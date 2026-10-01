@@ -1,0 +1,8 @@
+{
+  "parent_exit": 0,
+  "child_alive_at_diagnostic_copy": true,
+  "diagnostic_partial_group": true,
+  "diagnostic_stayed_fixed": true,
+  "registered_child_done_before_complete_copy": true,
+  "seconds": 0.072168166
+}

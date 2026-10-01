@@ -1,0 +1,16 @@
+diff --git a/src/catalog.ts b/src/catalog.ts
+index 2d6f457..8721af8 100644
+--- a/src/catalog.ts
++++ b/src/catalog.ts
+@@ -1,5 +1,9 @@
+-export function normalizeSku(value: string): string {
+-  return value.trim();
++export function normalizeSku(value: string): { key: string } {
++  const key = value.trim();
++  if (!key) {
++    throw new TypeError("SKU must not be blank");
++  }
++  return { key };
+ }
+ 
+ // These functions intentionally share a file, but own separate edits.

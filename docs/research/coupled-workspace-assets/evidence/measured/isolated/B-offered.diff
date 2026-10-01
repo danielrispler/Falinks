@@ -1,0 +1,27 @@
+diff --git a/src/catalog.ts b/src/catalog.ts
+index 2d6f457..73d764f 100644
+--- a/src/catalog.ts
++++ b/src/catalog.ts
+@@ -6,6 +6,6 @@ export function normalizeSku(value: string): string {
+ // A owns normalization; B owns presentation.
+ // No symbol reservation or automatic ownership detection is implemented.
+ 
+-export function displaySku(value: string): string {
+-  return `SKU:${value}`;
++export function displaySku(value: {key: string}): string {
++  return `SKU:${value.key}`;
+ }
+diff --git a/src/generated/schema.ts b/src/generated/schema.ts
+new file mode 100644
+index 0000000..10aabf9
+--- /dev/null
++++ b/src/generated/schema.ts
+@@ -0,0 +1 @@
++export const schema = "key";
+diff --git a/src/generated/tag.ts b/src/generated/tag.ts
+new file mode 100644
+index 0000000..05f4f87
+--- /dev/null
++++ b/src/generated/tag.ts
+@@ -0,0 +1 @@
++export const tag = "v2";

@@ -1,0 +1,237 @@
+{
+  "condition": "isolated",
+  "base": "401223a852202f52cc277b45dccd217708eff7b7",
+  "setup_seconds": 0.5833093329999954,
+  "argv": {
+    "A": [
+      "codex",
+      "exec",
+      "--ignore-user-config",
+      "--ephemeral",
+      "-C",
+      "/private/tmp/falinks-coupled-nnb2534u/live/isolated/A",
+      "-s",
+      "workspace-write",
+      "--add-dir",
+      "/private/tmp/falinks-coupled-nnb2534u/live/isolated/coord",
+      "--json",
+      "-"
+    ],
+    "B": [
+      "codex",
+      "exec",
+      "--ignore-user-config",
+      "--ephemeral",
+      "-C",
+      "/private/tmp/falinks-coupled-nnb2534u/live/isolated/B",
+      "-s",
+      "workspace-write",
+      "--add-dir",
+      "/private/tmp/falinks-coupled-nnb2534u/live/isolated/coord",
+      "--json",
+      "-"
+    ]
+  },
+  "agent_started": {
+    "A": 55.545735916,
+    "B": 55.547013041
+  },
+  "agent_ended": {
+    "A": 114.863317166,
+    "B": 114.863352333
+  },
+  "baseline": {
+    "build": {
+      "argv": [
+        "node",
+        "/private/tmp/falinks-coupled-nnb2534u/tools/node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.json"
+      ],
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "lint": {
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "tests": {
+      "argv": [
+        "node",
+        "tests.cjs",
+        "base"
+      ],
+      "code": 0,
+      "stdout": "fixed base assertions passed\n",
+      "stderr": ""
+    },
+    "seconds": 0.4603134159999982,
+    "passed": true
+  },
+  "early_request": {
+    "time": 0.011287583,
+    "pid": 27678,
+    "data": null
+  },
+  "draft_checkpoint": {
+    "time": 0.011276708,
+    "pid": 27674,
+    "data": null
+  },
+  "engine_early_capture_wait_seconds": 76.987814583,
+  "withdrawn": null,
+  "restored": null,
+  "interruption_seconds": 0,
+  "dirty_shared_development_check": null,
+  "early_hashes": {
+    ".gitignore": "ed19d3c9c8a5e34d0179e0b1a9c2907d2e657738733e4a432a8cf81c76ce56f1",
+    "control.py": "8cc38b06200715475df175bca9732e38b3ec2642e79ee720a2ea91e1a44040c0",
+    "eslint.config.cjs": "d38afd19717dae6e4fa839bbde2e33961d949454c5ba49fcc2eee3aa715ed13d",
+    "focused.cjs": "2598331ca02836dc01b0b7f61c93c6665aa8a2940702ae81f6cb388d6f3b6475",
+    "generator.py": "cf1e77bebddbe0ecbbf3381d36b6fe2831fc42cb5aec781fbc7c6b9a1e522925",
+    "src/caller.ts": "83d5809ae817ed0ff8172edda2fe6c63342c40368f018af6402f53c1c31b90fb",
+    "src/catalog.ts": "dcbd41b0b40c11472dc1a03a5a4708329f55358d1512c3df8c05b2f1d137ed1f",
+    "tests.cjs": "06a64c1fc56f7896f959ee4d698f085b1b1469d92a0ce5dd950bb50c76a9ce2c",
+    "tsconfig.json": "3186f5d0a67c16167c054f365aee1ae06eb1f8048baf7ac93b209b200ede7dd3"
+  },
+  "early_checks": {
+    "build": {
+      "argv": [
+        "node",
+        "/private/tmp/falinks-coupled-nnb2534u/tools/node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.json"
+      ],
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "lint": {
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "tests": {
+      "argv": [
+        "node",
+        "tests.cjs",
+        "early"
+      ],
+      "code": 0,
+      "stdout": "fixed early assertions passed\n",
+      "stderr": ""
+    },
+    "seconds": 0.4704089159999967,
+    "passed": true
+  },
+  "final_checkpoints": {
+    "A": {
+      "time": 0.010843,
+      "pid": 27686,
+      "data": null
+    },
+    "B": {
+      "time": 0.014747083,
+      "pid": 27693,
+      "data": null
+    }
+  },
+  "missing_required_B": {
+    "build": {
+      "argv": [
+        "node",
+        "/private/tmp/falinks-coupled-nnb2534u/tools/node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.json"
+      ],
+      "code": 1,
+      "stdout": "src/caller.ts(4,21): error TS2345: Argument of type '{ key: string; }' is not assignable to parameter of type 'string'.\n",
+      "stderr": ""
+    },
+    "lint": {
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "tests": {
+      "skipped": "build failed"
+    },
+    "seconds": 0.4423900829999923,
+    "passed": false
+  },
+  "merges": [
+    {
+      "argv": [
+        "git",
+        "merge",
+        "--no-edit",
+        "A"
+      ],
+      "code": 0,
+      "stdout": "Updating 401223a..59bbc31\nFast-forward\n src/catalog.ts | 8 ++++++--\n 1 file changed, 6 insertions(+), 2 deletions(-)\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "merge",
+        "--no-edit",
+        "B"
+      ],
+      "code": 0,
+      "stdout": "Auto-merging src/catalog.ts\nMerge made by the 'ort' strategy.\n src/catalog.ts          | 4 ++--\n src/generated/schema.ts | 1 +\n src/generated/tag.ts    | 1 +\n 3 files changed, 4 insertions(+), 2 deletions(-)\n create mode 100644 src/generated/schema.ts\n create mode 100644 src/generated/tag.ts\n",
+      "stderr": ""
+    }
+  ],
+  "integration_seconds": 0.09842079199999887,
+  "final_hashes": {
+    ".gitignore": "ed19d3c9c8a5e34d0179e0b1a9c2907d2e657738733e4a432a8cf81c76ce56f1",
+    "control.py": "8cc38b06200715475df175bca9732e38b3ec2642e79ee720a2ea91e1a44040c0",
+    "eslint.config.cjs": "d38afd19717dae6e4fa839bbde2e33961d949454c5ba49fcc2eee3aa715ed13d",
+    "focused.cjs": "2598331ca02836dc01b0b7f61c93c6665aa8a2940702ae81f6cb388d6f3b6475",
+    "generator.py": "cf1e77bebddbe0ecbbf3381d36b6fe2831fc42cb5aec781fbc7c6b9a1e522925",
+    "src/caller.ts": "83d5809ae817ed0ff8172edda2fe6c63342c40368f018af6402f53c1c31b90fb",
+    "src/catalog.ts": "7655bb9352af1f8eea365e652c9d78645bafdd8ca85ab2dd7aa9016c20446503",
+    "src/generated/schema.ts": "8d88bda7ca7c65be322f30d82d60f4a862da173f0d628a38c3ad4b4c9ca0aaa2",
+    "src/generated/tag.ts": "5694f986fe5c0b190e630531c5904ee9903f193fb50e1d2d36ba5faf0d6f6bbd",
+    "tests.cjs": "06a64c1fc56f7896f959ee4d698f085b1b1469d92a0ce5dd950bb50c76a9ce2c",
+    "tsconfig.json": "3186f5d0a67c16167c054f365aee1ae06eb1f8048baf7ac93b209b200ede7dd3"
+  },
+  "final_checks": {
+    "build": {
+      "argv": [
+        "node",
+        "/private/tmp/falinks-coupled-nnb2534u/tools/node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.json"
+      ],
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "lint": {
+      "code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "tests": {
+      "argv": [
+        "node",
+        "tests.cjs",
+        "final"
+      ],
+      "code": 0,
+      "stdout": "fixed final assertions passed\n",
+      "stderr": ""
+    },
+    "seconds": 0.4628766670000033,
+    "passed": true
+  },
+  "total_seconds": 59.901215167000004,
+  "exits": {
+    "A": 0,
+    "B": 0
+  }
+}

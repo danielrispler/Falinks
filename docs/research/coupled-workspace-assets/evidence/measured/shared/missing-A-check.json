@@ -1,0 +1,23 @@
+{
+  "build": {
+    "argv": [
+      "node",
+      "/private/tmp/falinks-coupled-nnb2534u/tools/node_modules/typescript/bin/tsc",
+      "-p",
+      "tsconfig.json"
+    ],
+    "code": 1,
+    "stdout": "src/caller.ts(4,21): error TS2345: Argument of type 'string' is not assignable to parameter of type '{ key: string; }'.\n",
+    "stderr": ""
+  },
+  "lint": {
+    "code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "tests": {
+    "skipped": "build failed"
+  },
+  "seconds": 0.44870695800000004,
+  "passed": false
+}

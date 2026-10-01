@@ -1,0 +1,9 @@
+{
+  "same_head": true,
+  "same_branch": true,
+  "same_status": true,
+  "same_tracked_bytes": true,
+  "head": "caabadc245e05d8444c4e5c63a2356710e20bcd0",
+  "branch": "main",
+  "tracked_file_count": 7
+}

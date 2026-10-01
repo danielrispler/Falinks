@@ -1,0 +1,11 @@
+{
+  "baseline": "5036d29d9ecadd136ed907c3c05527783ef3c41b",
+  "A": "c8954ac5ac3bf6dce6a5cadcfbbfee4b60d505b1",
+  "A-tree": "07df843387b47d13bf989eabdfa24695220f5304",
+  "B": "b8f74a35531ba8049627e02bbeb9ae26e8ba32d8",
+  "B-tree": "cfd30fe1fed77d23891d7a13948ba4f2f02a7b4d",
+  "combined": "e95d72e9b7af78b8fc00320c99432d2af3f3b557",
+  "combined-tree": "08abcdc0bd932a05682c2d257cafd89d2c886c41",
+  "early-candidate-manifest-sha256": "50281039ab3f414d2b976aa79b1b241af33344b31d403767952ace8e055c35cb",
+  "final-candidate-manifest-sha256": "57455631b71bd29c6a89701ce1f9ff3529a01880d35738db50beb359181cd72d"
+}

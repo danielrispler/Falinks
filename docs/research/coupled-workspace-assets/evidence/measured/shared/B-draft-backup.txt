@@ -1,0 +1,3 @@
+export function displaySku(value: string): string {
+  return undefined; // UNFINISHED_B
+}
