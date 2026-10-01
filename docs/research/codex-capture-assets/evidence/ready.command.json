@@ -1,0 +1,12 @@
+[
+  "codex",
+  "exec",
+  "--ignore-user-config",
+  "--ephemeral",
+  "-C",
+  "/tmp/falinks-codex-trial.Fpn1OF/runs/agent-a",
+  "-s",
+  "workspace-write",
+  "--json",
+  "Use native apply_patch to change only ready() in fixture.ts from return 1 to return 2. Do not change unfinished(), do not commit. Finish with READY."
+]

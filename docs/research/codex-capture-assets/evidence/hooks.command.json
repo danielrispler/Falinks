@@ -1,0 +1,17 @@
+[
+  "codex",
+  "exec",
+  "--ignore-user-config",
+  "--ephemeral",
+  "--dangerously-bypass-hook-trust",
+  "-C",
+  "/tmp/falinks-codex-trial.Fpn1OF/control",
+  "-s",
+  "workspace-write",
+  "--json",
+  "-c",
+  "hooks.PreToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command=\"/usr/bin/python3 /tmp/falinks-codex-trial.Fpn1OF/repo/docs/research/codex-capture-assets/hooks.py /tmp/falinks-codex-trial.Fpn1OF/hooks-events.jsonl\"}]}]",
+  "-c",
+  "hooks.PostToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command=\"/usr/bin/python3 /tmp/falinks-codex-trial.Fpn1OF/repo/docs/research/codex-capture-assets/hooks.py /tmp/falinks-codex-trial.Fpn1OF/hooks-events.jsonl\"}]}]",
+  "Use apply_patch to add native-hook.txt containing native. Then use shell redirection printf shell > shell-hook.txt. Do not commit. Finish."
+]

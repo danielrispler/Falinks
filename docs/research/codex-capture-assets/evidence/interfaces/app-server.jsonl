@@ -1,0 +1,3 @@
+{"method": "fs/changed", "params": {"watchId": "capture-trial", "changedPaths": ["/private/tmp/falinks-codex-trial.Fpn1OF/interfaces/watched.txt"]}, "emittedAtMs": 1790843979732}
+{"id": 5, "result": {}}
+{"id": 4, "result": {"exitCode": 137, "stdout": "", "stderr": ""}}

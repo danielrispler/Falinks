@@ -1,0 +1,12 @@
+[
+  "codex",
+  "exec",
+  "--ignore-user-config",
+  "--ephemeral",
+  "-C",
+  "/tmp/falinks-codex-trial.Fpn1OF/runs/shared",
+  "-s",
+  "workspace-write",
+  "--json",
+  "Use apply_patch to change only ready() from return 1 to return 2. Preserve the deliberately unfinished other function verbatim. Do not fix it, do not commit. Finish with READY."
+]

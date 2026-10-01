@@ -1,0 +1,12 @@
+[
+  "codex",
+  "exec",
+  "--ignore-user-config",
+  "--ephemeral",
+  "-C",
+  "/tmp/falinks-codex-trial.Fpn1OF/runs/agent-a",
+  "-s",
+  "workspace-write",
+  "--json",
+  "Use ordinary shell tools, not apply_patch: printf shell-ready into shell.txt; then run a single Python generator command that writes generated-a.ts containing export const a = 1; and generated-b.ts containing export const b = 2; (each with newline). Do not commit. Finish with READY."
+]

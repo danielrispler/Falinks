@@ -1,0 +1,14 @@
+2026-10-01T08:41:04.192096Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /private/tmp/falinks-codex-trial.Fpn1OF/interfaces-turn/fixture.ts:
+function ready() {
+  return 1;
+}
+2026-10-01T08:41:15.894234Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /private/tmp/falinks-codex-trial.Fpn1OF/interfaces-turn/fixture.ts:
+export function ready() {
+  return 1;
+}
+2026-10-01T08:41:29.081664Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /private/tmp/falinks-codex-trial.Fpn1OF/interfaces-turn/fixture.ts:
+export function ready() { return 1; }
+2026-10-01T08:41:35.623200Z ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to find expected lines in /private/tmp/falinks-codex-trial.Fpn1OF/interfaces-turn/fixture.ts:
+export function ready() {
+  return 1
+}

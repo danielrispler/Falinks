@@ -1,0 +1,12 @@
+[
+  "codex",
+  "exec",
+  "--ignore-user-config",
+  "--ephemeral",
+  "-C",
+  "/tmp/falinks-codex-trial.Fpn1OF/runs/agent-b",
+  "-s",
+  "workspace-write",
+  "--json",
+  "Use shell redirection to replace fixture.ts with exactly this unfinished draft, then stop your turn without repairing it or committing. It is deliberately unfinished, not ready:\nexport function ready(): number {\n  return 1;\n}\n\nexport function unfinished(): number {\n  return ; // UNFINISHED_B\n}\n"
+]

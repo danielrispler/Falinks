@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a0f69d-c518-7f30-ac43-6c9453c0036b"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll replace `fixture.ts` with the exact draft and stop without repairing it or committing.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"cat > fixture.ts <<'EOF'\nexport function ready(): number {\n  return 1;\n}\n\nexport function unfinished(): number {\n  return ; // UNFINISHED_B\n}\nEOF\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"cat > fixture.ts <<'EOF'\nexport function ready(): number {\n  return 1;\n}\n\nexport function unfinished(): number {\n  return ; // UNFINISHED_B\n}\nEOF\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Replaced `fixture.ts` with the exact unfinished draft using shell redirection. No repairs or commit."}}
+{"type":"turn.completed","usage":{"input_tokens":29678,"cached_input_tokens":26880,"cache_write_input_tokens":0,"output_tokens":121,"reasoning_output_tokens":0}}

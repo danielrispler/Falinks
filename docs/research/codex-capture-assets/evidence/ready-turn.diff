@@ -1,0 +1,11 @@
+diff --git a/fixture.ts b/fixture.ts
+index 6a20480df1059413217ac31b548c953376fc4b7f..fdeae9ffb4e53b5aa22bbf69fa63c1b4f0b59e67
+--- a/fixture.ts
++++ b/fixture.ts
+@@ -1,5 +1,5 @@
+ export function ready(): number {
+-  return 1;
++  return 2;
+ }
+ 
+ export function unfinished(): number {

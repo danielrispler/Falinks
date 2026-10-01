@@ -1,0 +1,25 @@
+{
+  "initialize": {
+    "platformFamily": "unix",
+    "platformOs": "macos"
+  },
+  "watch_event": {
+    "method": "fs/changed",
+    "params": {
+      "watchId": "capture-trial",
+      "changedPaths": [
+        "/private/tmp/falinks-codex-trial.Fpn1OF/interfaces-turn/watched.txt"
+      ]
+    },
+    "emittedAtMs": 1790844057521
+  },
+  "command_response": {
+    "id": 4,
+    "result": {
+      "exitCode": 137,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  "terminated_before_second_write": true
+}
