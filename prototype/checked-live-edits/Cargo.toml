@@ -1,0 +1,9 @@
+[package]
+name = "checked-live-edits-prototype"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "checked-live-edits-prototype"
+path = "main.rs"
