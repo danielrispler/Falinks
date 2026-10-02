@@ -1,0 +1,24 @@
+{
+  "root": "/private/tmp/falinks-write-boundary-pzvx0w4b",
+  "source": "/private/tmp/falinks-write-boundary-pzvx0w4b/source",
+  "command": [
+    "/opt/homebrew/Caskroom/codex/0.160.0/bin/codex",
+    "sandbox",
+    "-P",
+    "falinks-boundary-trial",
+    "-C",
+    "/private/tmp/falinks-write-boundary-pzvx0w4b",
+    "-c",
+    "permissions.falinks-boundary-trial={extends=\":workspace\",filesystem={\"/private/tmp/falinks-write-boundary-pzvx0w4b/source\"=\"read\"},network={enabled=false}}",
+    "--",
+    "/usr/bin/python3",
+    "-c",
+    "\nimport errno, json, os, subprocess, sys\nfrom pathlib import Path\nroot = Path(sys.argv[1])\nsource = root / 'source'\nassert (source / 'read.txt').read_text() == 'original\\n'\n(root / 'scratch-control.txt').write_text('writable\\n')\noperations = {\n    'write': lambda: (source / 'write.txt').write_text('bypass\\n'),\n    'delete': lambda: (source / 'delete.txt').unlink(),\n    'rename': lambda: (source / 'rename.txt').rename(source / 'renamed.txt'),\n    'replace': lambda: os.replace(root / 'incoming.txt', source / 'replace.txt'),\n    'symlink_create': lambda: (source / 'new-link').symlink_to(root / 'incoming.txt'),\n    'symlink_write': lambda: (root / 'alias.txt').write_text('bypass\\n'),\n    'directory_rename': lambda: source.rename(root / 'renamed-source'),\n}\nresults = {}\nfor name, operation in operations.items():\n    try:\n        operation()\n    except OSError as error:\n        results[name] = {'denied': error.errno in (errno.EACCES, errno.EPERM), 'errno': error.errno}\n    else:\n        results[name] = {'denied': False}\nchild = subprocess.run([\n    '/usr/bin/python3', '-c',\n    \"import errno,json,sys; from pathlib import Path\\n\"\n    \"try: Path(sys.argv[1]).write_text('child-bypass\\\\n')\\n\"\n    \"except OSError as e: print(json.dumps({'denied':e.errno in (errno.EACCES,errno.EPERM),'errno':e.errno}))\\n\"\n    \"else: print(json.dumps({'denied':False}))\",\n    str(source / 'child.txt')\n], start_new_session=True, capture_output=True, text=True, check=True)\nresults['new_session_child_write'] = json.loads(child.stdout)\nprint(json.dumps({'read': True, 'scratch_write': True, 'attempts': results}))\nassert all(result['denied'] for result in results.values()), results\n",
+    "/private/tmp/falinks-write-boundary-pzvx0w4b"
+  ],
+  "version": "codex-cli 0.160.0",
+  "sandbox_exit": 71,
+  "sandbox_stdout": "",
+  "sandbox_stderr": "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)\nsandbox-exec: sandbox_apply: Operation not permitted\n",
+  "source_unchanged": true
+}

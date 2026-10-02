@@ -1,0 +1,24 @@
+{
+  "root": "/private/tmp/falinks-worker-boundary-oorodrwn",
+  "command": [
+    "/opt/homebrew/Caskroom/codex/0.160.0/bin/codex",
+    "sandbox",
+    "-P",
+    "falinks-boundary-trial",
+    "-C",
+    "/private/tmp/falinks-worker-boundary-oorodrwn",
+    "-c",
+    "permissions.falinks-boundary-trial={extends=\":workspace\",filesystem={\"/private/tmp/falinks-worker-boundary-oorodrwn/source\"=\"read\"},network={enabled=false}}",
+    "--",
+    "/opt/homebrew/Caskroom/codex/0.160.0/bin/codex",
+    "app-server",
+    "--stdio",
+    "-c",
+    "analytics.enabled=false"
+  ],
+  "responses": [],
+  "observed": {},
+  "failure": "RuntimeError: worker stdout closed",
+  "worker_exit": 1,
+  "stderr": "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)\nError: failed to initialize sqlite state runtime under /Users/danielrispler/.codex: failed to initialize state runtime at /Users/danielrispler/.codex\n"
+}

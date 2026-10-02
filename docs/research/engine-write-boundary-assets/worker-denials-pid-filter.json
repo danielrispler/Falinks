@@ -1,0 +1,42 @@
+{
+  "root": "/private/tmp/falinks-worker-boundary-nkev6bmx",
+  "command": [
+    "/opt/homebrew/Caskroom/codex/0.160.0/bin/codex",
+    "sandbox",
+    "-P",
+    "falinks-boundary-trial",
+    "-C",
+    "/private/tmp/falinks-worker-boundary-nkev6bmx",
+    "-c",
+    "permissions.falinks-boundary-trial={extends=\":workspace\",filesystem={\"/private/tmp/falinks-worker-boundary-nkev6bmx/source\"=\"read\"},network={enabled=false}}",
+    "--log-denials",
+    "--",
+    "/opt/homebrew/Caskroom/codex/0.160.0/bin/codex",
+    "app-server",
+    "--stdio",
+    "-c",
+    "analytics.enabled=false",
+    "-c",
+    "sqlite_home=\"/private/tmp/falinks-worker-boundary-nkev6bmx/worker-state\"",
+    "-c",
+    "log_dir=\"/private/tmp/falinks-worker-boundary-nkev6bmx/worker-logs\""
+  ],
+  "responses": [],
+  "observed": {},
+  "failure": "RuntimeError: worker stdout closed",
+  "worker_exit": 1,
+  "diagnostic": {
+    "wrapper_pid": 42952,
+    "worker_pids": [
+      42963
+    ],
+    "retained_lines": [
+      "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)\n",
+      "Error: Operation not permitted (os error 1)\n",
+      "=== Sandbox denials ===\n"
+    ],
+    "redacted_line_count": 9
+  },
+  "stderr": "WARNING: proceeding, even though we could not create PATH aliases: Operation not permitted (os error 1)\nError: Operation not permitted (os error 1)\n=== Sandbox denials ===\n[Unrelated diagnostic content redacted: 9 lines]\n",
+  "post_exit_source_unchanged": true
+}

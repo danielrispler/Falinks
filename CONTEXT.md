@@ -5,7 +5,10 @@ The shared language for an engine through which coding agents propose and publis
 ## Language
 
 **Snapshot**:
-An identifiable repository version that stays fixed for a client's reads while it prepares a proposal.
+An immutable, identifiable repository version used as a recorded base or captured validation candidate.
+
+**Live workspace**:
+Shared working files used by agents collaborating on related subtasks. It includes unfinished changes, so its contents may change between reads.
 
 **Proposal**:
 A candidate change based on a snapshot, together with its explicitly declared dependencies. It is not yet part of the published state.
