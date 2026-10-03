@@ -1,0 +1,3611 @@
+{
+  "capture_identity": "sha256(canonical JSON of exact sources, explicit config and executed version records)",
+  "captures": {
+    "go": {
+      "baseline": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "",
+          "target": "darwin/arm64",
+          "tests": false
+        },
+        "files": {
+          "callee.go": "9eb7a9291c4736cbeb4a068936499802d0c5b696d4b6049d4de509eaccda6c58",
+          "callee_alt.go": "60a4ffa5a10abcd923d483b62f7eb6733ce90cbac0dc1ffeb61e83574dbc1628",
+          "go.mod": "41fd869c4d064263fab1910dd49ea6a0a6108eb81db934291c0d8ee7ac685494",
+          "siblings.go": "7e7849fbd015d8aa01be5b4472511b75efabc3327ed38af605423a48ec7669ad"
+        },
+        "id": "9efe8cb18b12cda9568d13148b6a4b2568b4a847057c576e3d4722ae631284fa",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/go/baseline",
+        "sources": {
+          "callee.go": "//go:build !alternate\n\npackage probe\nfunc Callee() int { return 7 }\n",
+          "callee_alt.go": "//go:build alternate\n\npackage probe\nfunc Callee() int { return 9 }\n",
+          "go.mod": "module captured.test/probe\n\ngo 1.26.0\n",
+          "siblings.go": "package probe\nfunc Left() int { return 1 }\nfunc Right() int { return Callee() }\n"
+        },
+        "stage": "baseline"
+      },
+      "config": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [
+            "alternate"
+          ],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "alternate",
+          "target": "darwin/arm64",
+          "tests": false
+        },
+        "files": {
+          "callee.go": "9eb7a9291c4736cbeb4a068936499802d0c5b696d4b6049d4de509eaccda6c58",
+          "callee_alt.go": "60a4ffa5a10abcd923d483b62f7eb6733ce90cbac0dc1ffeb61e83574dbc1628",
+          "go.mod": "41fd869c4d064263fab1910dd49ea6a0a6108eb81db934291c0d8ee7ac685494",
+          "siblings.go": "7e7849fbd015d8aa01be5b4472511b75efabc3327ed38af605423a48ec7669ad"
+        },
+        "id": "6d15cbcd12d97d758db7429abcd576e58c422b6cb3e41ab37e22992edebefe40",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/go/config",
+        "sources": {
+          "callee.go": "//go:build !alternate\n\npackage probe\nfunc Callee() int { return 7 }\n",
+          "callee_alt.go": "//go:build alternate\n\npackage probe\nfunc Callee() int { return 9 }\n",
+          "go.mod": "module captured.test/probe\n\ngo 1.26.0\n",
+          "siblings.go": "package probe\nfunc Left() int { return 1 }\nfunc Right() int { return Callee() }\n"
+        },
+        "stage": "config"
+      },
+      "shifted": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "",
+          "target": "darwin/arm64",
+          "tests": false
+        },
+        "files": {
+          "callee.go": "9eb7a9291c4736cbeb4a068936499802d0c5b696d4b6049d4de509eaccda6c58",
+          "callee_alt.go": "60a4ffa5a10abcd923d483b62f7eb6733ce90cbac0dc1ffeb61e83574dbc1628",
+          "go.mod": "41fd869c4d064263fab1910dd49ea6a0a6108eb81db934291c0d8ee7ac685494",
+          "siblings.go": "65fc14db7c8747d5406426bb065afc11b59b300eca57e7bc8beb7e6cec02cf15"
+        },
+        "id": "5ea82c25431142f969656ea7d5d6624432f43e6d456b3b8a02147cafc2b5d366",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/go/shifted",
+        "sources": {
+          "callee.go": "//go:build !alternate\n\npackage probe\nfunc Callee() int { return 7 }\n",
+          "callee_alt.go": "//go:build alternate\n\npackage probe\nfunc Callee() int { return 9 }\n",
+          "go.mod": "module captured.test/probe\n\ngo 1.26.0\n",
+          "siblings.go": "package probe\nfunc Left() int { \n// sibling edit\nreturn 1\n }\nfunc Right() int { return Callee() }\n"
+        },
+        "stage": "shifted"
+      },
+      "unfinished": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "",
+          "target": "darwin/arm64",
+          "tests": false
+        },
+        "files": {
+          "callee.go": "9eb7a9291c4736cbeb4a068936499802d0c5b696d4b6049d4de509eaccda6c58",
+          "callee_alt.go": "60a4ffa5a10abcd923d483b62f7eb6733ce90cbac0dc1ffeb61e83574dbc1628",
+          "go.mod": "41fd869c4d064263fab1910dd49ea6a0a6108eb81db934291c0d8ee7ac685494",
+          "siblings.go": "394391e78fe177f5a157aaa1158c25f6fe9e2b9dc167de1c41e0cf99fe6d5dfb"
+        },
+        "id": "c5b83896518cddc259b5f8594c1dd08659c1b308cf14cdcbc709739d29171391",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/go/unfinished",
+        "sources": {
+          "callee.go": "//go:build !alternate\n\npackage probe\nfunc Callee() int { return 7 }\n",
+          "callee_alt.go": "//go:build alternate\n\npackage probe\nfunc Callee() int { return 9 }\n",
+          "go.mod": "module captured.test/probe\n\ngo 1.26.0\n",
+          "siblings.go": "package probe\nfunc Left() int { return Undefined() }\nfunc Right() int { return Callee() }\n"
+        },
+        "stage": "unfinished"
+      }
+    },
+    "rust": {
+      "baseline": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "",
+          "target": "aarch64-apple-darwin",
+          "tests": false
+        },
+        "files": {
+          "Cargo.lock": "d513f650f69d0d9791b4b8d227cb5e6442a414acff5a7a7163ddf88b1eb889f4",
+          "Cargo.toml": "8428a585d86908a598c6c79e5a11078398bac54d1fe562ff35bf8709a84432b2",
+          "src/dep.rs": "203377736bff458a78884e28ce9ee9732c73fb443214751b868f7705b1239a5d",
+          "src/lib.rs": "9da1906ec48591b0a62993a06ed1118dcb953066ac18d1448c7ac6419c1e0118"
+        },
+        "id": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline",
+        "sources": {
+          "Cargo.lock": "version = 4\n\n[[package]]\nname = \"captured_probe\"\nversion = \"0.1.0\"\n",
+          "Cargo.toml": "[package]\nname = \"captured_probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nalternate = []\n",
+          "src/dep.rs": "#[cfg(not(feature = \"alternate\"))]\npub fn callee() -> i32 { 7 }\n#[cfg(feature = \"alternate\")]\npub fn callee() -> i32 { 9 }\n",
+          "src/lib.rs": "mod dep;\npub fn left() -> i32 { 1 }\npub fn right() -> i32 { dep::callee() }\n"
+        },
+        "stage": "baseline"
+      },
+      "config": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [
+            "alternate"
+          ],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "alternate",
+          "target": "aarch64-apple-darwin",
+          "tests": false
+        },
+        "files": {
+          "Cargo.lock": "d513f650f69d0d9791b4b8d227cb5e6442a414acff5a7a7163ddf88b1eb889f4",
+          "Cargo.toml": "8428a585d86908a598c6c79e5a11078398bac54d1fe562ff35bf8709a84432b2",
+          "src/dep.rs": "203377736bff458a78884e28ce9ee9732c73fb443214751b868f7705b1239a5d",
+          "src/lib.rs": "9da1906ec48591b0a62993a06ed1118dcb953066ac18d1448c7ac6419c1e0118"
+        },
+        "id": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config",
+        "sources": {
+          "Cargo.lock": "version = 4\n\n[[package]]\nname = \"captured_probe\"\nversion = \"0.1.0\"\n",
+          "Cargo.toml": "[package]\nname = \"captured_probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nalternate = []\n",
+          "src/dep.rs": "#[cfg(not(feature = \"alternate\"))]\npub fn callee() -> i32 { 7 }\n#[cfg(feature = \"alternate\")]\npub fn callee() -> i32 { 9 }\n",
+          "src/lib.rs": "mod dep;\npub fn left() -> i32 { 1 }\npub fn right() -> i32 { dep::callee() }\n"
+        },
+        "stage": "config"
+      },
+      "shifted": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "",
+          "target": "aarch64-apple-darwin",
+          "tests": false
+        },
+        "files": {
+          "Cargo.lock": "d513f650f69d0d9791b4b8d227cb5e6442a414acff5a7a7163ddf88b1eb889f4",
+          "Cargo.toml": "8428a585d86908a598c6c79e5a11078398bac54d1fe562ff35bf8709a84432b2",
+          "src/dep.rs": "203377736bff458a78884e28ce9ee9732c73fb443214751b868f7705b1239a5d",
+          "src/lib.rs": "13b59543269f7ca3b5ed3f5258af77753f43ea47f1f497c3d0c17be98b74627d"
+        },
+        "id": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted",
+        "sources": {
+          "Cargo.lock": "version = 4\n\n[[package]]\nname = \"captured_probe\"\nversion = \"0.1.0\"\n",
+          "Cargo.toml": "[package]\nname = \"captured_probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nalternate = []\n",
+          "src/dep.rs": "#[cfg(not(feature = \"alternate\"))]\npub fn callee() -> i32 { 7 }\n#[cfg(feature = \"alternate\")]\npub fn callee() -> i32 { 9 }\n",
+          "src/lib.rs": "mod dep;\npub fn left() -> i32 {\n    // sibling edit\n    1\n}\npub fn right() -> i32 { dep::callee() }\n"
+        },
+        "stage": "shifted"
+      },
+      "unfinished": {
+        "config": {
+          "build_scripts": false,
+          "cargo_all_targets": false,
+          "check_on_save": false,
+          "features": [],
+          "go_load_mode": "LoadAllSyntax|NeedModule",
+          "go_pattern": "./...",
+          "lock_writable": true,
+          "proc_macros": false,
+          "tags": "",
+          "target": "aarch64-apple-darwin",
+          "tests": false
+        },
+        "files": {
+          "Cargo.lock": "d513f650f69d0d9791b4b8d227cb5e6442a414acff5a7a7163ddf88b1eb889f4",
+          "Cargo.toml": "8428a585d86908a598c6c79e5a11078398bac54d1fe562ff35bf8709a84432b2",
+          "src/dep.rs": "203377736bff458a78884e28ce9ee9732c73fb443214751b868f7705b1239a5d",
+          "src/lib.rs": "e2b575cb20c7743f49819be184a3567fa10e8fe4e6590809b66f454d3226b257"
+        },
+        "id": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+        "path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished",
+        "sources": {
+          "Cargo.lock": "version = 4\n\n[[package]]\nname = \"captured_probe\"\nversion = \"0.1.0\"\n",
+          "Cargo.toml": "[package]\nname = \"captured_probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nalternate = []\n",
+          "src/dep.rs": "#[cfg(not(feature = \"alternate\"))]\npub fn callee() -> i32 { 7 }\n#[cfg(feature = \"alternate\")]\npub fn callee() -> i32 { 9 }\n",
+          "src/lib.rs": "mod dep;\npub fn left() -> i32 { 1 + }\npub fn right() -> i32 { dep::callee() }\n"
+        },
+        "stage": "unfinished"
+      }
+    }
+  },
+  "environment": {
+    "CARGO_HOME": "/private/tmp/falinks-analysis-tools-20261003/cargo",
+    "CARGO_NET_OFFLINE": "true",
+    "CGO_ENABLED": "0",
+    "GOARCH": "arm64",
+    "GOCACHE": "/private/tmp/falinks-analysis-tools-20261003/go-cache",
+    "GOENV": "off",
+    "GOMODCACHE": "/private/tmp/falinks-analysis-tools-20261003/go-mod",
+    "GOOS": "darwin",
+    "GOPACKAGESDRIVER": "off",
+    "GOPROXY": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "RUSTUP_HOME": "/private/tmp/falinks-analysis-tools-20261003/rustup"
+  },
+  "independent_symbol_application": false,
+  "results": {
+    "go": {
+      "baseline": {
+        "capture": "9efe8cb18b12cda9568d13148b6a4b2568b4a847057c576e3d4722ae631284fa",
+        "compiled_files": [
+          "callee.go",
+          "siblings.go"
+        ],
+        "context_error": "<nil>",
+        "errors": [],
+        "owners": [
+          {
+            "end": 42,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Left",
+            "line": 2,
+            "name": "Left",
+            "objectpath_error": "<nil>",
+            "start": 14
+          },
+          {
+            "end": 67,
+            "file": "callee.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Callee",
+            "line": 4,
+            "name": "Callee",
+            "objectpath_error": "<nil>",
+            "start": 37
+          },
+          {
+            "end": 79,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Right",
+            "line": 3,
+            "name": "Right",
+            "objectpath_error": "<nil>",
+            "start": 43
+          }
+        ],
+        "reverse": {
+          "captured.test/probe.Callee": [
+            "captured.test/probe.Right"
+          ]
+        },
+        "tags": "",
+        "uses": [
+          {
+            "file": "siblings.go",
+            "line": 3,
+            "objectpath_error": "<nil>",
+            "offset": 69,
+            "owner": "captured.test/probe.Right",
+            "target": "captured.test/probe.Callee"
+          }
+        ]
+      },
+      "canceled": {
+        "accepted": false,
+        "capture": "9efe8cb18b12cda9568d13148b6a4b2568b4a847057c576e3d4722ae631284fa",
+        "compiled_files": [],
+        "context_error": "context canceled",
+        "current_capture": "5ea82c25431142f969656ea7d5d6624432f43e6d456b3b8a02147cafc2b5d366",
+        "errors": [],
+        "load_error": "err: context canceled: stderr: ",
+        "owners": [],
+        "reverse": {},
+        "tags": "",
+        "uses": []
+      },
+      "config": {
+        "capture": "6d15cbcd12d97d758db7429abcd576e58c422b6cb3e41ab37e22992edebefe40",
+        "compiled_files": [
+          "callee_alt.go",
+          "siblings.go"
+        ],
+        "context_error": "<nil>",
+        "errors": [],
+        "owners": [
+          {
+            "end": 42,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Left",
+            "line": 2,
+            "name": "Left",
+            "objectpath_error": "<nil>",
+            "start": 14
+          },
+          {
+            "end": 66,
+            "file": "callee_alt.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Callee",
+            "line": 4,
+            "name": "Callee",
+            "objectpath_error": "<nil>",
+            "start": 36
+          },
+          {
+            "end": 79,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Right",
+            "line": 3,
+            "name": "Right",
+            "objectpath_error": "<nil>",
+            "start": 43
+          }
+        ],
+        "reverse": {
+          "captured.test/probe.Callee": [
+            "captured.test/probe.Right"
+          ]
+        },
+        "tags": "alternate",
+        "uses": [
+          {
+            "file": "siblings.go",
+            "line": 3,
+            "objectpath_error": "<nil>",
+            "offset": 69,
+            "owner": "captured.test/probe.Right",
+            "target": "captured.test/probe.Callee"
+          }
+        ]
+      },
+      "delayed": {
+        "accepted": false,
+        "capture": "9efe8cb18b12cda9568d13148b6a4b2568b4a847057c576e3d4722ae631284fa",
+        "compiled_files": [
+          "callee.go",
+          "siblings.go"
+        ],
+        "context_error": "<nil>",
+        "current_capture": "6d15cbcd12d97d758db7429abcd576e58c422b6cb3e41ab37e22992edebefe40",
+        "errors": [],
+        "owners": [
+          {
+            "end": 42,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Left",
+            "line": 2,
+            "name": "Left",
+            "objectpath_error": "<nil>",
+            "start": 14
+          },
+          {
+            "end": 67,
+            "file": "callee.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Callee",
+            "line": 4,
+            "name": "Callee",
+            "objectpath_error": "<nil>",
+            "start": 37
+          },
+          {
+            "end": 79,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Right",
+            "line": 3,
+            "name": "Right",
+            "objectpath_error": "<nil>",
+            "start": 43
+          }
+        ],
+        "reverse": {
+          "captured.test/probe.Callee": [
+            "captured.test/probe.Right"
+          ]
+        },
+        "tags": "",
+        "uses": [
+          {
+            "file": "siblings.go",
+            "line": 3,
+            "objectpath_error": "<nil>",
+            "offset": 69,
+            "owner": "captured.test/probe.Right",
+            "target": "captured.test/probe.Callee"
+          }
+        ]
+      },
+      "shifted": {
+        "capture": "5ea82c25431142f969656ea7d5d6624432f43e6d456b3b8a02147cafc2b5d366",
+        "compiled_files": [
+          "callee.go",
+          "siblings.go"
+        ],
+        "context_error": "<nil>",
+        "errors": [],
+        "owners": [
+          {
+            "end": 60,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Left",
+            "line": 2,
+            "name": "Left",
+            "objectpath_error": "<nil>",
+            "start": 14
+          },
+          {
+            "end": 67,
+            "file": "callee.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Callee",
+            "line": 4,
+            "name": "Callee",
+            "objectpath_error": "<nil>",
+            "start": 37
+          },
+          {
+            "end": 97,
+            "file": "siblings.go",
+            "ill_typed": false,
+            "key": "captured.test/probe.Right",
+            "line": 6,
+            "name": "Right",
+            "objectpath_error": "<nil>",
+            "start": 61
+          }
+        ],
+        "reverse": {
+          "captured.test/probe.Callee": [
+            "captured.test/probe.Right"
+          ]
+        },
+        "tags": "",
+        "uses": [
+          {
+            "file": "siblings.go",
+            "line": 6,
+            "objectpath_error": "<nil>",
+            "offset": 87,
+            "owner": "captured.test/probe.Right",
+            "target": "captured.test/probe.Callee"
+          }
+        ]
+      },
+      "unfinished": {
+        "capture": "c5b83896518cddc259b5f8594c1dd08659c1b308cf14cdcbc709739d29171391",
+        "compiled_files": [
+          "callee.go",
+          "siblings.go"
+        ],
+        "context_error": "<nil>",
+        "errors": [
+          "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/go/unfinished/siblings.go:2:26: undefined: Undefined"
+        ],
+        "owners": [
+          {
+            "end": 52,
+            "file": "siblings.go",
+            "ill_typed": true,
+            "key": "captured.test/probe.Left",
+            "line": 2,
+            "name": "Left",
+            "objectpath_error": "<nil>",
+            "start": 14
+          },
+          {
+            "end": 67,
+            "file": "callee.go",
+            "ill_typed": true,
+            "key": "captured.test/probe.Callee",
+            "line": 4,
+            "name": "Callee",
+            "objectpath_error": "<nil>",
+            "start": 37
+          },
+          {
+            "end": 89,
+            "file": "siblings.go",
+            "ill_typed": true,
+            "key": "captured.test/probe.Right",
+            "line": 3,
+            "name": "Right",
+            "objectpath_error": "<nil>",
+            "start": 53
+          }
+        ],
+        "reverse": {
+          "captured.test/probe.Callee": [
+            "captured.test/probe.Right"
+          ]
+        },
+        "tags": "",
+        "uses": [
+          {
+            "file": "siblings.go",
+            "line": 3,
+            "objectpath_error": "<nil>",
+            "offset": 79,
+            "owner": "captured.test/probe.Right",
+            "target": "captured.test/probe.Callee"
+          }
+        ]
+      }
+    },
+    "rust": {
+      "baseline": {
+        "calls": {
+          "outgoing": {
+            "id": 13,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "fromRanges": [
+                  {
+                    "end": {
+                      "character": 35,
+                      "line": 2
+                    },
+                    "start": {
+                      "character": 24,
+                      "line": 2
+                    }
+                  }
+                ],
+                "to": {
+                  "detail": "pub fn callee() -> i32",
+                  "kind": 12,
+                  "name": "callee",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 0
+                    }
+                  },
+                  "selectionRange": {
+                    "end": {
+                      "character": 13,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 7,
+                      "line": 1
+                    }
+                  },
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/dep.rs"
+                }
+              }
+            ]
+          },
+          "prepare": {
+            "id": 12,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            ]
+          }
+        },
+        "capabilities": {
+          "callHierarchyProvider": true,
+          "definitionProvider": true,
+          "documentSymbolProvider": true,
+          "positionEncoding": "utf-16",
+          "referencesProvider": true,
+          "textDocumentSync": {
+            "change": 2,
+            "openClose": true,
+            "save": {}
+          }
+        },
+        "cargo_check": {
+          "exit": 0,
+          "messages": [
+            {
+              "executable": null,
+              "features": [],
+              "filenames": [
+                "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/target-baseline/debug/deps/libcaptured_probe-89a2f64708b89c8a.rmeta"
+              ],
+              "fresh": false,
+              "manifest_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/Cargo.toml",
+              "package_id": "path+file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline#captured_probe@0.1.0",
+              "profile": {
+                "debug_assertions": true,
+                "debuginfo": 2,
+                "opt_level": "0",
+                "overflow_checks": true,
+                "test": false
+              },
+              "reason": "compiler-artifact",
+              "target": {
+                "crate_types": [
+                  "lib"
+                ],
+                "doc": true,
+                "doctest": true,
+                "edition": "2024",
+                "kind": [
+                  "lib"
+                ],
+                "name": "captured_probe",
+                "src_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs",
+                "test": true
+              }
+            },
+            {
+              "reason": "build-finished",
+              "success": true
+            }
+          ],
+          "stderr": "    Checking captured_probe v0.1.0 (/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s\n"
+        },
+        "definition": {
+          "id": 8,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 1
+                },
+                "start": {
+                  "character": 7,
+                  "line": 1
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/dep.rs"
+            }
+          ]
+        },
+        "diagnostics": [
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/dep.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [
+                {
+                  "code": "inactive_code",
+                  "codeDescription": {
+                    "href": "https://rust-analyzer.github.io/book/diagnostics.html#inactive_code"
+                  },
+                  "message": "code is inactive due to #[cfg] directives: feature = \"alternate\" is disabled",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 3
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 2
+                    }
+                  },
+                  "severity": 4,
+                  "source": "rust-analyzer",
+                  "tags": [
+                    1
+                  ]
+                }
+              ],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/dep.rs",
+              "version": 1
+            }
+          }
+        ],
+        "forward": [
+          {
+            "owner": {
+              "file": "src/lib.rs",
+              "key": "captured_probe::right",
+              "range": {
+                "end": {
+                  "character": 39,
+                  "line": 2
+                },
+                "start": {
+                  "character": 0,
+                  "line": 2
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 12,
+                  "line": 2
+                },
+                "start": {
+                  "character": 7,
+                  "line": 2
+                }
+              }
+            },
+            "target": {
+              "file": "src/dep.rs",
+              "key": "captured_probe::dep::callee",
+              "range": {
+                "end": {
+                  "character": 28,
+                  "line": 1
+                },
+                "start": {
+                  "character": 0,
+                  "line": 0
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 13,
+                  "line": 1
+                },
+                "start": {
+                  "character": 7,
+                  "line": 1
+                }
+              }
+            }
+          }
+        ],
+        "owners": {
+          "src/dep.rs": {
+            "id": 10,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 3
+                  }
+                },
+                "tags": []
+              }
+            ]
+          },
+          "src/lib.rs": {
+            "id": 9,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "kind": 2,
+                "name": "dep",
+                "range": {
+                  "end": {
+                    "character": 8,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 0
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "left",
+                "range": {
+                  "end": {
+                    "character": 26,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 1
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "tags": []
+              }
+            ]
+          }
+        },
+        "races": [
+          {
+            "accepted": false,
+            "canceled": true,
+            "current_capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "request": 14,
+            "response": {
+              "error": {
+                "code": -32800,
+                "message": "canceled by client"
+              },
+              "id": 14,
+              "jsonrpc": "2.0"
+            }
+          },
+          {
+            "accepted": false,
+            "canceled": false,
+            "current_capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "request": 15,
+            "response": {
+              "id": 15,
+              "jsonrpc": "2.0",
+              "result": [
+                {
+                  "range": {
+                    "end": {
+                      "character": 35,
+                      "line": 2
+                    },
+                    "start": {
+                      "character": 29,
+                      "line": 2
+                    }
+                  },
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+                }
+              ]
+            }
+          }
+        ],
+        "references": {
+          "id": 11,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 35,
+                  "line": 2
+                },
+                "start": {
+                  "character": 29,
+                  "line": 2
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+            }
+          ]
+        },
+        "reverse": [
+          {
+            "file": "src/lib.rs",
+            "key": "captured_probe::right",
+            "range": {
+              "end": {
+                "character": 39,
+                "line": 2
+              },
+              "start": {
+                "character": 0,
+                "line": 2
+              }
+            },
+            "selectionRange": {
+              "end": {
+                "character": 12,
+                "line": 2
+              },
+              "start": {
+                "character": 7,
+                "line": 2
+              }
+            }
+          }
+        ],
+        "server": {
+          "name": "rust-analyzer",
+          "version": "0.3.3065-standalone (03fcb77246 2026-09-27)"
+        },
+        "server_status": [
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": false
+          },
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": true
+          }
+        ],
+        "trace": [
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+              "capabilities": {
+                "experimental": {
+                  "serverStatusNotification": true
+                },
+                "general": {
+                  "positionEncodings": [
+                    "utf-16"
+                  ]
+                },
+                "textDocument": {
+                  "documentSymbol": {
+                    "hierarchicalDocumentSymbolSupport": true
+                  }
+                }
+              },
+              "initializationOptions": {
+                "cargo": {
+                  "allTargets": false,
+                  "buildScripts": {
+                    "enable": false
+                  },
+                  "features": [],
+                  "target": "aarch64-apple-darwin"
+                },
+                "cfg": {
+                  "setTest": false
+                },
+                "checkOnSave": false,
+                "procMacro": {
+                  "enable": false
+                }
+              },
+              "processId": 75187,
+              "rootUri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline",
+              "workspaceFolders": [
+                {
+                  "name": "capture",
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline"
+                }
+              ]
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 2,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 3,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 4,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 5,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 6,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 7,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 8,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 9,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 10,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/dep.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 11,
+            "method": "textDocument/references",
+            "params": {
+              "context": {
+                "includeDeclaration": false
+              },
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 12,
+            "method": "textDocument/prepareCallHierarchy",
+            "params": {
+              "position": {
+                "character": 7,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 13,
+            "method": "callHierarchy/outgoingCalls",
+            "params": {
+              "item": {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 14,
+            "method": "textDocument/references",
+            "params": {
+              "context": {
+                "includeDeclaration": false
+              },
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 15,
+            "method": "textDocument/references",
+            "params": {
+              "context": {
+                "includeDeclaration": false
+              },
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/baseline/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "3a8e60a3050bb01f858e81a188494a0a6b51c59359e3266d398f8a25b5543e29",
+            "id": 16,
+            "method": "shutdown",
+            "params": null
+          },
+          {
+            "stderr": "2026-10-03T18:59:36.701708+03:00  WARN notify error: No path was found. about [\"/Users/danielrispler/Library/Application Support/rust-analyzer/rust-analyzer.toml\"]\n"
+          }
+        ]
+      },
+      "config": {
+        "calls": {
+          "outgoing": {
+            "id": 13,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "fromRanges": [
+                  {
+                    "end": {
+                      "character": 35,
+                      "line": 2
+                    },
+                    "start": {
+                      "character": 24,
+                      "line": 2
+                    }
+                  }
+                ],
+                "to": {
+                  "detail": "pub fn callee() -> i32",
+                  "kind": 12,
+                  "name": "callee",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 3
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 2
+                    }
+                  },
+                  "selectionRange": {
+                    "end": {
+                      "character": 13,
+                      "line": 3
+                    },
+                    "start": {
+                      "character": 7,
+                      "line": 3
+                    }
+                  },
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/dep.rs"
+                }
+              }
+            ]
+          },
+          "prepare": {
+            "id": 12,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            ]
+          }
+        },
+        "capabilities": {
+          "callHierarchyProvider": true,
+          "definitionProvider": true,
+          "documentSymbolProvider": true,
+          "positionEncoding": "utf-16",
+          "referencesProvider": true,
+          "textDocumentSync": {
+            "change": 2,
+            "openClose": true,
+            "save": {}
+          }
+        },
+        "cargo_check": {
+          "exit": 0,
+          "messages": [
+            {
+              "executable": null,
+              "features": [
+                "alternate"
+              ],
+              "filenames": [
+                "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/target-config/debug/deps/libcaptured_probe-aa737376ce5e14ce.rmeta"
+              ],
+              "fresh": false,
+              "manifest_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/Cargo.toml",
+              "package_id": "path+file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config#captured_probe@0.1.0",
+              "profile": {
+                "debug_assertions": true,
+                "debuginfo": 2,
+                "opt_level": "0",
+                "overflow_checks": true,
+                "test": false
+              },
+              "reason": "compiler-artifact",
+              "target": {
+                "crate_types": [
+                  "lib"
+                ],
+                "doc": true,
+                "doctest": true,
+                "edition": "2024",
+                "kind": [
+                  "lib"
+                ],
+                "name": "captured_probe",
+                "src_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs",
+                "test": true
+              }
+            },
+            {
+              "reason": "build-finished",
+              "success": true
+            }
+          ],
+          "stderr": "    Checking captured_probe v0.1.0 (/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s\n"
+        },
+        "definition": {
+          "id": 8,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 3
+                },
+                "start": {
+                  "character": 7,
+                  "line": 3
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/dep.rs"
+            }
+          ]
+        },
+        "diagnostics": [
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/dep.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [
+                {
+                  "code": "inactive_code",
+                  "codeDescription": {
+                    "href": "https://rust-analyzer.github.io/book/diagnostics.html#inactive_code"
+                  },
+                  "message": "code is inactive due to #[cfg] directives: feature = \"alternate\" is enabled",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 0
+                    }
+                  },
+                  "severity": 4,
+                  "source": "rust-analyzer",
+                  "tags": [
+                    1
+                  ]
+                }
+              ],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/dep.rs",
+              "version": 1
+            }
+          }
+        ],
+        "feature_effect_observed": true,
+        "forward": [
+          {
+            "owner": {
+              "file": "src/lib.rs",
+              "key": "captured_probe::right",
+              "range": {
+                "end": {
+                  "character": 39,
+                  "line": 2
+                },
+                "start": {
+                  "character": 0,
+                  "line": 2
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 12,
+                  "line": 2
+                },
+                "start": {
+                  "character": 7,
+                  "line": 2
+                }
+              }
+            },
+            "target": {
+              "file": "src/dep.rs",
+              "key": "captured_probe::dep::callee",
+              "range": {
+                "end": {
+                  "character": 28,
+                  "line": 3
+                },
+                "start": {
+                  "character": 0,
+                  "line": 2
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 13,
+                  "line": 3
+                },
+                "start": {
+                  "character": 7,
+                  "line": 3
+                }
+              }
+            }
+          }
+        ],
+        "owners": {
+          "src/dep.rs": {
+            "id": 10,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 3
+                  }
+                },
+                "tags": []
+              }
+            ]
+          },
+          "src/lib.rs": {
+            "id": 9,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "kind": 2,
+                "name": "dep",
+                "range": {
+                  "end": {
+                    "character": 8,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 0
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "left",
+                "range": {
+                  "end": {
+                    "character": 26,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 1
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "tags": []
+              }
+            ]
+          }
+        },
+        "races": [],
+        "references": {
+          "id": 11,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 35,
+                  "line": 2
+                },
+                "start": {
+                  "character": 29,
+                  "line": 2
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+            }
+          ]
+        },
+        "reverse": [
+          {
+            "file": "src/lib.rs",
+            "key": "captured_probe::right",
+            "range": {
+              "end": {
+                "character": 39,
+                "line": 2
+              },
+              "start": {
+                "character": 0,
+                "line": 2
+              }
+            },
+            "selectionRange": {
+              "end": {
+                "character": 12,
+                "line": 2
+              },
+              "start": {
+                "character": 7,
+                "line": 2
+              }
+            }
+          }
+        ],
+        "server": {
+          "name": "rust-analyzer",
+          "version": "0.3.3065-standalone (03fcb77246 2026-09-27)"
+        },
+        "server_status": [
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": false
+          },
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": true
+          }
+        ],
+        "trace": [
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+              "capabilities": {
+                "experimental": {
+                  "serverStatusNotification": true
+                },
+                "general": {
+                  "positionEncodings": [
+                    "utf-16"
+                  ]
+                },
+                "textDocument": {
+                  "documentSymbol": {
+                    "hierarchicalDocumentSymbolSupport": true
+                  }
+                }
+              },
+              "initializationOptions": {
+                "cargo": {
+                  "allTargets": false,
+                  "buildScripts": {
+                    "enable": false
+                  },
+                  "features": [
+                    "alternate"
+                  ],
+                  "target": "aarch64-apple-darwin"
+                },
+                "cfg": {
+                  "setTest": false
+                },
+                "checkOnSave": false,
+                "procMacro": {
+                  "enable": false
+                }
+              },
+              "processId": 75187,
+              "rootUri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config",
+              "workspaceFolders": [
+                {
+                  "name": "capture",
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config"
+                }
+              ]
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 2,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 3,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 4,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 5,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 6,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 7,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 8,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 9,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 10,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/dep.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 11,
+            "method": "textDocument/references",
+            "params": {
+              "context": {
+                "includeDeclaration": false
+              },
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 12,
+            "method": "textDocument/prepareCallHierarchy",
+            "params": {
+              "position": {
+                "character": 7,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 13,
+            "method": "callHierarchy/outgoingCalls",
+            "params": {
+              "item": {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/config/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "44c2b5a5f9f4274f8ef739a7f6c521aeb1c706ba07c55fe8e3e74cde816be482",
+            "id": 14,
+            "method": "shutdown",
+            "params": null
+          },
+          {
+            "stderr": "2026-10-03T18:59:40.951283+03:00  WARN notify error: No path was found. about [\"/Users/danielrispler/Library/Application Support/rust-analyzer/rust-analyzer.toml\"]\n"
+          }
+        ]
+      },
+      "shifted": {
+        "calls": {
+          "outgoing": {
+            "id": 13,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "fromRanges": [
+                  {
+                    "end": {
+                      "character": 35,
+                      "line": 5
+                    },
+                    "start": {
+                      "character": 24,
+                      "line": 5
+                    }
+                  }
+                ],
+                "to": {
+                  "detail": "pub fn callee() -> i32",
+                  "kind": 12,
+                  "name": "callee",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 0
+                    }
+                  },
+                  "selectionRange": {
+                    "end": {
+                      "character": 13,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 7,
+                      "line": 1
+                    }
+                  },
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/dep.rs"
+                }
+              }
+            ]
+          },
+          "prepare": {
+            "id": 12,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 5
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 5
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            ]
+          }
+        },
+        "capabilities": {
+          "callHierarchyProvider": true,
+          "definitionProvider": true,
+          "documentSymbolProvider": true,
+          "positionEncoding": "utf-16",
+          "referencesProvider": true,
+          "textDocumentSync": {
+            "change": 2,
+            "openClose": true,
+            "save": {}
+          }
+        },
+        "cargo_check": {
+          "exit": 0,
+          "messages": [
+            {
+              "executable": null,
+              "features": [],
+              "filenames": [
+                "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/target-shifted/debug/deps/libcaptured_probe-89a2f64708b89c8a.rmeta"
+              ],
+              "fresh": false,
+              "manifest_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/Cargo.toml",
+              "package_id": "path+file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted#captured_probe@0.1.0",
+              "profile": {
+                "debug_assertions": true,
+                "debuginfo": 2,
+                "opt_level": "0",
+                "overflow_checks": true,
+                "test": false
+              },
+              "reason": "compiler-artifact",
+              "target": {
+                "crate_types": [
+                  "lib"
+                ],
+                "doc": true,
+                "doctest": true,
+                "edition": "2024",
+                "kind": [
+                  "lib"
+                ],
+                "name": "captured_probe",
+                "src_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs",
+                "test": true
+              }
+            },
+            {
+              "reason": "build-finished",
+              "success": true
+            }
+          ],
+          "stderr": "    Checking captured_probe v0.1.0 (/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s\n"
+        },
+        "definition": {
+          "id": 8,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 1
+                },
+                "start": {
+                  "character": 7,
+                  "line": 1
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/dep.rs"
+            }
+          ]
+        },
+        "diagnostics": [
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/dep.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [
+                {
+                  "code": "inactive_code",
+                  "codeDescription": {
+                    "href": "https://rust-analyzer.github.io/book/diagnostics.html#inactive_code"
+                  },
+                  "message": "code is inactive due to #[cfg] directives: feature = \"alternate\" is disabled",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 3
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 2
+                    }
+                  },
+                  "severity": 4,
+                  "source": "rust-analyzer",
+                  "tags": [
+                    1
+                  ]
+                }
+              ],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/dep.rs",
+              "version": 1
+            }
+          }
+        ],
+        "forward": [
+          {
+            "owner": {
+              "file": "src/lib.rs",
+              "key": "captured_probe::right",
+              "range": {
+                "end": {
+                  "character": 39,
+                  "line": 5
+                },
+                "start": {
+                  "character": 0,
+                  "line": 5
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 12,
+                  "line": 5
+                },
+                "start": {
+                  "character": 7,
+                  "line": 5
+                }
+              }
+            },
+            "target": {
+              "file": "src/dep.rs",
+              "key": "captured_probe::dep::callee",
+              "range": {
+                "end": {
+                  "character": 28,
+                  "line": 1
+                },
+                "start": {
+                  "character": 0,
+                  "line": 0
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 13,
+                  "line": 1
+                },
+                "start": {
+                  "character": 7,
+                  "line": 1
+                }
+              }
+            }
+          }
+        ],
+        "owners": {
+          "src/dep.rs": {
+            "id": 10,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 3
+                  }
+                },
+                "tags": []
+              }
+            ]
+          },
+          "src/lib.rs": {
+            "id": 9,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "kind": 2,
+                "name": "dep",
+                "range": {
+                  "end": {
+                    "character": 8,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 0
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "left",
+                "range": {
+                  "end": {
+                    "character": 1,
+                    "line": 4
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 1
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 5
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 5
+                  }
+                },
+                "tags": []
+              }
+            ]
+          }
+        },
+        "races": [],
+        "references": {
+          "id": 11,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 35,
+                  "line": 5
+                },
+                "start": {
+                  "character": 29,
+                  "line": 5
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+            }
+          ]
+        },
+        "reverse": [
+          {
+            "file": "src/lib.rs",
+            "key": "captured_probe::right",
+            "range": {
+              "end": {
+                "character": 39,
+                "line": 5
+              },
+              "start": {
+                "character": 0,
+                "line": 5
+              }
+            },
+            "selectionRange": {
+              "end": {
+                "character": 12,
+                "line": 5
+              },
+              "start": {
+                "character": 7,
+                "line": 5
+              }
+            }
+          }
+        ],
+        "server": {
+          "name": "rust-analyzer",
+          "version": "0.3.3065-standalone (03fcb77246 2026-09-27)"
+        },
+        "server_status": [
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": false
+          },
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": true
+          }
+        ],
+        "trace": [
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+              "capabilities": {
+                "experimental": {
+                  "serverStatusNotification": true
+                },
+                "general": {
+                  "positionEncodings": [
+                    "utf-16"
+                  ]
+                },
+                "textDocument": {
+                  "documentSymbol": {
+                    "hierarchicalDocumentSymbolSupport": true
+                  }
+                }
+              },
+              "initializationOptions": {
+                "cargo": {
+                  "allTargets": false,
+                  "buildScripts": {
+                    "enable": false
+                  },
+                  "features": [],
+                  "target": "aarch64-apple-darwin"
+                },
+                "cfg": {
+                  "setTest": false
+                },
+                "checkOnSave": false,
+                "procMacro": {
+                  "enable": false
+                }
+              },
+              "processId": 75187,
+              "rootUri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted",
+              "workspaceFolders": [
+                {
+                  "name": "capture",
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted"
+                }
+              ]
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 2,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 3,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 4,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 5,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 6,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 7,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 8,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 9,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 10,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/dep.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 11,
+            "method": "textDocument/references",
+            "params": {
+              "context": {
+                "includeDeclaration": false
+              },
+              "position": {
+                "character": 29,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 12,
+            "method": "textDocument/prepareCallHierarchy",
+            "params": {
+              "position": {
+                "character": 7,
+                "line": 5
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 13,
+            "method": "callHierarchy/outgoingCalls",
+            "params": {
+              "item": {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 5
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 5
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 5
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/shifted/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "9088375c126c4ad8f89b743aea3fc31720196e05c872f8ff084990bde533b7d9",
+            "id": 14,
+            "method": "shutdown",
+            "params": null
+          },
+          {
+            "stderr": "2026-10-03T18:59:38.109865+03:00  WARN notify error: No path was found. about [\"/Users/danielrispler/Library/Application Support/rust-analyzer/rust-analyzer.toml\"]\n"
+          }
+        ]
+      },
+      "unfinished": {
+        "calls": {
+          "outgoing": {
+            "id": 13,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "fromRanges": [
+                  {
+                    "end": {
+                      "character": 35,
+                      "line": 2
+                    },
+                    "start": {
+                      "character": 24,
+                      "line": 2
+                    }
+                  }
+                ],
+                "to": {
+                  "detail": "pub fn callee() -> i32",
+                  "kind": 12,
+                  "name": "callee",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 0
+                    }
+                  },
+                  "selectionRange": {
+                    "end": {
+                      "character": 13,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 7,
+                      "line": 1
+                    }
+                  },
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/dep.rs"
+                }
+              }
+            ]
+          },
+          "prepare": {
+            "id": 12,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            ]
+          }
+        },
+        "capabilities": {
+          "callHierarchyProvider": true,
+          "definitionProvider": true,
+          "documentSymbolProvider": true,
+          "positionEncoding": "utf-16",
+          "referencesProvider": true,
+          "textDocumentSync": {
+            "change": 2,
+            "openClose": true,
+            "save": {}
+          }
+        },
+        "cargo_check": {
+          "exit": 101,
+          "messages": [
+            {
+              "manifest_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/Cargo.toml",
+              "message": {
+                "$message_type": "diagnostic",
+                "children": [],
+                "code": null,
+                "level": "error",
+                "message": "expected expression, found `}`",
+                "rendered": "error: expected expression, found `}`\n --> src/lib.rs:2:28\n  |\n2 | pub fn left() -> i32 { 1 + }\n  |                            ^ expected expression\n\n",
+                "spans": [
+                  {
+                    "byte_end": 37,
+                    "byte_start": 36,
+                    "column_end": 29,
+                    "column_start": 28,
+                    "expansion": null,
+                    "file_name": "src/lib.rs",
+                    "is_primary": true,
+                    "label": "expected expression",
+                    "line_end": 2,
+                    "line_start": 2,
+                    "suggested_replacement": null,
+                    "suggestion_applicability": null,
+                    "text": [
+                      {
+                        "highlight_end": 29,
+                        "highlight_start": 28,
+                        "text": "pub fn left() -> i32 { 1 + }"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "package_id": "path+file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished#captured_probe@0.1.0",
+              "reason": "compiler-message",
+              "target": {
+                "crate_types": [
+                  "lib"
+                ],
+                "doc": true,
+                "doctest": true,
+                "edition": "2024",
+                "kind": [
+                  "lib"
+                ],
+                "name": "captured_probe",
+                "src_path": "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs",
+                "test": true
+              }
+            },
+            {
+              "reason": "build-finished",
+              "success": false
+            }
+          ],
+          "stderr": "    Checking captured_probe v0.1.0 (/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished)\nerror: could not compile `captured_probe` (lib) due to 1 previous error\n"
+        },
+        "definition": {
+          "id": 8,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 13,
+                  "line": 1
+                },
+                "start": {
+                  "character": 7,
+                  "line": 1
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/dep.rs"
+            }
+          ]
+        },
+        "diagnostics": [
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [
+                {
+                  "code": "syntax-error",
+                  "codeDescription": {
+                    "href": "https://doc.rust-lang.org/stable/reference/"
+                  },
+                  "message": "Syntax Error: expected expression",
+                  "range": {
+                    "end": {
+                      "character": 26,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 26,
+                      "line": 1
+                    }
+                  },
+                  "severity": 1,
+                  "source": "rust-analyzer"
+                }
+              ],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/dep.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [
+                {
+                  "code": "inactive_code",
+                  "codeDescription": {
+                    "href": "https://rust-analyzer.github.io/book/diagnostics.html#inactive_code"
+                  },
+                  "message": "code is inactive due to #[cfg] directives: feature = \"alternate\" is disabled",
+                  "range": {
+                    "end": {
+                      "character": 28,
+                      "line": 3
+                    },
+                    "start": {
+                      "character": 0,
+                      "line": 2
+                    }
+                  },
+                  "severity": 4,
+                  "source": "rust-analyzer",
+                  "tags": [
+                    1
+                  ]
+                }
+              ],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/dep.rs",
+              "version": 1
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+              "diagnostics": [
+                {
+                  "code": "syntax-error",
+                  "codeDescription": {
+                    "href": "https://doc.rust-lang.org/stable/reference/"
+                  },
+                  "message": "Syntax Error: expected expression",
+                  "range": {
+                    "end": {
+                      "character": 26,
+                      "line": 1
+                    },
+                    "start": {
+                      "character": 26,
+                      "line": 1
+                    }
+                  },
+                  "severity": 1,
+                  "source": "rust-analyzer"
+                }
+              ],
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs",
+              "version": 1
+            }
+          }
+        ],
+        "forward": [
+          {
+            "owner": {
+              "file": "src/lib.rs",
+              "key": "captured_probe::right",
+              "range": {
+                "end": {
+                  "character": 39,
+                  "line": 2
+                },
+                "start": {
+                  "character": 0,
+                  "line": 2
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 12,
+                  "line": 2
+                },
+                "start": {
+                  "character": 7,
+                  "line": 2
+                }
+              }
+            },
+            "target": {
+              "file": "src/dep.rs",
+              "key": "captured_probe::dep::callee",
+              "range": {
+                "end": {
+                  "character": 28,
+                  "line": 1
+                },
+                "start": {
+                  "character": 0,
+                  "line": 0
+                }
+              },
+              "selectionRange": {
+                "end": {
+                  "character": 13,
+                  "line": 1
+                },
+                "start": {
+                  "character": 7,
+                  "line": 1
+                }
+              }
+            }
+          }
+        ],
+        "owners": {
+          "src/dep.rs": {
+            "id": 10,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "callee",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 13,
+                    "line": 3
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 3
+                  }
+                },
+                "tags": []
+              }
+            ]
+          },
+          "src/lib.rs": {
+            "id": 9,
+            "jsonrpc": "2.0",
+            "result": [
+              {
+                "deprecated": false,
+                "kind": 2,
+                "name": "dep",
+                "range": {
+                  "end": {
+                    "character": 8,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 0
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 7,
+                    "line": 0
+                  },
+                  "start": {
+                    "character": 4,
+                    "line": 0
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "left",
+                "range": {
+                  "end": {
+                    "character": 28,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 1
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 11,
+                    "line": 1
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 1
+                  }
+                },
+                "tags": []
+              },
+              {
+                "deprecated": false,
+                "detail": "fn() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "tags": []
+              }
+            ]
+          }
+        },
+        "races": [],
+        "references": {
+          "id": 11,
+          "jsonrpc": "2.0",
+          "result": [
+            {
+              "range": {
+                "end": {
+                  "character": 35,
+                  "line": 2
+                },
+                "start": {
+                  "character": 29,
+                  "line": 2
+                }
+              },
+              "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+            }
+          ]
+        },
+        "reverse": [
+          {
+            "file": "src/lib.rs",
+            "key": "captured_probe::right",
+            "range": {
+              "end": {
+                "character": 39,
+                "line": 2
+              },
+              "start": {
+                "character": 0,
+                "line": 2
+              }
+            },
+            "selectionRange": {
+              "end": {
+                "character": 12,
+                "line": 2
+              },
+              "start": {
+                "character": 7,
+                "line": 2
+              }
+            }
+          }
+        ],
+        "server": {
+          "name": "rust-analyzer",
+          "version": "0.3.3065-standalone (03fcb77246 2026-09-27)"
+        },
+        "server_status": [
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": false
+          },
+          {
+            "health": "ok",
+            "message": null,
+            "quiescent": true
+          }
+        ],
+        "trace": [
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+              "capabilities": {
+                "experimental": {
+                  "serverStatusNotification": true
+                },
+                "general": {
+                  "positionEncodings": [
+                    "utf-16"
+                  ]
+                },
+                "textDocument": {
+                  "documentSymbol": {
+                    "hierarchicalDocumentSymbolSupport": true
+                  }
+                }
+              },
+              "initializationOptions": {
+                "cargo": {
+                  "allTargets": false,
+                  "buildScripts": {
+                    "enable": false
+                  },
+                  "features": [],
+                  "target": "aarch64-apple-darwin"
+                },
+                "cfg": {
+                  "setTest": false
+                },
+                "checkOnSave": false,
+                "procMacro": {
+                  "enable": false
+                }
+              },
+              "processId": 75187,
+              "rootUri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished",
+              "workspaceFolders": [
+                {
+                  "name": "capture",
+                  "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished"
+                }
+              ]
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 2,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 3,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 4,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 5,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 6,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 7,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 8,
+            "method": "textDocument/definition",
+            "params": {
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 9,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 10,
+            "method": "textDocument/documentSymbol",
+            "params": {
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/dep.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 11,
+            "method": "textDocument/references",
+            "params": {
+              "context": {
+                "includeDeclaration": false
+              },
+              "position": {
+                "character": 29,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 12,
+            "method": "textDocument/prepareCallHierarchy",
+            "params": {
+              "position": {
+                "character": 7,
+                "line": 2
+              },
+              "textDocument": {
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 13,
+            "method": "callHierarchy/outgoingCalls",
+            "params": {
+              "item": {
+                "detail": "pub fn right() -> i32",
+                "kind": 12,
+                "name": "right",
+                "range": {
+                  "end": {
+                    "character": 39,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 0,
+                    "line": 2
+                  }
+                },
+                "selectionRange": {
+                  "end": {
+                    "character": 12,
+                    "line": 2
+                  },
+                  "start": {
+                    "character": 7,
+                    "line": 2
+                  }
+                },
+                "uri": "file:///private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/falinks-analysis-run-a4cledxf/rust/unfinished/src/lib.rs"
+              }
+            }
+          },
+          {
+            "capture": "6a6cf3e8b496c5e189893961d5f897a15a1c1ed14c8b60a9ee1552b95de66373",
+            "id": 14,
+            "method": "shutdown",
+            "params": null
+          },
+          {
+            "stderr": "2026-10-03T18:59:39.518138+03:00  WARN notify error: No path was found. about [\"/Users/danielrispler/Library/Application Support/rust-analyzer/rust-analyzer.toml\"]\n"
+          }
+        ]
+      }
+    }
+  },
+  "versions": {
+    "binary_sha256": {
+      "cargo": "fc7aa5077deca8abc0651f329e8ec1d968f520e996a93b428f9935014362b382",
+      "cargo_proxy": "ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a",
+      "go": "005640c7ff93028cb704283b0f737f2db3faf8b51b2561170c769b83905da646",
+      "rust_analyzer": "9b5877a14acf82e1d4dc86e5406423a0dd4e7227fa0d9cc6ccf5989946bcccc2",
+      "rustc": "dd6f58440b3418aa9157ae3f05d71eecff741ca41bc4eec120e7e8f2d933b9a0"
+    },
+    "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+    "go": "go version go1.26.2 darwin/arm64",
+    "go_env": "{\n\t\"CGO_ENABLED\": \"0\",\n\t\"GOARCH\": \"arm64\",\n\t\"GOENV\": \"\",\n\t\"GOFLAGS\": \"\",\n\t\"GOOS\": \"darwin\",\n\t\"GOROOT\": \"/usr/local/go\",\n\t\"GOTOOLCHAIN\": \"local\",\n\t\"GOTOOLDIR\": \"/usr/local/go/pkg/tool/darwin_arm64\",\n\t\"GOWORK\": \"off\"\n}",
+    "helper_sha256": "f785f931823b182dc3ac636e279dcdf20e739b8fe88a03d0826ef37230995972",
+    "host": "macOS-26.6.2-arm64-arm-64bit",
+    "module_files_sha256": {
+      "go.mod": "6857782dcc1232f3b67dcb342ef213c41a5c71a334757b524a3febd8ce9df274",
+      "go.sum": "794c73a9ac61851c4eb96bf2d5e00ce731350250c5984ee4a63874c3d44d857f"
+    },
+    "modules": "{\n\t\"Path\": \"falinks-prototype\",\n\t\"Main\": true,\n\t\"Dir\": \"/private/tmp/falinks-captured-analysis-20261003/prototypes/captured-analysis\",\n\t\"GoMod\": \"/private/tmp/falinks-captured-analysis-20261003/prototypes/captured-analysis/go.mod\",\n\t\"GoVersion\": \"1.26.0\"\n}\n{\n\t\"Path\": \"github.com/google/go-cmp\",\n\t\"Version\": \"v0.6.0\",\n\t\"Time\": \"2023-08-31T17:32:40Z\",\n\t\"Indirect\": true,\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/github.com/google/go-cmp@v0.6.0\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/github.com/google/go-cmp/@v/v0.6.0.mod\",\n\t\"GoVersion\": \"1.13\",\n\t\"Sum\": \"h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=\",\n\t\"GoModSum\": \"h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=\"\n}\n{\n\t\"Path\": \"github.com/yuin/goldmark\",\n\t\"Version\": \"v1.4.13\",\n\t\"Time\": \"2022-07-09T07:22:17Z\",\n\t\"Indirect\": true,\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/github.com/yuin/goldmark@v1.4.13\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/github.com/yuin/goldmark/@v/v1.4.13.mod\",\n\t\"GoVersion\": \"1.18\",\n\t\"Sum\": \"h1:fVcFKWvrslecOb/tg+Cc05dkeYx540o0FuFt3nUVDoE=\",\n\t\"GoModSum\": \"h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=\"\n}\n{\n\t\"Path\": \"golang.org/x/mod\",\n\t\"Version\": \"v0.41.0\",\n\t\"Time\": \"2026-08-24T20:56:42Z\",\n\t\"Indirect\": true,\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/golang.org/x/mod@v0.41.0\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/golang.org/x/mod/@v/v0.41.0.mod\",\n\t\"GoVersion\": \"1.26.0\",\n\t\"Sum\": \"h1:qJmnOUb4YB+FsEuM3HcWucdZASCPGhsX6uljO6pog0c=\",\n\t\"GoModSum\": \"h1:Ek9pY8RKWXwsWvd3rQiHYtMqkjSUV+s1Rj7j4H5Ur6o=\"\n}\n{\n\t\"Path\": \"golang.org/x/net\",\n\t\"Version\": \"v0.59.0\",\n\t\"Time\": \"2026-09-08T19:18:02Z\",\n\t\"Indirect\": true,\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/golang.org/x/net@v0.59.0\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/golang.org/x/net/@v/v0.59.0.mod\",\n\t\"GoVersion\": \"1.26.0\",\n\t\"Sum\": \"h1:5zfYln+w5XCxwrnMMJPufRgNoXEaGxl0wo5GqPXyues=\",\n\t\"GoModSum\": \"h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=\"\n}\n{\n\t\"Path\": \"golang.org/x/sync\",\n\t\"Version\": \"v0.23.0\",\n\t\"Time\": \"2026-08-31T03:04:41Z\",\n\t\"Indirect\": true,\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/golang.org/x/sync@v0.23.0\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/golang.org/x/sync/@v/v0.23.0.mod\",\n\t\"GoVersion\": \"1.26.0\",\n\t\"Sum\": \"h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=\",\n\t\"GoModSum\": \"h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=\"\n}\n{\n\t\"Path\": \"golang.org/x/sys\",\n\t\"Version\": \"v0.48.0\",\n\t\"Time\": \"2026-08-31T19:43:43Z\",\n\t\"Indirect\": true,\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/golang.org/x/sys@v0.48.0\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/golang.org/x/sys/@v/v0.48.0.mod\",\n\t\"GoVersion\": \"1.26.0\",\n\t\"Sum\": \"h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=\",\n\t\"GoModSum\": \"h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=\"\n}\n{\n\t\"Path\": \"golang.org/x/telemetry\",\n\t\"Version\": \"v0.0.0-20260924152758-ed294f943157\",\n\t\"Time\": \"2026-09-24T15:27:58Z\",\n\t\"Indirect\": true,\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/golang.org/x/telemetry@v0.0.0-20260924152758-ed294f943157\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/golang.org/x/telemetry/@v/v0.0.0-20260924152758-ed294f943157.mod\",\n\t\"GoVersion\": \"1.26.0\",\n\t\"Sum\": \"h1:DftxASHKl6JolFPqoN+2WrFO53JvkHwRXvFqf8gsivA=\",\n\t\"GoModSum\": \"h1:i+ivNqjDnTF3WTElsdk5g9V5DTSBYgdNo7xTU9SDwYA=\"\n}\n{\n\t\"Path\": \"golang.org/x/tools\",\n\t\"Version\": \"v0.51.0\",\n\t\"Time\": \"2026-10-02T18:49:45Z\",\n\t\"Dir\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/golang.org/x/tools@v0.51.0\",\n\t\"GoMod\": \"/private/tmp/falinks-analysis-tools-20261003/go-mod/cache/download/golang.org/x/tools/@v/v0.51.0.mod\",\n\t\"GoVersion\": \"1.26.0\",\n\t\"Sum\": \"h1:k4Xc/1Om9jwkBJBo4NVLMSARBoWtK10mx+W5BnXCeAI=\",\n\t\"GoModSum\": \"h1:9eEncMayCV6zRMGhR5eZEC2iBx98qWcF1HZ9Z7wJOoA=\"\n}",
+    "probe_sha256": "e85fa8bdb68b0cc47f7d527763311a4de0fd19dcf5d24ae4af827b1c421045fe",
+    "python": "3.9.6",
+    "rust_analyzer": "rust-analyzer 0.3.3065-standalone (03fcb77246 2026-09-27)",
+    "rust_analyzer_user_config_sha256": null,
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: aarch64-apple-darwin\nrelease: 1.99.0\nLLVM version: 23.1.1",
+    "rustup": "rustup 1.29.1 (d95a37b6a 2026-08-13)"
+  }
+}
