@@ -1,5 +1,9 @@
 ## Agent skills
 
+### Learning
+
+At session start, read `docs/agents/learning.md`. Follow its state/goal brief and explanation guidance during grilling, Wayfinder, and ordinary planning. After meaningful tickets, remind Daniel to invoke `$explain-diff-personal` and wait for explicit invocation. Complete the learning stop before resolving them or moving to the next issue.
+
 ### Issue tracker
 
 Track issues and specs in GitHub Issues for `danielrispler/Falinks`. Before issue operations, read `docs/agents/issue-tracker.md`.

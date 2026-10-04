@@ -42,8 +42,11 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 1. Run `python3 scripts/wayfinder_startup.py [map-number]`; omit the number for the current collaborative-editing map. It reads the full live map once and paginated open-child metadata in map order, including claims, open blockers and frontier eligibility. This repo uses native GitHub sub-issues and dependencies; unavailable blocker metadata is an error.
 2. Use the named ticket, or the first row with `frontier: true`. Refresh eligibility if tracker state may have changed, then claim before work. The command is read-only; GitHub remains authoritative.
 3. Load that ticket's body, its reading links and required skills once. Expand to other decisions or evidence when the question needs them; check for superseded decisions. Use the configured `gh` route directly. Read triage guidance when triaging.
+4. Open the session with the state and goal brief described in `docs/agents/learning.md`; follow its explanation guidance when planning or asking decision questions.
 
 ### Ticket context
+
+Before resolving a meaningful ticket, complete its explanation and learning stop using `docs/agents/learning.md`. Record remaining learning work with the session outcome when implementation or investigation finishes first.
 
 Every new Wayfinder ticket must include `## Reading` before linking it to the map. List relevant current decision resolutions and research artifacts by name, with one short reason per link. Use comment permalinks for specific resolutions. When no prior material applies, write `None — no prior decisions or research required.` Reading links are a starting set, not a limit on investigation; preserve the ticket's question, scope and stop condition.
 
