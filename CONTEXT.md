@@ -13,6 +13,15 @@ Shared working files used by agents collaborating on related subtasks. It includ
 **Validation workspace**:
 A repository directory used to materialize a captured candidate for checks, isolated from live edits and held exclusively for a validation run.
 
+**Work group**:
+Agents collaborating on related tasks. Membership expresses collaboration intent, not ownership of a physical directory or membership of every captured publication candidate.
+
+**Regrouping proposal**:
+An identified proposal to join, split or keep work groups, naming the affected agents, task scopes, target grouping, intended workspace arrangement and supporting evidence.
+
+**Regrouping transition**:
+Application of an agreed grouping and workspace arrangement while preserving work and its revision, candidate and publication obligations. It does not imply publication approval.
+
 **Proposal**:
 A candidate change based on a snapshot, together with its dependency information. It is not yet part of the published state.
 
