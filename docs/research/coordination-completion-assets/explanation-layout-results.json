@@ -1,0 +1,22 @@
+{
+  "lessons": [
+    "problem",
+    "flow",
+    "evidence",
+    "completed-snapshots",
+    "runtime-boundary",
+    "reading",
+    "questions",
+    "remaining-work"
+  ],
+  "viewports": [
+    1440,
+    390
+  ],
+  "expanded_previews_no_document_overflow": true,
+  "completed_snapshot_trace_passed": true,
+  "published_base_trace_passed": true,
+  "one_visible_question": true,
+  "runtime_exceptions": 0,
+  "audible_narration": "not tested"
+}

@@ -1,0 +1,18 @@
+{
+  "resumed_thread": "01a10b5d-c3d3-7ea1-b54c-3dfba33bb460",
+  "permission_profile": {
+    "id": "falinks-bridge",
+    "extends": ":workspace"
+  },
+  "restored_dynamic_tool_names": [
+    "engine_edit_probe",
+    "engine_review_probe",
+    "engine_offer_probe"
+  ],
+  "native_call_fixture_evidence": [],
+  "native_path_verified": false,
+  "processed_obligation_restored": true,
+  "synthetic_deferred_obligation_restored": true,
+  "model_turns_started": 0,
+  "scope": "Fresh app-server resumed saved thread and metadata. No model resumed pending work. E2 is an independent SQLite persistence fixture, not a real deferred-agent reconnect."
+}

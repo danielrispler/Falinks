@@ -1,0 +1,22 @@
+{
+  "scratch_root": "/private/tmp/falinks-coordination-completion-20261005/capture-5hw6qvlw",
+  "captured_mid_install": "f903b3ec31490aa1eb182a48172b015933ec9aee",
+  "captured_after_install": "b2971055d039db799b1aaafd0295039d495bfdef",
+  "coherent_mid_capture": true,
+  "new_revision_excludes_partial_install": true,
+  "unchanged_blob_reused": true,
+  "test_worktree_isolated_from_later_draft": true,
+  "checkpoint_records": [
+    {
+      "snapshot": "f903b3ec31490aa1eb182a48172b015933ec9aee",
+      "pointer_read_ms": 0.000542,
+      "total_pin_ms": 5.931583
+    },
+    {
+      "snapshot": "b2971055d039db799b1aaafd0295039d495bfdef",
+      "pointer_read_ms": 0.00025,
+      "total_pin_ms": 6.135292
+    }
+  ],
+  "scope": "Known fixed text edits, serialized host mutation, Python metadata lock and retained Git refs. No database revision transaction, crash injection, runtime attribution or general filesystem atomicity. Capture returns last completed engine revision while live reads may observe partial installation."
+}

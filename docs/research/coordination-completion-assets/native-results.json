@@ -1,0 +1,12 @@
+{
+  "binary": "/opt/homebrew/Caskroom/codex/0.160.0/bin/codex",
+  "binary_sha256": "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+  "fixture_path": "/private/tmp/falinks-coordination-completion-20261005/native-j03377mk/source/source.txt",
+  "patch": "*** Begin Patch\n*** Update File: /private/tmp/falinks-coordination-completion-20261005/native-j03377mk/source/source.txt\n@@\n-original\n+NATIVE_BYPASS\n*** End Patch",
+  "exit": 1,
+  "stdout": "",
+  "stderr": "Failed to write file /private/tmp/falinks-coordination-completion-20261005/native-j03377mk/source/source.txt\n",
+  "source_unchanged": true,
+  "writable_control_patch_succeeded": true,
+  "scope": "Native helper executes an exact path-bearing patch under the selected read-only subtree OS sandbox. Separately, the model router rejects native patch calls; its path-bearing event is not retained. This helper probe is not a newly observed model-native event."
+}

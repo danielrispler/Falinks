@@ -10,6 +10,9 @@ An immutable, identifiable repository version used as a recorded base or capture
 **Live workspace**:
 Shared working files used by agents collaborating on related subtasks. It includes unfinished changes, so its contents may change between reads.
 
+**Validation workspace**:
+A repository directory used to materialize a captured candidate for checks, isolated from live edits and held exclusively for a validation run.
+
 **Proposal**:
 A candidate change based on a snapshot, together with its dependency information. It is not yet part of the published state.
 

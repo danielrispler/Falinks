@@ -1,0 +1,74 @@
+{
+  "scratch_run": "/private/tmp/falinks-reusable-test-worktree-20261004/trial-6vb_d8wc",
+  "git": "git version 2.54.0 (Apple Git-157)",
+  "go": "go version go1.26.2 darwin/arm64",
+  "files": 1004,
+  "fixture_bytes": 4096000,
+  "changed_files": 2,
+  "baseline_test": {
+    "exit": 0,
+    "output": "ok  \texample.invalid/worktreeprobe\t0.355s"
+  },
+  "individual_test": {
+    "exit": 1,
+    "output": "FAIL\texample.invalid/worktreeprobe [build failed]\nFAIL\n# example.invalid/worktreeprobe [example.invalid/worktreeprobe.test]\n./checkout.go:2:36: not enough arguments in call to Quote\n\thave (number)\n\twant (int, string)"
+  },
+  "team_test": {
+    "exit": 0,
+    "output": "ok  \texample.invalid/worktreeprobe\t0.352s"
+  },
+  "exclusive_lock_contender_exit": 7,
+  "published_during_test": {
+    "checked_candidate": "53a2efc0cb5d5e493fa669699146eabf52a5fdf7",
+    "expected_base": "5eefaf8d5f008b51f81be0909384d039b8633341",
+    "current_published": "33bf16a52f80a0ca4f4b97a31bc36efd882d4d1a",
+    "outcome": "base changed; no acceptance, reconsider/recombine and check new exact candidate"
+  },
+  "live_draft_preserved": true,
+  "unchanged_fixture_inode_and_mtime_preserved": true,
+  "apply_candidate": {
+    "median_ms": 9.129,
+    "min_ms": 8.771,
+    "max_ms": 9.896,
+    "runs_ms": [
+      9.896,
+      8.949,
+      8.771,
+      9.331,
+      9.187,
+      9.264,
+      9.048,
+      9.18,
+      8.997,
+      8.846,
+      9.179,
+      9.021,
+      9.015,
+      9.129,
+      9.16
+    ]
+  },
+  "restore_base": {
+    "median_ms": 8.924,
+    "min_ms": 8.71,
+    "max_ms": 9.547,
+    "runs_ms": [
+      9.297,
+      8.784,
+      9.31,
+      8.71,
+      9.547,
+      8.734,
+      8.924,
+      9.069,
+      8.831,
+      9.095,
+      8.905,
+      8.864,
+      8.991,
+      8.808,
+      9.025
+    ]
+  },
+  "scope": "Real scratch Git worktree and Go tests; known prepared candidates. No runtime capture/attribution, publication engine, group approval, crash recovery, build-artifact cleanup or automatic semantic rebase implementation."
+}

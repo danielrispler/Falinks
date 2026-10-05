@@ -1,0 +1,36 @@
+{
+  "offers": [
+    {
+      "accepted": false,
+      "reason": "deferred obligation remains"
+    },
+    {
+      "accepted": true,
+      "reason": "eligible fixture, not publication"
+    }
+  ],
+  "reviews": [
+    {
+      "accepted": true,
+      "arguments": {
+        "event": "synthetic-E2",
+        "action": "process",
+        "reviewed_hash": "75a85dcb3d59ec80a5b757e167b580f2d90a0c6d93e028fa7334f1f619fda370"
+      }
+    }
+  ],
+  "model_turns_started": 1,
+  "event": "synthetic-E2",
+  "replayed_revision": "75a85dcb3d59ec80a5b757e167b580f2d90a0c6d93e028fa7334f1f619fda370",
+  "ordinary_reads": [
+    {
+      "command": "/bin/zsh -lc \"python3 - <<'PY'\nfrom pathlib import Path\nimport hashlib\nb = Path('source.txt').read_bytes()\nprint(repr(b))\nprint(hashlib.sha256(b).hexdigest())\nPY\"",
+      "aggregatedOutput": "b'engine_updated\\n'\n75a85dcb3d59ec80a5b757e167b580f2d90a0c6d93e028fa7334f1f619fda370\n",
+      "status": "completed"
+    }
+  ],
+  "completed": "completed",
+  "source_unchanged": true,
+  "scope": "One resumed real model turn on saved default thread, restored tool definitions, host replay of a synthetic deferred event, ordinary reread and enforced offer gate. No actual peer edit, durable handled-cursor implementation, multi-agent turn or engine publication.",
+  "server_exit": 0
+}
