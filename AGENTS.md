@@ -2,7 +2,7 @@
 
 ### Learning
 
-At session start, read `docs/agents/learning.md`. Follow its state/goal brief and explanation guidance during grilling, Wayfinder, and ordinary planning. After meaningful tickets, remind Daniel to invoke `$dsh-explain-diff` and wait for explicit invocation. Complete the learning stop before resolving them or moving to the next issue.
+At session start, read `docs/agents/learning.md`. Follow its state/goal brief and explanation guidance during grilling, Wayfinder, and ordinary planning. After meaningful tickets, suggest `$dsh-explain-diff` in the final message. Explanations are optional and never block ticket resolution or progress; run the skill only when explicitly invoked.
 
 ### Issue tracker
 

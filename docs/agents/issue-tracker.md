@@ -46,7 +46,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 ### Ticket context
 
-Before resolving a meaningful ticket, complete its explanation and learning stop using `docs/agents/learning.md`. Record remaining learning work with the session outcome when implementation or investigation finishes first.
+Resolve meaningful tickets when their agreed work and verification are complete. Follow `docs/agents/learning.md` for the optional explanation suggestion; explanation and readiness confirmation are not closure prerequisites.
 
 Every new Wayfinder ticket must include `## Reading` before linking it to the map. List relevant current decision resolutions and research artifacts by name, with one short reason per link. Use comment permalinks for specific resolutions. When no prior material applies, write `None — no prior decisions or research required.` Reading links are a starting set, not a limit on investigation; preserve the ticket's question, scope and stop condition.
 
