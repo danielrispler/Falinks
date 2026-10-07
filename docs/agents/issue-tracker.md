@@ -27,11 +27,17 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Before publishing a labelled issue, run the preflight in `docs/agents/triage-labels.md`. Create a GitHub issue.
+
+### Repository-specific `to-spec` confirmation
+
+Synthesize the complete draft independently from the settled conversation and repo evidence. Before publication, confirm the proposed testing seams with one focused question unless they were already explicitly agreed in the current conversation. Show the proposed checks and their limits, and wait for the answer before publishing. This confirmation concerns testing seams; preserve the settled design rather than reopening a design interview. The installed skill remains unchanged.
 
 ## When a skill says "fetch the relevant ticket"
 
 Use the **Read an issue** convention above; include relevant comments when the task depends on them.
+
+Read relevant linked decision resolutions directly before loading full issue histories, including when synthesizing a completed map. Expand into issue bodies or comments only to resolve identifiable gaps or supersession; follow replacement resolution links when present.
 
 ## Wayfinding operations
 
