@@ -1,0 +1,25 @@
+[
+  {
+    "started_at": "2026-10-08T09:33:03Z",
+    "binary_sha256": "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+    "root": "/private/tmp/falinks-adapter-chnz67u9",
+    "passed": false,
+    "failure": "SafetyError: mediated edit missing",
+    "publication_scoring_supported": false
+  },
+  {
+    "started_at": "2026-10-08T09:34:16Z",
+    "binary_sha256": "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+    "root": "/private/tmp/falinks-adapter-kbtmp5a8",
+    "passed": false,
+    "failure": "SafetyError: mediated edit missing",
+    "publication_scoring_supported": false
+  },
+  {
+    "started_at": "2026-10-08T09:35:44Z",
+    "binary_sha256": "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+    "root": "/private/tmp/falinks-adapter-6puax3sa",
+    "passed": true,
+    "publication_scoring_supported": false
+  }
+]
