@@ -818,11 +818,13 @@ fn explicit_retry_after_independent_progress_creates_a_later_completed_occurrenc
 fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
     let (dir, engine, _, _) = fixture();
     let mut pipe = [0; 2];
+    // SAFETY: `pipe` points to a writable array of two c_ints.
     assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+    // SAFETY: the child only makes async-signal-safe calls before `_exit`.
     let child = unsafe { libc::fork() };
     assert!(child >= 0);
     if child == 0 {
-        // Use only async-signal-safe libc calls between fork and exit.
+        // SAFETY: only async-signal-safe libc calls between fork and exit; `byte` is a valid one-byte buffer.
         unsafe {
             libc::close(pipe[1]);
             let mut byte = 0u8;
@@ -830,6 +832,7 @@ fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
             libc::_exit(0);
         }
     }
+    // SAFETY: closes the read end owned by this process; no pointers involved.
     unsafe {
         libc::close(pipe[0]);
     }
@@ -839,6 +842,7 @@ fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
         &dir.path().join("state"),
         &["a.rs", "b.rs"],
     );
+    // SAFETY: the buffer is a valid one-byte static; the fds and child pid were created above.
     unsafe {
         libc::write(pipe[1], b"x".as_ptr().cast(), 1);
         libc::close(pipe[1]);

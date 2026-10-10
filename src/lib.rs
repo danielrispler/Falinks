@@ -404,6 +404,7 @@ impl Drop for WriterLease {
     fn drop(&mut self) {
         use std::os::fd::AsRawFd;
         // Unlock the shared open-file description, including any pre-exec fork copies.
+        // SAFETY: the fd is owned by this open File for the whole call; flock has no memory effects.
         unsafe {
             libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
         }
@@ -423,6 +424,7 @@ fn writer_lease(path: &Path) -> Result<WriterLease> {
     if !metadata.is_file() || metadata.nlink() != 1 {
         return fail("invalid writer lease path");
     }
+    // SAFETY: the fd is owned by `lease`, which outlives the call; flock has no memory effects.
     if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return fail("engine writer already owned");
     }
@@ -1111,6 +1113,7 @@ impl Engine {
                 break status;
             }
             if std::time::Instant::now() >= deadline {
+                // SAFETY: kill takes no pointers; the target is this job's dedicated process group.
                 unsafe {
                     libc::kill(-group, libc::SIGKILL);
                 }
@@ -1121,7 +1124,9 @@ impl Engine {
         };
         // Trusted tools must keep descendants in this group and join them before exit.
         // A surviving descendant makes completion ambiguous; kill the group, retain output.
+        // SAFETY: signal 0 only probes whether the job's process group still exists.
         if unsafe { libc::kill(-group, 0) } == 0 {
+            // SAFETY: kill takes no pointers; the target is this job's dedicated process group.
             unsafe {
                 libc::kill(-group, libc::SIGKILL);
             }

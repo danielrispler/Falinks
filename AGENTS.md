@@ -6,6 +6,24 @@ These docs are shared by Codex and Claude Code. `$skill` means `/skill` in Claud
 
 The engine core is Rust only, along with its adapters, controlled hosts and repository automation. Falinks supports Rust and Go projects, so tests and fixtures may also be written in Go. Use Cargo for builds, checks and tool entry points; introduce no other language.
 
+## Checks
+
+CI runs these commands (`cargo deny` through its GitHub action, on Linux); run them before handing off a change:
+
+```sh
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo fmt --manifest-path evaluation/Cargo.toml --check
+cargo fetch --locked --manifest-path evaluation/Cargo.toml
+cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1
+cargo deny --locked check advisories bans
+cargo deny --locked --manifest-path evaluation/Cargo.toml check advisories bans
+```
+
+The toolchain is pinned in `rust-toolchain.toml`. The evaluation tests need Go on PATH.
+
 ## Agent skills
 
 ### Learning
@@ -26,4 +44,4 @@ Use the five default triage labels. Before triaging issues, read `docs/agents/tr
 
 ### Domain docs
 
-Use a single-context layout: root `CONTEXT.md` and `docs/adr/`. Before exploring the codebase, read `docs/agents/domain.md`.
+Use a single-context layout: root `CONTEXT.md` and `docs/adr/`. Before exploring the codebase, read `docs/agents/domain.md`. Settled decisions are indexed in the current map's Decisions-so-far; read the relevant linked resolution before proposing a design change.

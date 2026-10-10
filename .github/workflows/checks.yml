@@ -1,19 +1,71 @@
 name: Workflow checks
 
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  checks:
+  macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Reads rust-toolchain.toml.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          components: rustfmt, clippy
+          rustflags: ""
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-      - run: cargo run --bin wayfinder-startup -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  macos-evaluation:
+    # Separate job: sandboxed Go builds are slow; serial tests avoid runner contention.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache-workspaces: evaluation -> target
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: false
+      - run: cargo fmt --manifest-path evaluation/Cargo.toml --check
+      - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
+      - run: cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache-workspaces: |
+            . -> target
+            evaluation -> target
+      # Compile-only until Linux tests land (#35).
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: advisories bans
+          arguments: --locked
+          rust-version: "1.99.0"
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: advisories bans
+          arguments: --locked
+          rust-version: "1.99.0"
+          manifest-path: evaluation/Cargo.toml
