@@ -38,6 +38,10 @@ const SUMMARY_DRAFT: &str =
     "package gate\n\nfunc Summary(gross int, name string) string {\n\treturn Label(name)\n}\n";
 const SUMMARY_FINAL: &str = "package gate\n\nimport \"strconv\"\n\nfunc Summary(gross int, name string) string {\n\treturn Label(name) + \" costs \" + strconv.Itoa(Net(gross))\n}\n";
 const SUMMARY_NET: &str = "package gate\n\nimport \"strconv\"\n\nfunc Summary(gross int, name string) string {\n\treturn Label(name) + \" nets \" + strconv.Itoa(Net(gross))\n}\n";
+/// gofmt turns this into `SUMMARY_FINAL`.
+const SUMMARY_MESSY: &str = "package gate\n\nimport \"strconv\"\n\nfunc Summary(gross int, name string) string {\n\treturn Label(name)+\" costs \"+strconv.Itoa(Net(gross))\n}\n";
+const LABEL_LOUD: &str =
+    "package gate\n\nfunc Label(name string) string {\n\treturn \"item: \" + name + \"!\"\n}\n";
 const TEST: &str = "package gate\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestNetStaysWithinGross(t *testing.T) {\n\tfor gross := 0; gross <= 1000; gross++ {\n\t\tif n := Net(gross); n < 0 || n > gross {\n\t\t\tt.Fatalf(\"Net(%d) = %d\", gross, n)\n\t\t}\n\t}\n}\n\nfunc TestLabelNamesTheItem(t *testing.T) {\n\tif !strings.Contains(Label(\"lamp\"), \"lamp\") {\n\t\tt.Fatal(Label(\"lamp\"))\n\t}\n}\n";
 /// Enrolled source; `summary.go` is absent until agent 1 creates it.
 const FILES: &[(&str, Option<&str>)] = &[
@@ -334,10 +338,16 @@ impl Gate {
     fn prompt(&mut self, agent: usize, steps: &str) -> Result<()> {
         let events = self.undelivered(agent)?;
         let pending = self.engine().pending(self.client(agent))?;
+        let deferred: Vec<Value> = pending
+            .deferred
+            .iter()
+            .map(|(event, note)| json!({"event":event,"note":note}))
+            .collect();
         let text = format!(
-            "{}\nEngine events since your last notice: {}\nYour pending obligations: {}\n\n{steps}",
+            "{}\nEngine events since your last notice: {}\nYour deferred events: {}\nYour pending obligations: {}\n\n{steps}",
             self.header(agent)?,
             json_string(&events),
+            json_string(&deferred),
             json_string(&pending.obligations),
         );
         if let Some(last) = events.last() {
@@ -711,7 +721,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     gate.run(&[(0, review.into()), (1, review.into())])?;
     let summary_version = version(gate, "summary.go")?;
     let steps = format!(
-        "1. {}\n2. falinks_capture with request {{\"paths\": [\"price.go\"]}} and quote the body of Discount from its price.go content.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with request {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned.{}",
+        "1. {}\n2. falinks_capture with request {{\"paths\": [\"price.go\"]}} and quote the body of Discount from its price.go content.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with request {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned. Attempt this edit before any falinks_review.{}",
         edit_step(
             "summary-draft",
             "summary.go",
@@ -723,6 +733,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         root = gate.engine().root(gate.client(1))?.display()
     );
     let before = gate.accepted(1, "edit").len();
+    let phase_edits = gate.calls(1, "edit").len();
     gate.prompt(1, &steps)?;
     // Host barrier: once agent 1's draft is in, only agent 0 runs until its incomplete
     // draft commits. Agent 1's next mediated call waits, inside the same turn.
@@ -762,28 +773,52 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .find(|d| event_seq(d) >= Some(obligation.seq))
         .cloned()
         .ok_or("obligation notice not sent mid-turn")?;
-    let saw_draft = runtime.session.events.iter().any(|e| {
-        e["type"] == "user" && e.to_string().contains("return gross /\\n") && e["isReplay"] != true
-    });
-    let reviews = gate.accepted(1, "review");
-    let edits = gate.calls(1, "edit");
-    let final_edit = edits
+    // A native Read (not a capture) returned the peer's incomplete draft.
+    let reads: Vec<Value> = runtime
+        .session
+        .events
         .iter()
-        .find(|c| {
-            c["result"]["accepted"] == true
-                && c["host_call"]["request"]["output"]["summary.go"]["content"] == SUMMARY_FINAL
+        .filter(|e| e["type"] == "assistant")
+        .flat_map(|e| {
+            e["message"]["content"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
         })
-        .ok_or("summary final never applied")?;
-    let review_revision = reviews
-        .last()
-        .and_then(|r| r["host_call"]["request"]["revision"].as_u64())
-        .ok_or("agent 1 never reviewed")?;
+        .filter(|b| b["type"] == "tool_use" && b["name"] == "Read")
+        .map(|b| b["id"].clone())
+        .collect();
+    let saw_draft = runtime
+        .session
+        .events
+        .iter()
+        .filter(|e| e["type"] == "user" && e["isReplay"] != true)
+        .flat_map(|e| {
+            e["message"]["content"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .any(|b| {
+            b["type"] == "tool_result"
+                && reads.contains(&b["tool_use_id"])
+                && b.to_string().contains("return gross /\\n")
+        });
+    let reviews = gate.accepted(1, "review");
+    let edits = gate.calls(1, "edit").split_off(phase_edits);
+    let refused = edits
+        .iter()
+        .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
+    let applied = edits.iter().position(|c| {
+        c["result"]["accepted"] == true
+            && c["host_call"]["request"]["output"]["summary.go"]["content"] == SUMMARY_FINAL
+    });
     require(
         delivery["sent_in_turn"] == true
             && delivery["presented_span"] == delivery["sent_span"]
             && saw_draft
-            && final_edit["result"]["outcome"]["Applied"]["revision"].as_u64()
-                > Some(review_revision),
+            && refused.is_some()
+            && applied > refused,
         "steering, live incomplete draft or review-before-write failed",
     )?;
     gate.control(1, "steering")?;
@@ -910,6 +945,64 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     )?;
     gate.control(0, "steering")?;
     gate.evidence["phases"]["steering"]["agent0"] = json!({"delivery":delivery,"edits":edits});
+
+    // Exact two-member checks while drafting continues: agent 0 asks for feedback on the
+    // team revision; agent 1 drafts past it before the held run is processed.
+    gate.pause.store(true, Ordering::SeqCst);
+    let team = gate.engine().capture()?;
+    gate.run(&[(
+        0,
+        format!(
+            "1. falinks_capture with request {{}}.\n2. falinks_feedback with request {{\"id\": \"team-early\", \"revision\": {}}}.",
+            team.revision
+        ),
+    )])?;
+    let early = gate
+        .engine()
+        .runs()?
+        .into_iter()
+        .find(|r| r.binding.revision == team.revision && r.outcome.is_none())
+        .ok_or("feedback run not queued")?;
+    let summary = gate.engine().capture()?.files["summary.go"].version;
+    gate.run(&[(
+        1,
+        format!(
+            "1. {}{}",
+            edit_step(
+                "summary-more",
+                "summary.go",
+                SUMMARY_FINAL,
+                &summary.to_string()
+            ),
+            unreviewed("summary-more-2")
+        ),
+    )])?;
+    let drafted = gate.engine().capture()?.revision;
+    gate.pause.store(false, Ordering::SeqCst);
+    let id = early.id.clone();
+    gate.drive(|gate| {
+        Ok(gate
+            .engine()
+            .run(&id)
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.outcome.is_some()))
+    })?;
+    let checked = gate.engine().run(&id)?.ok_or("feedback run missing")?;
+    require(
+        checked.outcome == Some(RunOutcome::Passed)
+            && checked.binding.members == BTreeSet::from([0, 1])
+            && checked.binding.tree == team.tree
+            && drafted > team.revision,
+        &format!(
+            "two-member feedback did not check the exact held revision: {:?}",
+            checked.outcome
+        ),
+    )?;
+    gate.phase(
+        "team_checks_while_drafting",
+        json!({"run":checked,"drafted_revision":drafted}),
+    );
     let review = "1. falinks_pending with request {}.\n2. falinks_capture with request {}.\n3. For each pending obligation, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If none is pending, do nothing.";
     gate.run(&[(0, review.into()), (1, review.into())])?;
     for agent in 0..2 {
@@ -1010,42 +1103,133 @@ fn scenario(gate: &mut Gate) -> Result<()> {
             "mirror_after_crash":stale_mirror,"mirror_after_restart":published.tree}),
     );
 
-    // Phase 8: completion race. A message sent after `result` starts a new turn and
-    // leaves the engine event unhandled.
-    gate.run(&[(1, "1. falinks_post with request {\"task\": \"gate\", \"scope\": [], \"work\": \"None\", \"text\": \"summary is published\", \"reply_to\": null}.".into())])?;
-    let events = gate.undelivered(0)?;
-    let last = events.last().ok_or("no event for agent 0")?.clone();
-    gate.workers[0].delivered = last.seq;
-    gate.runtime(0)?.send(
+    // Phase 8: durable deferral and restored gates. Agent 0 changes Label; agent 1 defers
+    // its first unhandled event; its worker restarts; the resumed worker gets the deferral
+    // and obligation replayed, and its related write stays refused until review.
+    let label = gate.engine().capture()?.files["label.go"].version;
+    gate.run(&[(
+        0,
         format!(
-            "Host notice {}: engine events {}. Reply with one line acknowledging it and make no tool calls.",
-            last.id,
-            json_string(&events)
+            "1. {}{}",
+            edit_step("label-loud", "label.go", LABEL_LOUD, &label.to_string()),
+            unreviewed("label-loud-2")
         ),
-        Some(&last.id),
-    )?;
-    gate.drive(|_| Ok(true))?;
-    let delivery = gate
-        .runtime(0)?
-        .session
-        .deliveries
-        .iter()
-        .find(|d| d["event"] == last.id)
-        .cloned()
-        .ok_or("race notice missing")?;
-    let unhandled = gate.engine().pending(gate.client(0))?.unhandled;
+    )])?;
     require(
-        delivery["sent_in_turn"] == false
-            && delivery["presented_span"].as_u64() > delivery["sent_span"].as_u64()
-            && unhandled.iter().any(|e| e.seq == last.seq),
-        "later-turn presentation changed engine state",
+        gate.read_live(0, "label.go")? == LABEL_LOUD,
+        "label change missing",
     )?;
-    for agent in 0..2 {
-        gate.control(agent, "completion_race")?;
-    }
-    gate.phase("completion_race", json!({"delivery":delivery}));
+    let first = gate
+        .engine()
+        .pending(gate.client(1))?
+        .unhandled
+        .first()
+        .ok_or("agent 1 has no unhandled event")?
+        .seq;
+    gate.run(&[(
+        1,
+        format!("1. falinks_handle with request {{\"seq\": {first}, \"deferred\": \"revisit after restart\"}}."),
+    )])?;
+    let before_restart = gate.engine().pending(gate.client(1))?;
+    require(
+        before_restart.deferred.iter().any(|(e, _)| e.seq == first)
+            && !before_restart.obligations.is_empty(),
+        "deferral or obligation not recorded before the restart",
+    )?;
+    gate.stop_worker(1)?;
+    gate.start(1)?;
+    let summary = gate.engine().capture()?.files["summary.go"].version;
+    let phase_edits = gate.calls(1, "edit").len();
+    gate.run(&[(
+        1,
+        format!(
+            "The host restarted your worker; your deferred events and obligations are above.\n1. {} Attempt this edit before any falinks_review.{}",
+            edit_step("summary-messy", "summary.go", SUMMARY_MESSY, &summary.to_string()),
+            unreviewed("summary-messy-2")
+        ),
+    )])?;
+    let edits = gate.calls(1, "edit").split_off(phase_edits);
+    let refused = edits
+        .iter()
+        .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
+    let applied = edits.iter().position(|c| c["result"]["accepted"] == true);
+    require(
+        refused.is_some() && applied > refused && gate.read_live(1, "summary.go")? == SUMMARY_MESSY,
+        "restored review gate did not hold the resumed worker's write",
+    )?;
+    // The resumed worker formats its draft with the host-enrolled job.
+    let revision = gate.engine().capture()?.revision;
+    gate.run(&[(
+        1,
+        format!(
+            "1. falinks_capture with request {{}}.\n2. falinks_job with request {{\"id\": \"fmt\", \"revision\": {revision}, \"paths\": [\"summary.go\"]}}.\n3. falinks_apply_job with request {{\"id\": \"fmt\"}}."
+        ),
+    )])?;
+    let job = gate
+        .engine()
+        .request(gate.client(1), "job:fmt")?
+        .ok_or("job application missing")?;
+    require(
+        gate.read_live(1, "summary.go")? == SUMMARY_FINAL
+            && job.agent == 1
+            && matches!(job.outcome, Some(falinks::Outcome::Applied { .. })),
+        "captured job did not apply attributed output",
+    )?;
+    gate.phase(
+        "deferral_and_jobs",
+        json!({"deferred_seq":first,"edits":edits,"job":job}),
+    );
 
-    // Phase 9: unknown-source host injection. The engine halts, evidence stays, and the
+    // Phase 9: completion race. A message sent after `result` starts a new turn and
+    // leaves the engine event unhandled.
+    let post = |text: &str| {
+        format!(
+            "1. falinks_post with request {{\"task\": \"gate\", \"scope\": [], \"work\": \"None\", \"text\": \"{text}\", \"reply_to\": null}}."
+        )
+    };
+    gate.run(&[
+        (0, post("discount is published")),
+        (1, post("summary is published")),
+    ])?;
+    let mut races = vec![];
+    for agent in 0..2 {
+        let events = gate.undelivered(agent)?;
+        let last = events.last().ok_or("no race event")?.clone();
+        gate.workers[agent].delivered = last.seq;
+        gate.runtime(agent)?.send(
+            format!(
+                "Host notice {}: engine events {}. Reply with one line acknowledging it and make no tool calls.",
+                last.id,
+                json_string(&events)
+            ),
+            Some(&last.id),
+        )?;
+        races.push(last);
+    }
+    gate.drive(|_| Ok(true))?;
+    let mut deliveries = vec![];
+    for (agent, last) in races.iter().enumerate() {
+        let delivery = gate
+            .runtime(agent)?
+            .session
+            .deliveries
+            .iter()
+            .find(|d| d["event"] == last.id)
+            .cloned()
+            .ok_or("race notice missing")?;
+        let unhandled = gate.engine().pending(gate.client(agent))?.unhandled;
+        require(
+            delivery["sent_in_turn"] == false
+                && delivery["presented_span"].as_u64() > delivery["sent_span"].as_u64()
+                && unhandled.iter().any(|e| e.seq == last.seq),
+            "later-turn presentation changed engine state",
+        )?;
+        gate.control(agent, "completion_race")?;
+        deliveries.push(delivery);
+    }
+    gate.phase("completion_race", json!({"deliveries":deliveries}));
+
+    // Phase 10: unknown-source host injection. The engine halts, evidence stays, and the
     // worker's capability is revoked, which blocks publication and scoring.
     for agent in 0..2 {
         require(
@@ -1069,17 +1253,35 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         ),
     )])?;
     let incident = gate.engine().incident()?.ok_or("injection not detected")?;
+    // The halt reaches agent 1's next mediated call too.
+    gate.run(&[(1, "1. falinks_capture with request {}.".into())])?;
+    let published = gate.engine().published()?;
+    // Publication stays refused: a host-queued check run cannot publish.
+    let feedback = gate
+        .engine()
+        .feedback(gate.client(1), "after-halt", published.revision);
+    let validated = gate.engine().validate();
     require(
-        gate.runtime(0)?.session.gate.failed
-            && gate.runtime(0)?.require_supported().is_err()
-            && fs::read_to_string(space(&gate.dir, 0).join("label.go"))? == injected,
-        "unknown change did not revoke capability or lost evidence",
+        gate.engine().published()? == published
+            && !matches!(validated, Ok(Some(ref run)) if matches!(run.outcome, Some(RunOutcome::Published { .. }))),
+        "publication proceeded after the incident",
     )?;
     for agent in 0..2 {
+        require(
+            gate.runtime(agent)?.session.gate.failed
+                && gate.runtime(agent)?.require_supported().is_err(),
+            "unknown change did not revoke a worker's capability",
+        )?;
         gate.workers[agent]
             .controls
             .insert("unknown_change".into(), true);
     }
+    require(
+        fs::read_to_string(space(&gate.dir, 0).join("label.go"))? == injected,
+        "unknown change evidence was overwritten",
+    )?;
+    gate.evidence["phases"]["after_halt"] = json!({"feedback":format!("{:?}", feedback.map(|r| r.id)),
+        "validate":format!("{:?}", validated.map(|r| r.map(|r| r.outcome)))});
     gate.phase(
         "unknown_change",
         json!({"incident":incident.reason,"capability_revoked":true}),
