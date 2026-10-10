@@ -4,7 +4,7 @@ Issue [#23](https://github.com/danielrispler/Falinks/issues/23) supplies the ada
 
 ## Run
 
-Use macOS arm64 and the official `openai/codex` release `rust-v0.160.0`. Extract `codex-aarch64-apple-darwin.tar.gz` and `codex-code-mode-host-aarch64-apple-darwin.tar.gz` into a dedicated directory. Name the companion `codex-code-mode-host` alongside the CLI. Startup checks both executable hashes and the emitted experimental protocol schema; it never substitutes the installed CLI.
+Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) (today macOS arm64) and the official `openai/codex` release `rust-v0.160.0`. Extract `codex-aarch64-apple-darwin.tar.gz` and `codex-code-mode-host-aarch64-apple-darwin.tar.gz` into a dedicated directory. Name the companion `codex-code-mode-host` alongside the CLI. Startup checks both executable hashes and the emitted experimental protocol schema; it never substitutes the installed CLI.
 
 ```sh
 cargo check --all-targets

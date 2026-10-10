@@ -1,7 +1,7 @@
 //! Pinned Claude Code worker adapter: the #23 boundary ported to stream-json.
 //! Runtime-independent pieces (`Boundary`, `ControlGate`, `ControlledHost`) come from `falinks-host`.
 use falinks_host::{
-    Boundary, ControlGate, Result, file_hash, require,
+    Boundary, ControlGate, PinMap, Result, file_hash, platform_pin, require,
     runtime::{Engine, Notice},
 };
 use serde_json::{Value, json};
@@ -21,7 +21,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const PIN: &str = "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea";
+/// SHA-256 of the `claude` binary per verified platform.
+pub const PINS: PinMap<&str> = &[(
+    ("macos", "aarch64"),
+    "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea",
+)];
 pub const VERSION: &str = "2.1.287";
 pub const MODEL: &str = "claude-opus-5-5";
 /// Built-in tools every worker gets; the launch adds its `falinks` tools.
@@ -126,12 +130,17 @@ pub fn probe_controls(events: &[Value], command: &str, names: &[String]) -> Resu
     Err("exact probe command did not complete through the actual Bash tool".into())
 }
 
+pub fn pin(os: &str, arch: &str) -> Result<&'static str> {
+    platform_pin(PINS, os, arch)
+}
+
 pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
+    let pin = pin(std::env::consts::OS, std::env::consts::ARCH)?;
     let binary = binary.canonicalize()?;
     // Hash first: an unpinned executable is never run, and no other installed CLI is tried.
     require(
-        cfg!(target_os = "macos") && file_hash(&binary)? == PIN,
-        "unsupported platform or claude SHA-256; publication/scoring disabled",
+        file_hash(&binary)? == pin,
+        "unpinned claude SHA-256; publication/scoring disabled",
     )?;
     let mut command = Command::new(&binary);
     command.arg("--version").env("DISABLE_AUTOUPDATER", "1");

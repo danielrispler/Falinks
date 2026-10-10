@@ -393,3 +393,26 @@ fn queued_messages_merged_into_one_presentation_each_count_as_presented() {
         .collect();
     assert_eq!(spans, [json!(1), json!(1)]);
 }
+
+#[test]
+fn only_declared_platforms_have_a_claude_pin() {
+    assert_eq!(
+        falinks_claude::pin("macos", "aarch64").unwrap(),
+        "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea"
+    );
+    for (os, arch) in [
+        ("macos", "x86_64"),
+        ("linux", "x86_64"),
+        ("windows", "x86_64"),
+    ] {
+        let error = falinks_claude::pin(os, arch).unwrap_err().to_string();
+        assert!(error.contains("unsupported platform"), "{error}");
+    }
+}
+
+#[test]
+fn platforms_doc_lists_the_claude_pins() {
+    let doc = include_str!("../../../docs/platforms.md");
+    let row = falinks_host::platforms_row("Claude Code adapter", falinks_claude::PINS);
+    assert!(doc.lines().any(|line| line == row), "missing row: {row}");
+}

@@ -21,8 +21,44 @@ pub const REQUIRED: &[&str] = &[
     "completion_race",
     "resume_replay",
 ];
-pub const PIN: &str = "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b";
-pub const HOST_PIN: &str = "679eedaea70529aa1cffc9bc0a0788c186412663544fa76c09d63b57f383a65a";
+/// Verified pins keyed by `std::env::consts::{OS, ARCH}`. A platform is declared only after
+/// its adapter controls were re-run there (review-enforced); every other platform fails closed.
+pub type PinMap<T> = &'static [((&'static str, &'static str), T)];
+
+pub fn platform_pin<T: Copy>(pins: PinMap<T>, os: &str, arch: &str) -> Result<T> {
+    pins.iter()
+        .find(|(platform, _)| *platform == (os, arch))
+        .map(|(_, pin)| *pin)
+        .ok_or_else(|| {
+            format!("unsupported platform {os}/{arch}; publication/scoring disabled").into()
+        })
+}
+/// The `docs/platforms.md` columns, as `std::env::consts::{OS, ARCH}`.
+pub const PLATFORMS: &[(&str, &str)] = &[
+    ("macos", "aarch64"),
+    ("macos", "x86_64"),
+    ("linux", "x86_64"),
+    ("linux", "aarch64"),
+];
+/// The adapter's row in `docs/platforms.md`, derived from its pins so the two cannot drift.
+pub fn platforms_row<T>(component: &str, pins: PinMap<T>) -> String {
+    for (platform, _) in pins {
+        assert!(
+            PLATFORMS.contains(platform),
+            "{platform:?} has no docs column"
+        );
+    }
+    let cells: Vec<&str> = PLATFORMS
+        .iter()
+        .map(
+            |platform| match pins.iter().any(|(pinned, _)| pinned == platform) {
+                true => "Supported",
+                false => "Not yet verified (fails closed)",
+            },
+        )
+        .collect();
+    format!("| {component} | {} |", cells.join(" | "))
+}
 
 pub fn require(condition: bool, message: &str) -> Result<()> {
     if condition {

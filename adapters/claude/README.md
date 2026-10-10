@@ -4,7 +4,7 @@ Issue [#33](https://github.com/danielrispler/Falinks/issues/33) ports the [#23](
 
 ## Run
 
-Use macOS arm64 and Claude Code `2.1.287` (SHA-256 `6eab8333…cb41ea`). Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
+Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) (today macOS arm64) and Claude Code `2.1.287` (SHA-256 `6eab8333…cb41ea`). Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
 
 ```sh
 cargo build --release --bins
