@@ -9,6 +9,7 @@ use std::process::{Command, Output, Stdio};
 const CLI: &str = env!("CARGO_BIN_EXE_falinks-eval");
 const SCRIPTED: &str = env!("CARGO_BIN_EXE_scripted-worker");
 const CODEX_WORKER: &str = env!("CARGO_BIN_EXE_codex-worker");
+const CLAUDE_WORKER: &str = env!("CARGO_BIN_EXE_claude-worker");
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -79,6 +80,13 @@ fn config(base: &Path, worker_script: &str, worker_command: Value, runtime: &str
         ("runtime_sha256", json!(hash(runtime))),
         ("runtime_binary", json!(runtime)),
         ("auth_file", Value::Null),
+        ("runtime_home", Value::Null),
+        ("runtime_writable", json!([])),
+        ("evaluation_root", json!(root())),
+        ("eval_binary", json!(CLI)),
+        ("falinks_runner", json!(SCRIPTED)),
+        // The gate must name the same runtime binary as the runs.
+        ("gate_command", json!(["/bin/cp", runtime, "{output}"])),
         ("denied_roots", json!([])),
         ("timeout_seconds", json!(90)),
     ] {
@@ -102,11 +110,16 @@ fn baseline(fixture: &str, config: &Path, run: &Path) -> Output {
 
 fn successful_evidence(result: &Output, run: &Path) -> Value {
     let evidence_path = run.join("controller/result.json");
+    let stderr = |agent: &str| {
+        fs::read_to_string(run.join(format!("controller/{agent}.stderr"))).unwrap_or_default()
+    };
     assert!(
         result.status.success(),
-        "{}{}",
+        "{}{}\nA: {}\nB: {}",
         text(result),
-        fs::read_to_string(&evidence_path).unwrap_or_default()
+        fs::read_to_string(&evidence_path).unwrap_or_default(),
+        stderr("A"),
+        stderr("B")
     );
     read(evidence_path)
 }
@@ -266,6 +279,96 @@ fn codex_bridge_waits_for_peer_events_and_retains_all_usage() {
             .collect();
         assert_eq!(numbers, (1..=turns as u64).collect::<Vec<_>>());
     }
+}
+
+#[test]
+fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage() {
+    let tmp = tmp("falinks-claude-bridge-test-");
+    let base = tmp.path();
+    // The fake runtime runs inside the worker sandbox, so it must live outside the checkout.
+    let runtime = base.join("fake-claude");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        runtime.to_str().unwrap(),
+    );
+    let run = base.join("run");
+    let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
+    assert_eq!(evidence["usage"]["status"], "available");
+    for agent in ["A", "B"] {
+        let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
+        assert_eq!(reports[0]["subtype"], "error_max_turns");
+        // Capped first turn, its continuation, the plan/diff/development events.
+        assert!(reports.len() >= 4, "{reports:?}");
+        let transcript = fs::read_to_string(
+            run.join("agents")
+                .join(agent)
+                .join("scratch/claude-events.jsonl"),
+        )
+        .unwrap();
+        assert!(transcript.contains("\"done\"") && !transcript.contains("hidden"));
+    }
+    let events = fs::read_to_string(run.join("controller/events.jsonl")).unwrap();
+    assert_eq!(events.matches("\"action\":\"message\"").count(), 2);
+}
+
+#[test]
+fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
+    let tmp = tmp("falinks-batch-test-");
+    let config_path = config(
+        tmp.path(),
+        SCRIPTED,
+        json!(["{worker}", "relationships"]),
+        SCRIPTED,
+    );
+    let runs = tmp.path().join("runs");
+    let batch = |outcome: &str| {
+        Command::new(CLI)
+            .args(["batch", "--config"])
+            .arg(&config_path)
+            .arg("--runs")
+            .arg(&runs)
+            .env("FALINKS_FAKE_OUTCOME", outcome)
+            .output()
+            .unwrap()
+    };
+    let paused = batch("infrastructure_failure");
+    assert_eq!(paused.status.code(), Some(3), "{}", text(&paused));
+    let ledger = read(runs.join("batch.json"));
+    assert_eq!(ledger["runs"][0]["outcome"], "success");
+    assert_eq!(ledger["runs"][1]["outcome"], "infrastructure_failure");
+    assert_eq!(ledger["pauses"].as_array().unwrap().len(), 1);
+    let early = Command::new(CLI)
+        .args(["batch", "--config"])
+        .arg(&config_path)
+        .arg("--runs")
+        .arg(tmp.path().join("scored"))
+        .arg("--after-pilot")
+        .arg(&runs)
+        .output()
+        .unwrap();
+    assert!(
+        text(&early).contains("Complete the unscored pilot pair"),
+        "{}",
+        text(&early)
+    );
+
+    let finished = batch("success");
+    assert!(finished.status.success(), "{}", text(&finished));
+    let ledger = read(runs.join("batch.json"));
+    let replacement = &ledger["runs"][2];
+    assert_eq!(replacement["run_id"], "pilot-falinks-r1");
+    assert_eq!(replacement["replaces"], "pilot-falinks");
+    assert_eq!(ledger["gates"].as_array().unwrap().len(), 2);
+    assert!(runs.join("gate-2.json").exists());
+    assert_eq!(
+        read(runs.join("pilot-git/controller/result.json"))["scored"],
+        false
+    );
+    let summary = read(runs.join("report.json"));
+    assert_eq!(summary["replaced_runs"], json!(["pilot-falinks"]));
 }
 
 #[test]

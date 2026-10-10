@@ -100,3 +100,19 @@ Engine events are persisted before any notice. A worker in an active turn is sen
 ### Limits
 
 These are finite host-scripted runs on one machine and binary. Steering is forced by host barriers, not natural timing. Claude Code blocks long `sleep` commands, so a worker cannot be asked to wait. The model can trigger a safeguard refusal fallback; the model-identity control then invalidates the run, and prompts use neutral wording to make that less likely. `wait` is not a tool, because a blocking call would stall the single host thread.
+
+## Evaluation arm (#27)
+
+`falinks-arm FIXTURE --config FILE --output DIR [--pair NAME] [--order N] [--scored true]` runs one Falinks-arm evaluation run. Usually `falinks-eval batch` runs it; see `evaluation/README.md`. `arm::Arm` is the runtime-independent core: the production engine on the exported fixture, the Git arm's milestone triggers, and the host tools `ack`, `check` and `ready`. It calls the shared `falinks-eval oracle` on a commit of each exact capture. `tests/arm.rs` drives it with scripted envelopes, so no model is involved. Those tests cover drafts and milestones, pass/fail-only checks, publication and readiness, refused edits after `ready`, and the Rust visible checks under the engine sandbox.
+
+The runner launches both workers with the #26 profile and `control_host` set. The batch's fresh `check-integration` run supplies the controls; any later control failure still latches the gate and invalidates the run. The runner calls `reconsider()` once so the engine recommends at later boundaries. After an applied split or join, the moved worker is resumed in its new root.
+
+The result follows `evaluation/result-schema.json`. Retained evidence includes:
+
+- the timeline (`events.jsonl`)
+- engine history, runs, proposals and validator log
+- transcripts without reasoning
+- oracle evidence for every candidate (`controller/oracle/`)
+- per-turn usage with the last `rate_limit_event`
+
+Limits: the runner has not yet run against real agents. The pilot is its first real exercise. Natural-timing runs may meet stream-json shapes the gate has not recorded (for example, a compaction boundary in a long session). The adapter fails closed on those, so the run is recorded as an infrastructure failure.

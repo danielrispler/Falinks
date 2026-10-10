@@ -6,8 +6,10 @@ macOS `sandbox-exec`, Rust/Cargo and Go on PATH. The fixtures have no third-part
 dependencies. Verification used Rust 1.99.0 and Go 1.27.2 on macOS arm64.
 Unsupported/missing sandbox execution fails closed.
 
-Binaries: `falinks-eval` (the host CLI), `codex-worker` (the baseline Codex
-bridge) and `scripted-worker` (test-only scripted workers and fake runtime).
+Binaries: `falinks-eval` (the host CLI), `claude-worker` (the Git-arm Claude Code
+bridge, #27), `codex-worker` (the historical baseline Codex bridge) and
+`scripted-worker` (test-only scripted workers, fake runtimes and a fake Falinks runner).
+The Falinks arm runner is `falinks-arm` in `adapters/claude` (it needs the engine).
 
 ## Run the checks
 
@@ -40,10 +42,11 @@ instructions, developments and `oracle` seam, with its engine/adapter controls a
 
 Copy `config.json` to a host-only run configuration. Fill in the actual shared
 model, resolved model version, reasoning setting, runtime version, absolute
-runtime binary and its SHA-256, worker script path, and auth file. Use an absolute
-path to the `codex-worker` binary (`cargo build --release` puts it in
-`evaluation/target/release/`); credentials are copied into each isolated
-fresh CODEX_HOME rather than reusing previous session storage. Set `denied_roots`
+runtime binary and its SHA-256, worker script path, and runtime login fields. Use an
+absolute path to the worker binary (`cargo build --release` puts it in
+`evaluation/target/release/`). For the historical Codex bridge, `auth_file` is copied
+into each isolated fresh CODEX_HOME. For Claude Code, see
+[Paired evaluation](#paired-evaluation-27). Set `denied_roots`
 to all previous run directories and any additional solution/reference/transcript
 copies. Never put a run beneath a denied root or beneath this checkout.
 
@@ -102,8 +105,8 @@ cannot launch a run. The historical decision pins Codex 0.160.0 / SHA-256
 The initial setup installation was 0.161.0, so **no scored runs were attempted**. Reverify
 the pinned adapter or explicitly record/version renewed controls for another
 runtime; do not silently score with a new one. Deterministic engine and adapter
-safety gates from #19 remain prerequisites. This baseline CLI records unscored
-runs only. Scored-batch orchestration belongs with the downstream engine gates.
+safety gates from #19 remain prerequisites. `baseline` records unscored runs unless
+`batch` passes `--scored true`; see [Paired evaluation](#paired-evaluation-27).
 
 Record all arm instruction/tool differences. The baseline has separate writable
 worktrees and ordinary Git integration; Falinks has live grouped source and
@@ -154,14 +157,87 @@ budget includes preparation, communication, checks and integration. Every
 candidate check also has a bounded deadline. `schedule` emits the unscored
 producer/consumer pilot and nine pairs / 18 scored slots: three repetitions per
 fixture, alternating arm order and reversing the starting order by fixture.
-Infrastructure replacements need separate IDs linked to the failed run. No
-performance analysis or scored-batch execution is implemented here.
+Infrastructure replacements need separate IDs linked to the failed run; `batch`
+gives them `-rN` IDs and a `replaces` field.
+
+## Paired evaluation (#27)
+
+Claude Code `2.1.287` with `claude-opus-5-5` is the evaluated runtime in both arms
+([#32](https://github.com/danielrispler/Falinks/issues/32#issuecomment-6096677771)).
+Both arms launch one long-lived `claude -p` stream-json session per agent with the same
+isolation flags (`--setting-sources ""`, `--strict-mcp-config`, `--disable-slash-commands`,
+`dontAsk`), default reasoning and `--max-turns 12`. When a message hits that tool-call cap,
+the host sends a continuation. Host events are written at once and presented at the next
+tool-result boundary or as a new turn. An idle, unfinished agent with no new events gets a
+reminder after two minutes. Any `system/init` mismatch, model refusal fallback or other
+model in `modelUsage` invalidates the run. A `rate_limit_event` with status `rejected` ends
+it as `usage_limit`.
+
+- **Git arm** (`baseline` with `worker_script` = `claude-worker`): the worker runs in
+  the host sandbox-exec profile with Claude Code's sandbox off and tools
+  `Bash,Read,Glob,Grep,Edit,Write`. The agent reaches the host by running
+  `"$FALINKS_HOST" message|share|ack|check|ready` through Bash. A Unix socket relays those
+  commands as the JSON-line requests above, and `ready` fills in the last shared commit.
+  `runtime_home` and `runtime_writable` give the runtime its login and session state.
+- **Falinks arm** (`falinks-arm FIXTURE --config FILE --output DIR`): `prepare` exports the
+  fixture into the live root. Its dot-paths (`.gitignore`) are removed, because the engine
+  reserves them; the host adds their frozen bytes back to every candidate. The engine
+  enrolls the fixture files plus `x_test.go` / `tests/x.rs`. Engine checks are the Git
+  arm's visible commands with the pinned toolchain. Workers use the #26 launch profile and
+  every `engine_host` tool, plus host `ack`, `check` (visible checks and oracle on an exact
+  capture, pass/fail only) and `ready`. `ready` succeeds once every development is
+  acknowledged and the agent's workspace equals the published state. When both agents are
+  ready, the oracle runs on the published bytes. An applied split or join resumes the
+  moved worker in its new root. An engine incident is a `safety_failure`.
+- **Batch** (`batch --config FILE --runs DIR [--after-pilot PILOT_DIR]`): without
+  `--after-pilot` it runs the unscored pilot pair. Scoring is refused until that pilot
+  pair is complete.
+  - **Before any run**, the batch checks the frozen identities with `verify`. It then
+    runs `gate_command` once per invocation. That command must be a fresh
+    `check-integration` on the same `runtime_binary`.
+  - **Denied roots**: slots run in schedule order. Every other entry in the batch
+    directory is a denied root, as are sibling batch directories such as the pilot and
+    `<runtime_home>/.claude/projects`. Git-arm workers re-open only their own session
+    folder.
+  - **After each run**, the batch moves the run's `~/.claude/projects` session folders
+    into its private `controller/claude-projects`.
+  - **Pauses** (exit 3) happen on `usage_limit`, `safety_failure`,
+    `infrastructure_failure`, or a usage window at 90%.
+  - **Resuming**: rerunning resumes the batch. An infrastructure failure or a
+    usage-limited run gets an identified `-rN` replacement, and both records stay in
+    the evidence. After a `safety_failure`, the directory refuses to resume: repair,
+    renew the gates and start a new batch directory.
+  - **Configuration**: one batch directory keeps one configuration, so limits change
+    only between batches.
+  - **Report**: `report --runs DIR` lists every run's outcome, paired successes, medians
+    over jointly successful pairs and the continuation signal.
+  - **Agent mistakes** in either arm are refusals counted in `rejected_operations`. They
+    are never infrastructure failures.
+
+Run the pilot and batch in a session **outside auto mode**, because they launch nested
+agents:
+
+```sh
+cargo build --release --bins                       # repository root: falinks-arm, check-integration
+(cd evaluation && cargo build --release --offline) # claude-worker, falinks-eval
+cp evaluation/config.json /private/tmp/eval-config.json  # fill every REQUIRED field
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/pilot
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/scored --after-pilot /private/tmp/ev/pilot
+```
+
+Keep run roots short: the adapter's host socket lives in each run directory, and macOS
+limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and
+session state need more `runtime_writable` paths under the host sandbox. Record any such
+repair as a versioned pilot repair. A repair that changes frozen material needs
+`freeze`, which keeps the superseded manifest under `manifests/`, and a new
+configuration, so the scored batch uses a new directory.
 
 ## Freeze and setup budget
 
 `manifest.json` pins hashes and reproducible initial Git commits. The harness
 rejects changed materials. Repairs must be versioned before a new batch; then
-run `freeze`, retain the previous manifest and record why it changed. Never tune
+run `freeze`, which bumps `version` and retains the previous manifest under
+`manifests/`, and record why it changed in `setup.json`. Never tune
 against hidden oracle cases after scoring starts. Public and protected material
 hashes, instructions, worker/harness bytes and run configuration are evidence;
 the setup ledger is `setup.json`. The shared setup ceiling is eight hours and
@@ -175,5 +251,6 @@ for safety gates, run interpretation and continuation criteria.
 `verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger conservatively charges 3,789 seconds (about 63 minutes), leaving 25,011
-seconds of the shared eight-hour setup allowance for subsequent setup.
+ledger charges 6,491 seconds (about 108 minutes) through the #27 harness session,
+leaving 22,309 seconds of the shared eight-hour setup allowance for the pilot and any
+pilot repairs.
