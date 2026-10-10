@@ -1,6 +1,6 @@
 # Controlled live edits (#20)
 
-The `falinks` Rust library is the host-owned public protocol for this slice. `tests/protocol.rs` supplies two authenticated scripted clients using real temporary source, a bare Git object store and SQLite. Related-scope analysis, obligations, reviews, messages, offers, replay and waits are described in [Related-scope coordination (#21)](#related-scope-coordination-21). Exact candidates, validation and publication are described in [Checkpoint publication (#22)](#checkpoint-publication-22). The adapters are in `adapters/`; grouping belongs to a later ticket.
+The `falinks` Rust library is the host-owned public protocol for this slice. `tests/protocol.rs` supplies two authenticated scripted clients using real temporary source, a bare Git object store and SQLite. Related-scope analysis, obligations, reviews, messages, offers, replay and waits are described in [Related-scope coordination (#21)](#related-scope-coordination-21). Exact candidates, validation and publication are described in [Checkpoint publication (#22)](#checkpoint-publication-22). Join/split recommendations and workspace transitions are described in [Regrouping (#25)](#regrouping-25). The adapters are in `adapters/`.
 
 Run on macOS with Rust and `/usr/bin/git`:
 
@@ -58,7 +58,7 @@ Evidence is a pure function of an exact Git tree and the toolchain identity, cac
 
 ## Relevance
 
-A change covers the owners touched by its single per-file diff hunk in both the before and after evidence, so new edges in the after state count. A related scope is the registered nodes, everything they use (transitively), and their direct users. Both sides widen the same way. Missing evidence, analysis errors or a changed manifest/lockfile make the change unbounded. A broken unit, or a non-member file inside a unit, widens to that unit's files, its direct dependencies and all of its transitive reverse dependents. A declaration node covers its nested members. Bytes outside every owner widen to the file. The model treats the absence of reference or implementation edges as independence only for healthy, quiescent, unbroken evidence. This is the model-proven independence that lets unrelated work proceed; it is not a claim that the references are exhaustive (see Limits). File/package freshness is unchanged: distinct symbols never weaken `expected` versions.
+A change covers the owners touched by its single per-file diff hunk in both the before and after evidence, so new edges in the after state count. A related scope is the registered nodes and declared dependencies (`Scope::depends`), everything they use (transitively), and their direct users. Both sides widen the same way. Missing evidence, analysis errors or a changed manifest/lockfile make the change unbounded. A broken unit, or a non-member file inside a unit, widens to that unit's files, its direct dependencies and all of its transitive reverse dependents. A declaration node covers its nested members. Bytes outside every owner widen to the file. The model treats the absence of reference or implementation edges as independence only for healthy, quiescent, unbroken evidence. This is the model-proven independence that lets unrelated work proceed; it is not a claim that the references are exhaustive (see Limits). File/package freshness is unchanged: distinct symbols never weaken `expected` versions.
 
 ## Obligations, reviews and gates
 
@@ -119,3 +119,49 @@ Offer and feedback IDs are idempotent: an identical repeat returns the recorded 
 ## Limits
 
 Checks run serially in the one slot, and the host decides when to run `validate()`. Required checks are trusted host commands; Seatbelt is a bounded control, not containment of hostile tools. The engine combines automatically only along the linear completed history, so publication races always return the candidate for re-offer. An offer's recorded reviews are evidence. The enforced peer and dependency gate is that no member has a pending obligation for a change included in the candidate. A candidate blocked by a disconnected member emits no extra event: peers already receive `Disconnected`, and `candidate(R)` names the missing member. There is no power-loss guarantee, and no joint Git/SQLite transaction.
+
+# Regrouping (#25)
+
+`tests/regroup.rs` drives this slice through the public protocol with the real gopls/Go analysis and a trivial trusted check.
+
+## Workspaces and placement
+
+The engine holds one or more live roots (spaces). Space 0 is the root given to `Engine::open`; the host provisions more with `add_workspace(root)`, which must be empty, separate from storage and other roots, and is leased like the first. `placement()` names each agent's space: equal entries mean the agents are joined, which is the initial arrangement. `root(client)` is the only root the host may expose to that client's runtime, and `capture_for(client)` captures it. `capture()` is a host read of space 0, not an agent tool.
+
+Revision numbers are global, so every occurrence stays unique across spaces. Each revision records its `space`, its `group` (the agents placed there when it was created) and `included`, the set of applied operations its contents contain. Coverage uses those: a candidate's contributions are `included(R) − included(published)`, and its members are their authors plus host-required members of the revision's `group`. Regrouping therefore never changes a held candidate's membership. A candidate is publishable only when it contains the published state and adds work. Reviews, feedback and jobs must name a revision of the client's own space; an offer may also name a retained revision whose group included the client, so it can still cover a candidate held from before a transition. Live edits renew obligations only for agents placed in the edited space; the live-edit message still reaches the peer.
+
+## Recommendations
+
+`reconsider()` (host, initially), `recommend(client)` (agent request) and `propose(client, Propose)` (an agent's own join/split/keep, with an explanation and an optional failure report) produce a `Proposal`. Its `Signals` are observations, not a score:
+
+- compiler relationships between the agents' registered scopes (a scope's closure touches the other's nodes);
+- declarations: scopes registering the same nodes, or a `Scope::depends` declared dependency on the other's nodes. Declared dependencies also widen obligation relevance;
+- shared tasks;
+- stale or unreviewed write attempts, obligations raised by agents' live edits, and waits, since the last applied transition. Obligations a transition or incorporation raised are its consequence, not evidence;
+- agent reports and failure reports;
+- uncertainty: no analysis, degraded evidence, unbounded relevance or an agent without scopes.
+
+Joined agents split only when evidence is certain and shows no relationship, declaration, shared task or friction. Split agents join on a declaration, shared task, friction or uncertainty (prefer fewer groups); a compiler edge alone keeps the split. A failure report asks for the opposite arrangement. A pending proposal for the same change stands, whoever proposed it. An unchanged repeat from the same proposer since the last transition returns the earlier proposal, including a declined one. A join or split that would reverse or repeat the last applied transition becomes a keep unless scopes or relationships changed, friction appeared (for a join), or an agent reports failure; uncertainty alone does not reverse a split. There is no cooldown. After the first `reconsider()`, the engine also reconsiders at every boundary below, so materially new evidence produces a proposal without a request.
+
+A proposal names the affected agents, their scopes, the current and target placement, the target roots, the signals, the reasoning and a `context` fingerprint of placement plus every registered scope. Every `Regrouping` state change is an event to both agents.
+
+## Agreement
+
+`respond(client, id, context, Agree | Decline)` must repeat the proposal's exact context. Both agents must agree; silence or disconnect agrees to nothing. A decline keeps the arrangement. Any scope or placement change makes the proposal `Stale`; a new proposal and new agreement are required. A newer join/split proposal replaces older open ones.
+
+## Transitions
+
+Once both agree, the engine applies the proposal at once if its safety checks hold, otherwise it records `Blocked { blocker }` and keeps the current arrangement. Blocked proposals are retried after every edit, review, registration, response, validation run and provisioned root, while the context still matches. These boundaries run after the triggering operation has committed and never turn its outcome into an error: a transition that fails is recorded as `Blocked { blocker: "transition failed: …" }`. Blockers: a halted engine, a queued publication run, a space that has not incorporated the published state, an unprovisioned or occupied target root, unattributed differences from the published state, and overlapping drafts.
+
+- **Split** (agent 1 leaves): agent 1's unpublished operations and the files they wrote move to the target root, which receives the published state plus those files with their exact occurrences. Those paths in the shared root return to published bytes as new occurrences. If both agents' unpublished operations wrote the same file, the split waits (`interleaved unpublished drafts`) until that work is published.
+- **Join**: the leaving space's unpublished files are installed into the lower-numbered space, keeping their occurrences; the union of `included` keeps both authors in coverage. Overlapping unpublished files block the join. The vacated root keeps its last revision and is overwritten only by a later split.
+
+Transitions never publish, never reattribute operations, and never touch request records, checkpoints, runs or obligations. Old checkpoints keep their exact identity and binding; whether they still match a candidate is decided by the usual binding equality. Each agent whose view changed gets obligations for related scopes, caused by the applied `Regrouping` event. A transition records the before/after revisions of every root, retains the new snapshots and only then installs files. An interruption halts the engine. On restart every affected root must match its before or after bytes exactly; it is restored to before, and the agreed proposal applies at the next boundary.
+
+## Publications across split workspaces
+
+After each validation run, every occupied space that lacks the published state takes the published files that its own unpublished operations did not write, as an `Incorporated` event and a new revision. Its agents' related obligations are renewed. If the publication changed a file the space also drafted, nothing is installed; its members get one `Behind` event naming the overlaps. Its candidates cannot publish. `incorporate(client, request)` then installs the published state together with the client's resolution of every overlapping file, as one attributed operation (`Record::incorporates`) through the normal freshness and obligation gates.
+
+## Limits
+
+Two agents and therefore at most two occupied spaces; agent 1 is the one that leaves on a split. Engine-driven reconsideration starts with the host's first `reconsider()` and runs at operation boundaries, not on a timer. Signal analysis runs under the writer lock, like the edit gate. Draft movement is per file: two authors' drafts in one file block a split until published, and overlapping drafts block a join. There is no automatic merge of overlapping publications. Restart does not resume an interrupted transition by itself.

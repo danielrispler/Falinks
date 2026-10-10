@@ -136,6 +136,7 @@ fn scope(id: &str, nodes: &[&str]) -> Scope {
         id: id.into(),
         task: format!("task {id}"),
         nodes: nodes.iter().map(|n| n.to_string()).collect(),
+        depends: Default::default(),
     }
 }
 fn reread(engine: &Engine, client: &Client, scope: &str) -> Obligation {

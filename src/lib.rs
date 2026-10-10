@@ -3,6 +3,7 @@
 mod analysis;
 mod coordination;
 mod publication;
+mod regroup;
 pub use analysis::{Evidence, Footprint, Language, Owner, Pin, Tool, Toolchain, Unit, sha256_file};
 pub use coordination::{
     Availability, Body, Cancel, Checkpoint, Condition, Decision, Disposition, Event, Kind, Message,
@@ -11,10 +12,11 @@ pub use coordination::{
 pub use publication::{
     Binding, Candidate, Check, CheckResult, Run, RunAttempt, RunKind, RunOutcome, Stage,
 };
+pub use regroup::{Action, ProposalState, Propose, RegroupingProposal, Response, Signals};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
     os::unix::{
@@ -53,6 +55,16 @@ pub struct Capture {
     pub revision: u64,
     pub tree: String,
     pub files: BTreeMap<String, VersionedFile>,
+    /// The physical live workspace this revision belongs to; 0 is the primary root.
+    #[serde(default)]
+    pub space: usize,
+    /// Every applied operation whose effect this revision contains, published or not.
+    #[serde(default)]
+    pub included: BTreeSet<u64>,
+    /// Agents placed in this workspace when the revision was created; host-required
+    /// members of a candidate come from here, so later regrouping cannot change them.
+    #[serde(default)]
+    pub group: BTreeSet<usize>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -104,6 +116,9 @@ pub struct Record {
     pub before: Capture,
     pub proposed: Option<Capture>,
     pub outcome: Option<Outcome>,
+    /// The publication this operation incorporated, resolving overlapping drafts.
+    #[serde(default)]
+    pub incorporates: Option<u64>,
 }
 #[derive(Clone)]
 pub struct Client {
@@ -117,20 +132,46 @@ struct Identity {
     credentials: [String; 2],
 }
 
+/// Physical live workspaces and the agents placed in them. Changes only under the writer.
+#[derive(Clone)]
+pub(crate) struct Layout {
+    pub(crate) roots: Vec<PathBuf>,
+    /// None until a provisioned root first receives a workspace.
+    pub(crate) completed: Vec<Option<Capture>>,
+    pub(crate) placement: [usize; 2],
+}
+impl Layout {
+    /// The agent's workspace.
+    pub(crate) fn of(&self, agent: usize) -> usize {
+        self.placement[agent]
+    }
+    /// Agents placed in a workspace.
+    pub(crate) fn group(&self, space: usize) -> BTreeSet<usize> {
+        (0..2).filter(|a| self.placement[*a] == space).collect()
+    }
+    pub(crate) fn current(&self, space: usize) -> Result<Capture> {
+        Ok(self
+            .completed
+            .get(space)
+            .cloned()
+            .flatten()
+            .ok_or("workspace has no completed revision")?)
+    }
+}
+
 pub struct Engine {
-    live: PathBuf,
     state: PathBuf,
     identity: Identity,
     // ponytail: one writer mutex; split only if short-operation throughput warrants it.
     writer: Mutex<Connection>,
-    completed: RwLock<Capture>,
+    layout: RwLock<Layout>,
     jobs: Mutex<()>,
     analysis: RwLock<Vec<Toolchain>>,
     checks: RwLock<Vec<publication::Check>>,
     // One reusable validation workspace; its lease serializes validation runs.
     validation: Mutex<()>,
     signal: std::sync::Arc<coordination::Signal>,
-    _leases: [WriterLease; 2],
+    leases: Mutex<Vec<WriterLease>>,
 }
 
 fn connect(state: &Path) -> Result<Connection> {
@@ -142,9 +183,11 @@ fn connect(state: &Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, agent INTEGER NOT NULL, request_id TEXT NOT NULL, body TEXT NOT NULL, UNIQUE(agent, request_id));
         CREATE TABLE IF NOT EXISTS incidents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, body TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS jobs (agent INTEGER NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(agent,id));")?;
+        CREATE TABLE IF NOT EXISTS jobs (agent INTEGER NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(agent,id));
+        CREATE TABLE IF NOT EXISTS spaces (id INTEGER PRIMARY KEY, root TEXT NOT NULL UNIQUE, completed INTEGER);")?;
     coordination::tables(&db)?;
     publication::tables(&db)?;
+    regroup::tables(&db)?;
     Ok(db)
 }
 fn meta(db: &Connection, key: &str) -> Result<Option<String>> {
@@ -163,6 +206,34 @@ fn records(db: &Connection) -> Result<Vec<Record>> {
     let mut stmt = db.prepare("SELECT body FROM requests ORDER BY id")?;
     let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+}
+fn record(db: &Connection, operation: u64) -> Result<Record> {
+    Ok(serde_json::from_str(&db.query_row(
+        "SELECT body FROM requests WHERE id=?",
+        [operation as i64],
+        |r| r.get::<_, String>(0),
+    )?)?)
+}
+pub(crate) fn revision(db: &Connection, revision: u64) -> Result<Capture> {
+    let body = db
+        .query_row(
+            "SELECT body FROM revisions WHERE id=?",
+            [revision as i64],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or("unknown completed revision")?;
+    Ok(serde_json::from_str(&body)?)
+}
+/// Revision numbers are global across workspaces, so each names one occurrence.
+pub(crate) fn next_revision(db: &Connection) -> Result<u64> {
+    let max: i64 = db.query_row("SELECT COALESCE(MAX(id), 0) FROM revisions", [], |r| {
+        r.get(0)
+    })?;
+    Ok(max as u64 + 1)
+}
+pub(crate) fn placement(db: &Connection) -> Result<[usize; 2]> {
+    meta(db, "placement")?.map_or(Ok([0, 0]), |p| Ok(serde_json::from_str(&p)?))
 }
 fn save_record(db: &Connection, record: &Record) -> Result<()> {
     db.execute(
@@ -288,6 +359,24 @@ fn audit(live: &Path, capture: &Capture) -> Result<()> {
         }
     }
     Ok(())
+}
+/// Paths an operation installs: its outputs plus published files an incorporation brought in.
+fn installed(before: &Capture, proposed: &Capture, request: &Request) -> BTreeSet<String> {
+    proposed
+        .files
+        .iter()
+        .filter(|(p, f)| before.files[*p].file != f.file || request.output.contains_key(*p))
+        .map(|(p, _)| p.clone())
+        .collect()
+}
+/// A provisioned root that has not yet received a workspace holds no source.
+pub(crate) fn ensure_empty(root: &Path) -> Result<()> {
+    let mut observed = Vec::new();
+    paths(root, Path::new(""), &mut observed, true)?;
+    match observed.first() {
+        Some(path) => fail(format!("unexplained source write: {path}")),
+        None => Ok(()),
+    }
 }
 fn build_tree(
     state: &Path,
@@ -467,19 +556,37 @@ impl Engine {
         let db = connect(&state)?;
         let identity: Identity;
         let completed: Capture;
+        let mut leases = vec![source_lease, state_lease];
+        let mut layout = Layout {
+            roots: vec![live.clone()],
+            completed: Vec::new(),
+            placement: placement(&db)?,
+        };
         if let Some(stored) = meta(&db, "identity")? {
             identity = serde_json::from_str(&stored)?;
             if meta(&db, "live")?.as_deref() != live.to_str() {
                 return fail("workspace identity mismatch");
             }
-            let current: u64 = meta(&db, "completed")?
-                .ok_or("missing completed pointer")?
-                .parse()?;
-            completed = serde_json::from_str(&db.query_row(
-                "SELECT body FROM revisions WHERE id=?",
-                [current as i64],
-                |r| r.get::<_, String>(0),
-            )?)?;
+            let spaces = db
+                .prepare("SELECT root, completed FROM spaces ORDER BY id")?
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (i, (root, current)) in spaces.into_iter().enumerate() {
+                let root = PathBuf::from(root);
+                if i == 0 && root != live {
+                    return fail("workspace identity mismatch");
+                }
+                if i > 0 {
+                    leases.push(writer_lease(&root.join(".falinks-writer.lock"))?);
+                    layout.roots.push(root);
+                }
+                layout
+                    .completed
+                    .push(current.map(|c| revision(&db, c as u64)).transpose()?);
+            }
+            completed = layout.current(0)?;
             let expected: Vec<_> = enrolled.iter().map(|p| p.to_string()).collect();
             if expected.len() != completed.files.len()
                 || expected.iter().any(|p| !completed.files.contains_key(p))
@@ -540,32 +647,38 @@ impl Engine {
                 revision: 0,
                 tree: build_tree(&state, &files, "")?,
                 files,
+                space: 0,
+                included: BTreeSet::new(),
+                group: BTreeSet::from([0, 1]),
             };
             audit(&live, &completed)?;
             retain(&state, &completed)?;
             let tx = db.unchecked_transaction()?;
             set_meta(&tx, "identity", &serde_json::to_string(&identity)?)?;
             set_meta(&tx, "live", live.to_str().ok_or("non-UTF8 workspace")?)?;
-            set_meta(&tx, "completed", "0")?;
+            tx.execute(
+                "INSERT INTO spaces VALUES(0,?,0)",
+                [live.to_str().ok_or("non-UTF8 workspace")?],
+            )?;
             set_meta(&tx, "published", "0")?;
             tx.execute(
                 "INSERT INTO revisions VALUES(0,?)",
                 [serde_json::to_string(&completed)?],
             )?;
             tx.commit()?;
+            layout.completed.push(Some(completed));
         }
         let engine = Self {
-            live,
             state,
             identity,
             writer: Mutex::new(db),
-            completed: RwLock::new(completed),
+            layout: RwLock::new(layout),
             jobs: Mutex::new(()),
             analysis: RwLock::new(Vec::new()),
             checks: RwLock::new(Vec::new()),
             validation: Mutex::new(()),
             signal: coordination::Signal::new(),
-            _leases: [source_lease, state_lease],
+            leases: Mutex::new(leases),
         };
         engine.recover()?;
         publication::repair_mirror(&engine.state, &engine.published()?.tree)?;
@@ -599,12 +712,25 @@ impl Engine {
         }
         Ok(())
     }
-    pub fn capture(&self) -> Result<Capture> {
-        let capture = self
-            .completed
+    pub(crate) fn layout(&self) -> Result<Layout> {
+        Ok(self
+            .layout
             .read()
-            .map_err(|_| "completed lock poisoned")?
-            .clone();
+            .map_err(|_| "layout lock poisoned")?
+            .clone())
+    }
+    /// Host read of the primary workspace (space 0), where both agents start joined.
+    /// Agents read only their own workspace, through `capture_for`.
+    pub fn capture(&self) -> Result<Capture> {
+        self.capture_space(0)
+    }
+    /// Captures the live workspace the client is currently placed in.
+    pub fn capture_for(&self, client: &Client) -> Result<Capture> {
+        self.authorize(client)?;
+        self.capture_space(self.layout()?.of(client.agent))
+    }
+    fn capture_space(&self, space: usize) -> Result<Capture> {
+        let capture = self.layout()?.current(space)?;
         retain(&self.state, &capture)?;
         let db = connect(&self.state)?;
         db.execute(
@@ -638,16 +764,32 @@ impl Engine {
         body.map(|b| Ok(serde_json::from_str(&b)?)).transpose()
     }
     pub fn apply(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, false, &mut |_| Ok(()))
+        self.apply_inner(client, request, Mode::Apply, &mut |_| Ok(()))
     }
     pub fn retry(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, true, &mut |_| Ok(()))
+        self.apply_inner(client, request, Mode::Retry, &mut |_| Ok(()))
+    }
+    /// Brings the published state into the client's split workspace when its own
+    /// unpublished drafts overlap the publication. `output` must resolve every overlap.
+    pub fn incorporate(&self, client: &Client, request: Request) -> Result<Outcome> {
+        self.apply_inner(client, request, Mode::Incorporate, &mut |_| Ok(()))
     }
     fn apply_inner(
         &self,
         client: &Client,
         request: Request,
-        retry: bool,
+        mode: Mode,
+        observer: &mut dyn FnMut(Phase) -> Result<()>,
+    ) -> Result<Outcome> {
+        let outcome = self.apply_locked(client, request, mode, observer)?;
+        self.boundary();
+        Ok(outcome)
+    }
+    fn apply_locked(
+        &self,
+        client: &Client,
+        request: Request,
+        mode: Mode,
         observer: &mut dyn FnMut(Phase) -> Result<()>,
     ) -> Result<Outcome> {
         self.authorize(client)?;
@@ -655,11 +797,10 @@ impl Engine {
             return fail("request ID required");
         }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let before = self
-            .completed
-            .read()
-            .map_err(|_| "completed lock poisoned")?
-            .clone();
+        let layout = self.layout()?;
+        let space = layout.of(client.agent);
+        let live = layout.roots[space].clone();
+        let before = layout.current(space)?;
         let existing = db
             .query_row(
                 "SELECT body FROM requests WHERE agent=? AND request_id=?",
@@ -674,7 +815,7 @@ impl Engine {
                 return fail("request ID reused with changed contents");
             }
             if let Some(outcome) = &record.outcome {
-                if !retry || !matches!(outcome, Outcome::Interrupted { .. }) {
+                if mode != Mode::Retry || !matches!(outcome, Outcome::Interrupted { .. }) {
                     return Ok(outcome.clone());
                 }
             } else {
@@ -703,6 +844,7 @@ impl Engine {
                 before: before.clone(),
                 proposed: None,
                 outcome: None,
+                incorporates: None,
             };
             let tx = db.unchecked_transaction()?;
             tx.execute(
@@ -720,7 +862,7 @@ impl Engine {
         if let Some(reason) = meta(&db, "halted")? {
             return self.finish(&db, &mut record, Outcome::Rejected { reason });
         }
-        if let Err(error) = audit(&self.live, &before) {
+        if let Err(error) = audit(&live, &before) {
             let reason = error.to_string();
             self.save_incident(&db, &reason)?;
             return self.finish(&db, &mut record, Outcome::Rejected { reason });
@@ -775,12 +917,43 @@ impl Engine {
                 )?;
                 self.finish(db, record, Outcome::Interrupted { reason })
             };
+        let base = if mode == Mode::Incorporate {
+            let published = publication::published(&db)?;
+            let (merged, overlaps) = regroup::merge(&db, &before, &revision(&db, published)?)?;
+            let unresolved: Vec<_> = overlaps
+                .iter()
+                .filter(|p| !request.output.contains_key(*p))
+                .collect();
+            if before.included.is_superset(&merged.included) && overlaps.is_empty() {
+                return self.finish(
+                    &db,
+                    &mut record,
+                    Outcome::Rejected {
+                        reason: "workspace already incorporates the published state".into(),
+                    },
+                );
+            }
+            if !unresolved.is_empty() {
+                return self.finish(
+                    &db,
+                    &mut record,
+                    Outcome::Rejected {
+                        reason: format!(
+                            "incorporation must resolve overlapping drafts: {unresolved:?}"
+                        ),
+                    },
+                );
+            }
+            record.incorporates = Some(published);
+            merged
+        } else {
+            before.clone()
+        };
         let proposal = (|| -> Result<Capture> {
-            let mut proposed = before.clone();
-            proposed.revision = before
-                .revision
-                .checked_add(1)
-                .ok_or("revision occurrence exhausted")?;
+            let mut proposed = base.clone();
+            proposed.revision = next_revision(&db)?;
+            proposed.included.insert(record.operation);
+            proposed.group = layout.group(space);
             for (path, file) in &request.output {
                 let blob = file
                     .as_ref()
@@ -798,11 +971,22 @@ impl Engine {
             proposed.tree = build_tree(&self.state, &proposed.files, "")?;
             Ok(proposed)
         })();
+        // Synchronized files that the request does not replace are installed too.
+        let installs: BTreeMap<String, Option<File>> = proposal
+            .as_ref()
+            .map(|proposed| {
+                installed(&before, proposed, &request)
+                    .into_iter()
+                    .map(|p| (p.clone(), proposed.files[&p].file.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
         let proposed = match proposal {
             Ok(proposed) => proposed,
             Err(error) => return interrupted(&db, &mut record, error),
         };
-        let change = match self.gate(&db, client, &before, &proposed, &request) {
+        let changed: BTreeSet<String> = installs.keys().cloned().collect();
+        let change = match self.gate(&db, client, &before, &proposed, &changed) {
             Ok(Ok(change)) => change,
             Ok(Err(outcome)) => return self.finish(&db, &mut record, outcome),
             // Nothing installed yet: record a visible outcome rather than strand the request.
@@ -818,11 +1002,11 @@ impl Engine {
             record.installation_pending = true;
             save_record(&db, &record)?;
             observer(Phase::Retained)?;
-            for (path, file) in &request.output {
-                install(&self.live, path, file)?;
+            for (path, file) in &installs {
+                install(&live, path, file)?;
                 observer(Phase::Installed(path.clone()))?;
             }
-            audit(&self.live, &proposed)?;
+            audit(&live, &proposed)?;
             observer(Phase::BeforeCommit)?;
             Ok(proposed)
         })();
@@ -836,24 +1020,47 @@ impl Engine {
         };
         record.outcome = Some(outcome.clone());
         record.installation_pending = false;
-        let mut completed_guard = self
-            .completed
-            .write()
-            .map_err(|_| "completed lock poisoned")?;
+        // Published files an incorporation brought in are changes for the client too.
+        let synced: BTreeSet<String> = changed
+            .into_iter()
+            .filter(|p| !request.output.contains_key(p))
+            .collect();
+        let view = if synced.is_empty() {
+            None
+        } else {
+            Some(self.view_change(&before, &proposed, &synced)?)
+        };
+        let mut layout_guard = self.layout.write().map_err(|_| "layout lock poisoned")?;
         let tx = db.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO revisions VALUES(?,?)",
             params![proposed.revision as i64, serde_json::to_string(&proposed)?],
         )?;
-        set_meta(&tx, "completed", &proposed.revision.to_string())?;
+        tx.execute(
+            "UPDATE spaces SET completed=? WHERE id=?",
+            params![proposed.revision as i64, space as i64],
+        )?;
         save_record(&tx, &record)?;
-        self.record_change(&tx, client, &request, &proposed, &change)?;
+        let cause = self.record_change(&tx, client, &request, &proposed, &change, &layout)?;
+        if let Some(view) = &view {
+            self.renew_for_view(&tx, client.agent, view, proposed.revision, cause)?;
+        }
         tx.commit()?;
-        *completed_guard = proposed;
-        drop(completed_guard);
+        layout_guard.completed[space] = Some(proposed);
+        drop(layout_guard);
         self.signal.notify();
         observer(Phase::Committed)?;
         Ok(outcome)
+    }
+    /// Every provisioned root matches its completed revision; an unused root is empty.
+    pub(crate) fn audit_all(&self, layout: &Layout) -> Result<()> {
+        for (root, completed) in layout.roots.iter().zip(&layout.completed) {
+            match completed {
+                Some(completed) => audit(root, completed)?,
+                None => ensure_empty(root)?,
+            }
+        }
+        Ok(())
     }
     fn finish(&self, db: &Connection, record: &mut Record, outcome: Outcome) -> Result<Outcome> {
         record.outcome = Some(outcome.clone());
@@ -862,11 +1069,7 @@ impl Engine {
     }
     fn recover(&self) -> Result<()> {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let completed = self
-            .completed
-            .read()
-            .map_err(|_| "completed lock poisoned")?
-            .clone();
+        let layout = self.layout()?;
         for mut record in records(&db)? {
             if let Some(proposed) = &record.proposed {
                 retain(&self.state, proposed)?;
@@ -880,24 +1083,25 @@ impl Engine {
             if record.outcome.is_none() || record.installation_pending {
                 if let Some(proposed) = &record.proposed {
                     retain(&self.state, proposed)?;
+                    let live = &layout.roots[record.before.space];
+                    let completed = layout.current(record.before.space)?;
+                    let changed = installed(&record.before, proposed, &record.request);
                     let reliable = (|| -> Result<()> {
                         // Check the full source universe before restoring any; never guess attribution.
                         let mut observed = Vec::new();
-                        paths(&self.live, Path::new(""), &mut observed, true)?;
+                        paths(live, Path::new(""), &mut observed, true)?;
                         if observed.iter().any(|p| !completed.files.contains_key(p)) {
                             return fail("unenrolled source during recovery; evidence retained");
                         }
                         for (path, file) in &completed.files {
-                            if !record.request.output.contains_key(path)
-                                && read_file(&self.live, path)? != file.file
-                            {
+                            if !changed.contains(path) && read_file(live, path)? != file.file {
                                 return fail(
                                     "unexplained unrelated source during recovery; evidence retained",
                                 );
                             }
                         }
-                        for path in record.request.output.keys() {
-                            let current = read_file(&self.live, path)?;
+                        for path in &changed {
+                            let current = read_file(live, path)?;
                             if current != record.before.files[path].file
                                 && current != proposed.files[path].file
                             {
@@ -912,8 +1116,8 @@ impl Engine {
                         self.save_incident(&db, &error.to_string())?;
                         return Err(error);
                     }
-                    for path in record.request.output.keys() {
-                        install(&self.live, path, &record.before.files[path].file)?;
+                    for path in &changed {
+                        install(live, path, &record.before.files[path].file)?;
                     }
                 }
                 record.installation_pending = false;
@@ -938,12 +1142,15 @@ impl Engine {
                 save_job(&db, &job)?;
             }
         }
-        if let Err(error) = audit(&self.live, &completed) {
+        regroup::recover(self, &db, &layout)?;
+        if let Err(error) = self.audit_all(&layout) {
             self.save_incident(&db, &error.to_string())?;
             return Err(error);
         }
         // Only known interrupted installations are cleared. Unexplained edits stay halted.
-        if meta(&db, "halted")?.is_some_and(|r| r.starts_with("interrupted operation ")) {
+        if meta(&db, "halted")?.is_some_and(|r| {
+            r.starts_with("interrupted operation ") || r.starts_with("interrupted transition ")
+        }) {
             db.execute("DELETE FROM meta WHERE key='halted'", [])?;
         }
         if let Some(reason) = meta(&db, "halted")? {
@@ -951,6 +1158,15 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Apply,
+    /// Explicit retry of an interrupted request.
+    Retry,
+    /// Also brings the published state into a split workspace.
+    Incorporate,
 }
 
 /// Host fault/barrier seam; never exposed to untrusted clients.
@@ -969,7 +1185,7 @@ impl Engine {
         request: Request,
         mut observer: impl FnMut(Phase) -> Result<()>,
     ) -> Result<Outcome> {
-        self.apply_inner(client, request, false, &mut observer)
+        self.apply_inner(client, request, Mode::Apply, &mut observer)
     }
 }
 
@@ -1038,6 +1254,9 @@ impl Engine {
             [spec.revision as i64],
             |r| r.get::<_, String>(0),
         )?)?;
+        if capture.space != self.layout()?.of(client.agent) {
+            return fail("job must capture a revision of the client's workspace");
+        }
         retain(&self.state, &capture)?;
         let mut expected = BTreeMap::new();
         for path in spec.inputs.iter().chain(spec.outputs.iter()) {
@@ -1114,7 +1333,9 @@ impl Engine {
             "/dev",
         ];
         for system in SYSTEM_READS {
-            if self.live.starts_with(system) || self.state.starts_with(system) {
+            if self.layout()?.roots.iter().any(|r| r.starts_with(system))
+                || self.state.starts_with(system)
+            {
                 return fail("source/controller overlaps captured-job system read boundary");
             }
         }
@@ -1284,7 +1505,17 @@ impl Engine {
             reason: reason.into(),
             files: BTreeMap::new(),
         };
-        observe(&self.live, Path::new(""), &mut incident.files)?;
+        for (space, root) in self.layout()?.roots.iter().enumerate() {
+            let mut files = BTreeMap::new();
+            observe(root, Path::new(""), &mut files)?;
+            // Paths outside the primary root are prefixed with their workspace.
+            incident
+                .files
+                .extend(files.into_iter().map(|(path, file)| match space {
+                    0 => (path, file),
+                    _ => (format!("@{space}/{path}"), file),
+                }));
+        }
         let body = serde_json::to_string(&incident)?;
         let tx = db.unchecked_transaction()?;
         tx.execute("INSERT INTO incidents(body) VALUES(?)", [&body])?;

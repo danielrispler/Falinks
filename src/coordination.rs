@@ -2,7 +2,7 @@
 //! checkpoint offers, the durable event stream and voluntary waits.
 use crate::analysis::{self, Evidence, Footprint};
 use crate::publication::{self, RunOutcome};
-use crate::{Capture, Client, Engine, Request, Result, connect, fail, meta, retain};
+use crate::{Capture, Client, Engine, Layout, Result, connect, fail, meta, retain};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,6 +21,16 @@ pub struct Scope {
     pub id: String,
     pub task: String,
     pub nodes: BTreeSet<String>,
+    /// Declared dependencies: nodes this work relies on beyond compiler evidence.
+    /// They widen relevance and never narrow it.
+    #[serde(default)]
+    pub depends: BTreeSet<String>,
+}
+impl Scope {
+    /// Registered nodes plus declared dependencies.
+    pub(crate) fn relevant(&self) -> BTreeSet<String> {
+        self.nodes.union(&self.depends).cloned().collect()
+    }
 }
 /// Pending while `required` (the latest relevant completed revision) exceeds
 /// `reviewed` (the latest explicitly reviewed captured revision).
@@ -165,6 +175,20 @@ pub enum Body {
         tree: String,
         checkpoints: BTreeMap<usize, String>,
     },
+    /// A regrouping proposal was created or changed state.
+    Regrouping(Box<crate::RegroupingProposal>),
+    /// The engine brought a publication into a split workspace.
+    Incorporated {
+        space: usize,
+        publication: u64,
+        revision: u64,
+    },
+    /// Drafts in a split workspace overlap a publication; `incorporate` must resolve them.
+    Behind {
+        space: usize,
+        publication: u64,
+        overlaps: Vec<String>,
+    },
 }
 /// `seq` is the SQLite commit sequence; `id` is stable across replay.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +291,36 @@ pub(crate) fn obligations(db: &Connection, agent: usize) -> Result<Vec<Obligatio
     let mut stmt = db.prepare("SELECT body FROM scopes WHERE agent=? ORDER BY id")?;
     let rows = stmt.query_map([agent as i64], |r| r.get::<_, String>(0))?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+}
+/// Renews every scope of `agent` related to `footprint` to require review of `revision`.
+pub(crate) fn renew(
+    tx: &Connection,
+    agent: usize,
+    footprint: &Footprint,
+    sides: &[&[Evidence]],
+    revision: u64,
+    cause: u64,
+) -> Result<()> {
+    for mut obligation in obligations(tx, agent)? {
+        if analysis::related(
+            footprint,
+            &analysis::closure(&obligation.scope.relevant(), sides),
+        ) {
+            obligation.required = revision;
+            save_obligation(tx, &obligation)?;
+            emit(
+                tx,
+                mine(agent),
+                &Body::Obligation {
+                    agent,
+                    scope: obligation.scope.id.clone(),
+                    revision,
+                    cause,
+                },
+            )?;
+        }
+    }
+    Ok(())
 }
 fn save_obligation(db: &Connection, obligation: &Obligation) -> Result<()> {
     db.execute(
@@ -440,7 +494,7 @@ impl Engine {
         client: &Client,
         before: &Capture,
         proposed: &Capture,
-        request: &Request,
+        paths: &BTreeSet<String>,
     ) -> Result<std::result::Result<Change, crate::Outcome>> {
         let configured = !self
             .analysis
@@ -460,13 +514,14 @@ impl Engine {
                 reason: format!("unknown analysis input universe; recapture required: {unknown:?}"),
             }));
         }
-        let paths: BTreeSet<_> = request.output.keys().cloned().collect();
         let sides = [evidence[0].as_slice(), evidence[1].as_slice()];
-        let footprint = analysis::change(before, proposed, &paths, &sides);
+        let footprint = analysis::change(before, proposed, paths, &sides);
         let blocked: BTreeMap<_, _> = obligations(db, client.agent)?
             .into_iter()
             .filter(|o| o.pending())
-            .filter(|o| analysis::related(&footprint, &analysis::closure(&o.scope.nodes, &sides)))
+            .filter(|o| {
+                analysis::related(&footprint, &analysis::closure(&o.scope.relevant(), &sides))
+            })
             .map(|o| (o.scope.id.clone(), o))
             .collect();
         if !blocked.is_empty() {
@@ -481,15 +536,17 @@ impl Engine {
     }
 
     /// Inside the completed-pointer transaction: the live-edit message and every
-    /// renewed obligation commit together with the revision they describe.
+    /// renewed obligation commit together with the revision they describe. Only
+    /// agents placed in the edited workspace see the change in their live source.
     pub(crate) fn record_change(
         &self,
         tx: &Connection,
         client: &Client,
-        request: &Request,
+        request: &crate::Request,
         proposed: &Capture,
         change: &Change,
-    ) -> Result<()> {
+        layout: &Layout,
+    ) -> Result<u64> {
         let task = obligations(tx, client.agent)?
             .iter()
             .map(|o| o.scope.task.clone())
@@ -514,43 +571,64 @@ impl Engine {
             }),
         )?;
         let sides = [change.evidence[0].as_slice(), change.evidence[1].as_slice()];
-        for agent in (0..2).filter(|a| *a != client.agent) {
-            for mut obligation in obligations(tx, agent)? {
-                if analysis::related(
-                    &change.footprint,
-                    &analysis::closure(&obligation.scope.nodes, &sides),
-                ) {
-                    obligation.required = proposed.revision;
-                    save_obligation(tx, &obligation)?;
-                    emit(
-                        tx,
-                        mine(agent),
-                        &Body::Obligation {
-                            agent,
-                            scope: obligation.scope.id.clone(),
-                            revision: proposed.revision,
-                            cause,
-                        },
-                    )?;
-                }
-            }
+        for agent in (0..2).filter(|a| *a != client.agent && layout.placement[*a] == proposed.space)
+        {
+            renew(
+                tx,
+                agent,
+                &change.footprint,
+                &sides,
+                proposed.revision,
+                cause,
+            )?;
         }
-        Ok(())
+        Ok(cause)
+    }
+    /// An agent's live view changing without its own edit. Analyzes before any
+    /// transaction opens, since analysis writes its cache on another connection.
+    pub(crate) fn view_change(
+        &self,
+        before: &Capture,
+        after: &Capture,
+        paths: &BTreeSet<String>,
+    ) -> Result<Change> {
+        let evidence = [self.evidence(before)?, self.evidence(after)?];
+        let sides = [evidence[0].as_slice(), evidence[1].as_slice()];
+        let footprint = analysis::change(before, after, paths, &sides);
+        Ok(Change {
+            footprint,
+            evidence,
+        })
+    }
+    /// Inside the transaction committing `revision`: renew the agent's related scopes.
+    pub(crate) fn renew_for_view(
+        &self,
+        tx: &Connection,
+        agent: usize,
+        change: &Change,
+        revision: u64,
+        cause: u64,
+    ) -> Result<()> {
+        let sides = [change.evidence[0].as_slice(), change.evidence[1].as_slice()];
+        renew(tx, agent, &change.footprint, &sides, revision, cause)
     }
 
     pub fn register(&self, client: &Client, scope: Scope) -> Result<Obligation> {
+        let obligation = self.register_locked(client, scope)?;
+        // Changed task context voids pending regrouping agreement.
+        self.boundary();
+        Ok(obligation)
+    }
+    fn register_locked(&self, client: &Client, scope: Scope) -> Result<Obligation> {
         self.authorize(client)?;
         // Under the writer lock: no commit can fall between the baseline and the save.
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let completed = self
-            .completed
-            .read()
-            .map_err(|_| "completed lock poisoned")?
-            .clone();
+        let layout = self.layout()?;
+        let completed = layout.current(layout.of(client.agent))?;
         if scope.id.is_empty() || scope.nodes.is_empty() {
             return fail("scope needs an ID and at least one node");
         }
-        for node in &scope.nodes {
+        for node in &scope.relevant() {
             let path = node.split_once('#').map_or(node.as_str(), |(p, _)| p);
             if !completed.files.contains_key(path) {
                 return fail(format!("scope node outside enrollment: {node}"));
@@ -584,8 +662,11 @@ impl Engine {
             .into_iter()
             .find(|o| o.scope.id == review.scope)
             .ok_or("unknown scope")?;
-        if captured(&db, review.revision)?.is_none() {
-            return fail("review must name a revision captured for rereading");
+        let space = self.layout()?.of(client.agent);
+        if captured(&db, review.revision)?.is_none_or(|c| c.space != space) {
+            return fail(
+                "review must name a revision of the client's workspace captured for rereading",
+            );
         }
         obligation.reviewed = obligation.reviewed.max(review.revision);
         let tx = db.unchecked_transaction()?;
@@ -601,6 +682,8 @@ impl Engine {
         tx.commit()?;
         drop(db);
         self.signal.notify();
+        // A cleared obligation may unblock an agreed transition.
+        self.boundary();
         Ok(obligation)
     }
     pub fn post(&self, client: &Client, plan: Plan) -> Result<Event> {
@@ -648,7 +731,7 @@ impl Engine {
     fn check_work(&self, db: &Connection, work: &Work) -> Result<()> {
         let known = match work {
             Work::None => true,
-            Work::Revision(r) => meta(db, "completed")?.ok_or("completed")?.parse::<u64>()? >= *r,
+            Work::Revision(r) => crate::revision(db, *r).is_ok(),
             Work::Checkpoint(id) => checkpoint(db, id)?.is_some(),
         };
         if !known {
@@ -669,6 +752,12 @@ impl Engine {
         }
         let capture =
             captured(&db, offer.revision)?.ok_or("offer must name a captured revision")?;
+        // Its own workspace, or a retained candidate whose group it belonged to.
+        if capture.space != self.layout()?.of(client.agent)
+            && !capture.group.contains(&client.agent)
+        {
+            return fail("offer must name a revision of the client's workspace or group");
+        }
         // Even an older revision: deferred relevant changes cannot authorize any offer.
         let pending: Vec<_> = obligations(&db, client.agent)?
             .into_iter()
@@ -872,6 +961,11 @@ impl Engine {
         if matches!(condition, Condition::Message { from, .. } if from == client.agent) {
             return fail("a client cannot wait for its own message");
         }
+        // Durable evidence of coordination waiting for regrouping recommendations.
+        connect(&self.state)?.execute(
+            "INSERT INTO waits(agent, condition) VALUES(?,?)",
+            params![client.agent as i64, format!("{condition:?}")],
+        )?;
         let deadline = timeout.map(|t| Instant::now() + t);
         // Check the durable store while holding the signal lock: a commit's
         // notification cannot fall between the check and the wait.

@@ -171,6 +171,7 @@ fn coverage_counts_overwritten_authors_and_required_members_but_not_notified_pee
                 id: "watch".into(),
                 task: "consumer".into(),
                 nodes: ["a.rs".to_string()].into(),
+                depends: Default::default(),
             },
         )
         .unwrap();
