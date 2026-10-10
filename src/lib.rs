@@ -1,11 +1,15 @@
 //! Host-owned, single-repository protocol. Clients have opaque authenticated handles.
-//! No publication API is enabled. See docs/engine.md for the supported boundary.
+//! See docs/engine.md for the supported boundary.
 mod analysis;
 mod coordination;
+mod publication;
 pub use analysis::{Evidence, Footprint, Language, Owner, Pin, Tool, Toolchain, Unit, sha256_file};
 pub use coordination::{
     Availability, Body, Cancel, Checkpoint, Condition, Decision, Disposition, Event, Kind, Message,
     Obligation, Offer, Pending, Plan, Reply, Review, Scope, WaitOutcome, Work,
+};
+pub use publication::{
+    Binding, Candidate, Check, CheckResult, Run, RunAttempt, RunKind, RunOutcome, Stage,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -122,6 +126,9 @@ pub struct Engine {
     completed: RwLock<Capture>,
     jobs: Mutex<()>,
     analysis: RwLock<Vec<Toolchain>>,
+    checks: RwLock<Vec<publication::Check>>,
+    // One reusable validation workspace; its lease serializes validation runs.
+    validation: Mutex<()>,
     signal: std::sync::Arc<coordination::Signal>,
     _leases: [WriterLease; 2],
 }
@@ -137,6 +144,7 @@ fn connect(state: &Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS jobs (agent INTEGER NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(agent,id));")?;
     coordination::tables(&db)?;
+    publication::tables(&db)?;
     Ok(db)
 }
 fn meta(db: &Connection, key: &str) -> Result<Option<String>> {
@@ -554,10 +562,13 @@ impl Engine {
             completed: RwLock::new(completed),
             jobs: Mutex::new(()),
             analysis: RwLock::new(Vec::new()),
+            checks: RwLock::new(Vec::new()),
+            validation: Mutex::new(()),
             signal: coordination::Signal::new(),
             _leases: [source_lease, state_lease],
         };
         engine.recover()?;
+        publication::repair_mirror(&engine.state, &engine.published()?.tree)?;
         Ok(engine)
     }
     /// Host provisioning only: never expose these secrets as an agent tool.
@@ -914,6 +925,7 @@ impl Engine {
                 save_record(&db, &record)?;
             }
         }
+        publication::recover(&db)?;
         let mut stmt = db.prepare("SELECT body FROM jobs")?;
         let job_rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         for body in job_rows {
@@ -1108,14 +1120,6 @@ impl Engine {
         }
         let input = fs::canonicalize(job.directory.join("input"))?;
         let output = fs::canonicalize(job.directory.join("output"))?;
-        // Serialize paths as quoted strings; prevent profile injection from storage paths.
-        let quote = |p: &Path| -> Result<String> {
-            let s = p.to_str().ok_or("non-UTF8 job directory")?;
-            if s.contains(['\n', '\r']) {
-                return fail("unsupported job directory");
-            }
-            Ok(serde_json::to_string(s)?)
-        };
         let system_reads = SYSTEM_READS
             .iter()
             .map(|p| Ok(format!("(subpath {})", quote(Path::new(p))?)))
@@ -1127,50 +1131,15 @@ impl Engine {
             quote(&output)?,
             quote(&output)?
         );
-        fs::write(job.directory.join("sandbox.sb"), &profile)?;
-        let stdout = fs::File::create(job.directory.join("stdout"))?;
-        let stderr = fs::File::create(job.directory.join("stderr"))?;
-        let mut child = Command::new("/usr/bin/sandbox-exec")
-            .args(["-p", &profile, &job.spec.program])
-            .args(&job.spec.args)
-            .current_dir(&output)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("TMPDIR", &output)
-            .env("HOME", &output)
-            .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(stderr)
-            .process_group(0)
-            .spawn()?;
-        let group = child.id() as i32;
-        // Persist running process identity as evidence; restart never adopts its output.
-        fs::write(job.directory.join("process-group"), group.to_string())?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if std::time::Instant::now() >= deadline {
-                // SAFETY: kill takes no pointers; the target is this job's dedicated process group.
-                unsafe {
-                    libc::kill(-group, libc::SIGKILL);
-                }
-                child.wait()?;
-                return fail("job timed out; output retained");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        };
-        // Trusted tools must keep descendants in this group and join them before exit.
-        // A surviving descendant makes completion ambiguous; kill the group, retain output.
-        // SAFETY: signal 0 only probes whether the job's process group still exists.
-        if unsafe { libc::kill(-group, 0) } == 0 {
-            // SAFETY: kill takes no pointers; the target is this job's dedicated process group.
-            unsafe {
-                libc::kill(-group, libc::SIGKILL);
-            }
-            return fail("ambiguous completion: surviving job descendants");
-        }
+        let status = sandboxed(
+            &job.directory,
+            &profile,
+            &job.spec.program,
+            &job.spec.args,
+            &output,
+            &[("TMPDIR", &output), ("HOME", &output)],
+            std::time::Duration::from_secs(30),
+        )?;
         if !status.success() {
             return fail(format!("captured job failed: {status}"));
         }
@@ -1187,6 +1156,71 @@ impl Engine {
         }
         self.apply(client, job.request)
     }
+}
+
+/// Serialize paths as quoted strings; prevent Seatbelt profile injection from storage paths.
+fn quote(p: &Path) -> Result<String> {
+    let s = p.to_str().ok_or("non-UTF8 sandbox path")?;
+    if s.contains(['\n', '\r']) {
+        return fail("unsupported sandbox path");
+    }
+    Ok(serde_json::to_string(s)?)
+}
+/// Runs a trusted host-enrolled tool under `profile` with a cleared environment, retaining
+/// the profile, stdout, stderr and process group in `evidence`.
+fn sandboxed(
+    evidence: &Path,
+    profile: &str,
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &[(&str, &Path)],
+    timeout: std::time::Duration,
+) -> Result<std::process::ExitStatus> {
+    fs::write(evidence.join("sandbox.sb"), profile)?;
+    let stdout = fs::File::create(evidence.join("stdout"))?;
+    let stderr = fs::File::create(evidence.join("stderr"))?;
+    let mut child = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", profile, program])
+        .args(args)
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .envs(env.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .process_group(0)
+        .spawn()?;
+    let group = child.id() as i32;
+    // Persist running process identity as evidence; restart never adopts its output.
+    fs::write(evidence.join("process-group"), group.to_string())?;
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            // SAFETY: kill takes no pointers; the target is this tool's dedicated process group.
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
+            child.wait()?;
+            return fail("timed out; output retained");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    // Trusted tools must keep descendants in this group and join them before exit.
+    // A surviving descendant makes completion ambiguous; kill the group, retain output.
+    // SAFETY: signal 0 only probes whether the tool's process group still exists.
+    if unsafe { libc::kill(-group, 0) } == 0 {
+        // SAFETY: kill takes no pointers; the target is this tool's dedicated process group.
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+        return fail("ambiguous completion: surviving descendants");
+    }
+    Ok(status)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
