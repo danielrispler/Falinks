@@ -2,6 +2,10 @@
 
 These docs are shared by Codex and Claude Code. `$skill` means `/skill` in Claude Code (plugin skills may appear as `/mattpocock-skills:<name>`). During session openings, planning, grilling, decision questions and explanations, `docs/agents/learning.md` overrides any terse or brevity output mode.
 
+## Implementation language
+
+The engine core is Rust only, along with its adapters, controlled hosts and repository automation. Falinks supports Rust and Go projects, so tests and fixtures may also be written in Go. Use Cargo for builds, checks and tool entry points; introduce no other language.
+
 ## Agent skills
 
 ### Learning
@@ -14,7 +18,7 @@ Track issues and specs in GitHub Issues for `danielrispler/Falinks`. Before issu
 
 ### Wayfinder
 
-For Wayfinder sessions, run `cargo run -q --bin wayfinder-startup -- [map-number]` (default: current map). Follow the startup and ticket-context rules in `docs/agents/issue-tracker.md` when creating, starting, or updating tickets.
+For Wayfinder sessions, run `cargo run --bin wayfinder-startup -- [map-number]` (default: current map). Follow the startup and ticket-context rules in `docs/agents/issue-tracker.md` when creating, starting, or updating tickets.
 
 ### Triage labels
 

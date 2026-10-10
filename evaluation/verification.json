@@ -1,17 +1,17 @@
 {
-  "verified_utc": "2026-10-10T09:09:03Z",
+  "verified_utc": "2026-10-10T09:22:59Z",
   "command": "cd evaluation && cargo test --offline",
   "outcome": "passed",
   "checks": 7,
   "integration_checks": 6,
-  "elapsed_seconds": 52.40,
+  "elapsed_seconds": 56.25,
   "environment": {
     "platform": "macOS arm64",
     "rust": "1.99.0",
     "go": "1.27.2",
     "git": "2.54.0"
   },
-  "manifest_sha256": "047f1327ffa0ea3bd96c0c812af9ee9cc1b9a2bd9ed37be1bff65d3646882d03",
+  "manifest_sha256": "783f61df5e6f0677540086b58a90276b8e009f781806135dde84fa1ffeffa0ae",
   "fixtures": {
     "go-page": {
       "initial_commit": "0a9b7fb1c3ffc994d6748860c0c2dafb4a1d969b",
@@ -45,7 +45,7 @@
     "controller read denied to both workers (mutation without the denial fails the test)",
     "prior-arm reads denied during checks; export-ignore cannot hide failing tests"
   ],
-  "lint": "cargo clippy --all-targets --offline: no warnings",
+  "lint": "cargo fmt --check and cargo clippy --all-targets --offline -- -D warnings: clean",
   "limitations": [
     "No authenticated model run or scored batch.",
     "The checked-in run configuration is a template; actual batch identities must be frozen before pilots/scoring.",

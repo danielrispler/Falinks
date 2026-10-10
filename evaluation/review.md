@@ -38,6 +38,7 @@ Rust runs the six integration tests in parallel.
 
 `freeze` was rerun because harness bytes are hashed: only harness/crate hashes
 changed; all three initial commits reproduce identically. No scored batch has
-used the previous manifest. A mutation removing the controller denial makes the
+used the previous manifest. A later `cargo fmt` pass refroze harness hashes again
+with initial commits unchanged. A mutation removing the controller denial makes the
 baseline isolation test fail. The port was not re-reviewed by independent
 Standards/Spec agents.

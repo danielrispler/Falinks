@@ -12,10 +12,10 @@
     "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
     "result-schema.json": "4c3158f3ab4b617b009e213a7511eadc3a0c11c48330471b18fd324fee027c95",
-    "src/baseline.rs": "aea7c4e09a9932544fd5ec2a3f4e38cd00622a62e2217385f06d5ceb8b1d67fc",
-    "src/bin/codex-worker.rs": "39d633c90d1c7d37c41d3d759dd20b5f9a0663320195fd82ef81c929389933d4",
-    "src/bin/scripted-worker.rs": "b01f9aa3faa64a4c82c1cf26ea5c8cfa12f7e45c0cdab4b873bff6d318682838",
-    "src/main.rs": "c0f2fd185b7dc8ef8d764ad9ce98c2dc13e761b7d8a49428c774100eb34e8f21"
+    "src/baseline.rs": "d8289dcdb5bed05da6807e23afc8da931cf8d7741eb3fc8663c6c487d6b8923e",
+    "src/bin/codex-worker.rs": "70f002aea5735a795ab523b8256c2bfc956b47d63d5ab6ca7172e767051cb87e",
+    "src/bin/scripted-worker.rs": "ee5f1843103640843aa675ab8733ca5fa0cb5c8f1c221d622df95a9e87e3f377",
+    "src/main.rs": "b1f4c8bf9ee1bbb0ea3e9613700215192a653284191b793f9fdd96882abc31d9"
   },
   "initial_commits": {
     "go-page": "0a9b7fb1c3ffc994d6748860c0c2dafb4a1d969b",

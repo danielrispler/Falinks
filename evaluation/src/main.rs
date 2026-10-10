@@ -95,11 +95,19 @@ pub fn utc(secs: u64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 pub fn utc_now() -> String {
-    utc(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())
+    utc(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs())
 }
 
 pub struct Output {
@@ -119,7 +127,12 @@ pub fn kill_group(pid: u32, signal: i32) {
 }
 
 /// Runs argv in its own process group; the whole group is killed afterwards.
-pub fn command(argv: &[String], cwd: &Path, env: &[(String, String)], timeout: Duration) -> Result<Output> {
+pub fn command(
+    argv: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<Output> {
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(cwd)
@@ -154,7 +167,11 @@ pub fn command(argv: &[String], cwd: &Path, env: &[(String, String)], timeout: D
     child.wait()?;
     let (stdout, stderr) = (stdout.join().unwrap(), stderr.join().unwrap());
     match status {
-        Some(status) => Ok(Output { success: status.success(), stdout, stderr }),
+        Some(status) => Ok(Output {
+            success: status.success(),
+            stdout,
+            stderr,
+        }),
         None => bail!("Command timed out after {timeout:?}: {}", argv.join(" ")),
     }
 }
@@ -183,12 +200,20 @@ impl Sandbox {
         if self.network {
             profile.push("(allow network-outbound)".into());
         }
-        profile.extend(self.writable.iter().map(|p| format!("(allow file-write* (subpath {}))", quote(p))));
+        profile.extend(
+            self.writable
+                .iter()
+                .map(|p| format!("(allow file-write* (subpath {}))", quote(p))),
+        );
         profile.extend(self.denied.iter().map(|p| {
             let p = quote(p);
             format!("(deny file-read* (subpath {p})) (deny file-write* (subpath {p}))")
         }));
-        let mut wrapped = vec!["/usr/bin/sandbox-exec".to_string(), "-p".into(), profile.join("\n")];
+        let mut wrapped = vec![
+            "/usr/bin/sandbox-exec".to_string(),
+            "-p".into(),
+            profile.join("\n"),
+        ];
         wrapped.extend(argv);
         Ok(wrapped)
     }
@@ -200,7 +225,11 @@ pub fn strings(argv: &[&str]) -> Vec<String> {
 
 pub fn git_env() -> Vec<(String, String)> {
     let mut env = vec![("PATH".to_string(), env::var("PATH").unwrap_or_default())];
-    env.extend(FIXED_ENV.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    env.extend(
+        FIXED_ENV
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string())),
+    );
     env
 }
 
@@ -219,7 +248,9 @@ pub fn git_raw(repo: &Path, args: &[&str], guard: Option<&Sandbox>) -> Result<Ve
 }
 
 pub fn git(repo: &Path, args: &[&str], guard: Option<&Sandbox>) -> Result<String> {
-    Ok(String::from_utf8_lossy(&git_raw(repo, args, guard)?).trim().to_string())
+    Ok(String::from_utf8_lossy(&git_raw(repo, args, guard)?)
+        .trim()
+        .to_string())
 }
 
 pub fn put_files(dest: &Path, files: &Value) -> Result<()> {
@@ -247,7 +278,15 @@ fn material_hashes() -> Result<Value> {
         .iter()
         .flat_map(|dir| walk(&root.join(dir)))
         .collect();
-    files.extend(["config.json", "result-schema.json", "Cargo.toml", "Cargo.lock"].map(|f| root.join(f)));
+    files.extend(
+        [
+            "config.json",
+            "result-schema.json",
+            "Cargo.toml",
+            "Cargo.lock",
+        ]
+        .map(|f| root.join(f)),
+    );
     for path in files {
         let name = path.strip_prefix(&root)?.to_string_lossy().into_owned();
         hashes.insert(name, sha256(&fs::read(&path)?).into());
@@ -256,18 +295,28 @@ fn material_hashes() -> Result<Value> {
 }
 
 fn freeze() -> Result<()> {
-    let tmp = tempfile::Builder::new().prefix("falinks-freeze-").tempdir()?;
+    let tmp = tempfile::Builder::new()
+        .prefix("falinks-freeze-")
+        .tempdir()?;
     let mut commits = Map::new();
     for name in FIXTURES {
-        commits.insert(name.into(), initial(&tmp.path().join(name), &fixture(name)?)?.into());
+        commits.insert(
+            name.into(),
+            initial(&tmp.path().join(name), &fixture(name)?)?.into(),
+        );
     }
-    write(root().join("manifest.json"), &json!({"version": 1, "hashes": material_hashes()?, "initial_commits": commits}))
+    write(
+        root().join("manifest.json"),
+        &json!({"version": 1, "hashes": material_hashes()?, "initial_commits": commits}),
+    )
 }
 
 pub fn frozen() -> Result<Value> {
     let manifest = read(root().join("manifest.json"))?;
     if material_hashes()? != manifest["hashes"] {
-        bail!("Frozen materials changed: version repairs and explicitly run freeze before a new batch");
+        bail!(
+            "Frozen materials changed: version repairs and explicitly run freeze before a new batch"
+        );
     }
     Ok(manifest)
 }
@@ -276,7 +325,11 @@ pub fn frozen() -> Result<Value> {
 pub fn protected_roots() -> Result<Vec<PathBuf>> {
     let root = root();
     let common = PathBuf::from(git(&root, &["rev-parse", "--git-common-dir"], None)?);
-    let common = if common.is_absolute() { common } else { root.join(common) };
+    let common = if common.is_absolute() {
+        common
+    } else {
+        root.join(common)
+    };
     let mut roots = vec![resolve(root.parent().unwrap()), resolve(&common)];
     for line in git(&root, &["worktree", "list", "--porcelain"], None)?.lines() {
         if let Some(path) = line.strip_prefix("worktree ") {
@@ -286,11 +339,19 @@ pub fn protected_roots() -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
-fn run_checks(commands: &[Vec<String>], work: &Path, env: &[(String, String)], sandbox: &Sandbox,
-              deadline: Instant, stop_on_failure: bool) -> Result<Value> {
+fn run_checks(
+    commands: &[Vec<String>],
+    work: &Path,
+    env: &[(String, String)],
+    sandbox: &Sandbox,
+    deadline: Instant,
+    stop_on_failure: bool,
+) -> Result<Value> {
     let mut results = Vec::new();
     for argv in commands {
-        let remaining = deadline.saturating_duration_since(Instant::now()).max(Duration::from_millis(10));
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(10));
         let result = command(&sandbox.wrap(argv.clone())?, work, env, remaining)?;
         results.push(json!({"command": argv, "passed": result.success, "output": result.text()}));
         if stop_on_failure && !result.success {
@@ -301,7 +362,11 @@ fn run_checks(commands: &[Vec<String>], work: &Path, env: &[(String, String)], s
 }
 
 fn all_passed(checks: &Value) -> bool {
-    checks.as_array().unwrap().iter().all(|c| c["passed"] == true)
+    checks
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|c| c["passed"] == true)
 }
 
 fn restore(work: &Path, source: &BTreeMap<String, Vec<u8>>) -> Result<()> {
@@ -321,14 +386,23 @@ fn restore(work: &Path, source: &BTreeMap<String, Vec<u8>>) -> Result<()> {
 }
 
 /// Checks execute only in a host-owned copy, with protected tests and fixed build inputs.
-pub fn check(candidate: &Path, fixture: &Value, private: &Path, timeout: Duration, denied_roots: &[PathBuf]) -> Result<Value> {
+pub fn check(
+    candidate: &Path,
+    fixture: &Value,
+    private: &Path,
+    timeout: Duration,
+    denied_roots: &[PathBuf],
+) -> Result<Value> {
     let deadline = Instant::now() + timeout;
     let work = private.join("check");
     // Raw tree blobs preserve exact committed bytes; archive export attributes do not.
     let tree = git_raw(candidate, &["ls-tree", "-rz", "--full-tree", "HEAD"], None)?;
     let mut source = BTreeMap::new();
     for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
-        let tab = entry.iter().position(|b| *b == b'\t').ok_or("Malformed tree entry")?;
+        let tab = entry
+            .iter()
+            .position(|b| *b == b'\t')
+            .ok_or("Malformed tree entry")?;
         let metadata = String::from_utf8_lossy(&entry[..tab]).into_owned();
         let name = String::from_utf8(entry[tab + 1..].to_vec())?;
         let fields: Vec<&str> = metadata.split_whitespace().collect();
@@ -352,13 +426,25 @@ pub fn check(candidate: &Path, fixture: &Value, private: &Path, timeout: Duratio
             bail!("Fixture dependencies/build configuration must remain frozen");
         }
     }
-    if source.keys().any(|name| name == "build.rs" || name.starts_with(".cargo/")) {
+    if source
+        .keys()
+        .any(|name| name == "build.rs" || name.starts_with(".cargo/"))
+    {
         bail!("Custom build configuration is outside the fixture contract");
     }
     restore(&work, &source)?;
 
     let mut env: Vec<(String, String)> = env::vars()
-        .filter(|(key, _)| ["PATH", "RUSTUP_HOME", "CARGO_HOME", "DEVELOPER_DIR", "SDKROOT"].contains(&key.as_str()))
+        .filter(|(key, _)| {
+            [
+                "PATH",
+                "RUSTUP_HOME",
+                "CARGO_HOME",
+                "DEVELOPER_DIR",
+                "SDKROOT",
+            ]
+            .contains(&key.as_str())
+        })
         .collect();
     // rustup proxies locate toolchains through HOME unless RUSTUP_HOME is explicit.
     if let (Err(_), Ok(home)) = (env::var("RUSTUP_HOME"), env::var("HOME")) {
@@ -380,13 +466,30 @@ pub fn check(candidate: &Path, fixture: &Value, private: &Path, timeout: Duratio
     denied.push(parent.join("agents"));
     denied.extend(denied_roots.iter().cloned());
     // Capture is the only allowed exception beneath private state: deny sibling paths individually.
-    denied.extend(fs::read_dir(parent)?.flatten().map(|e| e.path()).filter(|p| p != private));
-    denied.extend(fs::read_dir(private)?.flatten().map(|e| e.path()).filter(|p| *p != work));
-    let sandbox = Sandbox { writable: SCRATCH_DIRS.map(|n| work.join(n)).to_vec(), denied, network: false };
+    denied.extend(
+        fs::read_dir(parent)?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p != private),
+    );
+    denied.extend(
+        fs::read_dir(private)?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| *p != work),
+    );
+    let sandbox = Sandbox {
+        writable: SCRATCH_DIRS.map(|n| work.join(n)).to_vec(),
+        denied,
+        network: false,
+    };
 
     let rust = fixture["language"] == "rust";
     let commands: Vec<Vec<String>> = if rust {
-        vec![strings(&["cargo", "check", "--offline", "--locked"]), strings(&["cargo", "test", "--offline", "--locked"])]
+        vec![
+            strings(&["cargo", "check", "--offline", "--locked"]),
+            strings(&["cargo", "test", "--offline", "--locked"]),
+        ]
     } else {
         vec![strings(&["go", "test", "./..."])]
     };
@@ -409,12 +512,34 @@ pub fn check(candidate: &Path, fixture: &Value, private: &Path, timeout: Duratio
             fs::remove_file(path)?;
         }
     }
-    let oracle = protected(fixture["name"].as_str().unwrap())?["oracle"].as_str().unwrap().to_string();
+    let oracle = protected(fixture["name"].as_str().unwrap())?["oracle"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let oracle_commands = if rust {
         fs::write(work.join("oracle.rs"), oracle)?;
         vec![
-            strings(&["rustc", "--edition=2021", "--crate-name", "catalog", "--crate-type", "lib", "src/lib.rs", "-o", "bin/libcatalog.rlib"]),
-            strings(&["rustc", "--edition=2021", "--test", "oracle.rs", "--extern", "catalog=bin/libcatalog.rlib", "-o", "bin/oracle"]),
+            strings(&[
+                "rustc",
+                "--edition=2021",
+                "--crate-name",
+                "catalog",
+                "--crate-type",
+                "lib",
+                "src/lib.rs",
+                "-o",
+                "bin/libcatalog.rlib",
+            ]),
+            strings(&[
+                "rustc",
+                "--edition=2021",
+                "--test",
+                "oracle.rs",
+                "--extern",
+                "catalog=bin/libcatalog.rlib",
+                "-o",
+                "bin/oracle",
+            ]),
             vec![at("bin/oracle")],
         ]
     } else {
@@ -431,7 +556,9 @@ pub fn check(candidate: &Path, fixture: &Value, private: &Path, timeout: Duratio
 
 fn verify() -> Result<i32> {
     let manifest = frozen()?;
-    let tmp = tempfile::Builder::new().prefix("falinks-verify-").tempdir()?;
+    let tmp = tempfile::Builder::new()
+        .prefix("falinks-verify-")
+        .tempdir()?;
     let base = resolve(tmp.path());
     let mut results = Map::new();
     let timeout = Duration::from_secs(120);
@@ -449,17 +576,25 @@ fn verify() -> Result<i32> {
         git(&repo, &["add", "."], None)?;
         git(&repo, &["commit", "-m", "Known-correct reference"], None)?;
         let reference = check(&repo, &fixture, &private, timeout, &[])?;
-        results.insert(name.into(), json!({
-            "initial": first["oracle"], "reference": reference["oracle"],
-            "initial_visible": first["visible"], "reference_visible": reference["visible"],
-            "initial_commit": sha, "reference_commit": reference["candidate"],
-        }));
+        results.insert(
+            name.into(),
+            json!({
+                "initial": first["oracle"], "reference": reference["oracle"],
+                "initial_visible": first["visible"], "reference_visible": reference["visible"],
+                "initial_commit": sha, "reference_commit": reference["candidate"],
+            }),
+        );
     }
     let ok = results.values().all(|r| {
-        r["initial"]["passed"] == false && r["reference"]["passed"] == true
-            && r["initial_visible"]["passed"] == true && r["reference_visible"]["passed"] == true
+        r["initial"]["passed"] == false
+            && r["reference"]["passed"] == true
+            && r["initial_visible"]["passed"] == true
+            && r["reference_visible"]["passed"] == true
     });
-    println!("{}", serde_json::to_string_pretty(&json!({"fixtures": results}))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({"fixtures": results}))?
+    );
     Ok(if ok { 0 } else { 1 })
 }
 
@@ -467,7 +602,11 @@ fn schedule() -> Value {
     let mut pairs = Vec::new();
     for (index, name) in FIXTURES.iter().enumerate() {
         for repetition in 0..3 {
-            let arms = if (index + repetition) % 2 == 0 { ["git", "falinks"] } else { ["falinks", "git"] };
+            let arms = if (index + repetition) % 2 == 0 {
+                ["git", "falinks"]
+            } else {
+                ["falinks", "git"]
+            };
             pairs.push(json!({"pair": format!("{name}-{}", repetition + 1), "fixture": name, "arms": arms}));
         }
     }
@@ -492,20 +631,32 @@ impl Args {
         let (mut positional, mut options, mut raw) = (Vec::new(), Vec::new(), raw.into_iter());
         while let Some(arg) = raw.next() {
             match arg.strip_prefix("--") {
-                Some(key) => options.push((key.to_string(), raw.next().ok_or(format!("--{key} needs a value"))?)),
+                Some(key) => options.push((
+                    key.to_string(),
+                    raw.next().ok_or(format!("--{key} needs a value"))?,
+                )),
                 None => positional.push(arg),
             }
         }
-        Ok(Args { positional, options })
+        Ok(Args {
+            positional,
+            options,
+        })
     }
     fn all(&self, key: &str) -> Vec<&str> {
-        self.options.iter().filter(|(k, _)| k == key).map(|(_, v)| v.as_str()).collect()
+        self.options
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+            .collect()
     }
     fn get(&self, key: &str) -> Option<&str> {
         self.all(key).last().copied()
     }
     fn required(&self, key: &str) -> Result<&str> {
-        Ok(self.get(key).ok_or(format!("--{key} is required\n{USAGE}"))?)
+        Ok(self
+            .get(key)
+            .ok_or(format!("--{key} is required\n{USAGE}"))?)
     }
     fn fixture(&self) -> Result<&str> {
         match self.positional.get(1) {
@@ -527,7 +678,10 @@ fn run() -> Result<i32> {
         Some("prepare") => {
             let manifest = frozen()?;
             let name = args.fixture()?;
-            let sha = initial(&resolve(Path::new(args.required("output")?)), &fixture(name)?)?;
+            let sha = initial(
+                &resolve(Path::new(args.required("output")?)),
+                &fixture(name)?,
+            )?;
             if manifest["initial_commits"][name] != sha.as_str() {
                 bail!("Initial commit differs from manifest");
             }
@@ -540,12 +694,24 @@ fn run() -> Result<i32> {
             let evidence = resolve(Path::new(args.required("evidence")?));
             fs::create_dir(&evidence)?;
             let evidence = resolve(&evidence);
-            let denied: Vec<PathBuf> = args.all("deny-root").iter().map(|p| resolve(Path::new(p))).collect();
-            let result = check(&resolve(Path::new(args.required("repo")?)), &fixture(name)?, &evidence,
-                               Duration::from_secs(120), &denied)?;
+            let denied: Vec<PathBuf> = args
+                .all("deny-root")
+                .iter()
+                .map(|p| resolve(Path::new(p)))
+                .collect();
+            let result = check(
+                &resolve(Path::new(args.required("repo")?)),
+                &fixture(name)?,
+                &evidence,
+                Duration::from_secs(120),
+                &denied,
+            )?;
             write(evidence.join("checks.json"), &result)?;
             let passed = result["oracle"]["passed"] == true && result["visible"]["passed"] == true;
-            println!("{}", json!({"candidate": result["candidate"], "passed": passed}));
+            println!(
+                "{}",
+                json!({"candidate": result["candidate"], "passed": passed})
+            );
             Ok(if passed { 0 } else { 1 })
         }
         Some("baseline") => baseline::baseline(

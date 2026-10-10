@@ -8,7 +8,9 @@ use std::{fs, thread};
 
 fn emit(value: Value) {
     let mut stdout = io::stdout().lock();
-    writeln!(stdout, "{value}").and_then(|_| stdout.flush()).expect("host channel closed");
+    writeln!(stdout, "{value}")
+        .and_then(|_| stdout.flush())
+        .expect("host channel closed");
 }
 
 fn main() {
@@ -72,34 +74,67 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Value::from(std::mem::take(&mut pending))
         );
         let model = &start["model"];
-        let mut common: Vec<String> = ["--ignore-user-config", "--ignore-rules", "--json", "--output-schema"]
-            .map(String::from).to_vec();
+        let mut common: Vec<String> = [
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--json",
+            "--output-schema",
+        ]
+        .map(String::from)
+        .to_vec();
         common.extend([
-            schema.to_string_lossy().into(), "-o".into(), answer.to_string_lossy().into(),
-            "-m".into(), model["model"].as_str().unwrap_or_default().into(),
-            "-c".into(), format!("model_reasoning_effort={}", model["reasoning"]),
-            "-c".into(), "approval_policy=\"never\"".into(),
+            schema.to_string_lossy().into(),
+            "-o".into(),
+            answer.to_string_lossy().into(),
+            "-m".into(),
+            model["model"].as_str().unwrap_or_default().into(),
+            "-c".into(),
+            format!("model_reasoning_effort={}", model["reasoning"]),
+            "-c".into(),
+            "approval_policy=\"never\"".into(),
         ]);
         let mut argv = vec!["exec".to_string()];
         match &thread_id {
-            Some(id) => argv.extend(["resume".into()].into_iter().chain(common).chain([id.clone(), "-".into()])),
-            None => argv.extend(["--sandbox".into(), "workspace-write".into()].into_iter().chain(common).chain(["-".into()])),
+            Some(id) => argv.extend(
+                ["resume".into()]
+                    .into_iter()
+                    .chain(common)
+                    .chain([id.clone(), "-".into()]),
+            ),
+            None => argv.extend(
+                ["--sandbox".into(), "workspace-write".into()]
+                    .into_iter()
+                    .chain(common)
+                    .chain(["-".into()]),
+            ),
         }
-        let mut child = Command::new(start["runtime_binary"].as_str().ok_or("runtime_binary missing")?)
-            .args(&argv)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
+        let mut child = Command::new(
+            start["runtime_binary"]
+                .as_str()
+                .ok_or("runtime_binary missing")?,
+        )
+        .args(&argv)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
         child.stdin.take().unwrap().write_all(prompt.as_bytes())?;
         let output = child.wait_with_output()?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         // Preserve runtime events in agent scratch; host retains stdout requests and stderr separately.
-        fs::write(scratch.join(format!("turn-{turn}.jsonl")), stdout.as_bytes())?;
-        for event in stdout.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
+        fs::write(
+            scratch.join(format!("turn-{turn}.jsonl")),
+            stdout.as_bytes(),
+        )?;
+        for event in stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        {
             if event["type"] == "thread.started" {
                 thread_id = event["thread_id"].as_str().map(String::from);
             }
-            if event["type"] == "turn.completed" && let Some(usage) = event["usage"].as_object() {
+            if event["type"] == "turn.completed"
+                && let Some(usage) = event["usage"].as_object()
+            {
                 let mut report = usage.clone();
                 report.insert("turn".into(), turn.into());
                 emit(json!({"action": "usage", "usage": report}));
@@ -110,7 +145,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err(format!("Codex exited {}", output.status).into());
         }
         let response: Value = serde_json::from_str(&fs::read_to_string(&answer)?)?;
-        let action = response["action"].as_str().ok_or("response lacks action")?.to_string();
+        let action = response["action"]
+            .as_str()
+            .ok_or("response lacks action")?
+            .to_string();
         if action == "wait" {
             continue;
         }
@@ -129,7 +167,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         };
         loop {
             let reply = events.recv()?;
-            let done = reply["type"] == expected && (expected != "ok" || reply["action"] == action.as_str());
+            let done = reply["type"] == expected
+                && (expected != "ok" || reply["action"] == action.as_str());
             pending.push(reply);
             if done {
                 break;

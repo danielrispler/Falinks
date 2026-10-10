@@ -26,7 +26,7 @@ Baseline source: local session `rollout-2026-10-02T21-04-23-01a0fdc9-eaf0-77d1-9
 - Load the chosen ticket after selecting it; claim before working as Wayfinder requires. Read linked resolutions and artifacts as needed, checking for reopened or superseded decisions.
 - Keep canonical decision detail in ticket resolutions. Do not copy full decisions into another local summary or change the map's destination.
 
-The startup command is `cargo run -q --bin wayfinder-startup -- [map-number]` (originally a Python script, ported to Rust on 2026-10-10); `cargo test --bin wayfinder-startup` runs its offline selection checks. The standing startup and ticket-context rules live in `docs/agents/issue-tracker.md`, reached through `AGENTS.md`.
+The startup command is `cargo run --bin wayfinder-startup -- [map-number]`; `--check` runs its offline selection checks. The standing startup and ticket-context rules live in `docs/agents/issue-tracker.md`, reached through `AGENTS.md`.
 
 Reading sections were added to [Specify live-workspace notification handling and revalidation](https://github.com/danielrispler/Falinks/issues/17) and [Probe captured Rust/Go analysis and owning-symbol correspondence](https://github.com/danielrispler/Falinks/issues/18). Their questions, scope and stop conditions were preserved.
 

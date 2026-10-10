@@ -31,8 +31,13 @@ struct Run {
 impl Run {
     fn event(&self, kind: &str, values: Value) -> Result<()> {
         let mut row = json!({"elapsed": self.started.elapsed().as_secs_f64(), "kind": kind});
-        row.as_object_mut().unwrap().extend(values.as_object().unwrap().clone());
-        let mut stream = fs::OpenOptions::new().create(true).append(true).open(&self.events)?;
+        row.as_object_mut()
+            .unwrap()
+            .extend(values.as_object().unwrap().clone());
+        let mut stream = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.events)?;
         writeln!(stream, "{row}")?;
         Ok(())
     }
@@ -49,7 +54,8 @@ impl Run {
     }
 
     fn check_timeout(&self) -> Duration {
-        self.remaining().clamp(Duration::from_secs(1), Duration::from_secs(120))
+        self.remaining()
+            .clamp(Duration::from_secs(1), Duration::from_secs(120))
     }
 
     fn record_check(&mut self, private: &Path, number: usize, result: &Value) -> Result<()> {
@@ -61,7 +67,13 @@ impl Run {
     }
 }
 
-pub fn baseline(name: &str, config_path: &Path, output: &Path, pair: &str, order: i64) -> Result<i32> {
+pub fn baseline(
+    name: &str,
+    config_path: &Path,
+    output: &Path,
+    pair: &str,
+    order: i64,
+) -> Result<i32> {
     let started = Instant::now();
     let config = read(config_path)?;
     let fixture = fixture(name)?;
@@ -114,27 +126,62 @@ pub fn baseline(name: &str, config_path: &Path, output: &Path, pair: &str, order
         timing["elapsed_seconds"] = started.elapsed().as_secs_f64().into();
         timing["stop_utc"] = utc_now().into();
     }
-    timing["cleanup_elapsed_seconds"] = (started.elapsed().as_secs_f64() - timing["elapsed_seconds"].as_f64().unwrap()).into();
+    timing["cleanup_elapsed_seconds"] =
+        (started.elapsed().as_secs_f64() - timing["elapsed_seconds"].as_f64().unwrap()).into();
     run.evidence["harness_sha256"] = sha256(&fs::read(env::current_exe()?)?).into();
     write(private.join("result.json"), &run.evidence)?;
     let outcome = run.evidence["outcome"].clone();
-    println!("{}", json!({"outcome": outcome, "evidence": private.join("result.json")}));
+    println!(
+        "{}",
+        json!({"outcome": outcome, "evidence": private.join("result.json")})
+    );
     Ok(if outcome == "success" { 0 } else { 1 })
 }
 
-fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, public: &Path, private: &Path) -> Result<()> {
-    for key in ["model", "model_version", "reasoning", "runtime_version", "runtime_sha256", "worker_command", "timeout_seconds"] {
-        if matches!(&config[key], Value::Null | Value::Bool(false)) || config[key] == "" || config[key] == 0 {
+fn execute(
+    run: &mut Run,
+    config: &Value,
+    fixture: &Value,
+    manifest: &Value,
+    public: &Path,
+    private: &Path,
+) -> Result<()> {
+    for key in [
+        "model",
+        "model_version",
+        "reasoning",
+        "runtime_version",
+        "runtime_sha256",
+        "worker_command",
+        "timeout_seconds",
+    ] {
+        if matches!(&config[key], Value::Null | Value::Bool(false))
+            || config[key] == ""
+            || config[key] == 0
+        {
             bail!("Missing frozen run configuration: {key}");
         }
     }
-    if ["model", "model_version", "reasoning", "runtime_version", "runtime_sha256"]
-        .iter()
-        .any(|key| config[key].as_str().is_some_and(|v| v.starts_with("REQUIRED:")))
-    {
+    if [
+        "model",
+        "model_version",
+        "reasoning",
+        "runtime_version",
+        "runtime_sha256",
+    ]
+    .iter()
+    .any(|key| {
+        config[key]
+            .as_str()
+            .is_some_and(|v| v.starts_with("REQUIRED:"))
+    }) {
         bail!("Replace run configuration placeholders before launch");
     }
-    let binary = resolve(Path::new(config["runtime_binary"].as_str().ok_or("runtime_binary must be a path")?));
+    let binary = resolve(Path::new(
+        config["runtime_binary"]
+            .as_str()
+            .ok_or("runtime_binary must be a path")?,
+    ));
     let actual_hash = sha256(&fs::read(&binary)?);
     if config["runtime_sha256"] != actual_hash.as_str() {
         bail!("Runtime binary hash differs from frozen run configuration");
@@ -142,7 +189,10 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
     run.evidence["runtime_verified_sha256"] = actual_hash.into();
     let timeout = config["timeout_seconds"].as_f64().unwrap_or(0.0);
     let worker_command: Vec<String> = match config["worker_command"].as_array() {
-        Some(argv) if timeout > 0.0 && timeout <= 1800.0 => argv.iter().map(|w| w.as_str().map(String::from)).collect::<Option<_>>()
+        Some(argv) if timeout > 0.0 && timeout <= 1800.0 => argv
+            .iter()
+            .map(|w| w.as_str().map(String::from))
+            .collect::<Option<_>>()
             .ok_or("Worker command must be argv of strings")?,
         _ => bail!("Worker command must be argv; maximum run duration is 1800 seconds"),
     };
@@ -157,26 +207,67 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
     run.evidence["initial_snapshot"] = sha.clone().into();
     let at = |p: &Path| p.to_string_lossy().into_owned();
     for agent in AGENTS {
-        git(&repo, &["worktree", "add", "-b", agent, &at(&public.join(agent)), &sha], None)?;
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                agent,
+                &at(&public.join(agent)),
+                &sha,
+            ],
+            None,
+        )?;
         fs::create_dir(public.join(agent).join("scratch"))?;
     }
-    git(&repo, &["worktree", "add", "-b", "integration", &at(&public.join("integration")), &sha], None)?;
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "integration",
+            &at(&public.join("integration")),
+            &sha,
+        ],
+        None,
+    )?;
     // The controller Git repository and all exact checks are outside worker access.
     let retained = private.join("retained");
     initial(&retained, fixture)?;
     let mut denied = protected_roots()?;
     denied.push(private.to_path_buf());
     for path in config["denied_roots"].as_array().into_iter().flatten() {
-        denied.push(resolve(Path::new(path.as_str().ok_or("denied_roots must be paths")?)));
+        denied.push(resolve(Path::new(
+            path.as_str().ok_or("denied_roots must be paths")?,
+        )));
     }
-    let public_guard = Sandbox { writable: vec![public.to_path_buf()], denied: denied.clone(), network: false };
+    let public_guard = Sandbox {
+        writable: vec![public.to_path_buf()],
+        denied: denied.clone(),
+        network: false,
+    };
 
     let (tx, incoming): (_, Receiver<(&'static str, Option<String>)>) = channel();
-    let worker_script = resolve(Path::new(config["worker_script"].as_str().ok_or("worker_script must be a path")?));
+    let worker_script = resolve(Path::new(
+        config["worker_script"]
+            .as_str()
+            .ok_or("worker_script must be a path")?,
+    ));
     for agent in AGENTS {
         let scratch = public.join(agent).join("scratch");
         let mut env: Vec<(String, String)> = env::vars()
-            .filter(|(k, _)| ["PATH", "CARGO_HOME", "RUSTUP_HOME", "DEVELOPER_DIR", "SDKROOT"].contains(&k.as_str()))
+            .filter(|(k, _)| {
+                [
+                    "PATH",
+                    "CARGO_HOME",
+                    "RUSTUP_HOME",
+                    "DEVELOPER_DIR",
+                    "SDKROOT",
+                ]
+                .contains(&k.as_str())
+            })
             .collect();
         env.extend([
             ("HOME".to_string(), at(&scratch)),
@@ -190,7 +281,10 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
         let worker_copy = scratch.join("worker");
         fs::copy(&worker_script, &worker_copy)?;
         run.evidence["worker_sha256"] = sha256(&fs::read(&worker_script)?).into();
-        let argv: Vec<String> = worker_command.iter().map(|w| w.replace("{worker}", &at(&worker_copy))).collect();
+        let argv: Vec<String> = worker_command
+            .iter()
+            .map(|w| w.replace("{worker}", &at(&worker_copy)))
+            .collect();
         if let Some(auth) = config["auth_file"].as_str() {
             let codex_home = scratch.join("codex");
             fs::create_dir(&codex_home)?;
@@ -199,7 +293,11 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
         }
         let stderr = fs::File::create(private.join(format!("{agent}.stderr")))?;
         let sandbox = Sandbox {
-            writable: vec![public.join(agent), repo.join(".git"), public.join("integration")],
+            writable: vec![
+                public.join(agent),
+                repo.join(".git"),
+                public.join("integration"),
+            ],
             denied: denied.clone(),
             network: true,
         };
@@ -225,7 +323,10 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
             }
             let _ = tx.send((agent, None));
         });
-        let task: Map<String, Value> = fixture.as_object().unwrap().iter()
+        let task: Map<String, Value> = fixture
+            .as_object()
+            .unwrap()
+            .iter()
             .filter(|(k, _)| *k != "files" && *k != "milestones")
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -268,16 +369,24 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
             continue;
         };
         let request: Value = serde_json::from_str(&line)?;
-        run.event("worker_request", json!({"agent": agent, "request": request}))?;
+        run.event(
+            "worker_request",
+            json!({"agent": agent, "request": request}),
+        )?;
         let action = request["action"].as_str().unwrap_or_default();
         let peer = peer(agent);
         match action {
             "message" => {
-                run.send(peer, json!({"type": "peer_message", "sender": agent, "text": request["text"]}))?;
+                run.send(
+                    peer,
+                    json!({"type": "peer_message", "sender": agent, "text": request["text"]}),
+                )?;
                 run.send(agent, json!({"type": "ok", "action": action}))?;
             }
             "ack" => {
-                let expected = milestone_index.checked_sub(1).map(|i| milestones[i]["id"].as_str().unwrap());
+                let expected = milestone_index
+                    .checked_sub(1)
+                    .map(|i| milestones[i]["id"].as_str().unwrap());
                 if request["milestone"].as_str() != expected || !awaiting_ack.remove(agent) {
                     bail!("Invalid milestone acknowledgment");
                 }
@@ -285,16 +394,33 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
                 run.send(agent, json!({"type": "ok", "action": action}))?;
             }
             "usage" => {
-                let reports = run.evidence.as_object_mut().unwrap().entry("worker_usage").or_insert(json!({}));
-                reports.as_object_mut().unwrap().entry(agent).or_insert(json!([]))
-                    .as_array_mut().unwrap().push(request["usage"].clone());
-                let status = if reports.as_object().unwrap().len() == 2 { "available" } else { "partial" };
+                let reports = run
+                    .evidence
+                    .as_object_mut()
+                    .unwrap()
+                    .entry("worker_usage")
+                    .or_insert(json!({}));
+                reports
+                    .as_object_mut()
+                    .unwrap()
+                    .entry(agent)
+                    .or_insert(json!([]))
+                    .as_array_mut()
+                    .unwrap()
+                    .push(request["usage"].clone());
+                let status = if reports.as_object().unwrap().len() == 2 {
+                    "available"
+                } else {
+                    "partial"
+                };
                 let agents = reports.clone();
                 run.evidence["usage"] = json!({"status": status, "agents": agents, "format": "per-turn reports; not cumulative totals"});
                 run.send(agent, json!({"type": "ok", "action": action}))?;
             }
             "limit" => {
-                run.evidence["usage_limit_interruptions"].as_array_mut().unwrap()
+                run.evidence["usage_limit_interruptions"]
+                    .as_array_mut()
+                    .unwrap()
                     .push(json!({"agent": agent, "detail": request["detail"]}));
                 run.evidence["outcome"] = "usage_limit".into();
                 bail!("Subscription/usage interruption; batch paused, no provider switch");
@@ -303,7 +429,8 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
                 if milestone_index != milestones.len() || awaiting_ack.contains(agent) {
                     bail!("Final readiness before developments delivered/acknowledged");
                 }
-                if shares[agent].is_none() || request["commit"].as_str() != shares[agent].as_deref() {
+                if shares[agent].is_none() || request["commit"].as_str() != shares[agent].as_deref()
+                {
                     bail!("Final readiness must name last shared commit");
                 }
                 ready.insert(agent);
@@ -311,15 +438,26 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
             }
             "check" => {
                 // Either worker can ask for feedback on an unfinished shared combination.
-                let result = combine(public, private, &retained, fixture, &shares, request["resolved"].as_str(),
-                                     run.check_timeout(), &denied)?;
+                let result = combine(
+                    public,
+                    private,
+                    &retained,
+                    fixture,
+                    &shares,
+                    request["resolved"].as_str(),
+                    run.check_timeout(),
+                    &denied,
+                )?;
                 if result["passed"] == true {
                     final_resolution = result["candidate"].as_str().map(String::from);
                 }
                 check_number += 1;
                 run.record_check(private, check_number, &result)?;
-                run.send(agent, json!({"type": "check_result", "candidate": result["candidate"],
-                                       "passed": result["passed"], "conflict": result["conflict"]}))?;
+                run.send(
+                    agent,
+                    json!({"type": "check_result", "candidate": result["candidate"],
+                                       "passed": result["passed"], "conflict": result["conflict"]}),
+                )?;
                 run.event("validation", json!({"agent": agent, "candidate": result["candidate"], "passed": result["passed"]}))?;
             }
             "share" => {
@@ -332,15 +470,29 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
                 if public_git(&work, &["diff", "--cached", "--binary"])?.is_empty() {
                     bail!("Share must contain new unfinished work");
                 }
-                public_git(&work, &["commit", "-m", &format!("{agent} draft {}", sequence[agent] + 1)])?;
+                public_git(
+                    &work,
+                    &[
+                        "commit",
+                        "-m",
+                        &format!("{agent} draft {}", sequence[agent] + 1),
+                    ],
+                )?;
                 let commit = public_git(&work, &["rev-parse", "HEAD"])?;
                 shares.insert(agent, Some(commit.clone()));
                 *sequence.get_mut(agent).unwrap() += 1;
                 let patch = public_git(&work, &["diff", "--binary", &sha, &commit])?;
-                run.event("draft_shared", json!({"agent": agent, "commit": commit, "diff": patch}))?;
+                run.event(
+                    "draft_shared",
+                    json!({"agent": agent, "commit": commit, "diff": patch}),
+                )?;
                 run.send(agent, json!({"type": "shared", "commit": commit}))?;
-                run.send(peer, json!({"type": "peer_diff", "sender": agent, "commit": commit, "diff": patch}))?;
-                if awaiting_ack.is_empty() && milestone_index < milestones.len()
+                run.send(
+                    peer,
+                    json!({"type": "peer_diff", "sender": agent, "commit": commit, "diff": patch}),
+                )?;
+                if awaiting_ack.is_empty()
+                    && milestone_index < milestones.len()
                     && AGENTS.iter().all(|a| sequence[a] > milestone_floor[a])
                 {
                     let milestone = milestones[milestone_index].clone();
@@ -349,7 +501,10 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
                     ready.clear();
                     run.event("development", json!({"milestone": milestone}))?;
                     let mut development = json!({"type": "development"});
-                    development.as_object_mut().unwrap().extend(milestone.as_object().unwrap().clone());
+                    development
+                        .as_object_mut()
+                        .unwrap()
+                        .extend(milestone.as_object().unwrap().clone());
                     for member in AGENTS {
                         run.send(member, development.clone())?;
                     }
@@ -358,42 +513,84 @@ fn execute(run: &mut Run, config: &Value, fixture: &Value, manifest: &Value, pub
             _ => bail!("Unknown worker action: {action}"),
         }
     }
-    let result = combine(public, private, &retained, fixture, &shares, final_resolution.as_deref(), run.check_timeout(), &denied)?;
+    let result = combine(
+        public,
+        private,
+        &retained,
+        fixture,
+        &shares,
+        final_resolution.as_deref(),
+        run.check_timeout(),
+        &denied,
+    )?;
     check_number += 1;
     run.record_check(private, check_number, &result)?;
     let passed = result["passed"] == true;
     run.evidence["final_snapshot"] = result["candidate"].clone();
     run.evidence["oracle"] = result["oracle"].clone();
     run.evidence["outcome"] = if passed { "success" } else { "task_failure" }.into();
-    run.event("final_validation", json!({"candidate": result["candidate"], "passed": passed}))?;
+    run.event(
+        "final_validation",
+        json!({"candidate": result["candidate"], "passed": passed}),
+    )?;
     run.evidence["timing"]["elapsed_seconds"] = run.started.elapsed().as_secs_f64().into();
     run.evidence["timing"]["stop_utc"] = utc_now().into();
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)] // Mirrors the single host call site; a struct adds nothing.
-fn combine(public: &Path, private: &Path, retained: &Path, fixture: &Value, shares: &BTreeMap<&str, Option<String>>,
-           resolved: Option<&str>, timeout: Duration, denied: &[PathBuf]) -> Result<Value> {
+fn combine(
+    public: &Path,
+    private: &Path,
+    retained: &Path,
+    fixture: &Value,
+    shares: &BTreeMap<&str, Option<String>>,
+    resolved: Option<&str>,
+    timeout: Duration,
+    denied: &[PathBuf],
+) -> Result<Value> {
     let integration = public.join("integration");
-    let guard = Sandbox { writable: vec![public.to_path_buf()], denied: denied.to_vec(), network: false };
+    let guard = Sandbox {
+        writable: vec![public.to_path_buf()],
+        denied: denied.to_vec(),
+        network: false,
+    };
     let (Some(a), Some(b)) = (&shares["A"], &shares["B"]) else {
-        return Ok(json!({"candidate": null, "passed": false, "conflict": "Both drafts are needed"}));
+        return Ok(
+            json!({"candidate": null, "passed": false, "conflict": "Both drafts are needed"}),
+        );
     };
     // Agents may resolve conflicts with ordinary Git in the integration worktree.
     let candidate = match resolved.filter(|r| !r.is_empty()) {
         Some(resolved) => {
-            if resolved.len() != 40 || !resolved.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+            if resolved.len() != 40 || !resolved.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+            {
                 bail!("Resolved candidate must be an exact 40-character Git commit ID");
             }
             for commit in [a, b] {
-                git(&integration, &["merge-base", "--is-ancestor", commit, resolved], Some(&guard))?;
+                git(
+                    &integration,
+                    &["merge-base", "--is-ancestor", commit, resolved],
+                    Some(&guard),
+                )?;
             }
-            git(&integration, &["rev-parse", &format!("{resolved}^{{commit}}")], Some(&guard))?
+            git(
+                &integration,
+                &["rev-parse", &format!("{resolved}^{{commit}}")],
+                Some(&guard),
+            )?
         }
         None => {
             git(&integration, &["reset", "--hard", a], Some(&guard))?;
             git(&integration, &["clean", "-fdx"], Some(&guard))?;
-            let argv = guard.wrap(strings(&["git", "-c", "core.hooksPath=/dev/null", "merge", "--no-edit", b]))?;
+            let argv = guard.wrap(strings(&[
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "merge",
+                "--no-edit",
+                b,
+            ]))?;
             let merged = command(&argv, &integration, &git_env(), Duration::from_secs(120))?;
             if !merged.success {
                 return Ok(json!({"candidate": null, "passed": false, "conflict": merged.text()}));
@@ -403,9 +600,22 @@ fn combine(public: &Path, private: &Path, retained: &Path, fixture: &Value, shar
     };
     let mut fetch_denied: Vec<PathBuf> = denied.iter().filter(|p| *p != private).cloned().collect();
     let check_denied = fetch_denied.clone();
-    fetch_denied.extend(fs::read_dir(private)?.flatten().map(|e| e.path()).filter(|p| p != retained));
-    let fetch_guard = Sandbox { writable: vec![retained.to_path_buf()], denied: fetch_denied, network: false };
-    git(retained, &["fetch", &public.join("repo").to_string_lossy(), &candidate], Some(&fetch_guard))?;
+    fetch_denied.extend(
+        fs::read_dir(private)?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p != retained),
+    );
+    let fetch_guard = Sandbox {
+        writable: vec![retained.to_path_buf()],
+        denied: fetch_denied,
+        network: false,
+    };
+    git(
+        retained,
+        &["fetch", &public.join("repo").to_string_lossy(), &candidate],
+        Some(&fetch_guard),
+    )?;
     git(retained, &["checkout", "--detach", &candidate], None)?;
     let checks = check(retained, fixture, private, timeout, &check_denied)?;
     Ok(json!({

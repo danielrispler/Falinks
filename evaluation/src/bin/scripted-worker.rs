@@ -46,20 +46,31 @@ fn main() {
 }
 
 fn lines() -> impl Iterator<Item = Value> {
-    io::stdin().lines().map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+    io::stdin()
+        .lines()
+        .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
 }
 
 fn relationships() {
     let mut events = lines();
     let start = events.next().unwrap();
     let agent = start["agent"].as_str().unwrap().to_string();
-    let file = if agent == "A" { "producer.go" } else { "consumer.go" };
+    let file = if agent == "A" {
+        "producer.go"
+    } else {
+        "consumer.go"
+    };
     // Resolve controller relative to the public worktree; protected by sandbox-exec.
-    let controller = Path::new(start["workspace"].as_str().unwrap()).parent().unwrap().parent().unwrap()
+    let controller = Path::new(start["workspace"].as_str().unwrap())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .join("controller/events.jsonl");
     match fs::read(controller) {
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied =>
-            send(json!({"action": "message", "text": "protected-read-denied"})),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            send(json!({"action": "message", "text": "protected-read-denied"}))
+        }
         other => panic!("controller readable or unexpected: {other:?}"),
     }
     append(file, &format!("\n// first unfinished draft {agent}\n"));
@@ -73,14 +84,20 @@ fn relationships() {
             }
             ("ok", Some("ack")) => {
                 if pending["id"] == "record-contract" {
-                    fs::write(file, reference("go-relationships", file) + "\n// unfinished contract draft\n").unwrap();
+                    fs::write(
+                        file,
+                        reference("go-relationships", file) + "\n// unfinished contract draft\n",
+                    )
+                    .unwrap();
                 } else {
                     fs::write(file, reference("go-relationships", file)).unwrap();
                     last_final = true;
                 }
                 send(json!({"action": "share"}));
             }
-            ("shared", _) if last_final => send(json!({"action": "ready", "commit": event["commit"]})),
+            ("shared", _) if last_final => {
+                send(json!({"action": "ready", "commit": event["commit"]}))
+            }
             ("ok", Some("ready")) => park(),
             _ => {}
         }
@@ -93,12 +110,17 @@ fn conflict() {
     let agent = start["agent"].as_str().unwrap().to_string();
     append("handler.go", &format!("\n// initial {agent}\n"));
     send(json!({"action": "share"}));
-    let (mut is_final, mut own_final, mut peer_final, mut checking) = (false, Value::Null, false, false);
+    let (mut is_final, mut own_final, mut peer_final, mut checking) =
+        (false, Value::Null, false, false);
     for event in events {
         match (event["type"].as_str().unwrap(), event["action"].as_str()) {
             ("development", _) => send(json!({"action": "ack", "milestone": event["id"]})),
             ("ok", Some("ack")) => {
-                fs::write("handler.go", reference("go-page", "handler.go") + &format!("\n// final {agent}\n")).unwrap();
+                fs::write(
+                    "handler.go",
+                    reference("go-page", "handler.go") + &format!("\n// final {agent}\n"),
+                )
+                .unwrap();
                 is_final = true;
                 send(json!({"action": "share"}));
             }
@@ -108,21 +130,49 @@ fn conflict() {
                     send(json!({"action": "ready", "commit": own_final}));
                 }
             }
-            ("peer_diff", _) if event["sender"] == "B" && event["diff"].as_str().unwrap().contains("+// final B") =>
-                peer_final = true,
+            ("peer_diff", _)
+                if event["sender"] == "B"
+                    && event["diff"].as_str().unwrap().contains("+// final B") =>
+            {
+                peer_final = true
+            }
             ("check_result", _) => {
                 if event["conflict"].as_str().is_some_and(|c| !c.is_empty()) {
-                    let integration = PathBuf::from(start["integration_workspace"].as_str().unwrap());
-                    fs::write(integration.join("handler.go"),
-                              reference("go-page", "handler.go") + "\n// resolved ordinary merge\n").unwrap();
-                    for args in [&["add", "handler.go"][..], &["commit", "-m", "Resolve both contributions"]] {
+                    let integration =
+                        PathBuf::from(start["integration_workspace"].as_str().unwrap());
+                    fs::write(
+                        integration.join("handler.go"),
+                        reference("go-page", "handler.go") + "\n// resolved ordinary merge\n",
+                    )
+                    .unwrap();
+                    for args in [
+                        &["add", "handler.go"][..],
+                        &["commit", "-m", "Resolve both contributions"],
+                    ] {
                         let status = Command::new("git")
-                            .args(["-c", "core.hooksPath=/dev/null", "-c", "user.name=Test", "-c", "user.email=test@example.invalid"])
-                            .args(args).current_dir(&integration).stdout(Stdio::null()).status().unwrap();
+                            .args([
+                                "-c",
+                                "core.hooksPath=/dev/null",
+                                "-c",
+                                "user.name=Test",
+                                "-c",
+                                "user.email=test@example.invalid",
+                            ])
+                            .args(args)
+                            .current_dir(&integration)
+                            .stdout(Stdio::null())
+                            .status()
+                            .unwrap();
                         assert!(status.success());
                     }
-                    let head = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&integration).output().unwrap();
-                    send(json!({"action": "check", "resolved": String::from_utf8(head.stdout).unwrap().trim()}));
+                    let head = Command::new("git")
+                        .args(["rev-parse", "HEAD"])
+                        .current_dir(&integration)
+                        .output()
+                        .unwrap();
+                    send(
+                        json!({"action": "check", "resolved": String::from_utf8(head.stdout).unwrap().trim()}),
+                    );
                 } else if event["passed"] == true {
                     send(json!({"action": "ready", "commit": own_final}));
                 } else {
@@ -149,17 +199,30 @@ fn fake_codex(argv: &[String]) {
     io::stdin().read_to_string(&mut prompt).unwrap();
     let events: Vec<Value> = serde_json::from_str(prompt.rsplit_once('\n').unwrap().1).unwrap();
     // A telemetry acknowledgment alone is not new peer/task context.
-    assert!(events.iter().any(|e| e["type"] != "ok" || e["action"] != "usage"), "telemetry wait spin");
+    assert!(
+        events
+            .iter()
+            .any(|e| e["type"] != "ok" || e["action"] != "usage"),
+        "telemetry wait spin"
+    );
     let has = |kind: &str, action: Option<&str>| {
-        events.iter().find(|e| e["type"] == kind && action.is_none_or(|a| e["action"] == a))
+        events
+            .iter()
+            .find(|e| e["type"] == kind && action.is_none_or(|a| e["action"] == a))
     };
     let state_file = Path::new("scratch/fake-state.json");
-    let mut state: Value = fs::read_to_string(state_file).map(|s| serde_json::from_str(&s).unwrap())
+    let mut state: Value = fs::read_to_string(state_file)
+        .map(|s| serde_json::from_str(&s).unwrap())
         .unwrap_or(json!({"phase": "start"}));
-    let mut response = json!({"action": "wait", "text": "", "milestone": "", "commit": "", "resolved": ""});
+    let mut response =
+        json!({"action": "wait", "text": "", "milestone": "", "commit": "", "resolved": ""});
     let phase = state["phase"].as_str().unwrap().to_string();
     if let Some(start) = has("start", None) {
-        let file = if start["agent"] == "A" { "producer.go" } else { "consumer.go" };
+        let file = if start["agent"] == "A" {
+            "producer.go"
+        } else {
+            "consumer.go"
+        };
         state["agent"] = start["agent"].clone();
         state["file"] = file.into();
         response["action"] = "message".into();
@@ -176,16 +239,33 @@ fn fake_codex(argv: &[String]) {
     } else if phase.starts_with("ack-") && has("ok", Some("ack")).is_some() {
         let is_final = phase == "ack-follow-ups";
         let file = state["file"].as_str().unwrap().to_string();
-        fs::write(&file, reference("go-relationships", &file) + if is_final { "" } else { "\n// contract draft\n" }).unwrap();
+        fs::write(
+            &file,
+            reference("go-relationships", &file)
+                + if is_final {
+                    ""
+                } else {
+                    "\n// contract draft\n"
+                },
+        )
+        .unwrap();
         response["action"] = "share".into();
         state["phase"] = if is_final { "final" } else { "contract" }.into();
-    } else if phase == "final" && let Some(shared) = has("shared", None) {
+    } else if phase == "final"
+        && let Some(shared) = has("shared", None)
+    {
         response["action"] = "ready".into();
         response["commit"] = shared["commit"].clone();
         state["phase"] = "ready".into();
     }
     fs::write(state_file, state.to_string()).unwrap();
     fs::write(flag("-o"), response.to_string()).unwrap();
-    println!("{}", json!({"type": "thread.started", "thread_id": "fixture-thread"}));
-    println!("{}", json!({"type": "turn.completed", "usage": {"input_tokens": 2, "cached_input_tokens": 0, "output_tokens": 3}}));
+    println!(
+        "{}",
+        json!({"type": "thread.started", "thread_id": "fixture-thread"})
+    );
+    println!(
+        "{}",
+        json!({"type": "turn.completed", "usage": {"input_tokens": 2, "cached_input_tokens": 0, "output_tokens": 3}})
+    );
 }

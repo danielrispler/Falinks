@@ -1,0 +1,28 @@
+[package]
+name = "falinks-host"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[[bin]]
+name = "check-adapter"
+path = "check_adapter.rs"
+
+[[bin]]
+name = "sandbox-probe"
+path = "sandbox_probe.rs"
+
+[[bin]]
+name = "wayfinder-startup"
+path = "../../scripts/wayfinder_startup.rs"
+
+[dependencies]
+libc = "0.2"
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde_json = "1"
+sha2 = "0.10"
+shlex = "2"
+tempfile = "3"
