@@ -520,7 +520,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         let probe = gate.probe(agent)?;
         gate.start(agent)?;
         let steps = format!(
-            "1. Bash: run exactly `{probe}` (do not change it) and keep its FALINKS_CONTROLS line.\n2. Read {ledger} and note whether it is available to you.\n3. falinks_register with request {scope}.\n4. falinks_capture with request {{}}.",
+            "1. Bash: run exactly `{probe}` (do not change it) and keep its FALINKS_CONTROLS line.\n2. Call the Read tool on {ledger} even if you expect it to fail, and report the tool result.\n3. falinks_register with request {scope}.\n4. falinks_capture with request {{}}.",
             ledger = gate.dir.join("state/ledger.sqlite").display()
         );
         gate.prompt(agent, &steps)?;
