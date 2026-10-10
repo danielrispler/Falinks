@@ -75,3 +75,23 @@ The agent harness that runs one agent session and presents its tools and message
 
 **Presentation boundary**:
 A point at which a worker runtime shows pending messages to its agent. Presentation is not processing, acknowledgment or revalidation.
+
+**Captured job**:
+A host-enrolled trusted formatter or generator run against a captured revision of a client's workspace. Its declared output can be applied as that client's edit.
+_Avoid_: Job command, generator run
+
+**Required check**:
+A host-enrolled trusted command, such as compilation or fixed tests, that must pass on a candidate before publication.
+_Avoid_: Validation command, test step
+
+**Contained command**:
+A captured job or a required check, run under the containment guarantee.
+_Avoid_: Sandboxed command, sandboxed tool
+
+**Containment guarantee**:
+What every contained command receives on every supported platform: no network, reads limited to its command kind's boundary, writes only under its output, a cleared environment, process-group containment within a bounded run time, and refusal to run when these cannot be enforced. It bounds trusted tools; it does not contain hostile programs.
+_Avoid_: Sandbox contract (a contract is an agreement a proposal depends on)
+
+**Supported platform**:
+An operating system on which a Falinks component upholds its guarantees and CI or recorded evidence proves it. Support is claimed per component: the engine and each worker-runtime adapter separately.
+_Avoid_: Development platform (the OS Falinks is built on, currently macOS)
