@@ -1,0 +1,4 @@
+# Tests hash pinned toolchain binaries (~100MB) per analysis; unoptimized sha2 dominated test time.
+# Lives here, not in a manifest, because evaluation/Cargo.toml is frozen material.
+[profile.dev.package.sha2]
+opt-level = 3
