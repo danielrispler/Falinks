@@ -6,6 +6,10 @@ These docs are shared by Codex and Claude Code. `$skill` means `/skill` in Claud
 
 The engine core is Rust only, along with its adapters, controlled hosts and repository automation. Falinks supports Rust and Go projects, so tests and fixtures may also be written in Go. Use Cargo for builds, checks and tool entry points; introduce no other language.
 
+## Supported platforms
+
+The current list, per component, is `docs/platforms.md`. Do not infer support from issue comments.
+
 ## Checks
 
 Before handing off a change, run every CI check locally, in CI's order:

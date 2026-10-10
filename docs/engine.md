@@ -2,7 +2,7 @@
 
 The `falinks` Rust library is the host-owned public protocol for this slice. `tests/protocol.rs` supplies two authenticated scripted clients using real temporary source, a bare Git object store and SQLite. Related-scope analysis, obligations, reviews, messages, offers, replay and waits are described in [Related-scope coordination (#21)](#related-scope-coordination-21). Exact candidates, validation and publication are described in [Checkpoint publication (#22)](#checkpoint-publication-22). Join/split recommendations and workspace transitions are described in [Regrouping (#25)](#regrouping-25). The adapters are in `adapters/`.
 
-Run on macOS with Rust and `/usr/bin/git`:
+Run on a [supported platform](platforms.md) with Rust and Git 2.32 or newer on `PATH`:
 
 ```sh
 cargo test
@@ -11,7 +11,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-The captured-job checks install their own Seatbelt profile with `/usr/bin/sandbox-exec`. An outer sandbox that forbids installing another profile must run these checks outside that outer sandbox; a denied sandbox installation is a visible job failure, never a fallback to unrestricted execution. Other Unix platforms can use edits/storage, but captured jobs fail visibly as unsupported.
+Captured jobs and required checks are contained commands (`src/contain.rs`). On macOS they install their own Seatbelt profile with `/usr/bin/sandbox-exec`. An outer sandbox that forbids installing another profile must run these checks outside that outer sandbox. On Linux they run through the `falinks-contain` helper executable (ADR 2), which installs Landlock (pinned to ABI 3) and a seccomp filter that denies every socket. It acts as the command's subreaper. The host may set its path with `configure_containment`; the default is `falinks-contain` beside the host executable. A denied sandbox installation, a missing Landlock or helper, or a helper protocol mismatch is a visible job failure, never a fallback to unrestricted execution. Other platforms can use edits and storage, but contained commands fail visibly as unsupported. Requirements are in [docs/platforms.md](platforms.md).
 
 ## Host and client boundary
 
@@ -27,7 +27,7 @@ Enrollment is fixed for an experiment and includes absent paths for future creat
 - `request()` and `history()` return attributed request contents, scope, outcomes and exact before/proposed revisions. Identical submissions join the short writer operation and return its recorded result. Changed contents under an existing ID fail. An interrupted request can be retried explicitly with `retry()` after restart reconciliation; prior attempts remain retained, and freshness is checked again.
 - `run_job()` captures declared inputs from a recorded completed revision, prepares separate read-only input and writable output directories, and retains the complete job record/logs/artifacts. `apply_job()` applies all declared output together through the same freshness gate, including input paths that the job did not write. Live mutations do not hold the job lease.
 
-Jobs are host-enrolled trusted formatter/generator commands, with cleared environment, fixed input/output layout, no network, filesystem read restrictions and output-only writes under macOS Seatbelt. System tool/runtime reads remain allowed. Supported tools keep descendants in the assigned process group and join them before exit; daemonizing or escaping that group is unsupported and must not be enrolled. A surviving group is killed and reported as ambiguous. A 30-second execution bound kills timed-out groups. Failed commands, undeclared/reserved output, unsupported modes/aliases and unavailable sandboxing retain evidence and cannot apply. This is a bounded trusted-tool integration, not containment of arbitrary hostile programs. A restart never adopts output from a job whose completion was not recorded; it retains the directory and records a visible integration error.
+Jobs are host-enrolled trusted formatter/generator commands, with cleared environment, fixed input/output layout, no network, filesystem read restrictions and output-only writes (plus `/dev/null`). System tool/runtime reads remain allowed. Supported tools keep descendants in the assigned process group and join them before exit; daemonizing or escaping that group is unsupported and must not be enrolled. A surviving group is killed and reported as ambiguous. On Linux the helper also sweeps descendants that escaped the group (for example with `setsid`); macOS cannot detect those (#58). A 30-second execution bound kills timed-out groups. Failed commands, undeclared/reserved output, unsupported modes/aliases and unavailable sandboxing retain evidence and cannot apply. This is a bounded trusted-tool integration, not containment of arbitrary hostile programs. A restart never adopts output from a job whose completion was not recorded; it retains the directory and records a visible integration error.
 
 ## Storage and recovery
 
@@ -82,7 +82,7 @@ Analysis runs inside the short writer operation (about one analyzer run per edit
 
 # Checkpoint publication (#22)
 
-`tests/publication.rs` drives this slice through the public protocol with real Git, SQLite and the pinned `rustc` as the required compile and test checks. The checks need macOS Seatbelt, like captured jobs.
+`tests/publication.rs` drives this slice through the public protocol with real Git, SQLite and the pinned `rustc` as the required compile and test checks. The checks are contained commands, like captured jobs.
 
 ## Exact candidates and offers
 
@@ -96,7 +96,7 @@ When an offer completes coverage, the same SQLite commit queues a publication ru
 
 All runs share one validation workspace, `state/validation`, under one lease. The lease covers preparation, checks, acceptance and synchronization, so runs queue while live drafting continues. A run marks the slot dirty in SQLite before touching it. The slot is reused only when SQLite records it clean and its files still match that record exactly. Otherwise it is moved to `state/quarantine/` as evidence and rebuilt. A free lock after a crash proves nothing. Only differing files are rewritten.
 
-Each check runs in the slot with a cleared environment and a fresh output directory (`TMPDIR`, `HOME`, `CARGO_TARGET_DIR`, `GOCACHE`). Seatbelt denies network, any write outside that output, and reading live or controller files. After each check the slot is verified against the candidate; a mutation refuses the run and quarantines the slot. Logs are kept in the run record. Output directories are deleted after the run. After the run the slot is synchronized to the published snapshot and recorded clean.
+Each check runs in the slot with a cleared environment and a fresh output directory (`TMPDIR`, `HOME`, `CARGO_TARGET_DIR`, `GOCACHE`). Containment denies network, any write outside that output, and reading live or controller files. A 300-second bound kills a timed-out check. On Linux the read boundary is the complement of the live and controller roots, computed when the check starts. Those roots must not be reachable through another mount, and a directory created later outside them is unreadable. After each check the slot is verified against the candidate; a mutation refuses the run and quarantines the slot. Logs are kept in the run record. Output directories are deleted after the run. After the run the slot is synchronized to the published snapshot and recorded clean.
 
 ## Acceptance
 
@@ -118,7 +118,7 @@ Offer and feedback IDs are idempotent: an identical repeat returns the recorded 
 
 ## Limits
 
-Checks run serially in the one slot, and the host decides when to run `validate()`. Required checks are trusted host commands; Seatbelt is a bounded control, not containment of hostile tools. The engine combines automatically only along the linear completed history, so publication races always return the candidate for re-offer. An offer's recorded reviews are evidence. The enforced peer and dependency gate is that no member has a pending obligation for a change included in the candidate. A candidate blocked by a disconnected member emits no extra event: peers already receive `Disconnected`, and `candidate(R)` names the missing member. There is no power-loss guarantee, and no joint Git/SQLite transaction.
+Checks run serially in the one slot, and the host decides when to run `validate()`. Required checks are trusted host commands; containment is a bounded control, not containment of hostile tools. The engine combines automatically only along the linear completed history, so publication races always return the candidate for re-offer. An offer's recorded reviews are evidence. The enforced peer and dependency gate is that no member has a pending obligation for a change included in the candidate. A candidate blocked by a disconnected member emits no extra event: peers already receive `Disconnected`, and `candidate(R)` names the missing member. There is no power-loss guarantee, and no joint Git/SQLite transaction.
 
 # Regrouping (#25)
 
