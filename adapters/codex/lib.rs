@@ -22,7 +22,7 @@ pub const REQUIRED: &[&str] = &[
     "resume_replay",
 ];
 /// Verified pins keyed by `std::env::consts::{OS, ARCH}`. A platform is declared only after
-/// its adapter controls were re-run there; every other platform fails closed.
+/// its adapter controls were re-run there (review-enforced); every other platform fails closed.
 pub type PinMap<T> = &'static [((&'static str, &'static str), T)];
 
 pub fn platform_pin<T: Copy>(pins: PinMap<T>, os: &str, arch: &str) -> Result<T> {
@@ -33,21 +33,31 @@ pub fn platform_pin<T: Copy>(pins: PinMap<T>, os: &str, arch: &str) -> Result<T>
             format!("unsupported platform {os}/{arch}; publication/scoring disabled").into()
         })
 }
+/// The `docs/platforms.md` columns, as `std::env::consts::{OS, ARCH}`.
+pub const PLATFORMS: &[(&str, &str)] = &[
+    ("macos", "aarch64"),
+    ("macos", "x86_64"),
+    ("linux", "x86_64"),
+    ("linux", "aarch64"),
+];
 /// The adapter's row in `docs/platforms.md`, derived from its pins so the two cannot drift.
 pub fn platforms_row<T>(component: &str, pins: PinMap<T>) -> String {
-    let cell = |os: &str| {
-        let arches: Vec<&str> = pins
-            .iter()
-            .filter(|((pin_os, _), _)| *pin_os == os)
-            .map(|((_, arch), _)| *arch)
-            .collect();
-        if arches.is_empty() {
-            "Not yet verified (fails closed)".to_owned()
-        } else {
-            format!("Supported ({})", arches.join(", "))
-        }
-    };
-    format!("| {component} | {} | {} |", cell("macos"), cell("linux"))
+    for (platform, _) in pins {
+        assert!(
+            PLATFORMS.contains(platform),
+            "{platform:?} has no docs column"
+        );
+    }
+    let cells: Vec<&str> = PLATFORMS
+        .iter()
+        .map(
+            |platform| match pins.iter().any(|(pinned, _)| pinned == platform) {
+                true => "Supported",
+                false => "Not yet verified (fails closed)",
+            },
+        )
+        .collect();
+    format!("| {component} | {} |", cells.join(" | "))
 }
 
 pub fn require(condition: bool, message: &str) -> Result<()> {
