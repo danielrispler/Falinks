@@ -1187,10 +1187,9 @@ fn scenario(gate: &mut Gate) -> Result<()> {
             "1. falinks_post with request {{\"task\": \"gate\", \"scope\": [], \"work\": \"None\", \"text\": \"{text}\", \"reply_to\": null}}."
         )
     };
-    gate.run(&[
-        (0, post("discount is published")),
-        (1, post("summary is published")),
-    ])?;
+    // One at a time: each post must reach an idle peer, not one still in its turn.
+    gate.run(&[(0, post("discount is published"))])?;
+    gate.run(&[(1, post("summary is published"))])?;
     let mut races = vec![];
     for agent in 0..2 {
         let events = gate.undelivered(agent)?;
