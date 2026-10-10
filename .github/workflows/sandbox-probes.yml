@@ -1,0 +1,75 @@
+name: Sandbox backend probes
+
+# Research evidence for #34, not a required check. Runs the throwaway probe on real
+# Linux and Windows kernels and uploads the JSON reports.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["adapters/sandbox-backends-probe/**", ".github/workflows/sandbox-probes.yml"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-22.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      PROBE: adapters/sandbox-backends-probe/target/release/sandbox-backends-probe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache-workspaces: adapters/sandbox-backends-probe -> target
+      - run: sudo apt-get install -y bubblewrap
+      - run: cargo build --release --locked --manifest-path adapters/sandbox-backends-probe/Cargo.toml
+      - name: Runner defaults
+        run: $PROBE host report-default.json
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; runners may relax it.
+      - name: AppArmor user-namespace restriction enabled
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            old=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+            $PROBE host report-apparmor-restrict.json
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns="$old"
+          fi
+      - name: User namespaces disabled
+        run: |
+          old=$(cat /proc/sys/user/max_user_namespaces)
+          sudo sysctl -w user.max_user_namespaces=0
+          $PROBE host report-no-userns.json
+          sudo sysctl -w user.max_user_namespaces="$old"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-probe-${{ matrix.runner }}
+          path: report-*.json
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache-workspaces: adapters/sandbox-backends-probe -> target
+      - run: cargo build --release --locked --manifest-path adapters/sandbox-backends-probe/Cargo.toml
+      - run: adapters/sandbox-backends-probe/target/release/sandbox-backends-probe.exe host report-default.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-probe-windows-latest
+          path: report-*.json
