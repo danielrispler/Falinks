@@ -1,0 +1,21 @@
+{
+  "limit_seconds": 28800,
+  "scope": "Shared evaluation setup, including fixtures, baseline, pilot/integration repairs; excludes engine implementation and inactive user pauses.",
+  "sessions": [
+    {
+      "date": "2026-10-08",
+      "charged_seconds": 1800,
+      "measurement": "Conservative 30-minute charge for the interrupted initial setup session; includes reading before worktree creation. Not an exact stopwatch measurement.",
+      "work": "Three fixtures/oracles, baseline/worker, freeze/configuration/instructions and initial CLI checks."
+    },
+    {
+      "start_utc": "2026-10-10T07:50:18Z",
+      "charged_seconds": null,
+      "measurement": "Active resumed-session wall time; update at completion.",
+      "work": "Final validation, review, fixes and handoff."
+    }
+  ],
+  "charged_total_seconds": 1800,
+  "remaining_seconds": 27000,
+  "status": "in_progress"
+}

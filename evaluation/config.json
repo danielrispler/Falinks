@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "timeout_seconds": 1800,
+  "setup_limit_seconds": 28800,
+  "agents": [
+    "A",
+    "B"
+  ],
+  "model": "REQUIRED: same exact model in both arms",
+  "model_version": "REQUIRED: record resolved version; unknown blocks scoring",
+  "reasoning": "REQUIRED: same setting in both arms",
+  "runtime_version": "REQUIRED: reverified adapter version",
+  "runtime_sha256": "REQUIRED: actual binary hash",
+  "worker_command": [
+    "python3",
+    "{worker}"
+  ],
+  "tool_differences": {
+    "git": "Two writable Git worktrees; JSON-line messages and unfinished diffs; ordinary merges and conflict resolution; exact host-captured checks. No Falinks ledger or offer/reconsideration protocol.",
+    "falinks": "Live group workspace; engine-mediated mutations and revision-bound reviews/offers; host-captured checks. Adapter/engine supplied by downstream tickets.",
+    "shared": "Same two fresh identities, allocation, model/version/reasoning, requirements, dependency information, announcements, feedback opportunities, frozen milestones and trusted checks. No oracle/reference access."
+  },
+  "worker_script": "evaluation/codex_worker.py",
+  "runtime_binary": "REQUIRED: absolute pinned codex binary",
+  "auth_file": "REQUIRED: auth.json for the isolated fresh CODEX_HOME",
+  "denied_roots": [
+    "REQUIRED: checkout, other runs and any reference copies"
+  ]
+}
