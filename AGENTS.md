@@ -1,3 +1,7 @@
+## Implementation language
+
+Falinks is 100% Rust. Write all executable project code in Rust, including the engine, adapters, controlled hosts, tests, verification probes, fixtures and repository automation. Use Cargo for builds, checks and tool entry points; implement helpers in Rust rather than introducing another language.
+
 ## Agent skills
 
 ### Learning
@@ -10,7 +14,7 @@ Track issues and specs in GitHub Issues for `danielrispler/Falinks`. Before issu
 
 ### Wayfinder
 
-For Wayfinder sessions, run `python3 scripts/wayfinder_startup.py [map-number]` (default: current map). Follow the startup and ticket-context rules in `docs/agents/issue-tracker.md` when creating, starting, or updating tickets.
+For Wayfinder sessions, run `cargo run --bin wayfinder-startup -- [map-number]` (default: current map). Follow the startup and ticket-context rules in `docs/agents/issue-tracker.md` when creating, starting, or updating tickets.
 
 ### Triage labels
 
