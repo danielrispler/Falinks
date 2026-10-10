@@ -1,7 +1,7 @@
 //! Host-launched helpers run by Claude Code outside the worker sandbox: the `falinks`
 //! stdio MCP server and the `PreToolUse` identity hook. Both forward to the trusted host
 //! over its controller socket; neither touches the workspace itself.
-use falinks_host::{Result, require, runtime::tools};
+use falinks_host::{Result, require};
 use serde_json::{Value, json};
 use std::{
     env, fs,
@@ -36,7 +36,9 @@ fn hook(controller: &Path) -> Result<()> {
     )
 }
 
-fn mcp(controller: &Path, workspace: &str) -> Result<()> {
+fn mcp(controller: &Path) -> Result<()> {
+    // Host-written tool list for this launch.
+    let tools: Value = serde_json::from_str(&fs::read_to_string(controller.join("tools.json"))?)?;
     let session = env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default();
     let mut out = std::io::stdout();
     for line in BufReader::new(std::io::stdin()).lines() {
@@ -50,7 +52,7 @@ fn mcp(controller: &Path, workspace: &str) -> Result<()> {
                 json!({"result":{"protocolVersion":params["protocolVersion"],"capabilities":{"tools":{}},
                 "serverInfo":{"name":"falinks","version":"1"}}})
             }
-            "tools/list" => json!({"result":{"tools":tools(workspace)}}),
+            "tools/list" => json!({"result":{"tools":tools}}),
             "tools/call" => {
                 let result = host(
                     controller,
@@ -76,8 +78,8 @@ fn main() {
     let args = env::args().collect::<Vec<_>>();
     let result = match (args.get(1).map(String::as_str), args.len()) {
         (Some("hook"), 3) => hook(Path::new(&args[2])),
-        (Some("mcp"), 4) => mcp(Path::new(&args[2]), &args[3]),
-        _ => Err("usage: falinks-claude-tool hook CONTROLLER | mcp CONTROLLER WORKSPACE".into()),
+        (Some("mcp"), 3) => mcp(Path::new(&args[2])),
+        _ => Err("usage: falinks-claude-tool hook CONTROLLER | mcp CONTROLLER".into()),
     };
     if let Err(error) = result {
         eprintln!("{error}");

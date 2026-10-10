@@ -1,15 +1,15 @@
 # Supported platforms
 
-Falinks is developed on macOS and supported per component ([ADR 1](adr/0001-develop-on-macos-support-all-oses.md), [ADR 3](adr/0003-platform-support-is-claimed-per-component.md)). This file is the one current list. A platform that is not marked Supported fails closed there; it never runs with weaker containment.
+Falinks is developed on macOS. Support is claimed per component ([ADR 1](adr/0001-develop-on-macos-support-all-oses.md), [ADR 3](adr/0003-platform-support-is-claimed-per-component.md)). Each cell is Supported, Not yet verified (fails closed) or Unsupported by decision. A platform that is not Supported fails visibly. It never falls back to weaker containment.
 
-| Component | macOS (arm64) | Linux (x86_64) |
-| --- | --- | --- |
-| Engine | Supported: `macos` CI job | Supported: `linux` CI job (#54) |
-| Codex adapter | Supported: pinned binary (#11) | Not yet verified (#55, #57) |
-| Claude Code adapter | Supported: pinned binary (#32, #33) | Not yet verified (#55, #57) |
-| Evaluation harness | Supported (#19) | Not yet verified (#56) |
+| Component | macOS aarch64 | macOS x86_64 | Linux x86_64 | Linux aarch64 |
+|---|---|---|---|---|
+| Engine | Supported | Supported | Supported | Not yet verified (fails closed) |
+| Codex adapter | Supported | Not yet verified (fails closed) | Not yet verified (fails closed) | Not yet verified (fails closed) |
+| Claude Code adapter | Supported | Not yet verified (fails closed) | Not yet verified (fails closed) | Not yet verified (fails closed) |
+| Evaluation harness | Supported | Not yet verified (fails closed) | Not yet verified (fails closed) | Not yet verified (fails closed) |
 
-**Linux arm64** has no CI job and is not yet verified; the backend's arm64 build is type-checked only. **Windows** is planned through WSL 2, which runs a Linux kernel and would use the Linux column; it is not yet verified. Native Windows and the BSDs are unsupported by decision (#34, #35).
+The engine's Linux x86_64 cell rests on the `linux` CI job (#54). Linux aarch64 has no CI job; the backend is only type-checked there. Windows is planned through WSL 2, which is Linux; it is not yet verified. Native Windows and the BSDs are unsupported by decision (#34, #35). The evaluation harness moves to the per-OS backends in #56.
 
 ## Requirements
 
@@ -23,3 +23,7 @@ Falinks is developed on macOS and supported per component ([ADR 1](adr/0001-deve
 - **Escaped descendants.** On Linux, a descendant that leaves the command's process group (for example with `setsid`) is swept and reported as ambiguous completion. On macOS it is not detected; it keeps its sandbox but can outlive the command. Tracked in #58.
 - **Directory listings.** On Linux a contained command cannot list `/` or the ancestors of its readable trees; Seatbelt allows that. Reading files inside readable trees is unaffected.
 - **Signals.** On both platforms a contained command can signal other processes of the same user.
+
+## Adapter rows
+
+Each adapter accepts only binaries whose SHA-256 is pinned for the running OS and architecture (`std::env::consts::{OS, ARCH}`). Any other platform fails with an unsupported-platform reason before the binary is hashed or run. The pins live in `PINS` in `adapters/codex/runtime.rs` and `adapters/claude/lib.rs`. The adapter tests derive the two adapter rows from those pins and fail when they drift. The engine and evaluation-harness rows are not tested. Review, not a test, enforces that a platform gets a pin only after the adapter's controls have been re-run there.

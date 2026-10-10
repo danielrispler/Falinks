@@ -603,7 +603,7 @@ fn publication_crash_boundaries_accept_all_or_none_and_recover_committed_outcome
             initial.tree,
             "{stage}: mirror not yet updated"
         );
-        let (engine, alice, _) = reopen(dir.path());
+        let (engine, alice, bob) = reopen(dir.path());
         assert_eq!(
             fs::read(dir.path().join("live/a.rs")).unwrap(),
             b"pub fn a( unfinished",
@@ -616,6 +616,17 @@ fn publication_crash_boundaries_accept_all_or_none_and_recover_committed_outcome
             };
             assert_eq!(engine.published().unwrap(), candidate);
             assert_eq!(mirror(&dir), candidate.tree, "restart repairs the mirror");
+            // The notification the crash prevented is replayed from the committed event.
+            for client in [&alice, &bob] {
+                assert!(
+                    engine
+                        .events(client, 0)
+                        .unwrap()
+                        .iter()
+                        .any(|e| matches!(&e.body, Body::Published { run, .. } if *run == id)),
+                    "Published event not replayed after restart"
+                );
+            }
             // Duplicate requests recover the committed outcome without another publication.
             assert_eq!(engine.retry_run(&alice, &id).unwrap(), run);
             let duplicate = engine.offer(&alice, alices.clone()).unwrap();
@@ -767,4 +778,47 @@ fn missing_published_evidence_stops_restart_without_replacing_drafts() {
         .is_err()
     );
     assert_eq!(fs::read(dir.path().join("live/b.rs")).unwrap(), b"draft");
+}
+
+#[test]
+fn a_failing_check_on_a_two_member_candidate_accepts_neither_member() {
+    let (_dir, engine, alice, bob) = fixture();
+    let initial = engine.published().unwrap();
+    applied(
+        &engine,
+        &alice,
+        "a",
+        "a.rs",
+        "pub fn a() -> i32 {\n    3\n}\n",
+    );
+    let candidate = applied(
+        &engine,
+        &bob,
+        "b",
+        "b.rs",
+        "pub fn b() -> i32 {\n    crate::a::a()\n}\n",
+    );
+    let alices = engine
+        .offer(&alice, offer("alice", candidate.revision))
+        .unwrap();
+    let bobs = engine
+        .offer(&bob, offer("bob", candidate.revision))
+        .unwrap();
+    assert_eq!(bobs.members, members(&[0, 1]));
+    // Both compile; the fixed test fails only for the combination.
+    let run = engine.validate().unwrap().expect("coverage queued a run");
+    assert_eq!(
+        run.outcome,
+        Some(RunOutcome::Failed {
+            check: "tests".into()
+        })
+    );
+    assert_eq!(engine.published().unwrap(), initial);
+    for checkpoint in [alices, bobs] {
+        assert_eq!(
+            engine.checkpoint(&checkpoint.id).unwrap().unwrap().state,
+            Availability::Available,
+            "a failed group accepts no member"
+        );
+    }
 }

@@ -21,8 +21,44 @@ pub const REQUIRED: &[&str] = &[
     "completion_race",
     "resume_replay",
 ];
-pub const PIN: &str = "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b";
-pub const HOST_PIN: &str = "679eedaea70529aa1cffc9bc0a0788c186412663544fa76c09d63b57f383a65a";
+/// Verified pins keyed by `std::env::consts::{OS, ARCH}`. A platform is declared only after
+/// its adapter controls were re-run there (review-enforced); every other platform fails closed.
+pub type PinMap<T> = &'static [((&'static str, &'static str), T)];
+
+pub fn platform_pin<T: Copy>(pins: PinMap<T>, os: &str, arch: &str) -> Result<T> {
+    pins.iter()
+        .find(|(platform, _)| *platform == (os, arch))
+        .map(|(_, pin)| *pin)
+        .ok_or_else(|| {
+            format!("unsupported platform {os}/{arch}; publication/scoring disabled").into()
+        })
+}
+/// The `docs/platforms.md` columns, as `std::env::consts::{OS, ARCH}`.
+pub const PLATFORMS: &[(&str, &str)] = &[
+    ("macos", "aarch64"),
+    ("macos", "x86_64"),
+    ("linux", "x86_64"),
+    ("linux", "aarch64"),
+];
+/// The adapter's row in `docs/platforms.md`, derived from its pins so the two cannot drift.
+pub fn platforms_row<T>(component: &str, pins: PinMap<T>) -> String {
+    for (platform, _) in pins {
+        assert!(
+            PLATFORMS.contains(platform),
+            "{platform:?} has no docs column"
+        );
+    }
+    let cells: Vec<&str> = PLATFORMS
+        .iter()
+        .map(
+            |platform| match pins.iter().any(|(pinned, _)| pinned == platform) {
+                true => "Supported",
+                false => "Not yet verified (fails closed)",
+            },
+        )
+        .collect();
+    format!("| {component} | {} |", cells.join(" | "))
+}
 
 pub fn require(condition: bool, message: &str) -> Result<()> {
     if condition {
@@ -36,6 +72,21 @@ pub fn hash(bytes: &[u8]) -> String {
 }
 pub fn file_hash(path: &Path) -> Result<String> {
     Ok(hash(&std::fs::read(path)?))
+}
+
+/// `sandbox-probe` arguments for the historical fixture layout (`ROOT/{source,scratch,...}`).
+pub fn fixture_probe_args(root: &Path, expected: &str) -> Vec<String> {
+    let path = |name: &str| root.join(name).to_string_lossy().into_owned();
+    let mut args = vec![
+        path("worker-tools/sandbox-probe"),
+        path("source/source.txt"),
+        hash(expected.as_bytes()),
+        path("scratch"),
+    ];
+    for name in ["controller", "snapshots", "validation"] {
+        args.push(format!("{name}={}", path(&format!("{name}/secret.txt"))));
+    }
+    args
 }
 
 pub struct ControlGate {
@@ -80,6 +131,8 @@ pub struct Boundary {
     pub thread: Option<String>,
     agent: Option<String>,
     pub turn: Option<String>,
+    /// Registered `falinks_<operation>` tools; anything else is refused.
+    pub operations: Vec<String>,
 }
 impl Boundary {
     pub fn new(database: &Path, workspace: &Path, session: String) -> Result<Self> {
@@ -92,6 +145,7 @@ impl Boundary {
             thread: None,
             agent: None,
             turn: None,
+            operations: ["edit", "review", "offer"].map(String::from).to_vec(),
         })
     }
     pub fn bind(&mut self, thread: &str, agent: &str, resume: bool) -> Result<()> {
@@ -120,6 +174,15 @@ impl Boundary {
         self.agent = Some(agent.into());
         self.turn = None;
         Ok(())
+    }
+    /// Host-applied regrouping moved this agent: rebind its thread to this boundary's
+    /// workspace so resume accepts the new root. Never an agent capability.
+    pub fn relocate(&self, thread: &str, agent: &str) -> Result<()> {
+        let changed = self.db.execute(
+            "UPDATE binding SET workspace=? WHERE thread=? AND agent=?",
+            params![self.workspace, thread, agent],
+        )?;
+        require(changed == 1, "no binding to relocate")
     }
     pub fn begin(&mut self, turn: &str) -> Result<()> {
         require(
@@ -179,12 +242,11 @@ impl Boundary {
                 && call["callId"].as_str().is_some_and(|x| !x.is_empty()),
             "inactive runtime identity",
         )?;
-        let operation = match call["tool"].as_str() {
-            Some("falinks_edit") => "edit",
-            Some("falinks_review") => "review",
-            Some("falinks_offer") => "offer",
-            _ => return Err("unregistered tool".into()),
-        };
+        let operation = call["tool"]
+            .as_str()
+            .and_then(|tool| tool.strip_prefix("falinks_"))
+            .filter(|operation| self.operations.iter().any(|o| o == operation))
+            .ok_or("unregistered tool")?;
         let arguments = call["arguments"]
             .as_object()
             .ok_or("expected workspace and engine request")?;

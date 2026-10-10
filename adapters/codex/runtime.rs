@@ -1,4 +1,4 @@
-use crate::{Boundary, ControlGate, HOST_PIN, PIN, Result, file_hash, require};
+use crate::{Boundary, ControlGate, PinMap, Result, file_hash, platform_pin, require};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -70,14 +70,33 @@ pub fn configuration(root: &Path, binary: &Path) -> Vec<String> {
     args
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Pin {
+    /// SHA-256 of the `codex` binary.
+    pub codex: &'static str,
+    /// SHA-256 of the `codex-code-mode-host` beside it.
+    pub host: &'static str,
+}
+pub const PINS: PinMap<Pin> = &[(
+    ("macos", "aarch64"),
+    Pin {
+        codex: "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+        host: "679eedaea70529aa1cffc9bc0a0788c186412663544fa76c09d63b57f383a65a",
+    },
+)];
+pub fn pin(os: &str, arch: &str) -> Result<Pin> {
+    platform_pin(PINS, os, arch)
+}
+
 pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
+    let pin = pin(std::env::consts::OS, std::env::consts::ARCH)?;
     let binary = binary.canonicalize()?;
     require(
-        cfg!(target_os = "macos") && file_hash(&binary)? == PIN,
-        "unsupported platform or binary SHA-256; publication/scoring disabled",
+        file_hash(&binary)? == pin.codex,
+        "unpinned binary SHA-256; publication/scoring disabled",
     )?;
     require(
-        file_hash(&binary.with_file_name("codex-code-mode-host"))? == HOST_PIN,
+        file_hash(&binary.with_file_name("codex-code-mode-host"))? == pin.host,
         "missing or mismatched pinned code-mode host",
     )?;
     let mut command = Command::new(&binary);

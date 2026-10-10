@@ -12,6 +12,10 @@ name = "check-claude-adapter"
 path = "check_adapter.rs"
 
 [[bin]]
+name = "check-integration"
+path = "check_integration.rs"
+
+[[bin]]
 name = "falinks-claude-tool"
 path = "tool.rs"
 
@@ -19,8 +23,10 @@ path = "tool.rs"
 workspace = true
 
 [dependencies]
+falinks = { path = "../.." }
 falinks-host = { path = "../codex" }
 libc = "0.2"
+serde = "1"
 serde_json = "1"
 shlex = "2"
 tempfile = "3"
