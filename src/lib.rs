@@ -110,7 +110,7 @@ pub struct Engine {
     writer: Mutex<Connection>,
     completed: RwLock<Capture>,
     jobs: Mutex<()>,
-    _lease: fs::File,
+    _leases: [WriterLease; 2],
 }
 
 fn connect(state: &Path) -> Result<Connection> {
@@ -120,6 +120,7 @@ fn connect(state: &Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS revisions (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, agent INTEGER NOT NULL, request_id TEXT NOT NULL, body TEXT NOT NULL, UNIQUE(agent, request_id));
+        CREATE TABLE IF NOT EXISTS incidents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS jobs (agent INTEGER NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(agent,id));")?;
     Ok(db)
@@ -234,7 +235,10 @@ fn paths(root: &Path, relative: &Path, output: &mut Vec<String>, ignore_git: boo
     for entry in fs::read_dir(root.join(relative))? {
         let entry = entry?;
         let name = entry.file_name();
-        if ignore_git && relative.as_os_str().is_empty() && name == ".git" {
+        if ignore_git
+            && relative.as_os_str().is_empty()
+            && (name == ".git" || name == ".falinks-writer.lock")
+        {
             continue;
         }
         let path = relative.join(name);
@@ -395,6 +399,36 @@ fn install(live: &Path, path: &str, file: &Option<File>) -> Result<()> {
     }
 }
 
+struct WriterLease(fs::File);
+impl Drop for WriterLease {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // Unlock the shared open-file description, including any pre-exec fork copies.
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+fn writer_lease(path: &Path) -> Result<WriterLease> {
+    use std::os::fd::AsRawFd;
+    let lease = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    let metadata = lease.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return fail("invalid writer lease path");
+    }
+    if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return fail("engine writer already owned");
+    }
+    Ok(WriterLease(lease))
+}
+
 impl Engine {
     pub fn open(live: &Path, state: &Path, enrolled: &[&str]) -> Result<Self> {
         let live = fs::canonicalize(live)?;
@@ -404,17 +438,8 @@ impl Engine {
             return fail("controller storage must be separate from source");
         }
         fs::set_permissions(&state, fs::Permissions::from_mode(0o700))?;
-        let lease = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(state.join("writer.lock"))?;
-        use std::os::fd::AsRawFd;
-        if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return fail("engine writer already owned");
-        }
+        let source_lease = writer_lease(&live.join(".falinks-writer.lock"))?;
+        let state_lease = writer_lease(&state.join("writer.lock"))?;
         let db = connect(&state)?;
         let identity: Identity;
         let completed: Capture;
@@ -512,7 +537,7 @@ impl Engine {
             writer: Mutex::new(db),
             completed: RwLock::new(completed),
             jobs: Mutex::new(()),
-            _lease: lease,
+            _leases: [source_lease, state_lease],
         };
         engine.recover()?;
         Ok(engine)
@@ -710,7 +735,10 @@ impl Engine {
         let result = (|| -> Result<Capture> {
             observer(Phase::BeforeRetention)?;
             let mut proposed = before.clone();
-            proposed.revision = record.operation;
+            proposed.revision = before
+                .revision
+                .checked_add(1)
+                .ok_or("revision occurrence exhausted")?;
             for (path, file) in &request.output {
                 let blob = file
                     .as_ref()
@@ -719,7 +747,7 @@ impl Engine {
                 proposed.files.insert(
                     path.clone(),
                     VersionedFile {
-                        version: record.operation,
+                        version: proposed.revision,
                         file: file.clone(),
                         blob,
                     },
@@ -800,30 +828,37 @@ impl Engine {
             if record.outcome.is_none() || record.installation_pending {
                 if let Some(proposed) = &record.proposed {
                     retain(&self.state, proposed)?;
-                    // Check the full source universe before restoring any; never guess attribution.
-                    let mut observed = Vec::new();
-                    paths(&self.live, Path::new(""), &mut observed, true)?;
-                    if observed.iter().any(|p| !completed.files.contains_key(p)) {
-                        return fail("unenrolled source during recovery; evidence retained");
-                    }
-                    for (path, file) in &completed.files {
-                        if !record.request.output.contains_key(path)
-                            && read_file(&self.live, path)? != file.file
-                        {
-                            return fail(
-                                "unexplained unrelated source during recovery; evidence retained",
-                            );
+                    let reliable = (|| -> Result<()> {
+                        // Check the full source universe before restoring any; never guess attribution.
+                        let mut observed = Vec::new();
+                        paths(&self.live, Path::new(""), &mut observed, true)?;
+                        if observed.iter().any(|p| !completed.files.contains_key(p)) {
+                            return fail("unenrolled source during recovery; evidence retained");
                         }
-                    }
-                    for path in record.request.output.keys() {
-                        let current = read_file(&self.live, path)?;
-                        if current != record.before.files[path].file
-                            && current != proposed.files[path].file
-                        {
-                            return fail(format!(
-                                "ambiguous interrupted source: {path}; evidence retained"
-                            ));
+                        for (path, file) in &completed.files {
+                            if !record.request.output.contains_key(path)
+                                && read_file(&self.live, path)? != file.file
+                            {
+                                return fail(
+                                    "unexplained unrelated source during recovery; evidence retained",
+                                );
+                            }
                         }
+                        for path in record.request.output.keys() {
+                            let current = read_file(&self.live, path)?;
+                            if current != record.before.files[path].file
+                                && current != proposed.files[path].file
+                            {
+                                return fail(format!(
+                                    "ambiguous interrupted source: {path}; evidence retained"
+                                ));
+                            }
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = reliable {
+                        self.save_incident(&db, &error.to_string())?;
+                        return Err(error);
                     }
                     for path in record.request.output.keys() {
                         install(&self.live, path, &record.before.files[path].file)?;
@@ -850,10 +885,16 @@ impl Engine {
                 save_job(&db, &job)?;
             }
         }
-        audit(&self.live, &completed)?;
+        if let Err(error) = audit(&self.live, &completed) {
+            self.save_incident(&db, &error.to_string())?;
+            return Err(error);
+        }
         // Only known interrupted installations are cleared. Unexplained edits stay halted.
         if meta(&db, "halted")?.is_some_and(|r| r.starts_with("interrupted operation ")) {
             db.execute("DELETE FROM meta WHERE key='halted'", [])?;
+        }
+        if let Some(reason) = meta(&db, "halted")? {
+            return fail(format!("engine halted for reconciliation: {reason}"));
         }
         Ok(())
     }
@@ -1009,7 +1050,7 @@ impl Engine {
         if !cfg!(target_os = "macos") {
             return fail("captured jobs require verified macOS Seatbelt; unsupported platform");
         }
-        for system in [
+        const SYSTEM_READS: &[&str] = &[
             "/usr",
             "/bin",
             "/System",
@@ -1018,7 +1059,8 @@ impl Engine {
             "/private/etc",
             "/private/var/db/dyld",
             "/dev",
-        ] {
+        ];
+        for system in SYSTEM_READS {
             if self.live.starts_with(system) || self.state.starts_with(system) {
                 return fail("source/controller overlaps captured-job system read boundary");
             }
@@ -1033,8 +1075,13 @@ impl Engine {
             }
             Ok(serde_json::to_string(s)?)
         };
+        let system_reads = SYSTEM_READS
+            .iter()
+            .map(|p| Ok(format!("(subpath {})", quote(Path::new(p))?)))
+            .collect::<Result<Vec<_>>>()?
+            .join(" ");
         let profile = format!(
-            "(version 1) (allow default) (deny network*) (deny file-write*) (deny file-read*) (allow file-read* (literal \"/\") (subpath \"/usr\") (subpath \"/bin\") (subpath \"/System\") (subpath \"/Library\") (subpath \"/opt\") (subpath \"/private/etc\") (subpath \"/private/var/db/dyld\") (subpath \"/dev\") (subpath {}) (subpath {})) (allow file-write* (subpath {}))",
+            "(version 1) (allow default) (deny network*) (deny file-write*) (deny file-read*) (allow file-read* (literal \"/\") {system_reads} (subpath {}) (subpath {})) (allow file-write* (subpath {}))",
             quote(&input)?,
             quote(&output)?,
             quote(&output)?
@@ -1113,7 +1160,9 @@ pub struct Incident {
 fn observe(root: &Path, relative: &Path, files: &mut BTreeMap<String, ObservedFile>) -> Result<()> {
     for entry in fs::read_dir(root.join(relative))? {
         let entry = entry?;
-        if relative.as_os_str().is_empty() && entry.file_name() == ".git" {
+        if relative.as_os_str().is_empty()
+            && (entry.file_name() == ".git" || entry.file_name() == ".falinks-writer.lock")
+        {
             continue;
         }
         let path = relative.join(entry.file_name());
@@ -1158,12 +1207,25 @@ impl Engine {
             files: BTreeMap::new(),
         };
         observe(&self.live, Path::new(""), &mut incident.files)?;
-        set_meta(db, "incident", &serde_json::to_string(&incident)?)?;
+        let body = serde_json::to_string(&incident)?;
+        let tx = db.unchecked_transaction()?;
+        tx.execute("INSERT INTO incidents(body) VALUES(?)", [&body])?;
+        set_meta(&tx, "incident", &body)?;
+        tx.commit()?;
         Ok(())
     }
     pub fn incident(&self) -> Result<Option<Incident>> {
-        meta(&connect(&self.state)?, "incident")?
-            .map(|s| Ok(serde_json::from_str(&s)?))
-            .transpose()
+        Self::incident_at(&self.state)
+    }
+    pub fn incident_at(state: &Path) -> Result<Option<Incident>> {
+        meta(
+            &Connection::open_with_flags(
+                state.join("ledger.sqlite"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?,
+            "incident",
+        )?
+        .map(|s| Ok(serde_json::from_str(&s)?))
+        .transpose()
     }
 }

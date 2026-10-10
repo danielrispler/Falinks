@@ -728,3 +728,121 @@ fn lost_committed_response_recovers_the_same_outcome() {
     );
     assert_eq!(engine.history().unwrap().len(), 1);
 }
+
+#[test]
+fn repository_writer_ownership_cannot_be_bypassed_with_a_second_state_directory() {
+    let (dir, _engine, _, _) = fixture();
+    assert!(
+        Engine::open(
+            &dir.path().join("live"),
+            &dir.path().join("other-state"),
+            &["a.rs", "b.rs"]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn startup_incidents_remain_halted_after_external_bytes_are_put_back() {
+    let (dir, engine, _, _) = fixture();
+    drop(engine);
+    fs::write(dir.path().join("live/a.rs"), "startup external evidence").unwrap();
+    assert!(
+        Engine::open(
+            &dir.path().join("live"),
+            &dir.path().join("state"),
+            &["a.rs", "b.rs"]
+        )
+        .is_err()
+    );
+    let incident = Engine::incident_at(&dir.path().join("state"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        incident.files["a.rs"].bytes.as_deref(),
+        Some(b"startup external evidence".as_slice())
+    );
+    fs::write(dir.path().join("live/a.rs"), "fn a() {}\n").unwrap();
+    assert!(
+        Engine::open(
+            &dir.path().join("live"),
+            &dir.path().join("state"),
+            &["a.rs", "b.rs"]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn explicit_retry_after_independent_progress_creates_a_later_completed_occurrence() {
+    let (dir, engine, alice, _) = fixture();
+    let base = engine.capture().unwrap();
+    let request = edit("retry-later", &base, "a.rs", "alice draft");
+    let interrupted = engine
+        .apply_observed(&alice, request.clone(), |phase| {
+            if phase == Phase::Retained {
+                return Err("interrupted before installation".into());
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert!(engine.retry(&alice, request.clone()).is_err());
+    drop(engine);
+    let engine = Engine::open(
+        &dir.path().join("live"),
+        &dir.path().join("state"),
+        &["a.rs", "b.rs"],
+    )
+    .unwrap();
+    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
+    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
+    assert_eq!(engine.apply(&alice, request.clone()).unwrap(), interrupted);
+    engine
+        .apply(&bob, edit("independent", &base, "b.rs", "bob draft"))
+        .unwrap();
+    let preceding = engine.capture().unwrap();
+    engine.retry(&alice, request).unwrap();
+    let latest = engine.capture().unwrap();
+    assert!(latest.revision > preceding.revision);
+    assert_eq!(
+        latest.files["b.rs"].file.as_ref().unwrap().bytes,
+        b"bob draft"
+    );
+    assert_eq!(
+        latest.files["a.rs"].file.as_ref().unwrap().bytes,
+        b"alice draft"
+    );
+}
+
+#[test]
+fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
+    let (dir, engine, _, _) = fixture();
+    let mut pipe = [0; 2];
+    assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        // Use only async-signal-safe libc calls between fork and exit.
+        unsafe {
+            libc::close(pipe[1]);
+            let mut byte = 0u8;
+            libc::read(pipe[0], (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+    }
+    unsafe {
+        libc::close(pipe[0]);
+    }
+    drop(engine);
+    let reopened = Engine::open(
+        &dir.path().join("live"),
+        &dir.path().join("state"),
+        &["a.rs", "b.rs"],
+    );
+    unsafe {
+        libc::write(pipe[1], b"x".as_ptr().cast(), 1);
+        libc::close(pipe[1]);
+        libc::waitpid(child, std::ptr::null_mut(), 0);
+    }
+    assert!(reopened.is_ok());
+}
