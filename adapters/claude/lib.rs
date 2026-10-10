@@ -422,6 +422,8 @@ pub fn launch_args(root: &Path, session: &str, resume: bool) -> Vec<String> {
         "Bash,Read,Glob,Grep",
         "--permission-mode",
         "dontAsk",
+        "--max-turns",
+        "12",
     ]
     .map(String::from)
     .to_vec();
@@ -591,7 +593,14 @@ impl Runtime {
                 self.session.gate.failed = true;
                 Err(error)
             }
-            Ok(Input::Line(Ok(line))) => self.session.line(&line),
+            Ok(Input::Line(Ok(line))) => {
+                let observed = self.session.line(&line);
+                // Fail closed: a runtime mismatch also stops native tools, not only engine calls.
+                if observed.is_err() {
+                    self.close();
+                }
+                observed
+            }
             Ok(Input::Host(request, reply)) => {
                 let blocked = (request["kind"] == "call" && !self.control_host)
                     .then(|| self.require_supported().err())
@@ -628,6 +637,7 @@ impl Runtime {
     }
     /// Wait until every host message is presented and the runtime's turn has ended.
     pub fn wait(&mut self) -> Result<()> {
+        // shortcut: fixed bound for short fixture turns; production integration sets per-task budgets.
         let deadline = Instant::now() + Duration::from_secs(600);
         while !self.session.idle() {
             self.pump(deadline)?;

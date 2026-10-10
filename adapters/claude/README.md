@@ -17,7 +17,7 @@ The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executabl
 
 ## Launch profile
 
-The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Read,Glob,Grep`, `--permission-mode dontAsk`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables and sets `DISABLE_AUTOUPDATER=1`. Settings enable the sandbox with no unsandboxed escape: writes only to `scratch/`; source, tools and storage are write-denied; controller, snapshot and validation storage are read-denied. Edit, Write, web, Agent/Task and Skill are denied.
+The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Read,Glob,Grep`, `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables and sets `DISABLE_AUTOUPDATER=1`. Settings enable the sandbox with no unsandboxed escape: writes only to `scratch/`; source, tools and storage are write-denied; controller, snapshot and validation storage are read-denied. Edit, Write, web, Agent/Task and Skill are denied.
 
 The cwd is `scratch/`, not `source/`. At startup the trusted CLI creates `.claude/.cc-writes/` in its cwd. In `source/`, unknown-change detection correctly stopped the host before the first mediated edit.
 
@@ -35,7 +35,7 @@ Every turn's `system/init` must match the pinned version, model, `dontAsk` mode,
 - `modelUsage` naming anything but the pinned model
 - a tool outside the list
 
-The failure latches the fresh `ControlGate`, and engine calls stop. `require_supported` also checks that the process is alive and re-hashes the binary.
+The failure latches the fresh `ControlGate`, engine calls stop, and the worker process group is stopped at once, so native tools stop too. `require_supported` also checks that the process is alive and re-hashes the binary.
 
 ## Delivery under the #11 amendment
 
@@ -47,7 +47,7 @@ Resume re-passes every launch flag with `--resume`, re-verifies `init` (same ses
 
 `check-claude-adapter` runs three real turns:
 
-1. The exact `sandbox-probe` command runs through the actual Bash tool, and all 15 checks must pass. Then a mediated edit runs. Its E1 notice is sent mid-turn and presented in the same turn, then explicitly deferred. An offer is rejected.
+1. The exact `sandbox-probe` command runs through the actual Bash tool, and all 15 checks must pass. A native Read of `validation/` must appear in `permission_denials`. Then a mediated edit runs. Its E1 notice is sent mid-turn and presented in the same turn, then explicitly deferred. An offer is rejected.
 2. An E2 notice is sent after `result`. It is presented in a new turn and stays pending.
 3. After resume, the first offer is rejected and the probe passes again. E1 and E2 are reconsidered, and the final offer is eligible (not publication).
 
@@ -57,4 +57,4 @@ The steering and completion-race controls are verified in the first process and 
 
 ## Limits
 
-These are finite probes on one binary and machine; any version change requires renewed verification. Managed settings still apply under `--setting-sources ""`; init verification covers their visible effects (tools, MCP servers, plugins), not hidden hooks. The race control sends at the completion boundary rather than racing the final text generation. Interrupt and cancel-queued controls are not exercised here. The model-identity check makes a safeguard refusal fail the run; prompts use neutral wording to avoid it.
+These are finite probes on one binary and machine; any version change requires renewed verification. Managed settings still apply under `--setting-sources ""`; init verification covers their visible effects (tools, MCP servers, plugins), not hidden hooks. The race control sends at the completion boundary rather than racing the final text generation. Interrupt and cancel-queued controls are not exercised here. Stream-json emits `init` only after the first user message, so a resumed worker receives its replayed context in that message, before `init` can be checked. Mediated calls wait for `init`, and a mismatch stops the worker. Native Edit/Write and web tools are shown absent by `init`, not attempted. `rate_limit_event` lines are recorded but not yet acted on. The model-identity check makes a safeguard refusal fail the run; prompts use neutral wording to avoid it.
