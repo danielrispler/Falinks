@@ -1,5 +1,12 @@
 //! Host-owned, single-repository protocol. Clients have opaque authenticated handles.
 //! No publication API is enabled. See docs/engine.md for the supported boundary.
+mod analysis;
+mod coordination;
+pub use analysis::{Evidence, Footprint, Language, Owner, Pin, Tool, Toolchain, Unit, sha256_file};
+pub use coordination::{
+    Availability, Body, Cancel, Checkpoint, Condition, Decision, Disposition, Event, Kind, Message,
+    Obligation, Offer, Pending, Plan, Reply, Review, Scope, WaitOutcome, Work,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -71,6 +78,10 @@ pub enum Outcome {
     Rejected {
         reason: String,
     },
+    /// Related to registered work whose relevant change has not been reviewed.
+    Unreviewed {
+        obligations: BTreeMap<String, Obligation>,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Attempt {
@@ -110,6 +121,8 @@ pub struct Engine {
     writer: Mutex<Connection>,
     completed: RwLock<Capture>,
     jobs: Mutex<()>,
+    analysis: RwLock<Vec<Toolchain>>,
+    signal: std::sync::Arc<coordination::Signal>,
     _leases: [WriterLease; 2],
 }
 
@@ -123,6 +136,7 @@ fn connect(state: &Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS incidents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS jobs (agent INTEGER NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(agent,id));")?;
+    coordination::tables(&db)?;
     Ok(db)
 }
 fn meta(db: &Connection, key: &str) -> Result<Option<String>> {
@@ -539,6 +553,8 @@ impl Engine {
             writer: Mutex::new(db),
             completed: RwLock::new(completed),
             jobs: Mutex::new(()),
+            analysis: RwLock::new(Vec::new()),
+            signal: coordination::Signal::new(),
             _leases: [source_lease, state_lease],
         };
         engine.recover()?;
@@ -557,6 +573,7 @@ impl Engine {
         {
             return fail("authentication failed");
         }
+        self.signal.presence(agent, true);
         Ok(Client {
             agent,
             credential: credential.into(),
@@ -734,8 +751,20 @@ impl Engine {
         if !conflicts.is_empty() {
             return self.finish(&db, &mut record, Outcome::Stale { conflicts });
         }
-        let result = (|| -> Result<Capture> {
-            observer(Phase::BeforeRetention)?;
+        let interrupted =
+            |db: &Connection,
+             record: &mut Record,
+             error: Box<dyn std::error::Error + Send + Sync>| {
+                // Leave exact before/proposed bytes and request recoverable; no automatic continuation.
+                let reason = error.to_string();
+                set_meta(
+                    db,
+                    "halted",
+                    &format!("interrupted operation {}: {reason}", record.operation),
+                )?;
+                self.finish(db, record, Outcome::Interrupted { reason })
+            };
+        let proposal = (|| -> Result<Capture> {
             let mut proposed = before.clone();
             proposed.revision = before
                 .revision
@@ -756,6 +785,23 @@ impl Engine {
                 );
             }
             proposed.tree = build_tree(&self.state, &proposed.files, "")?;
+            Ok(proposed)
+        })();
+        let proposed = match proposal {
+            Ok(proposed) => proposed,
+            Err(error) => return interrupted(&db, &mut record, error),
+        };
+        let change = match self.gate(&db, client, &before, &proposed, &request) {
+            Ok(Ok(change)) => change,
+            Ok(Err(outcome)) => return self.finish(&db, &mut record, outcome),
+            // Nothing installed yet: record a visible outcome rather than strand the request.
+            Err(error) => {
+                let reason = format!("coordination gate failed: {error}");
+                return self.finish(&db, &mut record, Outcome::Rejected { reason });
+            }
+        };
+        let result = (|| -> Result<Capture> {
+            observer(Phase::BeforeRetention)?;
             retain(&self.state, &proposed)?;
             record.proposed = Some(proposed.clone());
             record.installation_pending = true;
@@ -771,16 +817,7 @@ impl Engine {
         })();
         let proposed = match result {
             Ok(proposed) => proposed,
-            Err(error) => {
-                // Leave exact before/proposed bytes and request recoverable; no automatic continuation.
-                let reason = error.to_string();
-                set_meta(
-                    &db,
-                    "halted",
-                    &format!("interrupted operation {}: {reason}", record.operation),
-                )?;
-                return self.finish(&db, &mut record, Outcome::Interrupted { reason });
-            }
+            Err(error) => return interrupted(&db, &mut record, error),
         };
         let outcome = Outcome::Applied {
             revision: proposed.revision,
@@ -799,9 +836,11 @@ impl Engine {
         )?;
         set_meta(&tx, "completed", &proposed.revision.to_string())?;
         save_record(&tx, &record)?;
+        self.record_change(&tx, client, &request, &proposed, &change)?;
         tx.commit()?;
         *completed_guard = proposed;
         drop(completed_guard);
+        self.signal.notify();
         observer(Phase::Committed)?;
         Ok(outcome)
     }

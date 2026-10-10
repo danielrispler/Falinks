@@ -1,6 +1,6 @@
 # Controlled live edits (#20)
 
-The `falinks` Rust library is the host-owned public protocol for this slice. `tests/protocol.rs` supplies two authenticated scripted clients using real temporary source, a bare Git object store and SQLite. No publication capability is enabled: the published pointer stays at the enrolled initial snapshot. The app-server adapter, semantic analysis, notification/review obligations, offers, validation and grouping belong to later tickets.
+The `falinks` Rust library is the host-owned public protocol for this slice. `tests/protocol.rs` supplies two authenticated scripted clients using real temporary source, a bare Git object store and SQLite. No publication capability is enabled: the published pointer stays at the enrolled initial snapshot. Related-scope analysis, obligations, reviews, messages, offers, replay and waits are described in [Related-scope coordination (#21)](#related-scope-coordination-21). The app-server adapter, validation, publication and grouping belong to later tickets.
 
 Run on macOS with Rust and `/usr/bin/git`:
 
@@ -40,3 +40,42 @@ Restart verifies all referenced snapshots and enrollments, then examines every a
 ## Verification evidence
 
 The public-protocol checks cover independent/stale two-client edits, incomplete code, immutable midway capture, unchanged-object reuse, restore occurrence identity, duplicate in-flight submissions, changed-ID contents, restart/retry attempt preservation, unknown-write evidence, ownership/authentication, path/mode controls, failed retention, missing snapshots, job attribution and stale complete-output rejection, denied source/controller/input access, undeclared output and surviving descendants. Actual process exits exercise before-retention, retained, midway-installation, before-commit and committed boundaries. Ambiguous recovery verifies that no file is restored before the full source boundary is checked. These checks do not establish the downstream adapter's controls or general filesystem crash atomicity.
+
+# Related-scope coordination (#21)
+
+`tests/coordination.rs` drives this slice through the same public protocol, with the real analyzers. Requirements beyond the commands above: the `rust-analyzer` and `rust-src` toolchain components (pinned in `rust-toolchain.toml`), Go on `PATH`, and `gopls` v0.22.0 at `$(go env GOPATH)/bin/gopls` or `FALINKS_GOPLS`.
+
+## Evidence
+
+`configure_analysis(toolchains)` is a host call. Each `Toolchain` pins executables by SHA-256: `rust-analyzer`, `cargo`, `rustc` for Rust; `gopls`, `go` for Go. Features are Cargo features or Go build tags. A changed pin fails visibly at configuration. Cached evidence is re-verified on every use: if a pinned binary has been replaced, it is degraded and widened. Configuration lives in memory; after restart relevance stays conservative until the host reconfigures.
+
+Evidence is a pure function of an exact Git tree and the toolchain identity, cached in SQLite by both. A source or configuration change produces a new tree and so new evidence; old ranges are never reused. Each analysis writes the captured bytes to a disposable copy with a cleared environment (offline Cargo, `GOENV=off`, `GOTOOLCHAIN=local`, `GOPROXY=off`, no cgo) and checks afterwards that the analysis did not alter its inputs.
+
+- Units: `cargo metadata --locked --offline` crates, or `go list -deps` main-module packages, with their internal dependencies. `cargo check` and `go vet` errors mark a unit broken.
+- Owners: LSP hierarchical `documentSymbol`. Functions and methods at any depth, plus every top-level declaration. An edit belongs to the smallest owner that contains it.
+- Relationships: LSP `references` for every symbol, mapped to the owner of each use, plus `implementation` locations linked in both directions, so trait and interface implementations relate without a reference. rust-analyzer results count only after a quiescent `ok` server status. Go uses gopls, the public LSP built on `go/packages` and `go/types`, so one Rust client serves both languages.
+- Unknown input universe: external crates/packages, build scripts, proc macros or cgo. When analysis is configured, any write whose before or after evidence names one is rejected with "recapture required".
+
+## Relevance
+
+A change covers the owners touched by its single per-file diff hunk in both the before and after evidence, so new edges in the after state count. A related scope is the registered nodes, everything they use (transitively), and their direct users. Both sides widen the same way. Missing evidence, analysis errors or a changed manifest/lockfile make the change unbounded. A broken unit, or a non-member file inside a unit, widens to that unit's files, its direct dependencies and all of its transitive reverse dependents. A declaration node covers its nested members. Bytes outside every owner widen to the file. The model treats the absence of reference or implementation edges as independence only for healthy, quiescent, unbroken evidence. This is the model-proven independence that lets unrelated work proceed; it is not a claim that the references are exhaustive (see Limits). File/package freshness is unchanged: distinct symbols never weaken `expected` versions.
+
+## Obligations, reviews and gates
+
+`register(client, Scope)` records intended work as enrolled paths or `path#owner` nodes. Each scope carries `required` (the latest relevant completed revision) and `reviewed`. The live-edit message, `required` bumps and obligation events commit in the same SQLite transaction as the completed pointer. Waiters are woken only afterwards.
+
+`review(client, Review)` must name a revision that some `capture()` returned. It records keep/revise/drop and raises `reviewed`. It clears only an obligation whose `required` is at or below that revision. A later relevant change, including one that restores old bytes, is a new occurrence and renews the requirement. `apply` returns `Unreviewed` for writes related to a pending obligation and keeps the proposal. Unrelated writes proceed. `offer` refuses while any obligation is pending, even for an older revision. Event handling never clears obligations.
+
+## Messages, offers and replay
+
+Events carry the SQLite commit sequence and a stable `workspace:seq` ID. Message kinds: `Plan` (client `post`, reserves nothing), `LiveEdit` (engine, on commit), `CheckpointOffer` (`offer`) and `Publication` (reserved for committed acceptance; never emitted in this slice). Every message names its sender, workspace, task, scope and work. A reply must repeat the original message's exact work. Offers name a captured revision and stay available through later live edits until `withdraw` or an explicit `supersedes`.
+
+`events(client, after)` replays in order. `handle(client, seq, Processed | Deferred)` advances the durable handled position one event at a time. A deferral is stored in the same transaction, so a cursor never skips pending context. Duplicate or earlier handling is a no-op, apart from clearing a deferral. `pending(client)` restores unhandled events, deferred context and pending obligations after a reconnect or restart.
+
+## Waits
+
+`wait(client, Condition, timeout, cancel)` checks the durable store while holding the wake lock, so an event committed before the wait is caught up immediately. Possible outcomes are `Met`, `TimedOut`, `Cancelled` (via `cancel_token`), `Disconnected` (host `disconnect`, or a peer not authenticated since startup), `Withdrawn`, and `Superseded`, which names the replacement and is never followed automatically. A `Checkpoint` wait targets acceptance of that exact checkpoint. Publication is disabled, so in this slice such a wait can end only through one of the non-met outcomes.
+
+## Limits
+
+Analysis runs inside the short writer operation (about one analyzer run per edit; a few seconds on the fixtures). One diff hunk per file over-approximates multi-hunk edits. Reference and implementation evidence is not an exhaustive behavioral dependency model; dynamic dispatch through values, reflection or textual coupling can escape it. When analysis is configured, any external crate or package marks the input universe unknown and blocks writes until the repository is bounded, so only self-contained repositories are supported today. A review can cite any capture of a revision, not only one the reviewing client requested. Independent-symbol application stays disabled. Runtime delivery, `turn/steer` and adapter-side enforcement belong to the adapter ticket.
