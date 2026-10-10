@@ -268,10 +268,7 @@ impl Runtime {
                 let result = match outcome {
                     Ok(outcome) => {
                         if let Some(notice) = outcome.notice {
-                            require(
-                                self.attention(&notice.event, &notice.context)? == "steered",
-                                "active-turn steering not exercised",
-                            )?;
+                            self.attention(&notice.event, &notice.context)?;
                         }
                         outcome.result
                     }

@@ -2,6 +2,48 @@ use falinks_host::{Boundary, ControlGate, REQUIRED};
 use serde_json::json;
 
 #[test]
+#[ignore = "subprocess fixture invoked by cleanup regression"]
+fn output_holding_child() -> falinks_host::Result<()> {
+    use std::{process::Command, time::Duration};
+    if std::env::var_os("FALINKS_SLEEP_CHILD").is_some() {
+        std::thread::sleep(Duration::from_secs(60));
+    } else {
+        let child = Command::new(std::env::current_exe()?)
+            .args(["--ignored", "--exact", "output_holding_child"])
+            .env("FALINKS_SLEEP_CHILD", "1")
+            .spawn()?;
+        std::fs::write(
+            std::env::var_os("FALINKS_CHILD_PID_FILE").ok_or("missing fixture path")?,
+            child.id().to_string(),
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn exited_command_cannot_leave_descendants_holding_output() -> falinks_host::Result<()> {
+    use std::{process::Command, time::Duration};
+    let dir = tempfile::tempdir()?;
+    let pid_file = dir.path().join("descendant.pid");
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(["--ignored", "--exact", "output_holding_child"])
+        .env("FALINKS_CHILD_PID_FILE", &pid_file);
+    assert!(falinks_host::command_output(command, Duration::from_secs(2)).is_err());
+    let pid: i32 = std::fs::read_to_string(pid_file)?.trim().parse()?;
+    // A killed orphan can remain a zombie until reaped; it must no longer run.
+    let output = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()?;
+    let state = String::from_utf8(output.stdout)?;
+    assert!(
+        state.trim().is_empty() || state.trim().starts_with('Z'),
+        "descendant still running: {state}"
+    );
+    Ok(())
+}
+
+#[test]
 fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().canonicalize()?;

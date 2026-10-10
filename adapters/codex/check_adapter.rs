@@ -304,6 +304,13 @@ fn run(binary: &Path, probe: &Path, evidence: &mut Value) -> Result<()> {
         )?;
         evidence["appserver_controls"] = appserver_controls(&mut runtime, &root, "original\n")?;
         runtime.gate.record("mediated_calls", true)?;
+        require(
+            runtime
+                .deliveries
+                .iter()
+                .any(|delivery| delivery["event"] == "E1" && delivery["delivery"] == "steered"),
+            "active-turn steering not exercised",
+        )?;
         runtime.gate.record("steering", true)?;
         let thread = runtime
             .boundary

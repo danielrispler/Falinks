@@ -274,7 +274,16 @@ pub fn command_output(
     let mut stdout = vec![];
     let mut stderr = vec![];
     for _ in 0..2 {
-        let (is_stdout, bytes) = receive.recv_timeout(Duration::from_secs(5))?;
+        let (is_stdout, bytes) = match receive.recv_timeout(Duration::from_secs(5)) {
+            Ok(result) => result,
+            Err(error) => {
+                // SAFETY: kill only descendants in this command's dedicated process group.
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                }
+                return Err(error.into());
+            }
+        };
         if is_stdout {
             stdout = bytes?;
         } else {
