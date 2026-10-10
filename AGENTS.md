@@ -14,7 +14,7 @@ Track issues and specs in GitHub Issues for `danielrispler/Falinks`. Before issu
 
 ### Wayfinder
 
-For Wayfinder sessions, run `python3 scripts/wayfinder_startup.py [map-number]` (default: current map). Follow the startup and ticket-context rules in `docs/agents/issue-tracker.md` when creating, starting, or updating tickets.
+For Wayfinder sessions, run `cargo run -q --bin wayfinder-startup -- [map-number]` (default: current map). Follow the startup and ticket-context rules in `docs/agents/issue-tracker.md` when creating, starting, or updating tickets.
 
 ### Triage labels
 
