@@ -23,8 +23,9 @@ mod windows;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Contract timeout is 30 s; the probe uses a short one, the kill path is identical.
-const HANG_TIMEOUT: Duration = Duration::from_secs(3);
+/// Contract timeout is 30 s; the probe uses a shorter one (after the ~10 s of checks),
+/// the kill path is identical.
+const HANG_TIMEOUT: Duration = Duration::from_secs(15);
 const RUN_TIMEOUT: Duration = Duration::from_secs(30);
 /// Set in the host so the child can show whether the environment was cleared.
 const CANARY: &str = "FALINKS_PROBE_CANARY";
@@ -58,6 +59,8 @@ impl Fixture {
         }
         fs::write(fixture.input.join("in.txt"), b"input\n")?;
         fs::write(fixture.secret.join("secret.txt"), b"secret\n")?;
+        // Unformatted Go for the Tool scenario; `gofmt -l` lists it.
+        fs::write(fixture.input.join("x.go"), b"package x\nfunc  F( ){}\n")?;
         Ok(fixture)
     }
 }
@@ -70,6 +73,8 @@ pub enum Scenario {
     Hang,
     /// The mechanism is made unavailable; the child must never run.
     Unavailable,
+    /// A real formatter (`gofmt -l input`) runs instead of the probe child.
+    Tool,
 }
 
 impl Scenario {
@@ -78,6 +83,7 @@ impl Scenario {
             Scenario::Normal => "normal",
             Scenario::Hang => "hang",
             Scenario::Unavailable => "unavailable",
+            Scenario::Tool => "tool",
         }
     }
 }
@@ -173,6 +179,8 @@ fn record(
         let _ = file.read_to_string(&mut stderr);
     }
     stderr.truncate(2000);
+    let mut stdout = fs::read_to_string(fixture.evidence.join("stdout")).unwrap_or_default();
+    stdout.truncate(2000);
     let alive = descendant_alive(&fixture.output);
     json!({
         "platform": platform,
@@ -188,6 +196,7 @@ fn record(
         "loopback_reached_host": loopback.reached(),
         "detached_descendant_alive_after_cleanup": alive,
         "stderr": stderr,
+        "stdout": if child.is_some() { Value::Null } else { json!(stdout) },
         "extra": launch.extra,
     })
 }

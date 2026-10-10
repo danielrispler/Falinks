@@ -17,7 +17,10 @@ use std::{
     time::Duration,
 };
 
-const SYSTEM_READS: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc", "/proc"];
+/// Mirrors the Seatbelt system reads (`/opt` holds the runner Go toolchain).
+const SYSTEM_READS: &[&str] = &[
+    "/usr", "/bin", "/lib", "/lib64", "/sbin", "/etc", "/proc", "/opt",
+];
 
 fn read(path: &str) -> Value {
     fs::read_to_string(path).map_or(Value::Null, |text| json!(text.trim()))
@@ -72,6 +75,9 @@ pub fn plan() -> Vec<(&'static str, Scenario)> {
         ("landlock", Unavailable),
         ("landlock-v6", Normal),
         ("landlock-seccomp", Normal),
+        ("landlock-seccomp-strict", Normal),
+        ("none", Tool),
+        ("landlock-seccomp-strict", Tool),
         ("userns", Normal),
         ("userns", Hang),
         ("userns", Unavailable),
@@ -148,9 +154,21 @@ pub fn launch(
     // SAFETY: prctl with integer arguments only.
     unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) };
     let exe = env::current_exe()?;
-    let child = child_args(fixture, loopback, scenario);
+    let (program, child) = if scenario == Scenario::Tool {
+        let gofmt = env::split_paths(&env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join("gofmt"))
+            .find(|path| path.is_file())
+            .ok_or("gofmt not on PATH")?;
+        let gofmt = fs::canonicalize(gofmt)?;
+        (
+            gofmt,
+            vec!["-l".into(), fixture.input.display().to_string()],
+        )
+    } else {
+        (exe.clone(), child_args(fixture, loopback, scenario))
+    };
     let mut command = match mechanism {
-        "none" => Command::new(&exe),
+        "none" => Command::new(&program),
         "bwrap" => {
             let mut command = Command::new("bwrap");
             command.args(bwrap_args(fixture, &exe)).arg("--").arg(&exe);
@@ -167,7 +185,7 @@ pub fn launch(
                 .args(["wrap", mechanism, simulate])
                 .arg(&fixture.root)
                 .arg("--")
-                .arg(&exe);
+                .arg(&program);
             command
         }
     };
@@ -419,7 +437,7 @@ pub fn wrap(args: &[String]) -> Result<()> {
     let mut rules = Vec::new();
     match mechanism.as_str() {
         // Simulates a kernel without Landlock: the syscall reports ENOSYS.
-        "landlock" | "landlock-v6" | "landlock-seccomp" if simulate => {
+        m if simulate && m.starts_with("landlock") => {
             rules.push(Rule::Deny(libc::SYS_landlock_create_ruleset, libc::ENOSYS))
         }
         // Simulates user namespaces being disabled by policy.
@@ -435,6 +453,11 @@ pub fn wrap(args: &[String]) -> Result<()> {
         ));
         rules.push(Rule::Deny(libc::SYS_io_uring_setup, libc::EPERM));
     }
+    if mechanism == "landlock-seccomp-strict" {
+        // No socket of any family: pathname Unix sockets reach host daemons before ABI 9.
+        rules.push(Rule::Deny(libc::SYS_socket, libc::EPERM));
+        rules.push(Rule::Deny(libc::SYS_io_uring_setup, libc::EPERM));
+    }
     if !rules.is_empty() {
         seccomp(&rules)?;
     }
@@ -446,7 +469,7 @@ pub fn wrap(args: &[String]) -> Result<()> {
     };
     let contain = || landlock(abi, &root.join("input"), &root.join("output"), exe);
     match mechanism.as_str() {
-        "landlock" | "landlock-v6" | "landlock-seccomp" => contain()?,
+        m if m.starts_with("landlock") => contain()?,
         "userns" => {
             unshare_namespaces()?;
             // The first child is PID 1 of the new namespace; when it exits the kernel

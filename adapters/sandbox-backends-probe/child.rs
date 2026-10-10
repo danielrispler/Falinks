@@ -41,6 +41,15 @@ fn udp() -> Value {
     }
 }
 
+/// AppContainer denies opening `NUL`; inherit the host-provided handles there instead.
+fn null_or_inherit() -> Stdio {
+    if cfg!(windows) {
+        Stdio::inherit()
+    } else {
+        Stdio::null()
+    }
+}
+
 /// Starts a descendant that tries to leave the assigned process tree.
 fn spawn_descendant(output: &Path) -> Value {
     let mut command = Command::new(match env::current_exe() {
@@ -50,9 +59,9 @@ fn spawn_descendant(output: &Path) -> Value {
     command
         .arg("descendant")
         .arg(output)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdin(null_or_inherit())
+        .stdout(null_or_inherit())
+        .stderr(null_or_inherit());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -165,7 +174,43 @@ pub fn run(args: &[String]) -> Result<()> {
         "rename_input_into_output".into(),
         outcome(fs::rename(input.join("in.txt"), output.join("moved.txt"))),
     );
-    let internet: SocketAddr = "1.1.1.1:443".parse()?;
+    checks.insert(
+        "open_null_device".into(),
+        outcome(fs::File::open(if cfg!(windows) {
+            "NUL"
+        } else {
+            "/dev/null"
+        })),
+    );
+    checks.insert("descendant".into(), spawn_descendant(&output));
+    // Network last, isolated: LPAC fails WSAStartup and Rust std panics on first socket use.
+    let mut network_checks = Map::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        network(&mut network_checks, port)
+    }));
+    if let Err(panic) = result {
+        let text = panic
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        network_checks.insert("network_panic".into(), json!(text));
+    }
+    checks.extend(network_checks);
+    let report = Value::Object(checks);
+    // Evidence goes to output, the one writable place; stdout is the backup.
+    fs::File::create(output.join("child.json"))?.write_all(report.to_string().as_bytes())?;
+    println!("PROBE_CHILD={report}");
+    if hang {
+        loop {
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
+    Ok(())
+}
+
+fn network(checks: &mut Map<String, Value>, port: u16) {
+    let internet: SocketAddr = "1.1.1.1:443".parse().expect("address");
     checks.insert(
         "tcp_internet".into(),
         outcome(TcpStream::connect_timeout(
@@ -173,7 +218,7 @@ pub fn run(args: &[String]) -> Result<()> {
             Duration::from_secs(3),
         )),
     );
-    let loopback: SocketAddr = format!("127.0.0.1:{port}").parse()?;
+    let loopback: SocketAddr = format!("127.0.0.1:{port}").parse().expect("address");
     checks.insert(
         "tcp_loopback".into(),
         outcome(TcpStream::connect_timeout(
@@ -218,15 +263,4 @@ pub fn run(args: &[String]) -> Result<()> {
             ),
         );
     }
-    checks.insert("descendant".into(), spawn_descendant(&output));
-    let report = Value::Object(checks);
-    // Evidence goes to output, the one writable place; stdout is the backup.
-    fs::File::create(output.join("child.json"))?.write_all(report.to_string().as_bytes())?;
-    println!("PROBE_CHILD={report}");
-    if hang {
-        loop {
-            thread::sleep(Duration::from_secs(1));
-        }
-    }
-    Ok(())
 }

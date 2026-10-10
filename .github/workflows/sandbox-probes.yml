@@ -33,6 +33,11 @@ jobs:
         with:
           rustflags: ""
           cache-workspaces: adapters/sandbox-backends-probe -> target
+      # The Tool scenario runs the real gofmt under the sandbox.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: false
       - run: sudo apt-get install -y bubblewrap
       - run: cargo build --release --locked --manifest-path adapters/sandbox-backends-probe/Cargo.toml
       - name: Runner defaults
