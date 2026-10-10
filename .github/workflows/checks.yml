@@ -26,14 +26,27 @@ jobs:
         with:
           go-version: "1.27"
           cache: false
-      - run: go install golang.org/x/tools/gopls@v0.22.0
+      - id: gopls
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/gopls
+          key: gopls-v0.22.0-go1.27-${{ runner.os }}-${{ runner.arch }}
+      - if: steps.gopls.outputs.cache-hit != 'true'
+        run: go install golang.org/x/tools/gopls@v0.22.0
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
   macos-evaluation:
-    # Separate job: sandboxed Go builds are slow; serial tests avoid runner contention.
+    # Sandboxed Go/Cargo checks are slow and time out under contention, so each
+    # shard runs serially on its own runner. The last shard takes every other test.
     runs-on: macos-latest
+    strategy:
+      matrix:
+        tests:
+          - frozen_oracles
+          - oracle_blocks oracles_reject_compiling
+          - --skip frozen_oracles --skip oracle_blocks --skip oracles_reject_compiling
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -44,10 +57,8 @@ jobs:
         with:
           go-version: "1.27"
           cache: false
-      - run: cargo fmt --manifest-path evaluation/Cargo.toml --check
       - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
-      - run: cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1
+      - run: cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1 ${{ matrix.tests }}
 
   linux:
     runs-on: ubuntu-latest
@@ -59,6 +70,7 @@ jobs:
           cache-workspaces: |
             . -> target
             evaluation -> target
+      - run: cargo fmt --manifest-path evaluation/Cargo.toml --check
       # Compile-only until Linux tests land (#35).
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo clippy --locked --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
