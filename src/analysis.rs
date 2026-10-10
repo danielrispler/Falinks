@@ -737,15 +737,29 @@ fn references(
     }
     for (path, owned) in &symbols {
         for symbol in owned {
-            let reply = lsp.request(
-                "textDocument/references",
-                json!({
-                    "textDocument": {"uri": uri(path)},
-                    "position": {"line": symbol.selection.0, "character": symbol.selection.1},
-                    "context": {"includeDeclaration": false},
-                }),
-            )?;
-            for location in reply.as_array().into_iter().flatten() {
+            let params = json!({
+                "textDocument": {"uri": uri(path)},
+                "position": {"line": symbol.selection.0, "character": symbol.selection.1},
+                "context": {"includeDeclaration": false},
+            });
+            let uses = lsp.request("textDocument/references", params.clone())?;
+            // Implementations relate to their trait/interface without any reference
+            // edge. Servers refuse the request for symbols with no implementations.
+            let implementations = lsp
+                .request("textDocument/implementation", params)
+                .unwrap_or(Value::Null);
+            let implementations = match implementations {
+                Value::Object(_) => vec![implementations],
+                Value::Array(locations) => locations,
+                _ => Vec::new(),
+            };
+            let locations = uses
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|l| (l, false))
+                .chain(implementations.iter().map(|l| (l, true)));
+            for (location, implementation) in locations {
                 let Some(user_path) = location["uri"]
                     .as_str()
                     .and_then(|u| u.strip_prefix(&format!("{root}/")))
@@ -766,6 +780,9 @@ fn references(
                     .and_then(|o| owner_at(o, at))
                     .map_or_else(|| user_path.to_string(), |o| o.id.clone());
                 if user != symbol.owner {
+                    if implementation {
+                        evidence.edges.insert((symbol.owner.clone(), user.clone()));
+                    }
                     evidence.edges.insert((user, symbol.owner.clone()));
                 }
             }
@@ -789,8 +806,13 @@ pub struct Footprint {
     pub nodes: BTreeSet<String>,
 }
 fn matches(a: &str, b: &str) -> bool {
-    let file = |n: &str| n.split_once('#').map_or(n, |(p, _)| p).to_string();
-    a == b || (!a.contains('#') && file(b) == a) || (!b.contains('#') && file(a) == b)
+    // A file covers its owners; a declaration covers its nested members.
+    let covers = |outer: &str, inner: &str| {
+        inner.strip_prefix(outer).is_some_and(|rest| {
+            rest.starts_with('#') && !outer.contains('#') || rest.starts_with("::")
+        })
+    };
+    a == b || covers(a, b) || covers(b, a)
 }
 pub(crate) fn related(a: &Footprint, b: &Footprint) -> bool {
     a.all
@@ -808,10 +830,27 @@ fn unit_of<'a>(evidence: &'a Evidence, path: &str) -> Option<(&'a String, &'a Un
         })
         .max_by_key(|(_, u)| (u.files.contains(path), u.dir.len()))
 }
-/// A uncertain unit widens to its files, its dependencies and its reverse dependents.
+/// An uncertain unit widens to its files, its direct dependencies and all reverse dependents.
 fn widen(evidence: &Evidence, unit: &str, nodes: &mut BTreeSet<String>) {
-    for (name, other) in &evidence.units {
-        if name == unit || other.deps.contains(unit) || evidence.units[unit].deps.contains(name) {
+    let mut reached: BTreeSet<&str> = evidence.units[unit]
+        .deps
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut frontier = vec![unit];
+    while let Some(current) = frontier.pop() {
+        if reached.insert(current) {
+            frontier.extend(
+                evidence
+                    .units
+                    .iter()
+                    .filter(|(_, u)| u.deps.contains(current))
+                    .map(|(n, _)| n.as_str()),
+            );
+        }
+    }
+    for name in reached {
+        if let Some(other) = evidence.units.get(name) {
             nodes.extend(other.files.iter().cloned());
         }
     }

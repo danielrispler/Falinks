@@ -791,9 +791,14 @@ impl Engine {
             Ok(proposed) => proposed,
             Err(error) => return interrupted(&db, &mut record, error),
         };
-        let change = match self.gate(&db, client, &before, &proposed, &request)? {
-            Ok(change) => change,
-            Err(outcome) => return self.finish(&db, &mut record, outcome),
+        let change = match self.gate(&db, client, &before, &proposed, &request) {
+            Ok(Ok(change)) => change,
+            Ok(Err(outcome)) => return self.finish(&db, &mut record, outcome),
+            // Nothing installed yet: record a visible outcome rather than strand the request.
+            Err(error) => {
+                let reason = format!("coordination gate failed: {error}");
+                return self.finish(&db, &mut record, Outcome::Rejected { reason });
+            }
         };
         let result = (|| -> Result<Capture> {
             observer(Phase::BeforeRetention)?;

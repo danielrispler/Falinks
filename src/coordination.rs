@@ -91,6 +91,7 @@ pub struct Plan {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Offer {
     pub id: String,
+    pub task: String,
     pub revision: u64,
     pub scope: Vec<String>,
     pub text: String,
@@ -376,14 +377,21 @@ impl Engine {
                 )
                 .optional()?;
             let evidence: Evidence = match cached {
-                Some(body) => serde_json::from_str(&body)?,
+                Some(body) => {
+                    let mut evidence: Evidence = serde_json::from_str(&body)?;
+                    // Cached results stay bound to the pins: a replaced binary degrades them.
+                    if let Err(error) = analysis::verify(toolchain) {
+                        evidence.errors.push(error.to_string());
+                    }
+                    evidence
+                }
                 None => {
                     let scratch = self.state.join("analysis").join(crate::nonce()?);
                     std::fs::create_dir_all(&scratch)?;
                     let evidence = analysis::analyze(&scratch, capture, toolchain);
-                    // Infrastructure failures are retained once for diagnosis, never cached as truth.
+                    let _ = std::fs::remove_dir_all(&scratch);
+                    // Failures are reported in the evidence but never cached as truth.
                     if evidence.errors.is_empty() {
-                        let _ = std::fs::remove_dir_all(&scratch);
                         db.execute(
                             "INSERT OR IGNORE INTO evidence VALUES(?,?,?)",
                             params![capture.tree, key, serde_json::to_string(&evidence)?],
@@ -504,6 +512,8 @@ impl Engine {
 
     pub fn register(&self, client: &Client, scope: Scope) -> Result<Obligation> {
         self.authorize(client)?;
+        // Under the writer lock: no commit can fall between the baseline and the save.
+        let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         let completed = self
             .completed
             .read()
@@ -518,7 +528,6 @@ impl Engine {
                 return fail(format!("scope node outside enrollment: {node}"));
             }
         }
-        let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         // Updating a scope keeps its requirement; registration never clears work.
         let obligation = match obligations(&db, client.agent)?
             .into_iter()
@@ -571,11 +580,21 @@ impl Engine {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         self.check_work(&db, &plan.work)?;
         if let Some(reply) = &plan.reply_to {
+            // Only a message this client was sent (or sent itself) can be answered.
+            let visible = db
+                .query_row(
+                    "SELECT 1 FROM events WHERE seq=? AND audience & ? != 0",
+                    params![reply.event as i64, mine(client.agent)],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
             match event(&db, &self.identity.workspace, reply.event)? {
                 Some(Event {
                     body: Body::Message(original),
                     ..
-                }) if original.work == reply.work => {}
+                }) if original.work == reply.work
+                    && (visible || original.sender == client.agent) => {}
                 _ => return fail("reply must bind an existing message and its exact work"),
             }
         }
@@ -609,7 +628,7 @@ impl Engine {
         }
         Ok(())
     }
-    /// Offers an exact captured revision. Unreviewed obligations at or before it block.
+    /// Offers an exact captured revision. Any unreviewed obligation blocks it.
     pub fn offer(&self, client: &Client, offer: Offer) -> Result<Checkpoint> {
         self.authorize(client)?;
         let id = format!("{}/{}", client.agent, offer.id);
@@ -622,10 +641,10 @@ impl Engine {
         }
         let capture =
             captured(&db, offer.revision)?.ok_or("offer must name a captured revision")?;
-        retain(&self.state, &capture)?;
+        // Even an older revision: deferred relevant changes cannot authorize any offer.
         let pending: Vec<_> = obligations(&db, client.agent)?
             .into_iter()
-            .filter(|o| o.pending() && o.required <= offer.revision)
+            .filter(Obligation::pending)
             .map(|o| o.scope.id)
             .collect();
         if !pending.is_empty() {
@@ -633,6 +652,7 @@ impl Engine {
                 "unreviewed obligations block the offer: {pending:?}"
             ));
         }
+        retain(&self.state, &capture)?;
         let tx = db.unchecked_transaction()?;
         if let Some(old) = &offer.supersedes {
             let old = format!("{}/{old}", client.agent);
@@ -668,7 +688,7 @@ impl Engine {
                 kind: Kind::CheckpointOffer,
                 sender: client.agent,
                 workspace: self.identity.workspace.clone(),
-                task: String::new(),
+                task: offer.task.clone(),
                 scope: offer.scope,
                 work: Work::Checkpoint(id),
                 text: offer.text,
@@ -807,6 +827,9 @@ impl Engine {
         cancel: Option<&Cancel>,
     ) -> Result<WaitOutcome> {
         self.authorize(client)?;
+        if matches!(condition, Condition::Message { from, .. } if from == client.agent) {
+            return fail("a client cannot wait for its own message");
+        }
         let deadline = timeout.map(|t| Instant::now() + t);
         // Check the durable store while holding the signal lock: a commit's
         // notification cannot fall between the check and the wait.

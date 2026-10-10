@@ -321,6 +321,31 @@ fn broken_go_evidence_and_configuration_changes_widen_symmetrically() {
 }
 
 #[test]
+fn interface_implementations_relate_without_any_reference_edge() {
+    let (_dir, engine, alice, bob) = fixture(&[
+        ("go.mod", "module example.com/probe\n\ngo 1.22\n"),
+        (
+            "shape.go",
+            "package probe\n\ntype Shape interface {\n\tArea() int\n}\n",
+        ),
+        (
+            "square.go",
+            "package probe\n\ntype Square struct{}\n\nfunc (Square) Area() int {\n\treturn 1\n}\n",
+        ),
+    ]);
+    engine.configure_analysis(vec![go_toolchain()]).unwrap();
+    engine
+        .register(&alice, scope("shape", &["shape.go#Shape"]))
+        .unwrap();
+    let base = engine.capture().unwrap();
+    let square = text(&base, "square.go").replace("return 1", "return 2");
+    engine
+        .apply(&bob, edit("area", &base, "square.go", &square))
+        .unwrap();
+    assert_eq!(pending(&engine, &alice), ["shape"]);
+}
+
+#[test]
 fn changed_pins_and_unknown_input_universes_fail_closed() {
     let (_dir, engine, alice, bob) = fixture(RUST);
     let mut wrong = rust_toolchain();
@@ -490,6 +515,11 @@ fn waits_catch_up_on_missed_wakeups_and_report_explicit_outcomes() {
     };
     // Committed before the wait began: catch-up, not a lost wakeup.
     let early = engine.post(&bob, plan("early")).unwrap();
+    assert!(
+        engine
+            .wait(&bob, Condition::Message { from: 1, after: 0 }, None, None)
+            .is_err()
+    );
     let from_bob = |after| Condition::Message { from: 1, after };
     assert_eq!(
         engine
@@ -550,6 +580,7 @@ fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding(
     let base = engine.capture().unwrap();
     let offer = |id: &str, revision: u64, supersedes: Option<&str>| Offer {
         id: id.into(),
+        task: "producer".into(),
         revision,
         scope: vec!["b.rs".into()],
         text: format!("offer {id}"),
@@ -597,6 +628,12 @@ fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding(
         engine
             .offer(&bob, offer("c2", current.revision, Some("c1")))
             .is_err()
+    );
+    assert!(
+        engine
+            .offer(&bob, offer("older", base.revision, None))
+            .is_err(),
+        "pending review blocks even an older offer"
     );
     reread(&engine, &bob, "b");
     let wait = Condition::Checkpoint { id: c1.id.clone() };
