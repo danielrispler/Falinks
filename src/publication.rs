@@ -4,8 +4,8 @@ use crate::coordination::{
     Availability, Body, captured, checkpoint, emit, obligations, save_checkpoint,
 };
 use crate::{
-    Capture, Client, Engine, Outcome, Result, audit, connect, fail, install, meta, nonce, object,
-    quote, read_file, records, retain, sandboxed, set_meta,
+    Capture, Client, Engine, Result, audit, connect, fail, install, meta, nonce, object, placement,
+    quote, read_file, record, retain, revision, sandboxed, set_meta,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -135,43 +135,42 @@ fn save_run(db: &Connection, run: &Run) -> Result<()> {
     )?;
     Ok(())
 }
-fn published(db: &Connection) -> Result<u64> {
+pub(crate) fn published(db: &Connection) -> Result<u64> {
     Ok(meta(db, "published")?
         .ok_or("missing published pointer")?
         .parse()?)
 }
-fn revision(db: &Connection, revision: u64) -> Result<Capture> {
-    let body = db
-        .query_row(
-            "SELECT body FROM revisions WHERE id=?",
-            [revision as i64],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?
-        .ok_or("unknown completed revision")?;
-    Ok(serde_json::from_str(&body)?)
-}
 fn required(db: &Connection) -> Result<BTreeSet<usize>> {
     meta(db, "required")?.map_or(Ok(BTreeSet::new()), |r| Ok(serde_json::from_str(&r)?))
 }
+/// `revision` contains everything `base` does and adds unpublished work.
+pub(crate) fn ahead(db: &Connection, revision_id: u64, base: u64) -> Result<bool> {
+    let (candidate, base) = (revision(db, revision_id)?, revision(db, base)?);
+    Ok(candidate.included.is_superset(&base.included) && candidate.included != base.included)
+}
 
 /// Required offerers and included operations for `revision` over `base`. Every author of
-/// an applied operation in (base, revision] counts, even when later edits overwrote it.
+/// an included operation the base lacks counts, even when later edits overwrote it.
+/// Host-required members count when placed in the candidate's workspace group.
 pub(crate) fn coverage(
     db: &Connection,
-    revision: u64,
+    revision_id: u64,
     base: u64,
 ) -> Result<(BTreeSet<usize>, Vec<u64>)> {
-    let mut members = required(db)?;
-    let mut contributions = Vec::new();
-    for record in records(db)? {
-        if let Some(Outcome::Applied { revision: r, .. }) = record.outcome
-            && base < r
-            && r <= revision
-        {
-            contributions.push(record.operation);
-            members.insert(record.agent);
-        }
+    let candidate = revision(db, revision_id)?;
+    let base = revision(db, base)?;
+    let group = placement(db)?;
+    let mut members: BTreeSet<usize> = required(db)?
+        .into_iter()
+        .filter(|m| group[*m] == candidate.space)
+        .collect();
+    let contributions: Vec<u64> = candidate
+        .included
+        .difference(&base.included)
+        .copied()
+        .collect();
+    for operation in &contributions {
+        members.insert(record(db, *operation)?.agent);
     }
     Ok((members, contributions))
 }
@@ -214,7 +213,10 @@ fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
 pub(crate) fn queue(db: &Connection, revision: u64) -> Result<()> {
     let candidate = candidate(db, revision)?;
     let binding = candidate.binding;
-    if !candidate.missing.is_empty() || revision <= binding.base || binding.members.is_empty() {
+    if !candidate.missing.is_empty()
+        || !ahead(db, revision, binding.base)?
+        || binding.members.is_empty()
+    {
         return Ok(());
     }
     let ids: Vec<_> = binding.checkpoints.values().cloned().collect();
@@ -451,6 +453,8 @@ impl Engine {
             self.signal.notify();
         }
         self.release_slot()?;
+        // A finished run may unblock a transition; a publication reaches split workspaces.
+        self.advance()?;
         Ok(Some(run))
     }
     fn execute(
@@ -482,10 +486,16 @@ impl Engine {
             let evidence = outputs.join(&check.name);
             let out = evidence.join("out");
             fs::create_dir_all(&out)?;
+            let live = self
+                .layout()?
+                .roots
+                .iter()
+                .map(|r| Ok(format!("(subpath {})", quote(r)?)))
+                .collect::<Result<Vec<_>>>()?
+                .join(" ");
             let profile = format!(
-                "(version 1) (allow default) (deny network*) (deny file-write*) (allow file-write* (subpath {out}) (literal \"/dev/null\")) (deny file-read-data (subpath {}) (subpath {})) (allow file-read-data (subpath {}) (subpath {out}))",
+                "(version 1) (allow default) (deny network*) (deny file-write*) (allow file-write* (subpath {out}) (literal \"/dev/null\")) (deny file-read-data (subpath {}) {live}) (allow file-read-data (subpath {}) (subpath {out}))",
                 quote(&self.state)?,
-                quote(&self.live)?,
                 quote(&slot)?,
                 out = quote(&out)?,
             );
@@ -550,7 +560,7 @@ impl Engine {
         let binding = &run.binding;
         let base = published(db)?;
         if base != binding.base {
-            return Ok(Err(if binding.revision <= base {
+            return Ok(Err(if !ahead(db, binding.revision, base)? {
                 "a newer publication was accepted and is never overwritten".into()
             } else {
                 "published base advanced; reconsider and offer against the new base".into()
@@ -593,12 +603,7 @@ impl Engine {
         if let Err(reason) = self.recheck(&db, run, checks)? {
             return Ok(RunOutcome::Blocked { reason });
         }
-        let completed = self
-            .completed
-            .read()
-            .map_err(|_| "completed lock poisoned")?
-            .clone();
-        if let Err(error) = audit(&self.live, &completed) {
+        if let Err(error) = self.audit_all(&self.layout()?) {
             let reason = error.to_string();
             self.save_incident(&db, &reason)?;
             return Ok(RunOutcome::Blocked {

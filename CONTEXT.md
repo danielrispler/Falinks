@@ -22,6 +22,9 @@ An identified proposal to join, split or keep work groups, naming the affected a
 **Regrouping transition**:
 Application of an agreed grouping and workspace arrangement while preserving work and its revision, candidate and publication obligations. It does not imply publication approval.
 
+**Incorporation**:
+Bringing the published state into a split live workspace without overwriting that workspace's unfinished drafts. A file the publication and the drafts both changed needs an explicit, attributed resolution.
+
 **Proposal**:
 A candidate change based on a snapshot, together with its dependency information. It is not yet part of the published state.
 
