@@ -65,3 +65,12 @@ jobs:
           arguments: --locked
           rust-version: "1.99.0"
           manifest-path: evaluation/Cargo.toml
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The image bundles shellcheck, so run: steps are linted too.
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
