@@ -21,7 +21,7 @@ oracle fails, then checks a known-correct reference against both trusted visible
 commands and the independent oracle. The public CLI tests also reject compiling
 regressions in error propagation, kind selection and record IDs. Initial failure
 may be a missing required API compilation error; reference success exercises the
-full behavioral oracle. Checks require exact **committed** source, never live
+full behavioral oracle. Checks capture raw Git tree blobs, so export-ignore/export-subst cannot hide or rewrite files. Checks require exact **committed** source, never live
 workspace files. Visible tests cannot change the oracle's captured source.
 
 `fixtures/*.json` contain public initial source, allocation, dependency
@@ -29,7 +29,7 @@ information, commands, requirements and host milestone definitions.
 `protected/*.json` contain host-only oracle and reference bytes. Do **not** give
 this checkout or a clone of it to task agents. `prepare` exports only the initial
 fixture repository. A future Falinks runner must use the same export, freeze,
-instructions, developments and `oracle` seam, with its engine/adapter controls.
+instructions, developments and `oracle` seam, with its engine/adapter controls and repeated `--deny-root` arguments for all prior runs or reference copies.
 
 ## Baseline
 
@@ -61,7 +61,7 @@ both workers and recorded, rather than guessed from a marketing alias.
 explicit session-ID resume within a run. No `--last` or cross-run resume is used.
 It queues peer context at turn boundaries and waits for share capture replies
 before allowing more edits. Raw runtime events remain in scratch; usage is
-reported when exposed. These CLI primitives are described in [official Codex
+reported as retained per-turn records when exposed; telemetry acknowledgments never wake a waiting model. These CLI primitives are described in [official Codex
 noninteractive documentation](https://learn.chatgpt.com/docs/non-interactive-mode)
 and the [structured-loop example](https://developers.openai.com/cookbook/examples/codex/build_iterative_repair_loops_with_codex).
 This bridge has not been authenticated against a model in this ticket; it is
@@ -74,7 +74,7 @@ commit. Both shared tips must be ancestors. A successful resolved candidate is
 retained for final checks unless a new draft is shared. Final readiness names
 only each agent's last shared tip, without a Falinks ledger, review gate or
 checkpoint-offer protocol. The host retains the selected candidate in private
-Git storage and checks a fresh archive of that commit. Later worktree writes
+Git storage and checks the raw tree blobs of that commit. Later worktree writes
 cannot change checked bytes. Failure/conflict evidence and drafts remain intact.
 
 ## Developments and fairness
@@ -93,7 +93,7 @@ Freeze an actual batch configuration **before** pilots/scoring. The checked-in
 configuration is an intentionally incomplete template; placeholder identities
 cannot launch a run. The historical decision pins Codex 0.160.0 / SHA-256
 `112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b`.
-The local installation is 0.161.0, so **no scored runs were attempted**. Reverify
+The initial setup installation was 0.161.0, so **no scored runs were attempted**. Reverify
 the pinned adapter or explicitly record/version renewed controls for another
 runtime; do not silently score with a new one. Deterministic engine and adapter
 safety gates from #19 remain prerequisites. This baseline CLI records unscored
@@ -113,10 +113,10 @@ check set. Do not impose the engine ledger on Git or claim an engine is present.
 The host process, binaries and material checkout are trusted. Worker and compiler/
 test descendants run in macOS sandboxes. Worker writes are restricted to their
 own worktree, scratch, shared fixture Git metadata and integration worktree.
-Workers cannot read/write controller state, this checkout, other worktrees of
+Workers and host Git subprocesses cannot read/write controller state, this checkout, other worktrees of
 this setup repository or its shared Git object storage (which contains oracle
-bytes), or configured denied roots. Checks have networking disabled and can
-write only their captured check directory. Protected check logs are not sent to
+bytes), or configured denied roots. Host Git filters and subprocesses inherit the sandbox rather than privileged host access. Checks inherit those same exclusions, have networking disabled and can
+write only isolated build/cache/temp outputs; captured source and oracle files are read-only. Protected check logs are not sent to
 workers; workers get pass/fail and ordinary merge diagnostics. Runtime credentials
 are not included in retained evidence. The scripted test observes a denied
 controller read for both workers. Finite filesystem controls are not a claim
@@ -126,7 +126,7 @@ Each run uses a unique output directory and fresh contexts, initial objects,
 worktrees, scratch, check copies and controller state. Do not supply prior
 solutions or transcripts. Deny previous runs in both arms. Retain run directories
 for diagnosis; remove them only with an explicit experiment reset after recording
-evidence. Source symlinks/submodules/nonregular archive entries and new build
+evidence. Source symlinks/submodules/nonregular tree entries and new build
 hooks/dependency configuration are rejected. Independent oracles ignore agent
 integration tests and always use the frozen build inputs; focused tests are
 additional feedback. Added helpers within the fixture package are allowed.
@@ -163,3 +163,11 @@ covers this preparation plus remaining pilot/evaluation setup, **not engine
 implementation**. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
 for safety gates, run interpretation and continuation criteria.
+
+## Verification record
+
+`verification.json` records the six passing public CLI checks, fixture identities,
+compiler/runtime versions and the explicit limits of the evidence. `review.md`
+records the independent Standards/Spec review and resolved findings. The setup
+ledger conservatively charges 2,769 seconds (about 46 minutes), leaving 26,031
+seconds of the shared eight-hour setup allowance for subsequent setup.

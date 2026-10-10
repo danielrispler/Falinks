@@ -17,7 +17,10 @@ def main():
     events = queue.Queue()
     def receive():
         for line in sys.stdin:
-            events.put(json.loads(line))
+            event = json.loads(line)
+            if event.get('type')=='ok' and event.get('action')=='usage':
+                continue  # Telemetry receipts must not wake a waiting model.
+            events.put(event)
     threading.Thread(target=receive, daemon=True).start()
     scratch = Path('scratch')
     schema = scratch / 'response-schema.json'

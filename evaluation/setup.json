@@ -10,12 +10,16 @@
     },
     {
       "start_utc": "2026-10-10T07:50:18Z",
-      "charged_seconds": null,
-      "measurement": "Active resumed-session wall time; update at completion.",
-      "work": "Final validation, review, fixes and handoff."
+      "charged_seconds": 969,
+      "measurement": "Active resumed-session wall time through final verification, plus conservative startup and tracker/commit handoff allowances. Inactive user pause excluded.",
+      "work": "Final validation, review, fixes and handoff.",
+      "stop_utc": "2026-10-10T08:03:27Z",
+      "measured_seconds": 789,
+      "startup_allowance_seconds": 60,
+      "handoff_allowance_seconds": 120
     }
   ],
-  "charged_total_seconds": 1800,
-  "remaining_seconds": 27000,
-  "status": "in_progress"
+  "charged_total_seconds": 2769,
+  "remaining_seconds": 26031,
+  "status": "issue_24_complete; shared budget continues in downstream setup"
 }

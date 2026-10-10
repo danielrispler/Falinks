@@ -1,0 +1,58 @@
+{
+  "verified_utc": "2026-10-10T08:02:23Z",
+  "command": "python3 -m unittest discover -s evaluation/tests -v",
+  "outcome": "passed",
+  "checks": 6,
+  "elapsed_seconds": 79.642,
+  "environment": {
+    "platform": "macOS arm64",
+    "rust": "1.90.0",
+    "go": "1.27.1",
+    "python": "3.14.8",
+    "git": "2.56.0"
+  },
+  "manifest_sha256": "a419e6c1d9137f92478e47123eb9e06700e7121848611802dca368eba150316f",
+  "fixtures": {
+    "go-page": {
+      "initial_commit": "0a9b7fb1c3ffc994d6748860c0c2dafb4a1d969b",
+      "initial_visible_checks": true,
+      "initial_oracle": false,
+      "reference_visible_checks": true,
+      "reference_oracle": true,
+      "compiling_regression_rejected": true
+    },
+    "go-relationships": {
+      "initial_commit": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
+      "initial_visible_checks": true,
+      "initial_oracle": false,
+      "reference_visible_checks": true,
+      "reference_oracle": true,
+      "compiling_regression_rejected": true
+    },
+    "rust-errors": {
+      "initial_commit": "8c82c987dc848b1d5e49e799a92016579bb4e4e5",
+      "initial_visible_checks": true,
+      "initial_oracle": false,
+      "reference_visible_checks": true,
+      "reference_oracle": true,
+      "compiling_regression_rejected": true
+    }
+  },
+  "baseline_checks": [
+    "two fresh communicating worktrees and fixed task developments",
+    "same-handler ordinary merge conflict, resolution and exact final recheck",
+    "Codex bridge tested with scripted runtime: peer waits and complete per-turn usage",
+    "controller read denied to both workers",
+    "prior-arm reads denied during checks; export-ignore cannot hide failing tests"
+  ],
+  "syntax_check": "python3 -m compileall -q evaluation: passed",
+  "review": {
+    "standards": "pass",
+    "spec": "pass"
+  },
+  "limitations": [
+    "No authenticated model run or scored batch.",
+    "The checked-in run configuration is a template; actual batch identities must be frozen before pilots/scoring.",
+    "Filesystem controls do not establish arbitrary privileged-process containment."
+  ]
+}
