@@ -19,6 +19,9 @@ path = "sandbox_probe.rs"
 name = "wayfinder-startup"
 path = "../../scripts/wayfinder_startup.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 libc = "0.2"
 rusqlite = { version = "0.38", features = ["bundled"] }
