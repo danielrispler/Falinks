@@ -165,3 +165,7 @@ After each validation run, every occupied space that lacks the published state t
 ## Limits
 
 Two agents and therefore at most two occupied spaces; agent 1 is the one that leaves on a split. Engine-driven reconsideration starts with the host's first `reconsider()` and runs at operation boundaries, not on a timer. Signal analysis runs under the writer lock, like the edit gate. Draft movement is per file: two authors' drafts in one file block a split until published, and overlapping drafts block a join. There is no automatic merge of overlapping publications. Restart does not resume an interrupted transition by itself.
+
+# Real-agent integration (#26)
+
+`adapters/claude/engine_host.rs` exposes the agent-facing operations listed in its `OPERATIONS` as `falinks_*` tools (not `wait`, `retry_run` or any host call) behind the Claude adapter's authenticated boundary. `check-integration` runs two pinned Claude Code workers against this engine with host-scripted phases, barriers and a real crash after the acceptance commit. See the adapter's [README](../adapters/claude/README.md#production-integration-26) for the phases, report contents and limits. Deterministic scenarios stay in `tests/`. `adapters/claude/tests/engine_host.rs` checks the tool mapping against a real engine.

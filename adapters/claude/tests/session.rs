@@ -1,4 +1,4 @@
-use falinks_claude::{MODEL, Session, TOOLS};
+use falinks_claude::{Launch, MODEL, Session};
 use falinks_host::runtime::{EngineOutcome, Notice};
 use serde_json::{Value, json};
 use std::{cell::RefCell, path::Path, rc::Rc};
@@ -9,7 +9,7 @@ const TOKEN: &str = "host-token";
 /// Shapes recorded from the pinned binary in #32 (`2026-10-10-probe.json`).
 fn init(workspace: &Path) -> Value {
     json!({"type":"system","subtype":"init","claude_code_version":"2.1.287","cwd":workspace.with_file_name("scratch"),
-        "model":MODEL,"permissionMode":"dontAsk","session_id":SESSION,"tools":TOOLS,
+        "model":MODEL,"permissionMode":"dontAsk","session_id":SESSION,"tools":Launch::fixture(workspace.parent().unwrap()).allowed(),
         "mcp_servers":[{"name":"falinks","source":"dynamic","status":"connected"}],
         "plugins":[{"name":"cc-plugin-agents-md","path":"builtin","source":"cc-plugin-agents-md@builtin"},
             {"name":"cc-plugin-telemetry","path":"builtin","source":"cc-plugin-telemetry@builtin"},
@@ -41,6 +41,7 @@ fn fixture_with(notice: Option<&'static str>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().canonicalize().unwrap().join("source");
     std::fs::create_dir(&workspace).unwrap();
+    std::fs::create_dir(dir.path().join("controller")).unwrap();
     let calls = Rc::new(RefCell::new(vec![]));
     let seen = Rc::clone(&calls);
     let engine = Box::new(move |envelope: &Value| {
@@ -54,8 +55,7 @@ fn fixture_with(notice: Option<&'static str>) -> Fixture {
         })
     });
     let session = Session::new(
-        &workspace.join("context.sqlite"),
-        &workspace,
+        &Launch::fixture(dir.path().canonicalize().unwrap().as_path()),
         "agent-a",
         SESSION,
         TOKEN,
@@ -305,4 +305,91 @@ fn only_the_pinned_claude_executable_is_accepted() {
         .to_string();
     assert!(error.contains("SHA-256"), "{error}");
     assert!(falinks_claude::verify_binary(&dir.path().join("missing")).is_err());
+}
+
+#[test]
+fn the_launch_tool_profile_sets_init_and_registered_operations() {
+    let mut f = fixture();
+    let mut launch = Launch::fixture(f.workspace.parent().unwrap());
+    launch.tools = json!([{"name":"falinks_capture"},{"name":"falinks_edit"}]);
+    assert_eq!(
+        launch.allowed(),
+        [
+            "Bash",
+            "Glob",
+            "Grep",
+            "Read",
+            "mcp__falinks__falinks_capture",
+            "mcp__falinks__falinks_edit"
+        ]
+    );
+    let engine = Box::new(|_: &Value| {
+        Ok(EngineOutcome {
+            result: json!({"accepted":true}),
+            notice: None,
+        })
+    });
+    f.session = Session::new(&launch, "agent-a", SESSION, TOKEN, engine, false).unwrap();
+    // The historical three-tool init no longer matches this launch.
+    assert!(f.session.line(&init(&f.workspace)).is_err());
+
+    let mut f = fixture();
+    let launch = Launch {
+        tools: launch.tools.clone(),
+        ..Launch::fixture(f.workspace.parent().unwrap())
+    };
+    f.session = Session::new(
+        &launch,
+        "agent-a",
+        SESSION,
+        TOKEN,
+        Box::new(|_: &Value| {
+            Ok(EngineOutcome {
+                result: json!({"accepted":true}),
+                notice: None,
+            })
+        }),
+        false,
+    )
+    .unwrap();
+    let mut line = init(&f.workspace);
+    line["tools"] = json!(launch.allowed());
+    f.session.line(&line).unwrap();
+    let input = json!({"workspace":f.workspace,"request":{}});
+    f.session
+        .host(&hook("P1", "toolu_1", "falinks_capture", &input));
+    assert_eq!(
+        f.session
+            .host(&call("toolu_1", "falinks_capture", &input))
+            .0,
+        json!({"accepted":true})
+    );
+    // An operation outside the launch is refused even with a valid stamp.
+    f.session
+        .host(&hook("P1", "toolu_2", "falinks_offer", &input));
+    assert_eq!(
+        f.session.host(&call("toolu_2", "falinks_offer", &input)).0["accepted"],
+        false
+    );
+}
+
+#[test]
+fn queued_messages_merged_into_one_presentation_each_count_as_presented() {
+    let mut f = fixture();
+    f.session.sent("prompt", None);
+    f.session.line(&init(&f.workspace)).unwrap();
+    f.session.line(&replay("prompt")).unwrap();
+    // Two notices sent during one tool call reach the model as one replayed message.
+    f.session.sent("notice E1", Some("E1"));
+    f.session.sent("notice E2", Some("E2"));
+    f.session.line(&replay("notice E1\nnotice E2")).unwrap();
+    f.session.line(&result()).unwrap();
+    assert!(f.session.idle(), "both merged notices were presented");
+    let spans: Vec<_> = f
+        .session
+        .deliveries
+        .iter()
+        .map(|d| d["presented_span"].clone())
+        .collect();
+    assert_eq!(spans, [json!(1), json!(1)]);
 }

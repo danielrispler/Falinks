@@ -23,51 +23,55 @@ fn run() -> Result<()> {
         println!("CHILD_DENIED");
         return Ok(());
     }
-    require(args.len() == 3, "usage: sandbox-probe ROOT EXPECTED_HASH")?;
-    let root = Path::new(&args[1]);
-    let source = root.join("source/source.txt");
-    let scratch = root.join("scratch/control.txt");
+    require(
+        args.len() >= 4,
+        "usage: sandbox-probe SOURCE_FILE EXPECTED_HASH SCRATCH [NAME=PROTECTED_FILE]...",
+    )?;
+    let source = Path::new(&args[1]);
+    let directory = source.parent().ok_or("source file needs a directory")?;
+    let scratch_dir = Path::new(&args[3]);
+    let scratch = scratch_dir.join("control.txt");
     let mut checks = Map::new();
-    checks.insert("read".into(), json!(file_hash(&source)? == args[2]));
+    checks.insert("read".into(), json!(file_hash(source)? == args[2]));
     fs::write(&scratch, b"scratch\n")?;
     checks.insert("scratch".into(), json!(fs::read(&scratch)? == b"scratch\n"));
     checks.insert(
         "source_write".into(),
-        json!(denied(fs::write(&source, b"BYPASS"))),
+        json!(denied(fs::write(source, b"BYPASS"))),
     );
     checks.insert(
         "source_delete".into(),
-        json!(denied(fs::remove_file(&source))),
+        json!(denied(fs::remove_file(source))),
     );
     checks.insert(
         "source_rename".into(),
-        json!(denied(fs::rename(
-            &source,
-            root.join("scratch/renamed.txt")
-        ))),
+        json!(denied(fs::rename(source, scratch_dir.join("renamed.txt")))),
     );
     checks.insert(
         "source_create".into(),
-        json!(denied(fs::write(root.join("source/new.txt"), b"BYPASS"))),
+        json!(denied(fs::write(directory.join("new.txt"), b"BYPASS"))),
     );
     checks.insert(
         "source_replace".into(),
-        json!(denied(fs::rename(&scratch, &source))),
+        json!(denied(fs::rename(&scratch, source))),
     );
+    // The host links `SCRATCH/alias` to the source file before the probe runs.
     checks.insert(
         "alias_write".into(),
-        json!(denied(fs::write(root.join("scratch/alias"), b"BYPASS"))),
+        json!(denied(fs::write(scratch_dir.join("alias"), b"BYPASS"))),
     );
-    for name in ["controller", "snapshots", "validation"] {
-        let secret = root.join(name).join("secret.txt");
-        checks.insert(format!("{name}_read"), json!(denied(fs::read(&secret))));
+    for protected in &args[4..] {
+        let (name, secret) = protected
+            .split_once('=')
+            .ok_or("protected storage is NAME=FILE")?;
+        checks.insert(format!("{name}_read"), json!(denied(fs::read(secret))));
         checks.insert(
             format!("{name}_write"),
-            json!(denied(fs::write(&secret, b"BYPASS"))),
+            json!(denied(fs::write(secret, b"BYPASS"))),
         );
     }
     let mut child = Command::new(env::current_exe()?);
-    child.arg("--child-write").arg(&source);
+    child.arg("--child-write").arg(source);
     // SAFETY: setsid is async-signal-safe and called before exec, with no allocations.
     unsafe {
         child.pre_exec(|| {

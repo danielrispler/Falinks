@@ -190,3 +190,19 @@ fn unknown_directories_modes_and_root_aliases_stop_the_host() -> falinks_host::R
     }
     Ok(())
 }
+
+#[test]
+fn relocation_rebinds_only_an_existing_thread_for_resume() -> falinks_host::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (first, second) = (dir.path().join("first"), dir.path().join("second"));
+    std::fs::create_dir(&first)?;
+    std::fs::create_dir(&second)?;
+    let db = dir.path().join("context.sqlite");
+    Boundary::new(&db, &first, "c1".into())?.bind("thread", "agent", false)?;
+    let mut moved = Boundary::new(&db, &second, "c2".into())?;
+    assert!(moved.bind("thread", "agent", true).is_err());
+    assert!(moved.relocate("thread", "other-agent").is_err());
+    moved.relocate("thread", "agent")?;
+    moved.bind("thread", "agent", true)?;
+    Ok(())
+}

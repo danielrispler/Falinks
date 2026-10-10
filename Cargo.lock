@@ -94,8 +94,10 @@ dependencies = [
 name = "falinks-claude"
 version = "0.1.0"
 dependencies = [
+ "falinks",
  "falinks-host",
  "libc",
+ "serde",
  "serde_json",
  "shlex",
  "tempfile",
