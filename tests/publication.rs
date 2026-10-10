@@ -664,6 +664,48 @@ fn publication_crash_boundaries_accept_all_or_none_and_recover_committed_outcome
 }
 
 #[test]
+fn unconfigured_checks_are_retryable_and_committed_acceptance_survives_observer_errors() {
+    let (dir, engine, alice, bob) = fixture();
+    let candidate = team_candidate(&engine, &alice, &bob);
+    engine
+        .offer(&alice, offer("alice", candidate.revision))
+        .unwrap();
+    engine
+        .offer(&bob, offer("bob", candidate.revision))
+        .unwrap();
+    drop(engine);
+    // Restart without reconfiguring the in-memory check set: a host gap, not a verdict.
+    let engine = Engine::open(
+        &dir.path().join("live"),
+        &dir.path().join("state"),
+        ENROLLED,
+    )
+    .unwrap();
+    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
+    let run = engine.validate().unwrap().unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Interrupted { .. })),
+        "{run:?}"
+    );
+    engine.configure_checks(checks()).unwrap();
+    engine.retry_run(&alice, &run.id).unwrap();
+    let run = engine
+        .validate_observed(|stage| match stage {
+            Stage::Accepted => Err("observer failed after commit".into()),
+            _ => Ok(()),
+        })
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Published { .. })),
+        "{run:?}"
+    );
+    assert_eq!(engine.run(&run.id).unwrap().unwrap(), run);
+    assert_eq!(engine.published().unwrap(), candidate);
+    assert!(!dir.path().join("state/validation-runs").exists());
+}
+
+#[test]
 fn unexplained_source_writes_stop_publication_and_keep_evidence() {
     let (dir, engine, alice, bob) = fixture();
     let candidate = team_candidate(&engine, &alice, &bob);

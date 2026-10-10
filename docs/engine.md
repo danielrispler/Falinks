@@ -100,7 +100,7 @@ Each check runs in the slot with a cleared environment and a fresh output direct
 
 ## Acceptance
 
-A publication run first rechecks its gates, without running checks if one fails. After all checks pass it rechecks them again under the writer lock. The gates are: the same published base, the same complete coverage and bindings, no pending obligation for an included change, no halt, the same check set, and no unexplained live change. An unexplained change records an incident. One SQLite transaction then advances the published pointer, marks every covering checkpoint `Accepted`, records the run outcome and emits the `Published` event. A failed gate gives `Blocked` and a `Validated` event to both agents. The check results remain feedback.
+A publication run first rechecks its gates, without running checks if one fails. After all checks pass it rechecks them again under the writer lock. The gates are: the same published base, the same complete coverage and bindings, no pending obligation for an included change, no halt, the same check set, and no unexplained live change. An unexplained change records an incident. One SQLite transaction then advances the published pointer, marks every covering checkpoint `Accepted`, records the run outcome and emits the `Published` event. The pointer names a retained revision whose per-file occurrence versions are the published versions, so restoring earlier bytes still advances them. Publication is an engine event rather than a fourth agent message kind: it has no sender, and `Message` waits must not match it. A failed gate gives `Blocked` and a `Validated` event to both agents. The check results remain feedback.
 
 The Git ref `refs/falinks/published` mirrors the pointer. It is updated after the commit, and `Engine::open` repairs it from SQLite. A mirror failure never undoes acceptance.
 
@@ -108,7 +108,7 @@ A base advance returns the candidate to its members, who re-offer against the ne
 
 ## Requests and recovery
 
-Offer and feedback IDs are idempotent: an identical repeat returns the recorded checkpoint or run, and changed contents under the same ID fail. `run(id)` and `checkpoint(id)` answer an uncertain commit. A run interrupted by a crash or error becomes `Interrupted` at restart, and nothing resumes automatically. `retry_run` re-queues it as a new attempt, with every gate and check run again. Repeating `retry_run` on a committed run returns its recorded outcome. Restart preserves live drafts. A missing or corrupt retained snapshot stops startup.
+Offer and feedback IDs are idempotent: an identical repeat returns the recorded checkpoint or run, and changed contents under the same ID fail. `run(id)` and `checkpoint(id)` answer an uncertain commit. A run interrupted by a crash or error becomes `Interrupted` at restart, and nothing resumes automatically. `retry_run` re-queues it as a new attempt, with every gate and check run again. A run started before the host configured checks is also `Interrupted`, so it can be retried. Repeating `retry_run` on a committed run returns its recorded outcome. A `Failed`, `Refused` or `Blocked` run is final; changed work needs new offers, which form a new candidate. Restart preserves live drafts. A missing or corrupt retained snapshot stops startup.
 
 | Crash boundary | Observed outcome |
 | --- | --- |
@@ -118,4 +118,4 @@ Offer and feedback IDs are idempotent: an identical repeat returns the recorded 
 
 ## Limits
 
-Checks run serially in the one slot, and the host decides when to run `validate()`. Required checks are trusted host commands; Seatbelt is a bounded control, not containment of hostile tools. The engine combines automatically only along the linear completed history, so publication races always return the candidate for re-offer. There is no power-loss guarantee, and no joint Git/SQLite transaction.
+Checks run serially in the one slot, and the host decides when to run `validate()`. Required checks are trusted host commands; Seatbelt is a bounded control, not containment of hostile tools. The engine combines automatically only along the linear completed history, so publication races always return the candidate for re-offer. An offer's recorded reviews are evidence. The enforced peer and dependency gate is that no member has a pending obligation for a change included in the candidate. A candidate blocked by a disconnected member emits no extra event: peers already receive `Disconnected`, and `candidate(R)` names the missing member. There is no power-loss guarantee, and no joint Git/SQLite transaction.

@@ -427,6 +427,8 @@ impl Engine {
             .unwrap_or_else(|error| RunOutcome::Interrupted {
                 reason: error.to_string(),
             });
+        // Runs are serialized by the lease: no other run's build output can be here.
+        let _ = fs::remove_dir_all(self.state.join("validation-runs"));
         if !matches!(outcome, RunOutcome::Published { .. }) {
             run.running = false;
             run.attempts.last_mut().unwrap().outcome = Some(outcome.clone());
@@ -458,7 +460,8 @@ impl Engine {
         observer: &mut dyn FnMut(Stage) -> Result<()>,
     ) -> Result<RunOutcome> {
         if checks.is_empty() {
-            return Ok(RunOutcome::Blocked {
+            // A host configuration gap, not a verdict: retryable once checks are configured.
+            return Ok(RunOutcome::Interrupted {
                 reason: "no required checks configured".into(),
             });
         }
@@ -529,8 +532,6 @@ impl Engine {
                 });
             }
         }
-        // Logs are retained in the run record; build output never reaches another run.
-        let _ = fs::remove_dir_all(&outputs);
         if let Some(check) = failed {
             return Ok(RunOutcome::Failed { check });
         }
@@ -633,7 +634,8 @@ impl Engine {
         observer(Stage::Committing)?;
         tx.commit()?;
         drop(db);
-        observer(Stage::Accepted)?;
+        // Committed: an observer failure here cannot turn acceptance into another outcome.
+        let _ = observer(Stage::Accepted);
         // A failed mirror update never undoes acceptance; startup repairs it from SQLite.
         let _ = repair_mirror(&self.state, &candidate.tree);
         self.signal.notify();
