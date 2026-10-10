@@ -558,6 +558,27 @@ fn job_network_attempt_is_denied() {
 }
 
 #[test]
+fn job_udp_attempt_is_denied() {
+    let (_dir, engine, alice, _) = fixture();
+    let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let job = shell_job(
+        &engine,
+        &alice,
+        "udp",
+        "/bin/bash",
+        &format!("printf leak > /dev/udp/127.0.0.1/{port}; printf sent > b.rs"),
+    );
+    assert!(job.error.is_some(), "UDP job acknowledged");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        listener.recv(&mut [0; 16]).is_err(),
+        "job reached the host network"
+    );
+}
+
+#[test]
 fn job_timeout_kills_the_command_and_retains_evidence() {
     let (_dir, engine, alice, _) = fixture();
     let job = shell_job(&engine, &alice, "timeout", "/bin/sh", "sleep 60");
@@ -615,7 +636,7 @@ fn linux_subreaper_sweep_kills_setsid_descendants() {
 }
 
 #[test]
-fn git_missing_or_older_than_2_32_fails_open_visibly() {
+fn engine_open_fails_visibly_without_git_2_32() {
     let bin = tempfile::tempdir().unwrap();
     let old = bin.path().join("old");
     fs::create_dir(&old).unwrap();
@@ -641,7 +662,7 @@ fn git_missing_or_older_than_2_32_fails_open_visibly() {
 }
 
 #[test]
-#[ignore = "subprocess Engine::open worker; invoked by git_missing_or_older_than_2_32"]
+#[ignore = "subprocess Engine::open worker; invoked by engine_open_fails_visibly_without_git_2_32"]
 fn open_worker() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("live")).unwrap();

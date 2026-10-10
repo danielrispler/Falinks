@@ -7,7 +7,7 @@ use std::{
     fs,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     time::{Duration, Instant},
 };
 
@@ -66,12 +66,31 @@ pub(crate) fn supported() -> Result<()> {
 
 /// Runs `command` with a cleared environment, retaining stdout, stderr and the
 /// containment record in its evidence directory.
-pub(crate) fn run(helper: &Path, command: &Contained) -> Result<ExitStatus> {
+/// `helper` locates the Linux helper; it is not consulted on macOS.
+pub(crate) fn run(
+    helper: impl FnOnce() -> Result<PathBuf>,
+    command: &Contained,
+) -> Result<ExitStatus> {
     supported()?;
     if cfg!(target_os = "macos") {
         seatbelt(command)
     } else {
-        linux(helper, command)
+        via_helper(&helper()?, command)
+    }
+}
+
+/// Waits for `child` until `deadline`; on overrun kills its process group and returns None.
+fn wait_bounded(child: &mut Child, group: i32, deadline: Instant) -> Result<Option<ExitStatus>> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            kill_group(group);
+            child.wait()?;
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -123,17 +142,8 @@ fn seatbelt(command: &Contained) -> Result<ExitStatus> {
     let group = child.id() as i32;
     // Persist running process identity as evidence; restart never adopts its output.
     fs::write(command.evidence.join("process-group"), group.to_string())?;
-    let deadline = Instant::now() + command.timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_group(group);
-            child.wait()?;
-            return fail("timed out; output retained");
-        }
-        std::thread::sleep(Duration::from_millis(10));
+    let Some(status) = wait_bounded(&mut child, group, Instant::now() + command.timeout)? else {
+        return fail("timed out; output retained");
     };
     // Trusted tools must keep descendants in this group and join them before exit.
     // A surviving descendant makes completion ambiguous; kill the group, retain output.
@@ -171,12 +181,14 @@ struct Launch {
 struct Report {
     /// Raw wait status of the command; absent when it never ran or timed out.
     status: Option<i32>,
+    /// The command could not be started (for example, a missing program).
+    exec_error: Option<String>,
     timed_out: bool,
     survivors: bool,
     error: Option<String>,
 }
 
-fn linux(helper: &Path, command: &Contained) -> Result<ExitStatus> {
+fn via_helper(helper: &Path, command: &Contained) -> Result<ExitStatus> {
     let reads = match &command.reads {
         Reads::Only(trees) => SYSTEM_READS
             .iter()
@@ -203,6 +215,10 @@ fn linux(helper: &Path, command: &Contained) -> Result<ExitStatus> {
         timeout_ms: command.timeout.as_millis() as u64,
         report: command.evidence.join("containment.json"),
     };
+    // Never trust a report left by an earlier launch in the same directory.
+    let _ = fs::remove_file(&launch.report);
+    let command_group = command.evidence.join("command-group");
+    let _ = fs::remove_file(&command_group);
     let request = command.evidence.join("launch.json");
     fs::write(&request, serde_json::to_vec_pretty(&launch)?)?;
     let mut child = Command::new(helper)
@@ -218,16 +234,15 @@ fn linux(helper: &Path, command: &Contained) -> Result<ExitStatus> {
     fs::write(command.evidence.join("process-group"), group.to_string())?;
     // The helper enforces the bound; this backstop only catches a stuck helper.
     let deadline = Instant::now() + command.timeout + Duration::from_secs(10);
-    let helper_status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+    let Some(helper_status) = wait_bounded(&mut child, group, deadline)? else {
+        // The command runs in its own group, which the helper recorded.
+        if let Some(command) = fs::read_to_string(&command_group)
+            .ok()
+            .and_then(|g| g.trim().parse().ok())
+        {
+            kill_group(command);
         }
-        if Instant::now() >= deadline {
-            kill_group(group);
-            child.wait()?;
-            return fail("containment helper overran its bound; output retained");
-        }
-        std::thread::sleep(Duration::from_millis(10));
+        return fail("containment helper overran its bound; output retained");
     };
     let report: Report = match fs::read(&launch.report) {
         Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -239,6 +254,9 @@ fn linux(helper: &Path, command: &Contained) -> Result<ExitStatus> {
     };
     if let Some(error) = report.error {
         return fail(format!("containment unavailable: {error}"));
+    }
+    if let Some(error) = report.exec_error {
+        return fail(format!("cannot start contained command: {error}"));
     }
     if report.timed_out {
         return fail("timed out; output retained");
@@ -398,39 +416,50 @@ mod linux_helper {
                 contain(&reads, &output).map_err(|e| std::io::Error::other(e.to_string()))
             });
         }
-        let mut child = command.spawn()?;
-        let group = child.id() as i32;
-        let deadline = Instant::now() + Duration::from_millis(launch.timeout_ms);
-        let (status, timed_out) = loop {
-            if let Some(status) = child.try_wait()? {
-                break (Some(status.into_raw()), false);
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            // Errors from `contain` arrive as `Other`; anything else is the exec itself.
+            Err(error) if error.kind() == std::io::ErrorKind::Other => return Err(error.into()),
+            Err(error) => {
+                return Ok(Report {
+                    exec_error: Some(error.to_string()),
+                    ..Report::default()
+                });
             }
-            if Instant::now() >= deadline {
-                super::kill_group(group);
-                child.wait()?;
-                break (None, true);
-            }
-            std::thread::sleep(Duration::from_millis(10));
         };
+        let group = child.id() as i32;
+        // Lets the engine kill the command if this helper gets stuck.
+        fs::write(
+            launch.report.with_file_name("command-group"),
+            group.to_string(),
+        )?;
+        let deadline = Instant::now() + Duration::from_millis(launch.timeout_ms);
+        let status = super::wait_bounded(&mut child, group, deadline)?;
+        let timed_out = status.is_none();
+        let status = status.map(|s| s.into_raw());
         // Escaped descendants that already exited are reaped, not counted.
         std::thread::sleep(Duration::from_millis(50));
         reap();
-        let survivors = super::group_alive(group) || !adopted().is_empty();
+        let survivors = super::group_alive(group) || !adopted()?.is_empty();
         sweep(group)?;
         Ok(Report {
             status,
             timed_out,
             survivors,
-            error: None,
+            ..Report::default()
         })
     }
 
     /// Kills the command's group and every adopted descendant, including `setsid` escapes.
     fn sweep(group: i32) -> Result<()> {
         for _ in 0..100 {
-            super::kill_group(group);
-            let pids = adopted();
-            if pids.is_empty() && !super::group_alive(group) {
+            // Only signal the group while it exists, so a reused group id is never hit.
+            let alive = super::group_alive(group);
+            if alive {
+                super::kill_group(group);
+            }
+            let pids = adopted()?;
+            if pids.is_empty() && !alive {
                 return Ok(());
             }
             for pid in pids {
@@ -449,12 +478,13 @@ mod linux_helper {
     }
 
     /// Live children of this helper: after the command is waited, only adopted escapes.
-    fn adopted() -> Vec<i32> {
-        fs::read_to_string("/proc/thread-self/children")
-            .unwrap_or_default()
+    /// Unreadable means escapes cannot be detected, so it fails closed.
+    fn adopted() -> Result<Vec<i32>> {
+        Ok(fs::read_to_string("/proc/thread-self/children")
+            .map_err(|e| format!("cannot list adopted descendants: {e}"))?
             .split_whitespace()
             .filter_map(|p| p.parse().ok())
-            .collect()
+            .collect())
     }
 
     /// Runs in the forked child before exec: Landlock for files, seccomp for sockets.
@@ -542,6 +572,25 @@ mod tests {
         assert!(require_landlock(-1).is_err());
         assert!(require_landlock(2).is_err());
         assert!(require_landlock(3).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn helper_refuses_a_mismatched_protocol() {
+        let dir = tempfile::tempdir().unwrap();
+        let launch = Launch {
+            protocol: PROTOCOL + 1,
+            program: "/bin/true".into(),
+            args: Vec::new(),
+            cwd: dir.path().into(),
+            env: Vec::new(),
+            reads: Vec::new(),
+            output: dir.path().into(),
+            timeout_ms: 1000,
+            report: dir.path().join("containment.json"),
+        };
+        let error = supervise(&launch).err().unwrap().to_string();
+        assert!(error.contains("protocol"), "{error}");
     }
 
     #[test]

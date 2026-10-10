@@ -496,7 +496,7 @@ impl Engine {
                 ("GOPROXY", Path::new("off")),
             ];
             let status = contain::run(
-                &self.helper()?,
+                || self.helper(),
                 &contain::Contained {
                     evidence: &evidence,
                     program: &check.program,

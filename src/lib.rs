@@ -1372,7 +1372,7 @@ impl Engine {
         let input = fs::canonicalize(job.directory.join("input"))?;
         let output = fs::canonicalize(job.directory.join("output"))?;
         let status = contain::run(
-            &self.helper()?,
+            || self.helper(),
             &contain::Contained {
                 evidence: &job.directory,
                 program: &job.spec.program,
