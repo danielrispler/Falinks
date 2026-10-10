@@ -56,6 +56,8 @@ const SYSTEM: &[&str] = &[
     "task_notification",
 ];
 
+pub mod engine_host;
+
 pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
     let binary = binary.canonicalize()?;
     // Hash first: an unpinned executable is never run, and no other installed CLI is tried.
