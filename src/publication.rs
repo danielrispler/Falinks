@@ -4,8 +4,8 @@ use crate::coordination::{
     Availability, Body, captured, checkpoint, emit, obligations, save_checkpoint,
 };
 use crate::{
-    Capture, Client, Engine, Result, audit, connect, fail, install, meta, nonce, object, placement,
-    quote, read_file, record, retain, revision, sandboxed, set_meta,
+    Capture, Client, Engine, Result, audit, connect, fail, install, meta, nonce, object, quote,
+    read_file, record, retain, revision, sandboxed, set_meta,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -151,7 +151,7 @@ pub(crate) fn ahead(db: &Connection, revision_id: u64, base: u64) -> Result<bool
 
 /// Required offerers and included operations for `revision` over `base`. Every author of
 /// an included operation the base lacks counts, even when later edits overwrote it.
-/// Host-required members count when placed in the candidate's workspace group.
+/// Host-required members count when they were in the candidate's group at its creation.
 pub(crate) fn coverage(
     db: &Connection,
     revision_id: u64,
@@ -159,10 +159,9 @@ pub(crate) fn coverage(
 ) -> Result<(BTreeSet<usize>, Vec<u64>)> {
     let candidate = revision(db, revision_id)?;
     let base = revision(db, base)?;
-    let group = placement(db)?;
     let mut members: BTreeSet<usize> = required(db)?
-        .into_iter()
-        .filter(|m| group[*m] == candidate.space)
+        .intersection(&candidate.group)
+        .copied()
         .collect();
     let contributions: Vec<u64> = candidate
         .included
@@ -345,6 +344,9 @@ impl Engine {
             return Ok(existing);
         }
         let capture = captured(&db, revision)?.ok_or("feedback must name a captured revision")?;
+        if capture.space != self.layout()?.of(client.agent) {
+            return fail("feedback must name a revision of the client's workspace");
+        }
         let base = published(&db)?;
         let (members, contributions) = coverage(&db, revision, base)?;
         let created = Run {
@@ -454,7 +456,7 @@ impl Engine {
         }
         self.release_slot()?;
         // A finished run may unblock a transition; a publication reaches split workspaces.
-        self.advance()?;
+        self.boundary();
         Ok(Some(run))
     }
     fn execute(

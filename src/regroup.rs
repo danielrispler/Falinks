@@ -5,8 +5,9 @@ use crate::analysis::{self, Footprint};
 use crate::coordination::{Body, Scope, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
-    Capture, Client, Engine, Layout, Result, VersionedFile, audit, build_tree, connect, fail,
-    install, meta, next_revision, paths, read_file, record, retain, revision, set_meta,
+    Capture, Client, Engine, Layout, Result, VersionedFile, audit, build_tree, connect,
+    ensure_empty, fail, install, meta, next_revision, paths, read_file, record, retain, revision,
+    set_meta,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -27,19 +28,20 @@ pub enum Action {
 pub struct Signals {
     /// Compiler-derived relationships between the agents' registered scopes.
     pub compiler: Vec<String>,
-    /// Scopes both agents registered directly.
+    /// Scopes both agents registered, or one declared a dependency on the other's.
     pub declared: Vec<String>,
     pub shared_tasks: Vec<String>,
     /// Stale or unreviewed write attempts.
     pub retries: u64,
-    /// Reconsideration obligations raised.
+    /// Reconsideration obligations raised by agents' live edits; obligations a
+    /// transition or incorporation raised are its consequence, not new evidence.
     pub reconsiderations: u64,
     pub waits: u64,
     /// Agent explanations attached to their proposals.
     pub reports: Vec<String>,
     /// An agent reported that the current arrangement is not working.
     pub failing: bool,
-    /// Missing or degraded evidence. Uncertainty never splits a group.
+    /// Missing or degraded evidence: prefer fewer groups.
     pub uncertain: Vec<String>,
 }
 impl Signals {
@@ -62,9 +64,15 @@ pub enum ProposalState {
     /// A keep recommendation: recorded evidence, nothing to apply.
     Kept,
 }
+impl ProposalState {
+    /// Still awaiting agreement or application.
+    pub fn pending(&self) -> bool {
+        matches!(self, Self::Open | Self::Blocked { .. })
+    }
+}
 /// An exact regrouping proposal. Agreement binds to `context`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Proposal {
+pub struct RegroupingProposal {
     pub id: String,
     /// None when the engine recommends.
     pub proposer: Option<usize>,
@@ -105,15 +113,15 @@ struct Mark {
     proposal: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct Move {
+struct RootChange {
     space: usize,
     before: Option<Capture>,
     after: Capture,
 }
 /// A workspace installation recorded before any file changes, for restart recovery.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct Shift {
-    moves: Vec<Move>,
+struct Installation {
+    moves: Vec<RootChange>,
     installing: bool,
 }
 
@@ -125,7 +133,7 @@ pub(crate) fn tables(db: &Connection) -> Result<()> {
     )?;
     Ok(())
 }
-fn proposals(db: &Connection) -> Result<Vec<(u64, Proposal)>> {
+fn proposals(db: &Connection) -> Result<Vec<(u64, RegroupingProposal)>> {
     let mut stmt = db.prepare("SELECT seq, body FROM proposals ORDER BY seq")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
     rows.map(|row| {
@@ -134,17 +142,26 @@ fn proposals(db: &Connection) -> Result<Vec<(u64, Proposal)>> {
     })
     .collect()
 }
-fn save(db: &Connection, proposal: &Proposal) -> Result<()> {
+fn save(db: &Connection, proposal: &RegroupingProposal) -> Result<()> {
     db.execute(
         "UPDATE proposals SET body=? WHERE id=?",
         params![serde_json::to_string(proposal)?, proposal.id],
     )?;
     Ok(())
 }
-fn announce(db: &Connection, proposal: &Proposal) -> Result<u64> {
+fn announce(db: &Connection, proposal: &RegroupingProposal) -> Result<u64> {
     emit(db, 0b11, &Body::Regrouping(Box::new(proposal.clone())))
 }
-fn max(db: &Connection, sql: &str) -> Result<u64> {
+/// Saves and announces a state change in its own transaction.
+fn commit_state(db: &Connection, proposal: &RegroupingProposal) -> Result<()> {
+    let tx = db.unchecked_transaction()?;
+    save(&tx, proposal)?;
+    announce(&tx, proposal)?;
+    tx.commit()?;
+    Ok(())
+}
+const CONTEXT_CHANGED: &str = "task or group context changed; propose again";
+fn scalar(db: &Connection, sql: &str) -> Result<u64> {
     Ok(db.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
 }
 fn mark(db: &Connection) -> Result<Mark> {
@@ -160,7 +177,7 @@ fn scopes(db: &Connection) -> Result<[Vec<Scope>; 2]> {
     Ok([of(0)?, of(1)?])
 }
 /// Task and group context: any change voids agreement to an earlier proposal.
-fn context(db: &Connection) -> Result<String> {
+fn current_context(db: &Connection) -> Result<String> {
     use sha2::Digest;
     let bytes = serde_json::to_vec(&(crate::placement(db)?, scopes(db)?))?;
     Ok(format!("{:x}", sha2::Sha256::digest(bytes)))
@@ -239,7 +256,7 @@ pub(crate) fn recover(engine: &Engine, db: &Connection, layout: &Layout) -> Resu
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (id, body) in rows {
-        let mut shift: Shift = serde_json::from_str(&body)?;
+        let mut shift: Installation = serde_json::from_str(&body)?;
         if !shift.installing {
             continue;
         }
@@ -310,11 +327,7 @@ impl Engine {
             return fail("workspace roots must be separate from storage and each other");
         }
         let lease = crate::writer_lease(&root.join(".falinks-writer.lock"))?;
-        let mut observed = Vec::new();
-        paths(&root, Path::new(""), &mut observed, true)?;
-        if !observed.is_empty() {
-            return fail("a new workspace root must be empty");
-        }
+        ensure_empty(&root).map_err(|_| "a new workspace root must be empty")?;
         let space = layout.roots.len();
         db.execute(
             "INSERT INTO spaces VALUES(?,?,NULL)",
@@ -329,20 +342,20 @@ impl Engine {
             .map_err(|_| "lease lock poisoned")?
             .push(lease);
         drop(db);
-        self.advance()?;
+        self.boundary();
         Ok(space)
     }
     /// The live root the host exposes to this client's runtime.
     pub fn root(&self, client: &Client) -> Result<PathBuf> {
         self.authorize(client)?;
         let layout = self.layout()?;
-        Ok(layout.roots[layout.placement[client.agent]].clone())
+        Ok(layout.roots[layout.of(client.agent)].clone())
     }
     /// Workspace (space) per agent; equal entries mean the agents are joined.
     pub fn placement(&self) -> Result<[usize; 2]> {
         Ok(self.layout()?.placement)
     }
-    pub fn proposal(&self, id: &str) -> Result<Option<Proposal>> {
+    pub fn proposal(&self, id: &str) -> Result<Option<RegroupingProposal>> {
         let db = connect(&self.state)?;
         db.query_row("SELECT body FROM proposals WHERE id=?", [id], |r| {
             r.get::<_, String>(0)
@@ -351,7 +364,7 @@ impl Engine {
         .map(|b| Ok(serde_json::from_str(&b)?))
         .transpose()
     }
-    pub fn proposals(&self) -> Result<Vec<Proposal>> {
+    pub fn proposals(&self) -> Result<Vec<RegroupingProposal>> {
         Ok(proposals(&connect(&self.state)?)?
             .into_iter()
             .map(|(_, p)| p)
@@ -359,16 +372,20 @@ impl Engine {
     }
     /// Host or engine reconsideration: initially, at clean boundaries or when evidence may
     /// have changed. An unchanged recommendation returns the earlier proposal.
-    pub fn reconsider(&self) -> Result<Proposal> {
+    /// The first call also lets the engine reconsider by itself at later boundaries.
+    pub fn reconsider(&self) -> Result<RegroupingProposal> {
+        let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
+        set_meta(&db, "regroup_enabled", "1")?;
+        drop(db);
         self.recommendation(None, None)
     }
     /// An agent asks the engine to reconsider the arrangement.
-    pub fn recommend(&self, client: &Client) -> Result<Proposal> {
+    pub fn recommend(&self, client: &Client) -> Result<RegroupingProposal> {
         self.authorize(client)?;
         self.recommendation(None, None)
     }
     /// An agent's own join, split or keep proposal with its explanation.
-    pub fn propose(&self, client: &Client, propose: Propose) -> Result<Proposal> {
+    pub fn propose(&self, client: &Client, propose: Propose) -> Result<RegroupingProposal> {
         self.authorize(client)?;
         self.recommendation(Some(client.agent), Some(propose))
     }
@@ -379,15 +396,12 @@ impl Engine {
         id: &str,
         context: &str,
         response: Response,
-    ) -> Result<Proposal> {
+    ) -> Result<RegroupingProposal> {
         self.authorize(client)?;
         let proposal = {
             let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
             let mut proposal = self.proposal(id)?.ok_or("unknown proposal")?;
-            if !matches!(
-                proposal.state,
-                ProposalState::Open | ProposalState::Blocked { .. }
-            ) {
+            if !proposal.state.pending() {
                 return fail("proposal is not open");
             }
             if !proposal.agents.contains(&client.agent) {
@@ -396,10 +410,9 @@ impl Engine {
             if context != proposal.context {
                 return fail("a response must bind the proposal's exact context");
             }
-            let tx = db.unchecked_transaction()?;
-            if crate::regroup::context(&tx)? != proposal.context {
+            if current_context(&db)? != proposal.context {
                 proposal.state = ProposalState::Stale {
-                    reason: "task or group context changed; propose again".into(),
+                    reason: CONTEXT_CHANGED.into(),
                 };
             } else {
                 match response {
@@ -414,16 +427,16 @@ impl Engine {
                     }
                 }
             }
-            save(&tx, &proposal)?;
-            announce(&tx, &proposal)?;
-            tx.commit()?;
+            commit_state(&db, &proposal)?;
             proposal
         };
         self.signal.notify();
-        self.advance()?;
+        self.boundary();
         Ok(self.proposal(&proposal.id)?.unwrap_or(proposal))
     }
 
+    // ponytail: evidence is gathered under the writer lock, like the edit gate; gather
+    // outside it if reconsideration delays edits.
     fn signals(&self, db: &Connection, layout: &Layout) -> Result<Signals> {
         let mut signals = Signals::default();
         let scopes = scopes(db)?;
@@ -463,7 +476,13 @@ impl Engine {
         for a in &scopes[0] {
             for b in &scopes[1] {
                 let pair = format!("0:{} 1:{}", a.id, b.id);
-                if analysis::related(&nodes(a), &nodes(b)) {
+                let relevant = |s: &Scope| Footprint {
+                    all: false,
+                    nodes: s.relevant(),
+                };
+                if analysis::related(&relevant(a), &nodes(b))
+                    || analysis::related(&relevant(b), &nodes(a))
+                {
                     signals.declared.push(pair);
                     continue;
                 }
@@ -494,7 +513,8 @@ impl Engine {
             |r| r.get::<_, i64>(0),
         )? as u64;
         signals.reconsiderations = db.query_row(
-            "SELECT COUNT(*) FROM events WHERE seq>? AND json_extract(body, '$.Obligation') IS NOT NULL",
+            "SELECT COUNT(*) FROM events o JOIN events c ON c.seq = json_extract(o.body, '$.Obligation.cause')
+             WHERE o.seq>? AND json_extract(c.body, '$.Message') IS NOT NULL",
             [mark.event as i64],
             |r| r.get::<_, i64>(0),
         )? as u64;
@@ -520,7 +540,7 @@ impl Engine {
         &self,
         proposer: Option<usize>,
         propose: Option<Propose>,
-    ) -> Result<Proposal> {
+    ) -> Result<RegroupingProposal> {
         let proposal = {
             let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
             let layout = self.layout()?;
@@ -571,6 +591,8 @@ impl Engine {
                     [into, into]
                 }
                 Action::Split => {
+                    // ponytail: two agents and agent 1 always leaves; choose the mover by
+                    // draft ownership if more agents or asymmetric moves matter.
                     let stay = layout.placement[0];
                     let free = (0..layout.roots.len())
                         .find(|s| *s != stay && !layout.placement.contains(s))
@@ -578,19 +600,31 @@ impl Engine {
                     [stay, free]
                 }
             };
-            let context = context(&db)?;
-            // An unchanged proposal is not repeated.
-            if let Some((_, previous)) = history.last()
-                && previous.action == action
-                && previous.target == target
-                && previous.context == context
-                && previous.signals.failing == signals.failing
-                && material(&previous.signals) == material(&signals)
-            {
+            let context = current_context(&db)?;
+            // An unchanged proposal from the same proposer since the last transition, including a
+            // declined one, is not repeated.
+            // A pending proposal with the same exact change stands, whoever proposed it.
+            if let Some((_, pending)) = history.iter().find(|(_, p)| {
+                p.state.pending()
+                    && p.action == action
+                    && p.target == target
+                    && p.context == context
+            }) {
+                return Ok(pending.clone());
+            }
+            let since = mark(&db)?.proposal;
+            if let Some((_, previous)) = history.iter().rev().find(|(seq, p)| {
+                *seq > since
+                    && p.proposer == proposer
+                    && p.action == action
+                    && p.target == target
+                    && p.context == context
+                    && material(&p.signals) == material(&signals)
+            }) {
                 return Ok(previous.clone());
             }
-            let seq = max(&db, "SELECT COALESCE(MAX(seq), 0) + 1 FROM proposals")?;
-            let proposal = Proposal {
+            let seq = scalar(&db, "SELECT COALESCE(MAX(seq), 0) + 1 FROM proposals")?;
+            let proposal = RegroupingProposal {
                 id: format!("regroup:{seq}"),
                 proposer,
                 action,
@@ -614,10 +648,7 @@ impl Engine {
             let tx = db.unchecked_transaction()?;
             if action != Action::Keep {
                 for (_, mut earlier) in history {
-                    if matches!(
-                        earlier.state,
-                        ProposalState::Open | ProposalState::Blocked { .. }
-                    ) {
+                    if earlier.state.pending() {
                         earlier.state = ProposalState::Stale {
                             reason: format!("replaced by {}", proposal.id),
                         };
@@ -638,34 +669,51 @@ impl Engine {
         Ok(proposal)
     }
 
-    /// Runs at boundaries: voids proposals whose context changed, applies agreed ones whose
-    /// blockers cleared, and brings publications into split workspaces.
-    pub(crate) fn advance(&self) -> Result<()> {
-        let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let mut changed = false;
-        for (_, mut proposal) in proposals(&db)? {
-            let agreed = proposal.agreed == proposal.agents;
-            match proposal.state {
-                ProposalState::Open | ProposalState::Blocked { .. } => {}
-                _ => continue,
+    /// After a committed operation: its own outcome stands. Failed transitions are
+    /// recorded as blockers, interrupted installations halt durably, and anything else
+    /// is retried at the next boundary.
+    pub(crate) fn boundary(&self) {
+        let _ = self.advance();
+    }
+    /// Voids proposals whose context changed, applies agreed ones whose blockers cleared,
+    /// brings publications into split workspaces and, once enabled, reconsiders.
+    fn advance(&self) -> Result<()> {
+        let enabled = {
+            let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
+            let mut changed = false;
+            for (_, mut proposal) in proposals(&db)? {
+                if !proposal.state.pending() {
+                    continue;
+                }
+                if current_context(&db)? != proposal.context {
+                    proposal.state = ProposalState::Stale {
+                        reason: CONTEXT_CHANGED.into(),
+                    };
+                    commit_state(&db, &proposal)?;
+                    changed = true;
+                } else if proposal.agreed == proposal.agents {
+                    changed |= match self.attempt(&db, &mut proposal) {
+                        Ok(changed) => changed,
+                        Err(error) => {
+                            proposal.state = ProposalState::Blocked {
+                                blocker: format!("transition failed: {error}"),
+                            };
+                            commit_state(&db, &proposal)?;
+                            true
+                        }
+                    };
+                }
             }
-            if context(&db)? != proposal.context {
-                proposal.state = ProposalState::Stale {
-                    reason: "task or group context changed; propose again".into(),
-                };
-                let tx = db.unchecked_transaction()?;
-                save(&tx, &proposal)?;
-                announce(&tx, &proposal)?;
-                tx.commit()?;
-                changed = true;
-            } else if agreed {
-                changed |= self.attempt(&db, &mut proposal)?;
+            changed |= self.synchronize(&db)?;
+            if changed {
+                self.signal.notify();
             }
-        }
-        changed |= self.synchronize(&db)?;
-        drop(db);
-        if changed {
-            self.signal.notify();
+            meta(&db, "regroup_enabled")?.is_some()
+        };
+        // ponytail: reconsiders at every boundary; unchanged evidence is suppressed, and
+        // analysis is cached per tree. Throttle if broken drafts make re-analysis slow.
+        if enabled {
+            self.recommendation(None, None)?;
         }
         Ok(())
     }
@@ -675,7 +723,7 @@ impl Engine {
         &self,
         db: &Connection,
         layout: &Layout,
-        proposal: &Proposal,
+        proposal: &RegroupingProposal,
     ) -> Result<std::result::Result<Vec<(usize, Capture)>, String>> {
         if let Some(reason) = meta(db, "halted")? {
             return Ok(Err(format!("engine halted: {reason}")));
@@ -715,6 +763,9 @@ impl Engine {
                 Ok(Ok(own))
             };
         let next = next_revision(db)?;
+        let grouped = |space: usize| -> BTreeSet<usize> {
+            (0..2).filter(|a| proposal.target[*a] == space).collect()
+        };
         let mut moves = Vec::new();
         match proposal.action {
             Action::Keep => return Ok(Err("a keep proposal has nothing to apply".into())),
@@ -731,6 +782,7 @@ impl Engine {
                     Ok(own) => own,
                     Err(blocker) => return Ok(Err(blocker)),
                 };
+                // ponytail: drafts move per file; two authors in one file wait for publication.
                 let interleaved: Vec<_> = kept.intersection(&moved).collect();
                 if !interleaved.is_empty() {
                     return Ok(Err(format!(
@@ -746,6 +798,7 @@ impl Engine {
                 let mut created = published.clone();
                 created.space = target;
                 created.revision = next;
+                created.group = grouped(target);
                 created.included.extend(leaving.iter().copied());
                 for path in &moved {
                     created
@@ -758,6 +811,7 @@ impl Engine {
                     // Moved, not lost: the drafts continue in the new workspace.
                     let mut remaining = workspace.clone();
                     remaining.revision = next + 1;
+                    remaining.group = grouped(stay);
                     remaining.included.retain(|op| !leaving.contains(op));
                     for path in &moved {
                         remaining.files.insert(
@@ -796,6 +850,7 @@ impl Engine {
                 if !guest_drafts.is_empty() {
                     let mut joined = host.clone();
                     joined.revision = next;
+                    joined.group = grouped(into);
                     joined.included.extend(guest.included.iter().copied());
                     for path in &guest_drafts {
                         joined.files.insert(path.clone(), guest.files[path].clone());
@@ -809,7 +864,7 @@ impl Engine {
     }
 
     /// Applies an agreed proposal or records its blocker. Returns whether anything changed.
-    fn attempt(&self, db: &Connection, proposal: &mut Proposal) -> Result<bool> {
+    fn attempt(&self, db: &Connection, proposal: &mut RegroupingProposal) -> Result<bool> {
         let layout = self.layout()?;
         let moves = match self.plan(db, &layout, proposal)? {
             Ok(moves) => moves,
@@ -819,17 +874,14 @@ impl Engine {
                     return Ok(false);
                 }
                 proposal.state = blocked;
-                let tx = db.unchecked_transaction()?;
-                save(&tx, proposal)?;
-                announce(&tx, proposal)?;
-                tx.commit()?;
+                commit_state(db, proposal)?;
                 return Ok(true);
             }
         };
         // Each agent's view: its current workspace before, its target workspace after.
         let mut views = Vec::new();
         for agent in 0..2 {
-            let before = layout.current(layout.placement[agent])?;
+            let before = layout.current(layout.of(agent))?;
             let target = proposal.target[agent];
             let after = match moves.iter().find(|(s, _)| *s == target) {
                 Some((_, capture)) => capture.clone(),
@@ -837,7 +889,11 @@ impl Engine {
             };
             let paths = differing(&before, &after);
             if !paths.is_empty() {
-                views.push((agent, after.revision, self.view(&before, &after, &paths)?));
+                views.push((
+                    agent,
+                    after.revision,
+                    self.view_change(&before, &after, &paths)?,
+                ));
             }
         }
         let shift = self.install_moves(db, &layout, &moves)?;
@@ -849,13 +905,13 @@ impl Engine {
         let event = announce(&tx, proposal)?;
         let after = self.commit_moves(&tx, &layout, shift, &moves, proposal.target)?;
         for (agent, revision, view) in &views {
-            self.renew_view(&tx, *agent, view, *revision, event)?;
+            self.renew_for_view(&tx, *agent, view, *revision, event)?;
         }
         let mark = Mark {
             event,
-            request: max(&tx, "SELECT COALESCE(MAX(id), 0) FROM requests")?,
-            wait: max(&tx, "SELECT COALESCE(MAX(id), 0) FROM waits")?,
-            proposal: max(&tx, "SELECT COALESCE(MAX(seq), 0) FROM proposals")?,
+            request: scalar(&tx, "SELECT COALESCE(MAX(id), 0) FROM requests")?,
+            wait: scalar(&tx, "SELECT COALESCE(MAX(id), 0) FROM waits")?,
+            proposal: scalar(&tx, "SELECT COALESCE(MAX(seq), 0) FROM proposals")?,
         };
         set_meta(&tx, "regroup_mark", &serde_json::to_string(&mark)?)?;
         tx.commit()?;
@@ -874,7 +930,7 @@ impl Engine {
             if workspace.included.is_superset(&published.included) {
                 continue;
             }
-            let members: Vec<usize> = (0..2).filter(|a| layout.placement[*a] == *space).collect();
+            let members = layout.group(*space);
             let audience: i64 = members.iter().map(|a| crate::coordination::mine(*a)).sum();
             let (mut merged, overlaps) = merge(db, &workspace, &published)?;
             if !overlaps.is_empty() {
@@ -901,9 +957,10 @@ impl Engine {
                 continue;
             }
             merged.revision = next_revision(db)?;
+            merged.group = layout.group(*space);
             merged.tree = build_tree(&self.state, &merged.files, "")?;
             let moves = vec![(*space, merged.clone())];
-            let view = self.view(&workspace, &merged, &differing(&workspace, &merged))?;
+            let view = self.view_change(&workspace, &merged, &differing(&workspace, &merged))?;
             let shift = self.install_moves(db, &layout, &moves)?;
             let tx = db.unchecked_transaction()?;
             let event = emit(
@@ -917,7 +974,7 @@ impl Engine {
             )?;
             let after = self.commit_moves(&tx, &layout, shift, &moves, layout.placement)?;
             for agent in members {
-                self.renew_view(&tx, agent, &view, merged.revision, event)?;
+                self.renew_for_view(&tx, agent, &view, merged.revision, event)?;
             }
             tx.commit()?;
             *self.layout.write().map_err(|_| "layout lock poisoned")? = after;
@@ -934,10 +991,10 @@ impl Engine {
         layout: &Layout,
         moves: &[(usize, Capture)],
     ) -> Result<i64> {
-        let shift = Shift {
+        let shift = Installation {
             moves: moves
                 .iter()
-                .map(|(space, after)| Move {
+                .map(|(space, after)| RootChange {
                     space: *space,
                     before: layout.completed[*space].clone(),
                     after: after.clone(),
@@ -949,15 +1006,7 @@ impl Engine {
             let root = &layout.roots[change.space];
             let verified = match &change.before {
                 Some(before) => audit(root, before),
-                None => {
-                    let mut observed = Vec::new();
-                    paths(root, Path::new(""), &mut observed, true).and_then(|()| {
-                        match observed.first() {
-                            Some(path) => fail(format!("unexplained source write: {path}")),
-                            None => Ok(()),
-                        }
-                    })
-                }
+                None => ensure_empty(root),
             };
             if let Err(error) = verified {
                 self.save_incident(db, &error.to_string())?;
@@ -1018,7 +1067,7 @@ impl Engine {
         after.placement = placement;
         let body: String =
             tx.query_row("SELECT body FROM shifts WHERE id=?", [shift], |r| r.get(0))?;
-        let mut recorded: Shift = serde_json::from_str(&body)?;
+        let mut recorded: Installation = serde_json::from_str(&body)?;
         recorded.installing = false;
         tx.execute(
             "UPDATE shifts SET body=? WHERE id=?",
@@ -1083,6 +1132,15 @@ fn decide(joined: bool, signals: &Signals) -> (Action, String) {
         return (
             Action::Join,
             format!("collaboration on unfinished work looks useful; {summary}"),
+        );
+    }
+    if !signals.uncertain.is_empty() {
+        return (
+            Action::Join,
+            format!(
+                "uncertain evidence {:?}; prefer fewer groups",
+                signals.uncertain
+            ),
         );
     }
     if !signals.compiler.is_empty() {

@@ -21,6 +21,16 @@ pub struct Scope {
     pub id: String,
     pub task: String,
     pub nodes: BTreeSet<String>,
+    /// Declared dependencies: nodes this work relies on beyond compiler evidence.
+    /// They widen relevance and never narrow it.
+    #[serde(default)]
+    pub depends: BTreeSet<String>,
+}
+impl Scope {
+    /// Registered nodes plus declared dependencies.
+    pub(crate) fn relevant(&self) -> BTreeSet<String> {
+        self.nodes.union(&self.depends).cloned().collect()
+    }
 }
 /// Pending while `required` (the latest relevant completed revision) exceeds
 /// `reviewed` (the latest explicitly reviewed captured revision).
@@ -166,7 +176,7 @@ pub enum Body {
         checkpoints: BTreeMap<usize, String>,
     },
     /// A regrouping proposal was created or changed state.
-    Regrouping(Box<crate::Proposal>),
+    Regrouping(Box<crate::RegroupingProposal>),
     /// The engine brought a publication into a split workspace.
     Incorporated {
         space: usize,
@@ -294,7 +304,7 @@ pub(crate) fn renew(
     for mut obligation in obligations(tx, agent)? {
         if analysis::related(
             footprint,
-            &analysis::closure(&obligation.scope.nodes, sides),
+            &analysis::closure(&obligation.scope.relevant(), sides),
         ) {
             obligation.required = revision;
             save_obligation(tx, &obligation)?;
@@ -509,7 +519,9 @@ impl Engine {
         let blocked: BTreeMap<_, _> = obligations(db, client.agent)?
             .into_iter()
             .filter(|o| o.pending())
-            .filter(|o| analysis::related(&footprint, &analysis::closure(&o.scope.nodes, &sides)))
+            .filter(|o| {
+                analysis::related(&footprint, &analysis::closure(&o.scope.relevant(), &sides))
+            })
             .map(|o| (o.scope.id.clone(), o))
             .collect();
         if !blocked.is_empty() {
@@ -574,7 +586,7 @@ impl Engine {
     }
     /// An agent's live view changing without its own edit. Analyzes before any
     /// transaction opens, since analysis writes its cache on another connection.
-    pub(crate) fn view(
+    pub(crate) fn view_change(
         &self,
         before: &Capture,
         after: &Capture,
@@ -589,7 +601,7 @@ impl Engine {
         })
     }
     /// Inside the transaction committing `revision`: renew the agent's related scopes.
-    pub(crate) fn renew_view(
+    pub(crate) fn renew_for_view(
         &self,
         tx: &Connection,
         agent: usize,
@@ -604,7 +616,7 @@ impl Engine {
     pub fn register(&self, client: &Client, scope: Scope) -> Result<Obligation> {
         let obligation = self.register_locked(client, scope)?;
         // Changed task context voids pending regrouping agreement.
-        self.advance()?;
+        self.boundary();
         Ok(obligation)
     }
     fn register_locked(&self, client: &Client, scope: Scope) -> Result<Obligation> {
@@ -612,11 +624,11 @@ impl Engine {
         // Under the writer lock: no commit can fall between the baseline and the save.
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         let layout = self.layout()?;
-        let completed = layout.current(layout.placement[client.agent])?;
+        let completed = layout.current(layout.of(client.agent))?;
         if scope.id.is_empty() || scope.nodes.is_empty() {
             return fail("scope needs an ID and at least one node");
         }
-        for node in &scope.nodes {
+        for node in &scope.relevant() {
             let path = node.split_once('#').map_or(node.as_str(), |(p, _)| p);
             if !completed.files.contains_key(path) {
                 return fail(format!("scope node outside enrollment: {node}"));
@@ -650,7 +662,7 @@ impl Engine {
             .into_iter()
             .find(|o| o.scope.id == review.scope)
             .ok_or("unknown scope")?;
-        let space = self.layout()?.placement[client.agent];
+        let space = self.layout()?.of(client.agent);
         if captured(&db, review.revision)?.is_none_or(|c| c.space != space) {
             return fail(
                 "review must name a revision of the client's workspace captured for rereading",
@@ -671,7 +683,7 @@ impl Engine {
         drop(db);
         self.signal.notify();
         // A cleared obligation may unblock an agreed transition.
-        self.advance()?;
+        self.boundary();
         Ok(obligation)
     }
     pub fn post(&self, client: &Client, plan: Plan) -> Result<Event> {
@@ -740,8 +752,11 @@ impl Engine {
         }
         let capture =
             captured(&db, offer.revision)?.ok_or("offer must name a captured revision")?;
-        if capture.space != self.layout()?.placement[client.agent] {
-            return fail("offer must name a revision of the client's workspace");
+        // Its own workspace, or a retained candidate whose group it belonged to.
+        if capture.space != self.layout()?.of(client.agent)
+            && !capture.group.contains(&client.agent)
+        {
+            return fail("offer must name a revision of the client's workspace or group");
         }
         // Even an older revision: deferred relevant changes cannot authorize any offer.
         let pending: Vec<_> = obligations(&db, client.agent)?

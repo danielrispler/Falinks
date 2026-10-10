@@ -71,13 +71,25 @@ fn fixture() -> (TempDir, Engine, Client, Client) {
     (dir, engine, alice, bob)
 }
 fn register(engine: &Engine, client: &Client, id: &str, task: &str, nodes: &[&str]) {
+    declare(engine, client, id, task, nodes, &[]);
+}
+fn declare(
+    engine: &Engine,
+    client: &Client,
+    id: &str,
+    task: &str,
+    nodes: &[&str],
+    depends: &[&str],
+) {
+    let set = |s: &[&str]| s.iter().map(|n| n.to_string()).collect();
     engine
         .register(
             client,
             Scope {
                 id: id.into(),
                 task: task.into(),
-                nodes: nodes.iter().map(|n| n.to_string()).collect(),
+                nodes: set(nodes),
+                depends: set(depends),
             },
         )
         .unwrap();
@@ -110,7 +122,7 @@ fn edit(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> 
     assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
     engine.capture_for(client).unwrap()
 }
-fn agree(engine: &Engine, client: &Client, proposal: &Proposal) -> Proposal {
+fn agree(engine: &Engine, client: &Client, proposal: &RegroupingProposal) -> RegroupingProposal {
     engine
         .respond(client, &proposal.id, &proposal.context, Response::Agree)
         .unwrap()
@@ -138,7 +150,7 @@ fn agents(list: &[usize]) -> BTreeSet<usize> {
     list.iter().copied().collect()
 }
 /// Splits the independent drafts into the provisioned second root.
-fn split(dir: &TempDir, engine: &Engine, alice: &Client, bob: &Client) -> Proposal {
+fn split(dir: &TempDir, engine: &Engine, alice: &Client, bob: &Client) -> RegroupingProposal {
     independent(engine, alice, bob);
     engine.add_workspace(&dir.path().join("second")).unwrap();
     let proposal = engine.reconsider().unwrap();
@@ -254,7 +266,12 @@ fn useful_split_moves_unfinished_drafts_and_preserves_history_and_offers() {
     assert_eq!(engine.placement().unwrap(), [0, 1]);
     assert_eq!(engine.root(&bob).unwrap(), second);
     assert_eq!(engine.root(&alice).unwrap(), live);
-    assert_eq!(engine.proposals().unwrap().len(), 1);
+    let proposals = engine.proposals().unwrap();
+    assert!(matches!(proposals[0].state, ProposalState::Applied { .. }));
+    assert!(
+        proposals[1..].iter().all(|p| p.action == Action::Keep),
+        "the engine reconsiders by itself but never reverses: {proposals:?}"
+    );
 }
 
 #[test]
@@ -543,9 +560,14 @@ fn interrupted_transition_restores_both_roots_and_retries_after_restart() {
     // The new root installs first; restoring Bob's moved path in the shared root then fails.
     let live = dir.path().join("live");
     fs::set_permissions(&live, fs::Permissions::from_mode(0o555)).unwrap();
-    let failed = engine.respond(&bob, &proposal.id, &proposal.context, Response::Agree);
+    let failed = engine
+        .respond(&bob, &proposal.id, &proposal.context, Response::Agree)
+        .unwrap();
     fs::set_permissions(&live, fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(failed.is_err());
+    assert!(
+        matches!(&failed.state, ProposalState::Blocked { blocker } if blocker.starts_with("transition failed")),
+        "{failed:?}"
+    );
     assert_eq!(read(&dir.path().join("second"), "callee.go"), CALLEE);
     let halted = engine
         .apply(
@@ -579,4 +601,155 @@ fn interrupted_transition_restores_both_roots_and_retries_after_restart() {
     ));
     assert_eq!(read(&engine.root(&bob).unwrap(), "callee.go"), CALLEE);
     assert_eq!(read(&live, "callee.go"), GO[2].1);
+}
+
+#[test]
+fn join_waits_while_both_workspaces_drafted_the_same_file() {
+    let (dir, engine, alice, bob) = fixture();
+    split(&dir, &engine, &alice, &bob);
+    let right = "package probe\n\nfunc Left() int {\n\treturn 1\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
+    edit(&engine, &bob, "right", "siblings.go", right);
+    let join = engine
+        .propose(
+            &bob,
+            Propose {
+                action: Action::Join,
+                text: "split is not working".into(),
+                failing: true,
+            },
+        )
+        .unwrap();
+    agree(&engine, &alice, &join);
+    let blocked = agree(&engine, &bob, &join);
+    assert_eq!(
+        blocked.state,
+        ProposalState::Blocked {
+            blocker: "both workspaces hold unpublished drafts of [\"siblings.go\"]".into()
+        }
+    );
+    assert_eq!(engine.placement().unwrap(), [0, 1]);
+    assert_eq!(read(&engine.root(&alice).unwrap(), "siblings.go"), LEFT);
+    assert_eq!(read(&engine.root(&bob).unwrap(), "siblings.go"), right);
+}
+
+#[test]
+fn retained_candidate_keeps_its_membership_across_a_split() {
+    let (dir, engine, alice, bob) = fixture();
+    engine.require_members(agents(&[0, 1])).unwrap();
+    edit(&engine, &alice, "left", "siblings.go", LEFT);
+    let held = engine.capture().unwrap();
+    let alices = offer(&engine, &alice, "held");
+    assert_eq!(alices.members, agents(&[0, 1]), "Bob is a required member");
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = engine
+        .propose(
+            &bob,
+            Propose {
+                action: Action::Split,
+                text: "separate work".into(),
+                failing: false,
+            },
+        )
+        .unwrap();
+    agree(&engine, &alice, &split);
+    agree(&engine, &bob, &split);
+    assert_eq!(engine.placement().unwrap(), [0, 1]);
+
+    // Same identity, same members: Bob still has to offer the exact held candidate.
+    let candidate = engine.candidate(held.revision).unwrap();
+    assert_eq!(candidate.binding.members, agents(&[0, 1]));
+    assert_eq!(candidate.missing, agents(&[1]));
+    assert_eq!(engine.checkpoint("0/held").unwrap().unwrap(), alices);
+    let bobs = engine
+        .offer(
+            &bob,
+            Offer {
+                id: "held".into(),
+                task: "task".into(),
+                revision: held.revision,
+                scope: Vec::new(),
+                text: "held".into(),
+                supersedes: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(bobs.members, agents(&[0, 1]));
+    let run = engine.validate().unwrap().unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Published { .. })),
+        "{run:?}"
+    );
+    assert_eq!(read(&engine.root(&bob).unwrap(), "siblings.go"), LEFT);
+}
+
+#[test]
+fn obligations_a_transition_raised_are_not_evidence_to_reverse_it() {
+    let (dir, engine, alice, bob) = fixture();
+    // Right calls Callee: a compiler edge, so the engine itself would not split.
+    register(
+        &engine,
+        &alice,
+        "right",
+        "right task",
+        &["siblings.go#Right"],
+    );
+    register(
+        &engine,
+        &bob,
+        "callee",
+        "callee task",
+        &["callee.go#Callee"],
+    );
+    edit(&engine, &bob, "callee", "callee.go", CALLEE);
+    engine
+        .review(
+            &alice,
+            Review {
+                scope: "right".into(),
+                revision: engine.capture_for(&alice).unwrap().revision,
+                decision: Decision::Keep,
+                note: "read Callee".into(),
+            },
+        )
+        .unwrap();
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = engine
+        .propose(
+            &alice,
+            Propose {
+                action: Action::Split,
+                text: "Right is done for now".into(),
+                failing: false,
+            },
+        )
+        .unwrap();
+    agree(&engine, &alice, &split);
+    agree(&engine, &bob, &split);
+    assert_eq!(engine.placement().unwrap(), [0, 1]);
+    // Bob's Callee draft left Alice's view: a real obligation, caused by the transition.
+    assert!(
+        engine
+            .obligations(&alice)
+            .unwrap()
+            .iter()
+            .any(|o| o.pending())
+    );
+
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert_eq!(keep.signals.reconsiderations, 0);
+    assert_eq!(keep.signals.compiler, vec!["0:right 1:callee".to_string()]);
+
+    // A declared dependency on Bob's work is new collaboration evidence.
+    declare(
+        &engine,
+        &alice,
+        "right",
+        "right task",
+        &["siblings.go#Right"],
+        &["callee.go#Callee"],
+    );
+    let join = engine.reconsider().unwrap();
+    assert_eq!(join.action, Action::Join, "{}", join.reasoning);
+    assert_eq!(join.signals.declared, vec!["0:right 1:callee".to_string()]);
 }

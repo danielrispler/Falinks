@@ -12,7 +12,7 @@ pub use coordination::{
 pub use publication::{
     Binding, Candidate, Check, CheckResult, Run, RunAttempt, RunKind, RunOutcome, Stage,
 };
-pub use regroup::{Action, Proposal, ProposalState, Propose, Response, Signals};
+pub use regroup::{Action, ProposalState, Propose, RegroupingProposal, Response, Signals};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -61,6 +61,10 @@ pub struct Capture {
     /// Every applied operation whose effect this revision contains, published or not.
     #[serde(default)]
     pub included: BTreeSet<u64>,
+    /// Agents placed in this workspace when the revision was created; host-required
+    /// members of a candidate come from here, so later regrouping cannot change them.
+    #[serde(default)]
+    pub group: BTreeSet<usize>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
@@ -137,6 +141,14 @@ pub(crate) struct Layout {
     pub(crate) placement: [usize; 2],
 }
 impl Layout {
+    /// The agent's workspace.
+    pub(crate) fn of(&self, agent: usize) -> usize {
+        self.placement[agent]
+    }
+    /// Agents placed in a workspace.
+    pub(crate) fn group(&self, space: usize) -> BTreeSet<usize> {
+        (0..2).filter(|a| self.placement[*a] == space).collect()
+    }
     pub(crate) fn current(&self, space: usize) -> Result<Capture> {
         Ok(self
             .completed
@@ -347,6 +359,24 @@ fn audit(live: &Path, capture: &Capture) -> Result<()> {
         }
     }
     Ok(())
+}
+/// Paths an operation installs: its outputs plus published files an incorporation brought in.
+fn installed(before: &Capture, proposed: &Capture, request: &Request) -> BTreeSet<String> {
+    proposed
+        .files
+        .iter()
+        .filter(|(p, f)| before.files[*p].file != f.file || request.output.contains_key(*p))
+        .map(|(p, _)| p.clone())
+        .collect()
+}
+/// A provisioned root that has not yet received a workspace holds no source.
+pub(crate) fn ensure_empty(root: &Path) -> Result<()> {
+    let mut observed = Vec::new();
+    paths(root, Path::new(""), &mut observed, true)?;
+    match observed.first() {
+        Some(path) => fail(format!("unexplained source write: {path}")),
+        None => Ok(()),
+    }
 }
 fn build_tree(
     state: &Path,
@@ -619,6 +649,7 @@ impl Engine {
                 files,
                 space: 0,
                 included: BTreeSet::new(),
+                group: BTreeSet::from([0, 1]),
             };
             audit(&live, &completed)?;
             retain(&state, &completed)?;
@@ -688,14 +719,15 @@ impl Engine {
             .map_err(|_| "layout lock poisoned")?
             .clone())
     }
-    /// Captures the primary workspace (space 0), where both agents start joined.
+    /// Host read of the primary workspace (space 0), where both agents start joined.
+    /// Agents read only their own workspace, through `capture_for`.
     pub fn capture(&self) -> Result<Capture> {
         self.capture_space(0)
     }
     /// Captures the live workspace the client is currently placed in.
     pub fn capture_for(&self, client: &Client) -> Result<Capture> {
         self.authorize(client)?;
-        self.capture_space(self.layout()?.placement[client.agent])
+        self.capture_space(self.layout()?.of(client.agent))
     }
     fn capture_space(&self, space: usize) -> Result<Capture> {
         let capture = self.layout()?.current(space)?;
@@ -732,35 +764,32 @@ impl Engine {
         body.map(|b| Ok(serde_json::from_str(&b)?)).transpose()
     }
     pub fn apply(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, false, false, &mut |_| Ok(()))
+        self.apply_inner(client, request, Mode::Apply, &mut |_| Ok(()))
     }
     pub fn retry(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, true, false, &mut |_| Ok(()))
+        self.apply_inner(client, request, Mode::Retry, &mut |_| Ok(()))
     }
     /// Brings the published state into the client's split workspace when its own
     /// unpublished drafts overlap the publication. `output` must resolve every overlap.
     pub fn incorporate(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, false, true, &mut |_| Ok(()))
+        self.apply_inner(client, request, Mode::Incorporate, &mut |_| Ok(()))
     }
     fn apply_inner(
         &self,
         client: &Client,
         request: Request,
-        retry: bool,
-        incorporate: bool,
+        mode: Mode,
         observer: &mut dyn FnMut(Phase) -> Result<()>,
     ) -> Result<Outcome> {
-        let outcome = self.apply_locked(client, request, retry, incorporate, observer)?;
-        // Committed or recorded already; a blocked transition or sync retries at the next boundary.
-        let _ = self.advance();
+        let outcome = self.apply_locked(client, request, mode, observer)?;
+        self.boundary();
         Ok(outcome)
     }
     fn apply_locked(
         &self,
         client: &Client,
         request: Request,
-        retry: bool,
-        incorporate: bool,
+        mode: Mode,
         observer: &mut dyn FnMut(Phase) -> Result<()>,
     ) -> Result<Outcome> {
         self.authorize(client)?;
@@ -769,7 +798,7 @@ impl Engine {
         }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         let layout = self.layout()?;
-        let space = layout.placement[client.agent];
+        let space = layout.of(client.agent);
         let live = layout.roots[space].clone();
         let before = layout.current(space)?;
         let existing = db
@@ -786,7 +815,7 @@ impl Engine {
                 return fail("request ID reused with changed contents");
             }
             if let Some(outcome) = &record.outcome {
-                if !retry || !matches!(outcome, Outcome::Interrupted { .. }) {
+                if mode != Mode::Retry || !matches!(outcome, Outcome::Interrupted { .. }) {
                     return Ok(outcome.clone());
                 }
             } else {
@@ -888,7 +917,7 @@ impl Engine {
                 )?;
                 self.finish(db, record, Outcome::Interrupted { reason })
             };
-        let base = if incorporate {
+        let base = if mode == Mode::Incorporate {
             let published = publication::published(&db)?;
             let (merged, overlaps) = regroup::merge(&db, &before, &revision(&db, published)?)?;
             let unresolved: Vec<_> = overlaps
@@ -924,6 +953,7 @@ impl Engine {
             let mut proposed = base.clone();
             proposed.revision = next_revision(&db)?;
             proposed.included.insert(record.operation);
+            proposed.group = layout.group(space);
             for (path, file) in &request.output {
                 let blob = file
                     .as_ref()
@@ -945,13 +975,9 @@ impl Engine {
         let installs: BTreeMap<String, Option<File>> = proposal
             .as_ref()
             .map(|proposed| {
-                proposed
-                    .files
-                    .iter()
-                    .filter(|(p, f)| {
-                        before.files[*p].file != f.file || request.output.contains_key(*p)
-                    })
-                    .map(|(p, f)| (p.clone(), f.file.clone()))
+                installed(&before, proposed, &request)
+                    .into_iter()
+                    .map(|p| (p.clone(), proposed.files[&p].file.clone()))
                     .collect()
             })
             .unwrap_or_default();
@@ -999,9 +1025,10 @@ impl Engine {
             .into_iter()
             .filter(|p| !request.output.contains_key(p))
             .collect();
-        let view = match synced.is_empty() {
-            true => None,
-            false => Some(self.view(&before, &proposed, &synced)?),
+        let view = if synced.is_empty() {
+            None
+        } else {
+            Some(self.view_change(&before, &proposed, &synced)?)
         };
         let mut layout_guard = self.layout.write().map_err(|_| "layout lock poisoned")?;
         let tx = db.unchecked_transaction()?;
@@ -1016,7 +1043,7 @@ impl Engine {
         save_record(&tx, &record)?;
         let cause = self.record_change(&tx, client, &request, &proposed, &change, &layout)?;
         if let Some(view) = &view {
-            self.renew_view(&tx, client.agent, view, proposed.revision, cause)?;
+            self.renew_for_view(&tx, client.agent, view, proposed.revision, cause)?;
         }
         tx.commit()?;
         layout_guard.completed[space] = Some(proposed);
@@ -1030,13 +1057,7 @@ impl Engine {
         for (root, completed) in layout.roots.iter().zip(&layout.completed) {
             match completed {
                 Some(completed) => audit(root, completed)?,
-                None => {
-                    let mut observed = Vec::new();
-                    paths(root, Path::new(""), &mut observed, true)?;
-                    if let Some(path) = observed.first() {
-                        return fail(format!("unexplained source write: {path}"));
-                    }
-                }
+                None => ensure_empty(root)?,
             }
         }
         Ok(())
@@ -1064,16 +1085,7 @@ impl Engine {
                     retain(&self.state, proposed)?;
                     let live = &layout.roots[record.before.space];
                     let completed = layout.current(record.before.space)?;
-                    // Outputs plus any published files an incorporation synchronized.
-                    let changed: BTreeSet<&String> = proposed
-                        .files
-                        .iter()
-                        .filter(|(p, f)| {
-                            record.before.files[*p].file != f.file
-                                || record.request.output.contains_key(*p)
-                        })
-                        .map(|(p, _)| p)
-                        .collect();
+                    let changed = installed(&record.before, proposed, &record.request);
                     let reliable = (|| -> Result<()> {
                         // Check the full source universe before restoring any; never guess attribution.
                         let mut observed = Vec::new();
@@ -1090,8 +1102,8 @@ impl Engine {
                         }
                         for path in &changed {
                             let current = read_file(live, path)?;
-                            if current != record.before.files[*path].file
-                                && current != proposed.files[*path].file
+                            if current != record.before.files[path].file
+                                && current != proposed.files[path].file
                             {
                                 return fail(format!(
                                     "ambiguous interrupted source: {path}; evidence retained"
@@ -1105,7 +1117,7 @@ impl Engine {
                         return Err(error);
                     }
                     for path in &changed {
-                        install(live, path, &record.before.files[*path].file)?;
+                        install(live, path, &record.before.files[path].file)?;
                     }
                 }
                 record.installation_pending = false;
@@ -1148,6 +1160,15 @@ impl Engine {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Apply,
+    /// Explicit retry of an interrupted request.
+    Retry,
+    /// Also brings the published state into a split workspace.
+    Incorporate,
+}
+
 /// Host fault/barrier seam; never exposed to untrusted clients.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -1164,7 +1185,7 @@ impl Engine {
         request: Request,
         mut observer: impl FnMut(Phase) -> Result<()>,
     ) -> Result<Outcome> {
-        self.apply_inner(client, request, false, false, &mut observer)
+        self.apply_inner(client, request, Mode::Apply, &mut observer)
     }
 }
 
@@ -1233,6 +1254,9 @@ impl Engine {
             [spec.revision as i64],
             |r| r.get::<_, String>(0),
         )?)?;
+        if capture.space != self.layout()?.of(client.agent) {
+            return fail("job must capture a revision of the client's workspace");
+        }
         retain(&self.state, &capture)?;
         let mut expected = BTreeMap::new();
         for path in spec.inputs.iter().chain(spec.outputs.iter()) {
