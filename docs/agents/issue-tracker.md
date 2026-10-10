@@ -43,7 +43,7 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
 
 - It refuses closed tickets, blocked tickets and tickets assigned to someone else.
 - It assigns the issue to you.
-- It creates or reuses a worktree under `.claude/worktrees/` on branch `issue-<n>-<slug>`, from `origin/main`.
+- It reuses the ticket's worktree, or checks out its existing local or `origin` `issue-<n>-*` branch, or creates branch `issue-<n>-<slug>` from `origin/main`. New worktrees go under `.claude/worktrees/`.
 - It prints the worktree path.
 
 GitHub stays authoritative.

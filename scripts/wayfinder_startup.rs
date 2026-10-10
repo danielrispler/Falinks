@@ -102,6 +102,8 @@ pub enum Workspace {
     Reuse,
     /// The ticket branch exists without a worktree; check it out.
     CheckoutBranch,
+    /// Only `origin` has the ticket branch (pushed from another clone); track it.
+    TrackRemote,
     /// Neither exists; branch from up-to-date `origin/main`.
     Create,
 }
@@ -113,7 +115,7 @@ pub struct ClaimPlan {
     pub workspace: Workspace,
 }
 /// Decide whether `--claim` may take `issue` and how to set up its worktree.
-/// `worktrees` is `git worktree list --porcelain`; `branches` lists local branch names one per line.
+/// `worktrees` is `git worktree list --porcelain`; `branches` lists local and `origin/` branch names one per line.
 pub fn claim_plan(
     issue: &Value,
     open_blockers: &[u64],
@@ -158,12 +160,14 @@ pub fn claim_plan(
     let prefix = format!("issue-{number}-");
     let ours = |name: &str| name.starts_with(&prefix);
     let assign = assignees.is_empty();
-    let mut path = "";
-    for line in worktrees.lines() {
-        if let Some(worktree) = line.strip_prefix("worktree ") {
-            path = worktree;
-        } else if let Some(branch) = line.strip_prefix("branch refs/heads/")
-            && ours(branch)
+    for stanza in worktrees.split("\n\n") {
+        let field = |key: &str| stanza.lines().find_map(|line| line.strip_prefix(key));
+        // A prunable worktree's directory is gone, so it cannot be reused.
+        if let (Some(path), Some(branch), None) = (
+            field("worktree "),
+            field("branch refs/heads/"),
+            field("prunable"),
+        ) && ours(branch)
         {
             return Ok(ClaimPlan {
                 assign,
@@ -173,9 +177,15 @@ pub fn claim_plan(
             });
         }
     }
-    let (branch, workspace) = match branches.lines().map(str::trim).find(|name| ours(name)) {
-        Some(existing) => (existing.to_owned(), Workspace::CheckoutBranch),
-        None => (format!("{prefix}{slug}"), Workspace::Create),
+    let names = branches.lines().map(str::trim);
+    let local = names.clone().find(|name| ours(name));
+    let remote = names
+        .filter_map(|name| name.strip_prefix("origin/"))
+        .find(|name| ours(name));
+    let (branch, workspace) = match (local, remote) {
+        (Some(existing), _) => (existing.to_owned(), Workspace::CheckoutBranch),
+        (None, Some(pushed)) => (pushed.to_owned(), Workspace::TrackRemote),
+        (None, None) => (format!("{prefix}{slug}"), Workspace::Create),
     };
     Ok(ClaimPlan {
         assign,
@@ -273,6 +283,8 @@ fn claim(number: u64) -> Result<()> {
         .to_str()
         .ok_or("non-UTF-8 repo path")?
         .to_owned();
+    // Fetch first so a ticket branch pushed from another clone is seen.
+    stdout("git", &["fetch", "origin"])?;
     let plan = claim_plan(
         &issue,
         &blockers_of(number)?,
@@ -282,10 +294,10 @@ fn claim(number: u64) -> Result<()> {
         &stdout(
             "git",
             &[
-                "branch",
-                "--list",
-                &format!("issue-{number}-*"),
+                "for-each-ref",
                 "--format=%(refname:short)",
+                &format!("refs/heads/issue-{number}-*"),
+                &format!("refs/remotes/origin/issue-{number}-*"),
             ],
         )?,
     )?;
@@ -306,10 +318,25 @@ fn claim(number: u64) -> Result<()> {
     match plan.workspace {
         Workspace::Reuse => {}
         Workspace::CheckoutBranch => {
+            // A prunable worktree may still hold the branch; drop its stale record.
+            stdout("git", &["worktree", "prune"])?;
             stdout("git", &["worktree", "add", &plan.path, &plan.branch])?;
         }
+        Workspace::TrackRemote => {
+            stdout(
+                "git",
+                &[
+                    "worktree",
+                    "add",
+                    "--track",
+                    "-b",
+                    &plan.branch,
+                    &plan.path,
+                    &format!("origin/{}", plan.branch),
+                ],
+            )?;
+        }
         Workspace::Create => {
-            stdout("git", &["fetch", "origin", "main"])?;
             // --no-track: a plain `git push` must not target main.
             stdout(
                 "git",
@@ -338,14 +365,15 @@ fn run() -> Result<()> {
     }
     if args == ["--help"] {
         println!(
-            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, creates or reuses its worktree under .claude/worktrees/ on branch issue-<n>-<slug> from origin/main, and prints the path."
+            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path."
         );
         return Ok(());
     }
-    if let [flag, number] = args.as_slice()
-        && flag == "--claim"
-    {
-        return claim(number.parse()?);
+    if args.first().is_some_and(|flag| flag == "--claim") {
+        let [_, number] = args.as_slice() else {
+            return Err(USAGE.into());
+        };
+        return claim(number.parse().map_err(|_| USAGE)?);
     }
     require(args.len() <= 1, USAGE)?;
     let requested = args
@@ -353,20 +381,23 @@ fn run() -> Result<()> {
         .map(|number| number.parse::<u64>())
         .transpose()?;
     require(requested != Some(0), "map issue number must be positive")?;
-    let maps = gh(&[
-        "issue",
-        "list",
-        "--repo",
-        REPO,
-        "--label",
-        "wayfinder:map",
-        "--state",
-        "all",
-        "--limit",
-        "20",
-        "--json",
-        "number,title,state",
-    ])?;
+    let maps_in = |state: &str, limit: &str| {
+        gh(&[
+            "issue",
+            "list",
+            "--repo",
+            REPO,
+            "--label",
+            "wayfinder:map",
+            "--state",
+            state,
+            "--limit",
+            limit,
+            "--json",
+            "number,title,state",
+        ])
+    };
+    let maps = maps_in("open", "100")?;
     let view = |number: u64| {
         gh(&[
             "issue",
@@ -389,7 +420,9 @@ fn run() -> Result<()> {
             (select_map(Some(&issue), &maps)?, issue)
         }
         None => {
-            let map = select_map(None, &maps)?;
+            // With no open map, the closed-only list always errs, naming recent maps.
+            let map =
+                select_map(None, &maps).or_else(|_| select_map(None, &maps_in("closed", "20")?))?;
             (map, view(map)?)
         }
     };
@@ -543,6 +576,54 @@ mod claim_tests {
         assert_eq!(plan.workspace, Workspace::CheckoutBranch);
         assert_eq!(plan.branch, "issue-47-older-title");
         assert_eq!(plan.path, "/repo/.claude/worktrees/issue-47-older-title");
+    }
+    #[test]
+    fn prunable_worktree_is_not_reused() {
+        let worktrees = format!(
+            "{WORKTREES}\nworktree /gone/agent-1\nHEAD 123\nbranch refs/heads/issue-47-older-title\nprunable gitdir file points to non-existent location\n"
+        );
+        let plan = claim_plan(
+            &ticket(),
+            &[],
+            "dev",
+            ROOT,
+            &worktrees,
+            "issue-47-older-title\n",
+        )
+        .unwrap();
+        assert_eq!(plan.workspace, Workspace::CheckoutBranch);
+        assert_eq!(plan.path, "/repo/.claude/worktrees/issue-47-older-title");
+    }
+    #[test]
+    fn remote_only_branch_is_tracked_into_a_new_worktree() {
+        let plan = claim_plan(
+            &ticket(),
+            &[],
+            "dev",
+            ROOT,
+            WORKTREES,
+            "origin/issue-470-other\norigin/issue-47-pushed-elsewhere\n",
+        )
+        .unwrap();
+        assert_eq!(plan.workspace, Workspace::TrackRemote);
+        assert_eq!(plan.branch, "issue-47-pushed-elsewhere");
+        assert_eq!(
+            plan.path,
+            "/repo/.claude/worktrees/issue-47-pushed-elsewhere"
+        );
+    }
+    #[test]
+    fn local_branch_wins_over_remote_branch() {
+        let plan = claim_plan(
+            &ticket(),
+            &[],
+            "dev",
+            ROOT,
+            WORKTREES,
+            "origin/issue-47-older-title\nissue-47-older-title\n",
+        )
+        .unwrap();
+        assert_eq!(plan.workspace, Workspace::CheckoutBranch);
     }
     #[test]
     fn closed_ticket_is_refused() {
