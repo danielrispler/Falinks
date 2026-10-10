@@ -101,13 +101,7 @@ fn parse_results(output: &str) -> Result<Value> {
     Ok(value)
 }
 fn probe_args(root: &Path, expected: &str) -> Vec<String> {
-    vec![
-        root.join("worker-tools/sandbox-probe")
-            .to_string_lossy()
-            .into_owned(),
-        root.to_string_lossy().into_owned(),
-        hash(expected.as_bytes()),
-    ]
+    falinks_host::fixture_probe_args(root, expected)
 }
 fn probe_command(root: &Path, expected: &str) -> Result<String> {
     Ok(shlex::try_join(

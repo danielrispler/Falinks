@@ -24,15 +24,8 @@ use std::{
 pub const PIN: &str = "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea";
 pub const VERSION: &str = "2.1.287";
 pub const MODEL: &str = "claude-opus-5-5";
-pub const TOOLS: &[&str] = &[
-    "Bash",
-    "Glob",
-    "Grep",
-    "Read",
-    "mcp__falinks__falinks_edit",
-    "mcp__falinks__falinks_offer",
-    "mcp__falinks__falinks_review",
-];
+/// Built-in tools every worker gets; the launch adds its `falinks` tools.
+pub const NATIVE: &[&str] = &["Bash", "Glob", "Grep", "Read"];
 pub const PLUGINS: &[&str] = &[
     "cc-plugin-agents-md@builtin",
     "cc-plugin-plugin-authoring@builtin",
@@ -81,8 +74,59 @@ pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
     Ok(binary)
 }
 
+/// What one worker launch may see and call. Controls come only from here, never from a saved session.
+#[derive(Clone, Debug)]
+pub struct Launch {
+    /// The live root the worker reads; the engine-facing workspace.
+    pub source: PathBuf,
+    /// The worker's cwd and only writable directory.
+    pub scratch: PathBuf,
+    /// Host channel, token, settings and context: neither readable nor writable by the worker.
+    pub controller: PathBuf,
+    /// Host-provided executables: readable, write-denied.
+    pub worker_tools: PathBuf,
+    /// Other storage the worker may neither read nor write.
+    pub protected: Vec<PathBuf>,
+    /// MCP definitions of the `falinks` tools.
+    pub tools: Value,
+}
+impl Launch {
+    /// The #33 fixture layout under `root`, with the historical edit/review/offer tools.
+    pub fn fixture(root: &Path) -> Self {
+        let source = root.join("source");
+        Self {
+            tools: falinks_host::runtime::tools(&source.to_string_lossy()),
+            source,
+            scratch: root.join("scratch"),
+            controller: root.join("controller"),
+            worker_tools: root.join("worker-tools"),
+            protected: ["snapshots", "validation"].map(|n| root.join(n)).to_vec(),
+        }
+    }
+    /// `falinks_<operation>` names offered by this launch.
+    pub fn operations(&self) -> Vec<String> {
+        self.tools
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t["name"].as_str()?.strip_prefix("falinks_"))
+            .map(String::from)
+            .collect()
+    }
+    /// The exact runtime tool list `init` must report.
+    pub fn allowed(&self) -> Vec<String> {
+        let mut tools: Vec<String> = NATIVE.iter().map(|t| t.to_string()).collect();
+        tools.extend(
+            self.operations()
+                .iter()
+                .map(|o| format!("mcp__falinks__falinks_{o}")),
+        );
+        tools
+    }
+}
+
 /// Every turn's `system/init` must match the pinned launch profile exactly.
-pub fn verify_init(init: &Value, cwd: &Path, session: &str) -> Result<()> {
+pub fn verify_init(init: &Value, cwd: &Path, session: &str, tools: &[String]) -> Result<()> {
     let strings = |key: &str, field: Option<&str>| -> BTreeSet<String> {
         init[key]
             .as_array()
@@ -92,14 +136,15 @@ pub fn verify_init(init: &Value, cwd: &Path, session: &str) -> Result<()> {
             .collect()
     };
     let set = |items: &[&str]| items.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>();
+    let tools: BTreeSet<String> = tools.iter().cloned().collect();
     require(
         init["claude_code_version"] == VERSION
             && init["model"] == MODEL
             && init["permissionMode"] == "dontAsk"
             && init["session_id"] == session
             && init["cwd"].as_str().map(Path::new) == Some(cwd)
-            && init["tools"].as_array().map(Vec::len) == Some(TOOLS.len())
-            && strings("tools", None) == set(TOOLS)
+            && init["tools"].as_array().map(Vec::len) == Some(tools.len())
+            && strings("tools", None) == tools
             && init["mcp_servers"]
                 == json!([{"name":"falinks","source":"dynamic","status":"connected"}])
             && init["skills"] == json!([])
@@ -145,6 +190,8 @@ pub struct Session {
     connection: String,
     session: String,
     token: String,
+    cwd: PathBuf,
+    tools: Vec<String>,
     engine: Engine,
     spans: u64,
     in_turn: bool,
@@ -155,8 +202,7 @@ pub struct Session {
 }
 impl Session {
     pub fn new(
-        database: &Path,
-        workspace: &Path,
+        launch: &Launch,
         agent: &str,
         session: &str,
         token: &str,
@@ -164,7 +210,12 @@ impl Session {
         resume: bool,
     ) -> Result<Self> {
         let connection = random_hex(16)?;
-        let mut boundary = Boundary::new(database, workspace, connection.clone())?;
+        let mut boundary = Boundary::new(
+            &launch.controller.join("context.sqlite"),
+            &launch.source,
+            connection.clone(),
+        )?;
+        boundary.operations = launch.operations();
         boundary.bind(session, agent, resume)?;
         Ok(Self {
             boundary,
@@ -177,6 +228,8 @@ impl Session {
             connection,
             session: session.into(),
             token: token.into(),
+            cwd: launch.scratch.clone(),
+            tools: launch.allowed(),
             engine,
             spans: 0,
             in_turn: false,
@@ -191,6 +244,10 @@ impl Session {
     }
     pub fn session(&self) -> &str {
         &self.session
+    }
+    /// Between `init` and `result`: a message sent now is presented within this turn.
+    pub fn in_turn(&self) -> bool {
+        self.in_turn
     }
     /// The runtime has presented every host message and finished its turn.
     pub fn idle(&self) -> bool {
@@ -228,8 +285,7 @@ impl Session {
         match (kind, subtype) {
             ("system", "init") => {
                 // The trusted CLI writes `.claude/` into its cwd, so it runs from scratch, beside source.
-                let cwd = Path::new(&self.boundary.workspace).with_file_name("scratch");
-                verify_init(line, &cwd, &self.session)?;
+                verify_init(line, &self.cwd, &self.session, &self.tools)?;
                 require(!self.in_turn, "overlapping runtime turn")?;
                 self.spans += 1;
                 self.in_turn = true;
@@ -251,7 +307,9 @@ impl Session {
                 let blocks = line["message"]["content"].as_array().into_iter().flatten();
                 for block in blocks.filter(|b| b["type"] == "tool_use") {
                     require(
-                        block["name"].as_str().is_some_and(|n| TOOLS.contains(&n)),
+                        block["name"]
+                            .as_str()
+                            .is_some_and(|n| self.tools.iter().any(|t| t == n)),
                         "disabled capability attempted",
                     )?;
                 }
@@ -368,8 +426,8 @@ impl Session {
     }
 }
 
-pub fn settings(root: &Path, tool: &Path) -> Result<Value> {
-    let path = |name: &str| root.join(name).to_string_lossy().into_owned();
+pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
+    let path = |p: &Path| p.to_string_lossy().into_owned();
     let mut deny = [
         "Edit",
         "Write",
@@ -382,27 +440,29 @@ pub fn settings(root: &Path, tool: &Path) -> Result<Value> {
     ]
     .map(String::from)
     .to_vec();
-    for name in ["controller", "snapshots", "validation"] {
+    let mut hidden = vec![path(&launch.controller)];
+    hidden.extend(launch.protected.iter().map(|p| path(p)));
+    for name in &hidden {
         // `//` marks an absolute path in permission rules.
-        deny.push(format!("Read(/{}/**)", path(name)));
+        deny.push(format!("Read(/{name}/**)"));
     }
+    let mut read_only = vec![path(&launch.source), path(&launch.worker_tools)];
+    read_only.extend(hidden.iter().cloned());
     let hook = shlex::try_join([
         tool.to_string_lossy().as_ref(),
         "hook",
-        path("controller").as_str(),
+        path(&launch.controller).as_str(),
     ])?;
     Ok(json!({
-        "permissions":{"defaultMode":"dontAsk","allow":TOOLS,"deny":deny},
+        "permissions":{"defaultMode":"dontAsk","allow":launch.allowed(),"deny":deny},
         "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
-            "failIfUnavailable":true,"filesystem":{"allowWrite":[path("scratch")],
-            "denyWrite":[path("source"),path("worker-tools"),path("controller"),path("snapshots"),path("validation")],
-            "denyRead":[path("controller"),path("snapshots"),path("validation")]}},
+            "failIfUnavailable":true,"filesystem":{"allowWrite":[path(&launch.scratch)],
+            "denyWrite":read_only,"denyRead":hidden}},
         "hooks":{"PreToolUse":[{"matcher":"mcp__falinks__.*","hooks":[{"type":"command","command":hook}]}]},
         "env":{"DISABLE_AUTOUPDATER":"1"}
     }))
 }
-pub fn launch_args(root: &Path, session: &str, resume: bool) -> Vec<String> {
-    let controller = root.join("controller");
+pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String> {
     let mut args = [
         "-p",
         "--input-format",
@@ -461,30 +521,29 @@ impl Runtime {
     /// `resume` names a saved runtime session; otherwise the host chooses a fresh one.
     pub fn new(
         binary: &Path,
-        root: &Path,
+        launch: &Launch,
         agent: &str,
         resume: Option<&str>,
         engine: Engine,
         control_host: bool,
     ) -> Result<Self> {
         let binary = verify_binary(binary)?;
-        let root = root.canonicalize()?;
-        for name in [
-            "source",
-            "scratch",
-            "controller",
-            "snapshots",
-            "validation",
-            "worker-tools",
-        ] {
-            let path = root.join(name);
+        for path in [
+            &launch.source,
+            &launch.scratch,
+            &launch.controller,
+            &launch.worker_tools,
+        ]
+        .into_iter()
+        .chain(&launch.protected)
+        {
             require(
-                path.is_dir() && !path.is_symlink() && path.canonicalize()? == path,
+                path.is_dir() && !path.is_symlink() && path.canonicalize()? == *path,
                 "unsupported workspace layout",
             )?;
         }
-        let controller = root.join("controller");
-        let tool = root.join("worker-tools/falinks-claude-tool");
+        let controller = launch.controller.clone();
+        let tool = launch.worker_tools.join("falinks-claude-tool");
         let token = random_hex(32)?;
         let _ = fs::remove_file(controller.join("token"));
         fs::OpenOptions::new()
@@ -497,22 +556,14 @@ impl Runtime {
             Some(id) => id.to_owned(),
             None => session_id()?,
         };
-        let mut session = Session::new(
-            &controller.join("context.sqlite"),
-            &root.join("source"),
-            agent,
-            &id,
-            &token,
-            engine,
-            resume.is_some(),
-        )?;
+        let mut session = Session::new(launch, agent, &id, &token, engine, resume.is_some())?;
         session.gate.record("pin", true)?;
         fs::write(
             controller.join("settings.json"),
-            settings(&root, &tool)?.to_string(),
+            settings(launch, &tool)?.to_string(),
         )?;
-        let server = json!({"mcpServers":{"falinks":{"command":tool,
-            "args":["mcp",controller,session.boundary.workspace]}}});
+        fs::write(controller.join("tools.json"), launch.tools.to_string())?;
+        let server = json!({"mcpServers":{"falinks":{"command":tool,"args":["mcp",controller]}}});
         fs::write(controller.join("mcp.json"), server.to_string())?;
         let (sender, inputs) = mpsc::channel();
         let socket = controller.join("host.sock");
@@ -527,8 +578,8 @@ impl Runtime {
         });
         let mut command = Command::new(&binary);
         command
-            .args(launch_args(&root, &id, resume.is_some()))
-            .current_dir(root.join("scratch"))
+            .args(launch_args(&controller, &id, resume.is_some()))
+            .current_dir(&launch.scratch)
             .env("DISABLE_AUTOUPDATER", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -569,7 +620,8 @@ impl Runtime {
             closed: false,
         })
     }
-    fn send(&mut self, text: String, event: Option<&str>) -> Result<()> {
+    /// Write a user message. Sending never implies presentation or handling.
+    pub fn send(&mut self, text: String, event: Option<&str>) -> Result<()> {
         let input = self.input.as_mut().ok_or("claude connection closed")?;
         writeln!(
             input,
@@ -581,13 +633,23 @@ impl Runtime {
         Ok(())
     }
     fn pump(&mut self, deadline: Instant) -> Result<()> {
-        let input = self
-            .inputs
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+        if self.step(deadline.saturating_duration_since(Instant::now()))? {
+            return Ok(());
+        }
+        self.session.gate.failed = true;
+        Err("claude timed out".into())
+    }
+    /// Serve one runtime line or host request, waiting at most `timeout`.
+    /// `Ok(false)`: nothing arrived. Lets one host thread drive several workers.
+    pub fn step(&mut self, timeout: Duration) -> Result<bool> {
+        let input = match self.inputs.recv_timeout(timeout) {
+            Err(mpsc::RecvTimeoutError::Timeout) => return Ok(false),
+            other => other,
+        };
         match input {
             Err(error) => {
                 self.session.gate.failed = true;
-                Err(format!("claude disconnected or timed out: {error}").into())
+                Err(format!("claude disconnected: {error}").into())
             }
             Ok(Input::Line(Err(error))) => {
                 self.session.gate.failed = true;
@@ -599,7 +661,7 @@ impl Runtime {
                 if observed.is_err() {
                     self.close();
                 }
-                observed
+                observed.map(|()| true)
             }
             Ok(Input::Host(request, reply)) => {
                 let blocked = (request["kind"] == "call" && !self.control_host)
@@ -614,7 +676,7 @@ impl Runtime {
                     self.attention(&notice.event, &notice.context)?;
                 }
                 let _ = reply.send(value);
-                Ok(())
+                Ok(true)
             }
         }
     }

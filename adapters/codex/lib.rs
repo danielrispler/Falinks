@@ -38,6 +38,21 @@ pub fn file_hash(path: &Path) -> Result<String> {
     Ok(hash(&std::fs::read(path)?))
 }
 
+/// `sandbox-probe` arguments for the historical fixture layout (`ROOT/{source,scratch,...}`).
+pub fn fixture_probe_args(root: &Path, expected: &str) -> Vec<String> {
+    let path = |name: &str| root.join(name).to_string_lossy().into_owned();
+    let mut args = vec![
+        path("worker-tools/sandbox-probe"),
+        path("source/source.txt"),
+        hash(expected.as_bytes()),
+        path("scratch"),
+    ];
+    for name in ["controller", "snapshots", "validation"] {
+        args.push(format!("{name}={}", path(&format!("{name}/secret.txt"))));
+    }
+    args
+}
+
 pub struct ControlGate {
     pub controls: BTreeMap<String, bool>,
     pub failed: bool,
@@ -80,6 +95,8 @@ pub struct Boundary {
     pub thread: Option<String>,
     agent: Option<String>,
     pub turn: Option<String>,
+    /// Registered `falinks_<operation>` tools; anything else is refused.
+    pub operations: Vec<String>,
 }
 impl Boundary {
     pub fn new(database: &Path, workspace: &Path, session: String) -> Result<Self> {
@@ -92,6 +109,7 @@ impl Boundary {
             thread: None,
             agent: None,
             turn: None,
+            operations: ["edit", "review", "offer"].map(String::from).to_vec(),
         })
     }
     pub fn bind(&mut self, thread: &str, agent: &str, resume: bool) -> Result<()> {
@@ -179,12 +197,11 @@ impl Boundary {
                 && call["callId"].as_str().is_some_and(|x| !x.is_empty()),
             "inactive runtime identity",
         )?;
-        let operation = match call["tool"].as_str() {
-            Some("falinks_edit") => "edit",
-            Some("falinks_review") => "review",
-            Some("falinks_offer") => "offer",
-            _ => return Err("unregistered tool".into()),
-        };
+        let operation = call["tool"]
+            .as_str()
+            .and_then(|tool| tool.strip_prefix("falinks_"))
+            .filter(|operation| self.operations.iter().any(|o| o == operation))
+            .ok_or("unregistered tool")?;
         let arguments = call["arguments"]
             .as_object()
             .ok_or("expected workspace and engine request")?;

@@ -1,6 +1,6 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
-use falinks_claude::{Runtime, launch_args, settings, verify_binary};
+use falinks_claude::{Launch, Runtime, launch_args, settings, verify_binary};
 use falinks_host::{
     Result, controlled_host::ControlledHost, file_hash, hash, require, runtime::Engine,
 };
@@ -64,13 +64,8 @@ fn engine(host: &Rc<RefCell<ControlledHost>>) -> Engine {
     Box::new(move |envelope| host.borrow_mut().execute(envelope))
 }
 fn probe_command(root: &Path, expected: &str) -> Result<String> {
-    let probe = root.join("worker-tools/sandbox-probe");
-    let root = root.to_string_lossy();
-    Ok(shlex::try_join([
-        probe.to_string_lossy().as_ref(),
-        root.as_ref(),
-        hash(expected.as_bytes()).as_str(),
-    ])?)
+    let args = falinks_host::fixture_probe_args(root, expected);
+    Ok(shlex::try_join(args.iter().map(String::as_str))?)
 }
 /// The exact probe command must have run through the real Bash tool with every control passing.
 fn bash_controls(runtime: &mut Runtime, root: &Path, expected: &str) -> Result<Value> {
@@ -147,11 +142,12 @@ fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result
     evidence["probe_sha256"] = json!(file_hash(&probe)?);
     evidence["tool_sha256"] = json!(file_hash(&tool)?);
     evidence["root"] = json!(root);
-    evidence["settings"] = settings(&root, &root.join("worker-tools/falinks-claude-tool"))?;
+    let launch = Launch::fixture(&root);
+    evidence["settings"] = settings(&launch, &root.join("worker-tools/falinks-claude-tool"))?;
     let host = Rc::new(RefCell::new(ControlledHost::new(&root)?));
-    let mut runtime = Runtime::new(&binary, &root, AGENT, None, engine(&host), true)?;
+    let mut runtime = Runtime::new(&binary, &launch, AGENT, None, engine(&host), true)?;
     let session = runtime.session.session().to_owned();
-    evidence["launch"] = json!(launch_args(&root, &session, false));
+    evidence["launch"] = json!(launch_args(&launch.controller, &session, false));
     let result = (|| -> Result<()> {
         let original = hash(b"original\n");
         runtime.start(&format!(
@@ -255,7 +251,7 @@ fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result
     let resumed_host = Rc::new(RefCell::new(ControlledHost::new(&root)?));
     let mut resumed = Runtime::new(
         &binary,
-        &root,
+        &launch,
         AGENT,
         Some(&session),
         engine(&resumed_host),
