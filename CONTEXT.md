@@ -66,3 +66,9 @@ A repository change made outside the engine's publication workflow.
 
 **Supported language**:
 A programming language whose repositories Falinks can coordinate, including related scope and checks. Currently Rust and Go. Distinct from a client, which is an authenticated agent session.
+
+**Worker runtime**:
+The agent harness that runs one agent session and presents its tools and messages. Falinks reaches it only through an adapter.
+
+**Presentation boundary**:
+A point at which a worker runtime shows pending messages to its agent. Presentation is not processing, acknowledgment or revalidation.

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": ["Bash", "Read", "Glob", "Grep", "mcp__falinks__falinks_edit", "mcp__falinks__falinks_review", "mcp__falinks__falinks_offer"],
+    "deny": ["Edit", "Write", "NotebookEdit", "WebSearch", "WebFetch", "Agent", "Task", "Skill",
+             "Read(/{ROOT}/controller/**)", "Read(/{ROOT}/snapshots/**)", "Read(/{ROOT}/validation/**)"]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "allowWrite": ["{ROOT}/scratch"],
+      "denyWrite": ["{ROOT}/source"],
+      "denyRead": ["{ROOT}/controller", "{ROOT}/snapshots", "{ROOT}/validation"]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "{ROOT}/worker-tools/claude-probe hook --log {ROOT}/logs/hook.jsonl"}]}]
+  },
+  "env": {"DISABLE_AUTOUPDATER": "1"}
+}

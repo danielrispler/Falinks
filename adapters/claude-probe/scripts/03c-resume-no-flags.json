@@ -1,0 +1,4 @@
+[
+  {"send": "Without calling any tools, reply with the code word from earlier and the exact names of every tool you currently have."},
+  {"wait": "result", "timeout_s": 300}
+]

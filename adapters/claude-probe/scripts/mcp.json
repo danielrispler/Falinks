@@ -1,0 +1,3 @@
+{"mcpServers": {"falinks": {"command": "{ROOT}/worker-tools/claude-probe",
+  "args": ["mcp", "--log", "{ROOT}/logs/mcp.jsonl"],
+  "env": {"FALINKS_SOURCE": "{ROOT}/source/source.txt", "FALINKS_AGENT": "agent-A"}}}}

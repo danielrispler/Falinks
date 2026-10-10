@@ -1,0 +1,4 @@
+[
+  {"send": "Fixture workflow in {ROOT}. Remember the code word HERON. Call falinks_review with event R1, action defer, reviewed_hash h1. Then reply ok."},
+  {"wait": "result", "timeout_s": 300}
+]
