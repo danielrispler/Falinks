@@ -2,7 +2,9 @@
 //! performance; reference bytes are embedded by the trusted test host, never given to real workers.
 //!
 //! `scripted-worker relationships|conflict` speaks the host JSON-line protocol;
-//! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge.
+//! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
+//! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge;
+//! `scripted-worker <fixture> --output DIR ...` impersonates the Falinks-arm runner for batches.
 use serde_json::{Value, json};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -41,6 +43,8 @@ fn main() {
         Some("relationships") => relationships(),
         Some("conflict") => conflict(),
         Some("exec") => fake_codex(&args),
+        Some("-p") => fake_claude(&args),
+        Some("rust-errors" | "go-page" | "go-relationships") => fake_arm(&args),
         other => panic!("unknown mode {other:?}"),
     }
 }
@@ -268,4 +272,115 @@ fn fake_codex(argv: &[String]) {
         "{}",
         json!({"type": "turn.completed", "usage": {"input_tokens": 2, "cached_input_tokens": 0, "output_tokens": 3}})
     );
+}
+
+/// Runs a host command the way the agent's Bash tool would.
+fn host_command(args: &[&str]) -> (bool, Value) {
+    let output = Command::new(env::var("FALINKS_HOST").unwrap())
+        .arg("host")
+        .args(args)
+        .output()
+        .unwrap();
+    let reply = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+    (output.status.success(), reply)
+}
+
+fn fake_claude(argv: &[String]) {
+    let flag = |name: &str| argv[argv.iter().position(|a| a == name).unwrap() + 1].clone();
+    assert_eq!(flag("--model"), "scripted");
+    assert_eq!(flag("--max-turns"), "12");
+    let settings: Value = serde_json::from_str(&flag("--settings")).unwrap();
+    assert_eq!(settings["sandbox"]["enabled"], false);
+    let tools: Vec<String> = flag("--tools").split(',').map(String::from).collect();
+    let agent = env::var("FALINKS_AGENT").unwrap();
+    // The runtime runs in scratch/; the agent's worktree is its parent.
+    let file = format!(
+        "../{}",
+        if agent == "A" {
+            "producer.go"
+        } else {
+            "consumer.go"
+        }
+    );
+    let mut first = true;
+    for line in io::stdin().lines() {
+        let message: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let text = message["message"]["content"].as_str().unwrap().to_string();
+        send(
+            json!({"type": "system", "subtype": "init", "model": "scripted",
+            "claude_code_version": "scripted-v1", "permissionMode": "dontAsk", "tools": tools,
+            "session_id": flag("--session-id")}),
+        );
+        let mut subtype = "success";
+        if first {
+            first = false;
+            let (ok, reply) = host_command(&["ready"]);
+            assert!(
+                !ok && reply["type"] == "refused",
+                "early ready accepted: {reply}"
+            );
+            // A host-side protocol mistake is refused, not an infrastructure failure.
+            let (ok, reply) = host_command(&["ack", "no-such-development"]);
+            assert!(
+                !ok && reply["type"] == "refused",
+                "bad ack accepted: {reply}"
+            );
+            append(&file, &format!("\n// first unfinished draft {agent}\n"));
+            assert!(host_command(&["message", "Plan:", "draft", "first"]).0);
+            assert!(host_command(&["share"]).0);
+            // The bridge must continue a turn that hit the tool-call cap.
+            subtype = "error_max_turns";
+        } else if let Some(event) = text.strip_prefix("Host event: ") {
+            let event: Value = serde_json::from_str(event).unwrap();
+            if event["type"] == "development" {
+                let id = event["id"].as_str().unwrap();
+                assert!(host_command(&["ack", id]).0);
+                let name = &file[3..];
+                let draft = if id == "record-contract" {
+                    "\n// unfinished contract draft\n"
+                } else {
+                    ""
+                };
+                fs::write(&file, reference("go-relationships", name) + draft).unwrap();
+                assert!(host_command(&["share"]).0);
+                if id == "follow-ups" {
+                    let (ok, reply) = host_command(&["ready"]);
+                    assert!(ok, "{reply}");
+                }
+            }
+        }
+        send(
+            json!({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed",
+            "unifiedWindows": {"five_hour": {"utilization": 0.1}}}}),
+        );
+        send(json!({"type": "assistant", "message": {"model": "scripted",
+            "content": [{"type": "thinking", "thinking": "hidden"}, {"type": "text", "text": "done"}]}}));
+        send(json!({"type": "result", "subtype": subtype, "num_turns": 1,
+            "usage": {"input_tokens": 2, "output_tokens": 3}, "modelUsage": {"scripted": {}}}));
+    }
+}
+
+/// Writes Falinks-arm evidence with `FALINKS_FAKE_OUTCOME` (default success), after checking
+/// that the batch denied every earlier run to this one.
+fn fake_arm(argv: &[String]) {
+    let flag = |name: &str| argv[argv.iter().position(|a| a == name).unwrap() + 1].clone();
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(flag("--config")).unwrap()).unwrap();
+    let output = PathBuf::from(flag("--output"));
+    let denied = config["denied_roots"].as_array().unwrap();
+    for sibling in fs::read_dir(output.parent().unwrap()).unwrap().flatten() {
+        if sibling.path() != output {
+            let path = sibling.path().to_string_lossy().into_owned();
+            assert!(
+                denied.contains(&Value::from(path.clone())),
+                "{path} not denied"
+            );
+        }
+    }
+    fs::create_dir_all(output.join("controller")).unwrap();
+    let outcome = env::var("FALINKS_FAKE_OUTCOME").unwrap_or("success".into());
+    let result = json!({"run_id": output.file_name().unwrap().to_string_lossy(), "arm": "falinks",
+        "fixture": argv[0], "pair": flag("--pair"), "scored": flag("--scored") == "true", "outcome": outcome,
+        "timing": {"elapsed_seconds": 10.0}, "transitions": 0});
+    fs::write(output.join("controller/result.json"), result.to_string()).unwrap();
 }

@@ -73,6 +73,7 @@ pub fn baseline(
     output: &Path,
     pair: &str,
     order: i64,
+    scored: bool,
 ) -> Result<i32> {
     let started = Instant::now();
     let config = read(config_path)?;
@@ -88,7 +89,7 @@ pub fn baseline(
     let evidence = json!({
         "schema_version": 1, "run_id": destination.file_name().unwrap().to_string_lossy(), "arm": "git",
         "fixture": name, "fixture_version": fixture["version"], "freeze": manifest, "configuration": config,
-        "order": order, "pair": pair, "scored": false, "outcome": "infrastructure_failure",
+        "order": order, "pair": pair, "scored": scored, "outcome": "infrastructure_failure",
         "usage": {"status": "unavailable", "reason": "worker has not reported usage"},
         "usage_limit_interruptions": [], "rejected_operations": 0, "retries": 0,
         "discarded_or_rewritten_work": {"status": "unavailable"}, "validation_attempts": [],
@@ -162,19 +163,7 @@ fn execute(
             bail!("Missing frozen run configuration: {key}");
         }
     }
-    if [
-        "model",
-        "model_version",
-        "reasoning",
-        "runtime_version",
-        "runtime_sha256",
-    ]
-    .iter()
-    .any(|key| {
-        config[key]
-            .as_str()
-            .is_some_and(|v| v.starts_with("REQUIRED:"))
-    }) {
+    if config.to_string().contains("\"REQUIRED:") {
         bail!("Replace run configuration placeholders before launch");
     }
     let binary = resolve(Path::new(
@@ -292,16 +281,34 @@ fn execute(
             env.push(("CODEX_HOME".into(), at(&codex_home)));
         }
         let stderr = fs::File::create(private.join(format!("{agent}.stderr")))?;
+        let mut writable = vec![
+            public.join(agent),
+            repo.join(".git"),
+            public.join("integration"),
+        ];
+        // Runtime login/session state (e.g. Claude Code's `~/.claude`); the batch archives it per run.
+        for path in config["runtime_writable"].as_array().into_iter().flatten() {
+            writable.push(PathBuf::from(
+                path.as_str().ok_or("runtime_writable must be paths")?,
+            ));
+        }
         let sandbox = Sandbox {
-            writable: vec![
-                public.join(agent),
-                repo.join(".git"),
-                public.join("integration"),
-            ],
+            writable,
             denied: denied.clone(),
             network: true,
         };
-        let argv = sandbox.wrap(argv)?;
+        let mut argv = sandbox.wrap(argv)?;
+        if let Some(home) = config["runtime_home"].as_str() {
+            // `~/.claude/projects` is denied (other sessions' transcripts); the runtime may still
+            // keep this worker's own session, whose cwd is its scratch. Later rules win.
+            let own = Path::new(home)
+                .join(".claude/projects")
+                .join(crate::batch::project_folder(&scratch));
+            argv[2].push_str(&format!(
+                "\n(allow file-read* file-write* (subpath {}))",
+                serde_json::to_string(&own.to_string_lossy())?
+            ));
+        }
         let mut child = Command::new(&argv[0])
             .args(&argv[1..])
             .current_dir(public.join(agent))
@@ -335,7 +342,8 @@ fn execute(
             "peer_workspace": public.join(peer(agent)), "integration_workspace": public.join("integration"),
             "task": task, "development_count": milestones.len(), "allocation": fixture["allocation"][agent],
             "workflow": fs::read_to_string(root().join("instructions/git.md"))?,
-            "runtime_binary": config["runtime_binary"],
+            "runtime_binary": config["runtime_binary"], "runtime_version": config["runtime_version"],
+            "runtime_home": config["runtime_home"],
             "model": {"model": config["model"], "model_version": config["model_version"], "reasoning": config["reasoning"]},
         }))?;
         run.event("agent_started", json!({"agent": agent}))?;
@@ -375,6 +383,19 @@ fn execute(
         )?;
         let action = request["action"].as_str().unwrap_or_default();
         let peer = peer(agent);
+        // Agent protocol mistakes are refusals, as in the Falinks arm, never infrastructure failures.
+        let refuse = |run: &mut Run, reason: &str| -> Result<()> {
+            let count = run.evidence["rejected_operations"].as_u64().unwrap_or(0) + 1;
+            run.evidence["rejected_operations"] = count.into();
+            run.event(
+                "refused",
+                json!({"agent": agent, "action": action, "reason": reason}),
+            )?;
+            run.send(
+                agent,
+                json!({"type": "refused", "action": action, "reason": reason}),
+            )
+        };
         match action {
             "message" => {
                 run.send(
@@ -388,7 +409,8 @@ fn execute(
                     .checked_sub(1)
                     .map(|i| milestones[i]["id"].as_str().unwrap());
                 if request["milestone"].as_str() != expected || !awaiting_ack.remove(agent) {
-                    bail!("Invalid milestone acknowledgment");
+                    refuse(run, "no such unacknowledged development")?;
+                    continue;
                 }
                 milestone_floor.insert(agent, sequence[agent]);
                 run.send(agent, json!({"type": "ok", "action": action}))?;
@@ -427,18 +449,20 @@ fn execute(
             }
             "ready" => {
                 if milestone_index != milestones.len() || awaiting_ack.contains(agent) {
-                    bail!("Final readiness before developments delivered/acknowledged");
+                    refuse(run, "not every development is delivered and acknowledged")?;
+                    continue;
                 }
                 if shares[agent].is_none() || request["commit"].as_str() != shares[agent].as_deref()
                 {
-                    bail!("Final readiness must name last shared commit");
+                    refuse(run, "ready must name your last shared commit")?;
+                    continue;
                 }
                 ready.insert(agent);
                 run.send(agent, json!({"type": "ok", "action": action}))?;
             }
             "check" => {
                 // Either worker can ask for feedback on an unfinished shared combination.
-                let result = combine(
+                let result = match combine(
                     public,
                     private,
                     &retained,
@@ -447,7 +471,15 @@ fn execute(
                     request["resolved"].as_str(),
                     run.check_timeout(),
                     &denied,
-                )?;
+                ) {
+                    Ok(result) => result,
+                    // A bad resolved commit is the agent's mistake.
+                    Err(error) if request["resolved"].is_string() => {
+                        refuse(run, &format!("invalid resolved commit: {error}"))?;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 if result["passed"] == true {
                     final_resolution = result["candidate"].as_str().map(String::from);
                 }
@@ -462,13 +494,15 @@ fn execute(
             }
             "share" => {
                 if ready.contains(agent) {
-                    bail!("Cannot edit after final readiness");
+                    refuse(run, "you declared ready; no further shares")?;
+                    continue;
                 }
                 let work = public.join(agent);
                 public_git(&work, &["add", "--all", ".", ":(exclude)scratch"])?;
                 final_resolution = None;
                 if public_git(&work, &["diff", "--cached", "--binary"])?.is_empty() {
-                    bail!("Share must contain new unfinished work");
+                    refuse(run, "share must contain new unfinished work")?;
+                    continue;
                 }
                 public_git(
                     &work,
@@ -510,7 +544,7 @@ fn execute(
                     }
                 }
             }
-            _ => bail!("Unknown worker action: {action}"),
+            _ => refuse(run, "unknown action")?,
         }
     }
     let result = combine(

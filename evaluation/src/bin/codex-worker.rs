@@ -167,7 +167,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         };
         loop {
             let reply = events.recv()?;
-            let done = reply["type"] == expected
+            let done = (reply["type"] == expected || reply["type"] == "refused")
                 && (expected != "ok" || reply["action"] == action.as_str());
             pending.push(reply);
             if done {

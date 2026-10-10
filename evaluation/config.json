@@ -6,23 +6,38 @@
     "A",
     "B"
   ],
-  "model": "REQUIRED: same exact model in both arms",
-  "model_version": "REQUIRED: record resolved version; unknown blocks scoring",
-  "reasoning": "REQUIRED: same setting in both arms",
-  "runtime_version": "REQUIRED: reverified adapter version",
-  "runtime_sha256": "REQUIRED: actual binary hash",
+  "model": "claude-opus-5-5",
+  "model_version": "claude-opus-5-5 (the pinned runtime reports no finer version; init and modelUsage must name exactly this ID)",
+  "reasoning": "default (no effort flag) in both arms",
+  "runtime_version": "2.1.287",
+  "runtime_sha256": "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea",
   "worker_command": [
     "{worker}"
   ],
   "tool_differences": {
-    "git": "Two writable Git worktrees; JSON-line messages and unfinished diffs; ordinary merges and conflict resolution; exact host-captured checks. No Falinks ledger or offer/reconsideration protocol.",
-    "falinks": "Live group workspace; engine-mediated mutations and revision-bound reviews/offers; host-captured checks. Adapter/engine supplied by downstream tickets.",
-    "shared": "Same two fresh identities, allocation, model/version/reasoning, requirements, dependency information, announcements, feedback opportunities, frozen milestones and trusted checks. No oracle/reference access."
+    "git": "Two writable Git worktrees with native Read/Grep/Glob/Edit/Write and unsandboxed-by-Claude Bash inside the host sandbox-exec profile; host commands (message/share/ack/check/ready) via Bash; unfinished diffs; ordinary merges and conflict resolution; exact host-captured checks. The worker sandbox allows outbound network for the runtime, so Git-arm Bash also has network; Falinks-arm Bash runs in Claude Code's sandbox without it. No Falinks ledger or offer/reconsideration protocol.",
+    "falinks": "Live group workspace read with native Read/Grep/Glob; source changes only through engine-mediated falinks tools (edits, revision-bound reviews, offers, feedback runs, regrouping, gofmt job) plus host ack/check/ready tools. Claude Code's own sandbox: Bash writes only scratch. Enrollment fixes the file set: fixture files except dot-paths (held by the host and added to every candidate) plus x_test.go / tests/x.rs per source file. Publication requires the engine's visible checks; host check/final readiness add the oracle.",
+    "shared": "Same pinned Claude Code binary, model, default reasoning, --max-turns 12 per message with host continuation, isolation flags, fresh sessions, allocation, requirements, dependency information, milestone triggers, peer-event delivery at presentation boundaries, two-minute idle reminders, pass/fail-only visible+oracle checks and 30-minute bound. No oracle/reference access."
   },
-  "worker_script": "evaluation/target/release/codex-worker",
-  "runtime_binary": "REQUIRED: absolute pinned codex binary",
-  "auth_file": "REQUIRED: auth.json for the isolated fresh CODEX_HOME",
+  "worker_script": "REQUIRED: absolute evaluation/target/release/claude-worker",
+  "runtime_binary": "REQUIRED: absolute dedicated copy of the pinned claude 2.1.287",
+  "auth_file": null,
   "denied_roots": [
     "REQUIRED: checkout, other runs and any reference copies"
+  ],
+  "runtime_home": "REQUIRED: home holding the subscription login (normally $HOME)",
+  "runtime_writable": [
+    "REQUIRED: <runtime_home>/.claude",
+    "REQUIRED: <runtime_home>/.claude.json"
+  ],
+  "evaluation_root": "REQUIRED: absolute path of this evaluation directory",
+  "eval_binary": "REQUIRED: absolute evaluation/target/release/falinks-eval",
+  "falinks_runner": "REQUIRED: absolute target/release/falinks-arm (repository root)",
+  "gate_command": [
+    "REQUIRED: absolute target/release/check-integration",
+    "--binary",
+    "REQUIRED: same runtime_binary",
+    "--output",
+    "{output}"
   ]
 }
