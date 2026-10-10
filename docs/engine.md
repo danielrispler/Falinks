@@ -1,6 +1,6 @@
 # Controlled live edits (#20)
 
-The `falinks` Rust library is the host-owned public protocol for this slice. `tests/protocol.rs` supplies two authenticated scripted clients using real temporary source, a bare Git object store and SQLite. No publication capability is enabled: the published pointer stays at the enrolled initial snapshot. Related-scope analysis, obligations, reviews, messages, offers, replay and waits are described in [Related-scope coordination (#21)](#related-scope-coordination-21). The app-server adapter, validation, publication and grouping belong to later tickets.
+The `falinks` Rust library is the host-owned public protocol for this slice. `tests/protocol.rs` supplies two authenticated scripted clients using real temporary source, a bare Git object store and SQLite. Related-scope analysis, obligations, reviews, messages, offers, replay and waits are described in [Related-scope coordination (#21)](#related-scope-coordination-21). Exact candidates, validation and publication are described in [Checkpoint publication (#22)](#checkpoint-publication-22). The adapters are in `adapters/`; grouping belongs to a later ticket.
 
 Run on macOS with Rust and `/usr/bin/git`:
 
@@ -68,14 +68,54 @@ A change covers the owners touched by its single per-file diff hunk in both the 
 
 ## Messages, offers and replay
 
-Events carry the SQLite commit sequence and a stable `workspace:seq` ID. Message kinds: `Plan` (client `post`, reserves nothing), `LiveEdit` (engine, on commit), `CheckpointOffer` (`offer`) and `Publication` (reserved for committed acceptance; never emitted in this slice). Every message names its sender, workspace, task, scope and work. A reply must repeat the original message's exact work. Offers name a captured revision and stay available through later live edits until `withdraw` or an explicit `supersedes`.
+Events carry the SQLite commit sequence and a stable `workspace:seq` ID. Message kinds: `Plan` (client `post`, reserves nothing), `LiveEdit` (engine, on commit), and `CheckpointOffer` (`offer`). Committed acceptance is a separate `Published` event, and check results are `Validated` events (see #22). Every message names its sender, workspace, task, scope and work. A reply must repeat the original message's exact work. Offers name a captured revision and stay available through later live edits until `withdraw` or an explicit `supersedes`.
 
 `events(client, after)` replays in order. `handle(client, seq, Processed | Deferred)` advances the durable handled position one event at a time. A deferral is stored in the same transaction, so a cursor never skips pending context. Duplicate or earlier handling is a no-op, apart from clearing a deferral. `pending(client)` restores unhandled events, deferred context and pending obligations after a reconnect or restart.
 
 ## Waits
 
-`wait(client, Condition, timeout, cancel)` checks the durable store while holding the wake lock, so an event committed before the wait is caught up immediately. Possible outcomes are `Met`, `TimedOut`, `Cancelled` (via `cancel_token`), `Disconnected` (host `disconnect`, or a peer not authenticated since startup), `Withdrawn`, and `Superseded`, which names the replacement and is never followed automatically. A `Checkpoint` wait targets acceptance of that exact checkpoint. Publication is disabled, so in this slice such a wait can end only through one of the non-met outcomes.
+`wait(client, Condition, timeout, cancel)` checks the durable store while holding the wake lock, so an event committed before the wait is caught up immediately. Possible outcomes are `Met`, `TimedOut`, `Cancelled` (via `cancel_token`), `Disconnected` (host `disconnect`, or a peer not authenticated since startup), `Withdrawn`, and `Superseded`, which names the replacement and is never followed automatically. A `Checkpoint` wait targets acceptance of that exact checkpoint and is met by its `Published` event.
 
 ## Limits
 
 Analysis runs inside the short writer operation (about one analyzer run per edit; a few seconds on the fixtures). One diff hunk per file over-approximates multi-hunk edits. Reference and implementation evidence is not an exhaustive behavioral dependency model; dynamic dispatch through values, reflection or textual coupling can escape it. When analysis is configured, any external crate or package marks the input universe unknown and blocks writes until the repository is bounded, so only self-contained repositories are supported today. A review can cite any capture of a revision, not only one the reviewing client requested. Independent-symbol application stays disabled. Runtime delivery, `turn/steer` and adapter-side enforcement belong to the adapter ticket.
+
+# Checkpoint publication (#22)
+
+`tests/publication.rs` drives this slice through the public protocol with real Git, SQLite and the pinned `rustc` as the required compile and test checks. The checks need macOS Seatbelt, like captured jobs.
+
+## Exact candidates and offers
+
+A candidate is a completed revision `R` over the current published revision `B`. Completed history is linear, so the candidate holds every completed team edit up to `R`, including unfinished code; there is no ready-only reconstruction. Its required members are the authors of every applied operation in `(B, R]`, kept even when a later edit overwrote their bytes, plus the members the host requires with `require_members`. A peer that was only notified, with no included operation, is not a required member. `candidate(R)` reports the binding and the members still `missing` an offer. A disconnected member's unoffered work blocks the candidate; nobody else can offer for them.
+
+`offer` records the offer's binding: base, members, contributions (operation IDs) and the offerer's reviewed revision per scope. An offer counts toward a candidate only while it is `Available` and its binding equals the candidate's. So a changed base, membership or contribution set needs new offers, and supersession or withdrawal transfers nothing.
+
+## Checks
+
+When an offer completes coverage, the same SQLite commit queues a publication run. `feedback(client, id, R)` queues an early run of any captured revision; it never publishes. The host worker calls `validate()` to process the oldest queued run. The required check set comes from the host's `configure_checks`. It is held in memory, like analysis configuration, so after a restart the host must configure it again.
+
+All runs share one validation workspace, `state/validation`, under one lease. The lease covers preparation, checks, acceptance and synchronization, so runs queue while live drafting continues. A run marks the slot dirty in SQLite before touching it. The slot is reused only when SQLite records it clean and its files still match that record exactly. Otherwise it is moved to `state/quarantine/` as evidence and rebuilt. A free lock after a crash proves nothing. Only differing files are rewritten.
+
+Each check runs in the slot with a cleared environment and a fresh output directory (`TMPDIR`, `HOME`, `CARGO_TARGET_DIR`, `GOCACHE`). Seatbelt denies network, any write outside that output, and reading live or controller files. After each check the slot is verified against the candidate; a mutation refuses the run and quarantines the slot. Logs are kept in the run record. Output directories are deleted after the run. After the run the slot is synchronized to the published snapshot and recorded clean.
+
+## Acceptance
+
+A publication run first rechecks its gates, without running checks if one fails. After all checks pass it rechecks them again under the writer lock. The gates are: the same published base, the same complete coverage and bindings, no pending obligation for an included change, no halt, the same check set, and no unexplained live change. An unexplained change records an incident. One SQLite transaction then advances the published pointer, marks every covering checkpoint `Accepted`, records the run outcome and emits the `Published` event. The pointer names a retained revision whose per-file occurrence versions are the published versions, so restoring earlier bytes still advances them. Publication is an engine event rather than a fourth agent message kind: it has no sender, and `Message` waits must not match it. A failed gate gives `Blocked` and a `Validated` event to both agents. The check results remain feedback.
+
+The Git ref `refs/falinks/published` mirrors the pointer. It is updated after the commit, and `Engine::open` repairs it from SQLite. A mirror failure never undoes acceptance.
+
+A base advance returns the candidate to its members, who re-offer against the new base, and fresh checks run. Since `R` already holds the accepted work, this new exact combination has the same bytes but different bindings. A candidate at or below the published revision is refused: a newer publication is never overwritten. Relevance between the intervening work and the candidate was already enforced when the live edits were applied, because offers are refused while any obligation is pending.
+
+## Requests and recovery
+
+Offer and feedback IDs are idempotent: an identical repeat returns the recorded checkpoint or run, and changed contents under the same ID fail. `run(id)` and `checkpoint(id)` answer an uncertain commit. A run interrupted by a crash or error becomes `Interrupted` at restart, and nothing resumes automatically. `retry_run` re-queues it as a new attempt, with every gate and check run again. A run started before the host configured checks is also `Interrupted`, so it can be retried. Repeating `retry_run` on a committed run returns its recorded outcome. A `Failed`, `Refused` or `Blocked` run is final; changed work needs new offers, which form a new candidate. Restart preserves live drafts. A missing or corrupt retained snapshot stops startup.
+
+| Crash boundary | Observed outcome |
+| --- | --- |
+| During checks / before acceptance | Unpublished, all offers still available, run `Interrupted`, dirty slot quarantined on retry. |
+| Inside the acceptance transaction | Nothing accepted: no partial group, pointer or event. |
+| After commit, before mirror | Published, all members `Accepted`, mirror repaired on restart, duplicates return the outcome. |
+
+## Limits
+
+Checks run serially in the one slot, and the host decides when to run `validate()`. Required checks are trusted host commands; Seatbelt is a bounded control, not containment of hostile tools. The engine combines automatically only along the linear completed history, so publication races always return the candidate for re-offer. An offer's recorded reviews are evidence. The enforced peer and dependency gate is that no member has a pending obligation for a change included in the candidate. A candidate blocked by a disconnected member emits no extra event: peers already receive `Disconnected`, and `candidate(R)` names the missing member. There is no power-loss guarantee, and no joint Git/SQLite transaction.

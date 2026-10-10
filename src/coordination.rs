@@ -1,6 +1,7 @@
 //! Registered scopes, revision-bound obligations, explicit reviews, typed messages,
 //! checkpoint offers, the durable event stream and voluntary waits.
 use crate::analysis::{self, Evidence, Footprint};
+use crate::publication::{self, RunOutcome};
 use crate::{Capture, Client, Engine, Request, Result, connect, fail, meta, retain};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -54,7 +55,6 @@ pub enum Kind {
     Plan,
     LiveEdit,
     CheckpointOffer,
-    Publication,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Work {
@@ -101,7 +101,13 @@ pub struct Offer {
 pub enum Availability {
     Available,
     Withdrawn,
-    Superseded { replacement: String },
+    Superseded {
+        replacement: String,
+    },
+    /// Committed acceptance; `event` is the ordered publication event.
+    Accepted {
+        event: u64,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkpoint {
@@ -111,6 +117,14 @@ pub struct Checkpoint {
     pub capture: Capture,
     pub offer: Offer,
     pub state: Availability,
+    /// Published revision the offer was made against.
+    pub base: u64,
+    /// Required offerers: unpublished contributors in (base, revision] plus required members.
+    pub members: BTreeSet<usize>,
+    /// Applied operations in (base, revision], including overwritten ones.
+    pub contributions: Vec<u64>,
+    /// The offerer's reviewed revision per registered scope.
+    pub reviews: BTreeMap<String, u64>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Body {
@@ -135,6 +149,21 @@ pub enum Body {
     },
     Disconnected {
         agent: usize,
+    },
+    /// Exact-version check results, or a candidate returned to its members.
+    Validated {
+        run: String,
+        revision: u64,
+        tree: String,
+        outcome: RunOutcome,
+    },
+    /// Committed acceptance of an exact checked candidate.
+    Published {
+        run: String,
+        revision: u64,
+        base: u64,
+        tree: String,
+        checkpoints: BTreeMap<usize, String>,
     },
 }
 /// `seq` is the SQLite commit sequence; `id` is stable across replay.
@@ -161,8 +190,7 @@ pub struct Pending {
 pub enum Condition {
     /// The next message from `from` after stream position `after`.
     Message { from: usize, after: u64 },
-    /// Acceptance of this exact checkpoint. Publication is not enabled in this
-    /// slice, so such a wait ends only through the explicit non-met outcomes.
+    /// Committed acceptance of this exact checkpoint.
     Checkpoint { id: String },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,13 +257,13 @@ pub(crate) fn tables(db: &Connection) -> Result<()> {
     )?;
     Ok(())
 }
-fn others(agent: usize) -> i64 {
+pub(crate) fn others(agent: usize) -> i64 {
     0b11 & !(1 << agent)
 }
-fn mine(agent: usize) -> i64 {
+pub(crate) fn mine(agent: usize) -> i64 {
     1 << agent
 }
-fn obligations(db: &Connection, agent: usize) -> Result<Vec<Obligation>> {
+pub(crate) fn obligations(db: &Connection, agent: usize) -> Result<Vec<Obligation>> {
     let mut stmt = db.prepare("SELECT body FROM scopes WHERE agent=? ORDER BY id")?;
     let rows = stmt.query_map([agent as i64], |r| r.get::<_, String>(0))?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
@@ -251,7 +279,7 @@ fn save_obligation(db: &Connection, obligation: &Obligation) -> Result<()> {
     )?;
     Ok(())
 }
-fn event(db: &Connection, workspace: &str, seq: u64) -> Result<Option<Event>> {
+pub(crate) fn event(db: &Connection, workspace: &str, seq: u64) -> Result<Option<Event>> {
     db.query_row("SELECT body FROM events WHERE seq=?", [seq as i64], |r| {
         r.get::<_, String>(0)
     })
@@ -281,7 +309,7 @@ fn events_after(db: &Connection, workspace: &str, agent: usize, after: u64) -> R
     })
     .collect()
 }
-fn emit(db: &Connection, audience: i64, body: &Body) -> Result<u64> {
+pub(crate) fn emit(db: &Connection, audience: i64, body: &Body) -> Result<u64> {
     db.execute(
         "INSERT INTO events(audience, body) VALUES(?,?)",
         params![audience, serde_json::to_string(body)?],
@@ -298,7 +326,7 @@ fn cursor(db: &Connection, agent: usize) -> Result<u64> {
         .optional()?
         .unwrap_or(0) as u64)
 }
-fn checkpoint(db: &Connection, id: &str) -> Result<Option<Checkpoint>> {
+pub(crate) fn checkpoint(db: &Connection, id: &str) -> Result<Option<Checkpoint>> {
     db.query_row("SELECT body FROM checkpoints WHERE id=?", [id], |r| {
         r.get::<_, String>(0)
     })
@@ -306,14 +334,14 @@ fn checkpoint(db: &Connection, id: &str) -> Result<Option<Checkpoint>> {
     .map(|b| Ok(serde_json::from_str(&b)?))
     .transpose()
 }
-fn save_checkpoint(db: &Connection, checkpoint: &Checkpoint) -> Result<()> {
+pub(crate) fn save_checkpoint(db: &Connection, checkpoint: &Checkpoint) -> Result<()> {
     db.execute(
         "INSERT INTO checkpoints VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
         params![checkpoint.id, serde_json::to_string(checkpoint)?],
     )?;
     Ok(())
 }
-fn captured(db: &Connection, revision: u64) -> Result<Option<Capture>> {
+pub(crate) fn captured(db: &Connection, revision: u64) -> Result<Option<Capture>> {
     // Only a coherent capture an agent was actually given can be reviewed or offered.
     let seen = db
         .query_row(
@@ -653,6 +681,14 @@ impl Engine {
             ));
         }
         retain(&self.state, &capture)?;
+        let base: u64 = meta(&db, "published")?
+            .ok_or("missing published pointer")?
+            .parse()?;
+        let (members, contributions) = publication::coverage(&db, offer.revision, base)?;
+        let reviews = obligations(&db, client.agent)?
+            .into_iter()
+            .map(|o| (o.scope.id, o.reviewed))
+            .collect();
         let tx = db.unchecked_transaction()?;
         if let Some(old) = &offer.supersedes {
             let old = format!("{}/{old}", client.agent);
@@ -679,6 +715,10 @@ impl Engine {
             capture,
             offer: offer.clone(),
             state: Availability::Available,
+            base,
+            members,
+            contributions,
+            reviews,
         };
         save_checkpoint(&tx, &created)?;
         emit(
@@ -695,6 +735,8 @@ impl Engine {
                 reply_to: None,
             }),
         )?;
+        // Complete coverage queues the combined checks in the same commit.
+        publication::queue(&tx, offer.revision)?;
         tx.commit()?;
         drop(db);
         self.signal.notify();
@@ -868,6 +910,11 @@ impl Engine {
                                 checkpoint: id.clone(),
                                 replacement,
                             });
+                        }
+                        Availability::Accepted { event: seq } => {
+                            let accepted = event(&db, &self.identity.workspace, seq)?
+                                .ok_or("publication event missing")?;
+                            return Ok(WaitOutcome::Met(accepted));
                         }
                         Availability::Available if !connected[target.agent] => {
                             return Ok(WaitOutcome::Disconnected {
