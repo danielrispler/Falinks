@@ -292,7 +292,15 @@ fn claim(number: u64) -> Result<()> {
     if plan.assign {
         stdout(
             "gh",
-            &["issue", "edit", &id, "--repo", REPO, "--add-assignee", "@me"],
+            &[
+                "issue",
+                "edit",
+                &id,
+                "--repo",
+                REPO,
+                "--add-assignee",
+                "@me",
+            ],
         )?;
     }
     match plan.workspace {
