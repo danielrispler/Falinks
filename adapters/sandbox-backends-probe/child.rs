@@ -148,10 +148,16 @@ pub fn run(args: &[String]) -> Result<()> {
         "write_secret".into(),
         outcome(fs::write(secret.join("new.txt"), b"X")),
     );
+    // A fixed system temp path: TMPDIR points into output, so temp_dir() proves nothing.
+    let temp = if cfg!(windows) {
+        r"C:\Users\Public"
+    } else {
+        "/tmp"
+    };
     checks.insert(
-        "write_temp".into(),
+        "write_system_temp".into(),
         outcome(fs::write(
-            env::temp_dir().join("falinks-probe-escape"),
+            Path::new(temp).join("falinks-probe-escape"),
             b"X",
         )),
     );
@@ -187,6 +193,31 @@ pub fn run(args: &[String]) -> Result<()> {
             Err(error) => json!(format!("error: {error}")),
         },
     );
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::{linux::net::SocketAddrExt, unix::net};
+        // Host daemons reachable over pathname sockets bypass "no network" indirectly.
+        for path in [
+            "/run/systemd/resolve/io.systemd.Resolve",
+            "/run/dbus/system_bus_socket",
+            "/run/systemd/journal/stdout",
+        ] {
+            if Path::new(path).exists() {
+                checks.insert(
+                    format!("unix_connect {path}"),
+                    outcome(net::UnixStream::connect(path)),
+                );
+            }
+        }
+        let name = format!("falinks-probe-{port}");
+        checks.insert(
+            "unix_abstract_connect_host".into(),
+            outcome(
+                net::SocketAddr::from_abstract_name(name.as_bytes())
+                    .and_then(|addr| net::UnixStream::connect_addr(&addr)),
+            ),
+        );
+    }
     checks.insert("descendant".into(), spawn_descendant(&output));
     let report = Value::Object(checks);
     // Evidence goes to output, the one writable place; stdout is the backup.

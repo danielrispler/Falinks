@@ -389,18 +389,30 @@ fn spawn(
     let mut line = wide(OsStr::new(&line));
     let output = fixture.output.display().to_string();
     let root = env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    let mut block = String::new();
-    for (key, value) in [
-        ("PATH", format!(r"{root}\System32")),
-        ("SystemRoot", root.clone()),
-        ("TEMP", output.clone()),
-        ("TMP", output.clone()),
-        ("USERPROFILE", output.clone()),
-    ] {
-        block.push_str(&format!("{key}={value}\0"));
+    let minimal = vec![
+        ("PATH".to_string(), format!(r"{root}\System32")),
+        ("SystemRoot".into(), root.clone()),
+        ("TEMP".into(), output.clone()),
+        ("TMP".into(), output.clone()),
+        ("USERPROFILE".into(), output.clone()),
+    ];
+    // AppContainer creation redirects per-user folders into the package directory and
+    // may need LOCALAPPDATA/APPDATA; try the minimal block first and record the outcome.
+    let mut with_appdata = minimal.clone();
+    for key in ["LOCALAPPDATA", "APPDATA"] {
+        if let Ok(value) = env::var(key) {
+            with_appdata.push((key.into(), value));
+        }
     }
-    block.push('\0');
-    let block = block.encode_utf16().collect::<Vec<_>>();
+    let blocks = [minimal, with_appdata].map(|vars| {
+        let mut block = String::new();
+        for (key, value) in &vars {
+            block.push_str(&format!("{key}={value}\0"));
+        }
+        block.push('\0');
+        let names = vars.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
+        (names, block.encode_utf16().collect::<Vec<_>>())
+    });
     let cwd = wide(fixture.output.as_os_str());
 
     // Attribute values must stay alive until CreateProcessW returns.
@@ -474,24 +486,37 @@ fn spawn(
         startup.StartupInfo.hStdOutput = handles[1];
         startup.StartupInfo.hStdError = handles[2];
         startup.lpAttributeList = list;
-        // SAFETY: zeroed is valid for this out structure.
-        let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-        // SAFETY: every buffer is NUL-terminated and alive; the handle list limits inheritance.
-        let ok = unsafe {
-            CreateProcessW(
-                null(),
-                line.as_mut_ptr(),
-                null(),
-                null(),
-                1,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-                block.as_ptr().cast(),
-                cwd.as_ptr(),
-                &startup.StartupInfo,
-                &mut info,
-            )
-        };
-        check(ok, "CreateProcessW").map(|_| info)
+        let mut attempts = Vec::new();
+        let mut last = Err("no environment block tried".into());
+        for (names, block) in &blocks {
+            // SAFETY: zeroed is valid for this out structure.
+            let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: every buffer is NUL-terminated and alive; the handle list limits inheritance.
+            let ok = unsafe {
+                CreateProcessW(
+                    null(),
+                    line.as_mut_ptr(),
+                    null(),
+                    null(),
+                    1,
+                    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+                    block.as_ptr().cast(),
+                    cwd.as_ptr(),
+                    &startup.StartupInfo,
+                    &mut info,
+                )
+            };
+            last = check(ok, "CreateProcessW").map(|_| info);
+            attempts.push(json!({
+                "env": names,
+                "result": last.as_ref().map_or_else(|e| e.to_string(), |_| "ok".into()),
+            }));
+            if last.is_ok() {
+                break;
+            }
+        }
+        extra["env_attempts"] = json!(attempts);
+        last
     })();
     // SAFETY: list was initialized above and is no longer used by the OS.
     unsafe { DeleteProcThreadAttributeList(list) };

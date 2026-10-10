@@ -1,10 +1,12 @@
 //! Linux candidates. `wrap` installs a mechanism inside its own single-threaded process
 //! and then execs the child, as an in-process Rust backend would; `bwrap` is the external
 //! binary candidate. The host keeps the engine's process-group launch and kill path.
-use crate::{Fixture, Launch, Loopback, Result, Scenario, child_args, wait_until};
+use crate::{
+    Fixture, Launch, Loopback, Result, Scenario, child_args, descendant_alive, wait_until,
+};
 use landlock::{
     ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr,
-    RulesetCreatedAttr, path_beneath_rules,
+    RulesetCreatedAttr, Scope, path_beneath_rules,
 };
 use serde_json::{Value, json};
 use std::{
@@ -36,6 +38,12 @@ fn landlock_abi() -> i64 {
 
 pub fn facts() -> Value {
     let bwrap = Command::new("bwrap").arg("--version").output();
+    // cgroup v2 delegation route for process-tree kill: needs a systemd user manager.
+    let scope = Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "true"])
+        .output()
+        .map(|o| format!("{} {}", o.status, String::from_utf8_lossy(&o.stderr).trim()))
+        .unwrap_or_else(|e| format!("error: {e}"));
     json!({
         "kernel": read("/proc/sys/kernel/osrelease"),
         "os_release": fs::read_to_string("/etc/os-release").ok()
@@ -49,6 +57,7 @@ pub fn facts() -> Value {
         "max_user_namespaces": read("/proc/sys/user/max_user_namespaces"),
         "unprivileged_userns_clone": read("/proc/sys/kernel/unprivileged_userns_clone"),
         "cgroup": read("/proc/self/cgroup"),
+        "systemd_run_user_scope": scope,
         "bwrap": bwrap.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
             .unwrap_or_else(|e| format!("error: {e}")),
     })
@@ -61,6 +70,7 @@ pub fn plan() -> Vec<(&'static str, Scenario)> {
         ("landlock", Normal),
         ("landlock", Hang),
         ("landlock", Unavailable),
+        ("landlock-v6", Normal),
         ("landlock-seccomp", Normal),
         ("userns", Normal),
         ("userns", Hang),
@@ -185,12 +195,16 @@ pub fn launch(
         unsafe { libc::kill(-group, libc::SIGKILL) };
         child.wait()?;
     }
+    // Dead processes adopted by this subreaper host stay in the group as zombies until reaped.
+    std::thread::sleep(Duration::from_millis(50));
+    reap();
     // Same completion check as the engine: anything left in the group is a survivor.
     // SAFETY: signal 0 only probes whether the process group still exists.
     let survivors = unsafe { libc::kill(-group, 0) } == 0;
     // SAFETY: as above; kills the dedicated group.
     unsafe { libc::kill(-group, libc::SIGKILL) };
     let descendant = descendant_pid(fixture);
+    let alive_after_group_kill = descendant_alive(&fixture.output);
     let parent = descendant.and_then(|pid| {
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         // Fields after the parenthesised command: state, ppid, pgrp, session.
@@ -202,6 +216,14 @@ pub fn launch(
             .collect::<Vec<_>>();
         Some(json!({ "state": rest[0], "ppid": rest[1], "pgrp": rest[2], "session": rest[3] }))
     });
+    // Subreaper sweep: every remaining child of the host escaped the group; kill them all.
+    let swept = adopted();
+    for pid in &swept {
+        // SAFETY: kill takes no pointers; pid is a direct child of this host.
+        unsafe { libc::kill(*pid, libc::SIGKILL) };
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    reap();
     Ok(Launch {
         started: true,
         launch_error: None,
@@ -212,6 +234,8 @@ pub fn launch(
             "process_group": group,
             "host_pid": std::process::id(),
             "descendant_proc_stat_in_host_view": parent,
+            "descendant_alive_after_group_kill": alive_after_group_kill,
+            "subreaper_swept_pids": swept,
         }),
     })
 }
@@ -236,9 +260,31 @@ pub fn cleanup(fixture: &Fixture) {
         // SAFETY: kill takes no pointers; pid was checked to be the probe descendant.
         unsafe { libc::kill(pid, libc::SIGKILL) };
     }
-    // Reap adopted orphans so they do not linger as zombies of the subreaper host.
+    reap();
+}
+
+/// Reap adopted orphans so they do not linger as zombies of the subreaper host.
+fn reap() {
     // SAFETY: waitpid with a null status pointer is allowed.
     while unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) } > 0 {}
+}
+
+/// Live children of this host: after the job is waited, only adopted escapes remain.
+fn adopted() -> Vec<i32> {
+    let mut pids = Vec::new();
+    for task in fs::read_dir("/proc/self/task")
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        if let Ok(text) = fs::read_to_string(task.path().join("children")) {
+            pids.extend(
+                text.split_whitespace()
+                    .filter_map(|p| p.parse::<i32>().ok()),
+            );
+        }
+    }
+    pids
 }
 
 // ---- wrap: in-process mechanisms ----
@@ -309,16 +355,22 @@ fn seccomp(rules: &[Rule]) -> Result<()> {
 }
 
 /// Fail closed: any Landlock feature the kernel lacks is an error, never a weaker ruleset.
-fn landlock(input: &Path, output: &Path, exe: &Path) -> Result<()> {
-    let abi = ABI::V4;
+fn landlock(abi: ABI, input: &Path, output: &Path, exe: &Path) -> Result<()> {
     let mut reads = SYSTEM_READS.iter().map(PathBuf::from).collect::<Vec<_>>();
     reads.extend([input.to_owned(), exe.to_owned()]);
     reads.retain(|path| path.exists());
-    let status = Ruleset::default()
+    let ruleset = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
         .handle_access(AccessFs::from_all(abi))?
         // Handling TCP with no allow rules denies every TCP bind and connect.
-        .handle_access(AccessNet::from_all(abi))?
+        .handle_access(AccessNet::from_all(abi))?;
+    // ABI 6 scopes abstract Unix sockets and signals to the sandbox domain.
+    let ruleset = if abi >= ABI::V6 {
+        ruleset.scope(Scope::from_all(abi))?
+    } else {
+        ruleset
+    };
+    let status = ruleset
         .create()?
         .add_rules(path_beneath_rules(&reads, AccessFs::from_read(abi)))?
         .add_rules(path_beneath_rules(
@@ -367,7 +419,7 @@ pub fn wrap(args: &[String]) -> Result<()> {
     let mut rules = Vec::new();
     match mechanism.as_str() {
         // Simulates a kernel without Landlock: the syscall reports ENOSYS.
-        "landlock" | "landlock-seccomp" if simulate => {
+        "landlock" | "landlock-v6" | "landlock-seccomp" if simulate => {
             rules.push(Rule::Deny(libc::SYS_landlock_create_ruleset, libc::ENOSYS))
         }
         // Simulates user namespaces being disabled by policy.
@@ -387,9 +439,14 @@ pub fn wrap(args: &[String]) -> Result<()> {
         seccomp(&rules)?;
     }
     let exe = Path::new(&target[0]);
-    let contain = || landlock(&root.join("input"), &root.join("output"), exe);
+    let abi = if mechanism == "landlock-v6" {
+        ABI::V6
+    } else {
+        ABI::V4
+    };
+    let contain = || landlock(abi, &root.join("input"), &root.join("output"), exe);
     match mechanism.as_str() {
-        "landlock" | "landlock-seccomp" => contain()?,
+        "landlock" | "landlock-v6" | "landlock-seccomp" => contain()?,
         "userns" => {
             unshare_namespaces()?;
             // The first child is PID 1 of the new namespace; when it exits the kernel

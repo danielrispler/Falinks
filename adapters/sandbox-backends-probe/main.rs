@@ -93,6 +93,15 @@ impl Loopback {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         let (send, hits) = mpsc::channel();
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::{linux::net::SocketAddrExt, unix::net};
+            // Abstract socket the child tries to reach; scoped by Landlock v6 or a netns.
+            let name = format!("falinks-probe-{port}");
+            let addr = net::SocketAddr::from_abstract_name(name.as_bytes())?;
+            let abstract_listener = net::UnixListener::bind_addr(&addr)?;
+            thread::spawn(move || for _ in abstract_listener.incoming() {});
+        }
         thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 drop(stream);
@@ -141,7 +150,7 @@ pub struct Launch {
 
 /// Heartbeat written by the detached descendant; changes only while it lives.
 /// Works across PID namespaces, where the recorded pid is meaningless to the host.
-fn descendant_alive(output: &Path) -> Option<bool> {
+pub fn descendant_alive(output: &Path) -> Option<bool> {
     let read = || fs::read(output.join("heartbeat")).ok();
     let before = read()?;
     thread::sleep(Duration::from_millis(800));
