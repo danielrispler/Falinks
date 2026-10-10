@@ -63,3 +63,6 @@ Reassessment of affected planned or proposed work after a relevant change, follo
 
 **External edit**:
 A repository change made outside the engine's publication workflow.
+
+**Supported language**:
+A programming language whose repositories Falinks can coordinate, including related scope and checks. Currently Rust and Go. Distinct from a client, which is an authenticated agent session.
