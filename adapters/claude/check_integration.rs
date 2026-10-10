@@ -374,11 +374,21 @@ impl Gate {
         Ok(())
     }
     /// Pump both workers until every one is idle and `hook` reports it is done.
-    fn drive(&mut self, mut hook: impl FnMut(&mut Self) -> Result<bool>) -> Result<()> {
+    fn drive(&mut self, hook: impl FnMut(&mut Self) -> Result<bool>) -> Result<()> {
+        self.pump(&[0, 1], true, hook)
+    }
+    /// Step only `agents` until `until` holds (and, when `idle`, every worker is idle).
+    /// A worker left out is a host barrier: its mediated calls wait for their replies.
+    fn pump(
+        &mut self,
+        agents: &[usize],
+        idle: bool,
+        mut until: impl FnMut(&mut Self) -> Result<bool>,
+    ) -> Result<()> {
         let deadline = Instant::now() + PHASE;
         loop {
             self.notices()?;
-            for agent in 0..2 {
+            for &agent in agents {
                 if let Some(runtime) = self.workers[agent].runtime.as_mut() {
                     runtime.step(Duration::from_millis(20))?;
                     if runtime.session.gate.failed {
@@ -387,12 +397,13 @@ impl Gate {
                     }
                 }
             }
-            let done = hook(self)?;
-            let idle = self
-                .workers
-                .iter()
-                .all(|w| w.runtime.as_ref().is_none_or(|r| r.session.idle()));
-            if done && idle {
+            let done = until(self)?;
+            let quiet = !idle
+                || self
+                    .workers
+                    .iter()
+                    .all(|w| w.runtime.as_ref().is_none_or(|r| r.session.idle()));
+            if done && quiet {
                 for worker in self.workers.iter().filter_map(|w| w.runtime.as_ref()) {
                     let result = &worker.session.last_result;
                     require(
@@ -443,10 +454,7 @@ impl Gate {
             root.join("price.go").to_string_lossy().into_owned(),
             hash(&fs::read(root.join("price.go"))?),
             mine.join("scratch").to_string_lossy().into_owned(),
-            format!(
-                "state={}",
-                self.dir.join("state/marker.txt").display()
-            ),
+            format!("state={}", self.dir.join("state/marker.txt").display()),
             format!(
                 "controller={}",
                 mine.join("controller/marker.txt").display()
@@ -488,6 +496,12 @@ impl Gate {
     }
 }
 
+/// What to do when an edit is refused for a pending obligation.
+fn unreviewed(retry: &str) -> String {
+    format!(
+        " If the result is Unreviewed: call falinks_pending, call falinks_capture with request {{}}, then for each pending obligation falinks_review with request {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using that capture's revision, then repeat this edit with id \"{retry}\" and a fresh version."
+    )
+}
 fn edit_step(id: &str, path: &str, content: &str, version: &str) -> String {
     format!(
         "falinks_edit with request {{\"id\": \"{id}\", \"expected\": {{\"{path}\": {version}}}, \"output\": {{\"{path}\": {{\"content\": {}}}}}}}",
@@ -685,9 +699,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
 
     // Phase 6: steering. While agent 1's turn is active, agent 0 installs an incomplete
     // draft that agent 1's registered work depends on.
+    // The join's transition raised obligations; agent 1 reviews them before drafting.
+    let review = "1. falinks_pending with request {}.\n2. falinks_capture with request {}.\n3. For each pending obligation, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If none is pending, do nothing.";
+    gate.run(&[(0, review.into()), (1, review.into())])?;
     let summary_version = version(gate, "summary.go")?;
     let steps = format!(
-        "1. {} \n2. Bash: run `sleep 30`.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with request {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned. If the result is Unreviewed: call falinks_pending, reread price.go, call falinks_capture with request {{}}, then falinks_review with request {{\"scope\": \"summary\", \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current price.go\"}} using that capture's revision, then repeat this edit with id \"summary-final-2\" and fresh versions.",
+        "1. {}\n2. falinks_capture with request {{\"paths\": [\"price.go\"]}} and quote the body of Discount from its price.go content.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with request {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned.{}",
         edit_step(
             "summary-draft",
             "summary.go",
@@ -695,21 +712,31 @@ fn scenario(gate: &mut Gate) -> Result<()> {
             &summary_version
         ),
         edit_step("summary-final", "summary.go", SUMMARY_FINAL, "VERSION"),
+        unreviewed("summary-final-2"),
         root = gate.engine().root(gate.client(1))?.display()
     );
     gate.prompt(1, &steps)?;
+    // Host barrier: once agent 1's draft is in, only agent 0 runs until its incomplete
+    // draft commits. Agent 1's next mediated call waits, inside the same turn.
+    gate.pump(&[1], false, |gate| Ok(!gate.accepted(1, "edit").is_empty()))?;
     let broken = format!(
-        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — this is an intentionally unfinished draft that does not compile yet; use the price.go version step 1 returned.",
-        edit_step("discount-broken", "price.go", DISCOUNT_BROKEN, "VERSION")
+        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — this is an intentionally unfinished draft that does not compile yet; use the price.go version step 1 returned.{}",
+        edit_step("discount-broken", "price.go", DISCOUNT_BROKEN, "VERSION"),
+        unreviewed("discount-broken-2")
     );
-    let mut triggered = false;
-    gate.drive(|gate| {
-        if !triggered && !gate.accepted(1, "edit").is_empty() {
-            triggered = true;
-            gate.prompt(0, &broken)?;
-        }
-        Ok(triggered)
+    gate.prompt(0, &broken)?;
+    gate.pump(&[0], false, |gate| {
+        Ok(gate.read_live(0, "price.go")? == DISCOUNT_BROKEN
+            && gate.workers[0]
+                .runtime
+                .as_ref()
+                .is_some_and(|r| r.session.idle()))
     })?;
+    require(
+        gate.runtime(1)?.session.in_turn(),
+        "agent 1's turn ended before the peer edit",
+    )?;
+    gate.drive(|_| Ok(true))?;
     let obligation = gate
         .engine()
         .events(gate.client(1), 0)?
@@ -796,8 +823,9 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     // Phase 7: finish, review, offer the exact team candidate; acceptance commits but the
     // host faults before acknowledging it, then restarts the engine and both workers.
     let steps = format!(
-        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned. If the result is Unreviewed: call falinks_pending, call falinks_capture with request {{}}, then for each pending obligation falinks_review with request {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using that capture's revision, then repeat this edit with id \"discount-done-2\" and a fresh version.",
-        edit_step("discount-done", "price.go", DISCOUNT_FINAL, "VERSION")
+        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned.{}",
+        edit_step("discount-done", "price.go", DISCOUNT_FINAL, "VERSION"),
+        unreviewed("discount-done-2")
     );
     gate.run(&[(0, steps)])?;
     require(
