@@ -112,7 +112,7 @@ fn verify_schema(binary: &Path) -> Result<Value> {
     require(actual == expected, "protocol schema mismatch")?;
     Ok(json!(actual))
 }
-fn tools(workspace: &str) -> Value {
+pub fn tools(workspace: &str) -> Value {
     json!(["edit","review","offer"].map(|operation|json!({"name":format!("falinks_{operation}"),"description":format!("Submit an engine {operation}. Workspace: {workspace}"),"inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},"required":["workspace","request"],"additionalProperties":false}})))
 }
 

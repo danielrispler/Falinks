@@ -1,0 +1,26 @@
+[package]
+name = "falinks-claude"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[[bin]]
+name = "check-claude-adapter"
+path = "check_adapter.rs"
+
+[[bin]]
+name = "falinks-claude-tool"
+path = "tool.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+falinks-host = { path = "../codex" }
+libc = "0.2"
+serde_json = "1"
+shlex = "2"
+tempfile = "3"

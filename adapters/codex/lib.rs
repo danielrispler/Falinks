@@ -38,14 +38,27 @@ pub fn file_hash(path: &Path) -> Result<String> {
     Ok(hash(&std::fs::read(path)?))
 }
 
-#[derive(Default)]
 pub struct ControlGate {
     pub controls: BTreeMap<String, bool>,
     pub failed: bool,
+    required: &'static [&'static str],
+}
+impl Default for ControlGate {
+    fn default() -> Self {
+        Self::new(REQUIRED)
+    }
 }
 impl ControlGate {
+    /// A runtime adapter names its own required control set.
+    pub fn new(required: &'static [&'static str]) -> Self {
+        Self {
+            controls: BTreeMap::new(),
+            failed: false,
+            required,
+        }
+    }
     pub fn record(&mut self, name: &str, passed: bool) -> Result<()> {
-        require(REQUIRED.contains(&name), "unknown safety control")?;
+        require(self.required.contains(&name), "unknown safety control")?;
         self.controls.insert(name.into(), passed);
         self.failed |= !passed;
         Ok(())
@@ -53,7 +66,7 @@ impl ControlGate {
     pub fn require_supported(&self) -> Result<()> {
         require(
             !self.failed
-                && self.controls.len() == REQUIRED.len()
+                && self.controls.len() == self.required.len()
                 && self.controls.values().all(|x| *x),
             "fresh safety controls required; publication/scoring disabled",
         )
