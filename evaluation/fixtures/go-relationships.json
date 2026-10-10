@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "name": "go-relationships",
+  "language": "go",
+  "files": {
+    "go.mod": "module fixture\n\ngo 1.23\n",
+    ".gitignore": "/fixture.test\n",
+    "producer.go": "package fixture\n\nimport \"strings\"\n\nfunc Produce(lines []string) []string {\n    out := make([]string, 0, len(lines))\n    for _, line := range lines { out = append(out, strings.TrimSpace(line)) }\n    return out\n}\n",
+    "consumer.go": "package fixture\n\nfunc Consume(records []string) []string {\n    return append([]string{}, records...)\n}\n"
+  },
+  "requirements": [
+    "Initial task: Produce trims each input and drops blank lines without mutating input. Consume preserves incoming order without mutating its input. Add focused tests. Further behavioral developments will arrive at the frozen milestones."
+  ],
+  "allocation": {
+    "A": "Producer in producer.go; subsequent producer developments.",
+    "B": "Consumer in consumer.go; subsequent consumer developments."
+  },
+  "dependencies": [
+    "Initially Produce returns []string consumed by Consume. Developments may change that shared contract."
+  ],
+  "milestones": [
+    {
+      "id": "record-contract",
+      "trigger": "both agents have shared at least one nonempty unfinished diff",
+      "requirements": [
+        "The upstream feed now requires public Record struct { ID int; Text string }. Produce(lines []string) []Record uses the original 1-based line number for ID, trims Text and drops blanks without renumbering. Consume(records []Record) []string formats ID:Text, retaining order and inputs. This replaces the string contract."
+      ]
+    },
+    {
+      "id": "follow-ups",
+      "trigger": "both agents have shared a new nonempty diff after acknowledging record-contract",
+      "requirements": [
+        "A: add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy.",
+        "B: add Render(records []Record) string joining Consume output with newline, with no trailing newline; empty is empty string. Keep record contract behavior."
+      ]
+    }
+  ],
+  "commands": [
+    "go test ./..."
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "go-page",
+  "language": "go",
+  "files": {
+    "go.mod": "module fixture\n\ngo 1.23\n",
+    ".gitignore": "/fixture.test\n",
+    "handler.go": "package fixture\n\nimport (\n    \"encoding/json\"\n    \"net/http\"\n)\n\ntype Item struct {\n    ID int `json:\"id\"`\n    Kind string `json:\"kind\"`\n}\n\n// Input order is the stable response order. The caller retains ownership of items.\nfunc Handler(items []Item) http.Handler {\n    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n        w.Header().Set(\"Content-Type\", \"application/json\")\n        json.NewEncoder(w).Encode(items)\n    })\n}\n"
+  },
+  "requirements": [
+    "Extend Handler(items []Item) http.Handler: optional kind filters by exact Kind; empty/missing kind selects all. Preserve input ordering and never mutate caller data.",
+    "Optional offset and limit are nonnegative decimal integers; missing offset=0, missing limit=unbounded. Invalid, empty, negative or overflowing numbers return HTTP 400. Filter BEFORE pagination; offset at/beyond end and limit=0 yield []. Successful results use application/json; unknown parameters are ignored; nil input yields []. Add focused handler tests."
+  ],
+  "allocation": {
+    "A": "Kind filtering in handler.go and focused tests.",
+    "B": "Offset/limit pagination in the same handler.go and focused tests."
+  },
+  "dependencies": [
+    "Both subtasks edit Handler; selection order is filtering then offset then limit."
+  ],
+  "milestones": [
+    {
+      "id": "peer-drafts",
+      "trigger": "both agents have shared at least one nonempty unfinished diff",
+      "requirements": [
+        "Integration observation: a red/blue interleaved input must be filtered before slicing; keep input order."
+      ]
+    }
+  ],
+  "commands": [
+    "go test ./..."
+  ]
+}
