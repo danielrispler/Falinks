@@ -45,7 +45,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 ### Session startup
 
-1. Run `cargo run --bin wayfinder-startup -- [map-number]`; omit the number for the current collaborative-editing map. It reads the full live map once and paginated open-child metadata in map order, including claims, open blockers and frontier eligibility. This repo uses native GitHub sub-issues and dependencies; unavailable blocker metadata is an error.
+1. Run `cargo run --bin wayfinder-startup -- [map-number]`; omit the number to use the newest open issue labelled `wayfinder:map`. With no open map it exits non-zero and lists recent maps; it never falls back to a closed map, and an explicit closed or missing map is an error. The live collaborative-editing tickets are children of #19, a `Spec:` issue without the map label, so pass `19` to see them. It reads the full live map once and paginated open-child metadata in map order, including claims, open blocker numbers (`blocked_by`) and frontier eligibility. This repo uses native GitHub sub-issues and dependencies; unavailable blocker metadata is an error.
 2. Use the named ticket, or the first row with `frontier: true`. Refresh eligibility if tracker state may have changed, then claim before work. The command is read-only; GitHub remains authoritative.
 3. Load that ticket's body, its reading links and required skills once. Expand to other decisions or evidence when the question needs them; check for superseded decisions. Use the configured `gh` route directly. Read triage guidance when triaging.
 4. Open the session with the state and goal brief described in `docs/agents/learning.md`; follow its explanation guidance when planning or asking decision questions.
