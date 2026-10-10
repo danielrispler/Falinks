@@ -1251,7 +1251,8 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     // The halt reaches agent 1's next mediated call too.
     gate.run(&[(1, "1. falinks_capture with request {}.".into())])?;
     let published = gate.engine().published()?;
-    // Publication stays refused: a host-queued check run cannot publish.
+    // No publication follows the halt. The halt's publication gate itself is covered by
+    // tests/publication.rs `unexplained_source_writes_stop_publication_and_keep_evidence`.
     let feedback = gate
         .engine()
         .feedback(gate.client(1), "after-halt", published.revision);

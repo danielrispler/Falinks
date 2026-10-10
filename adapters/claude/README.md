@@ -74,7 +74,7 @@ cargo build --release --bins
   --output /path/to/integration-report.json
 ```
 
-It needs the same pinned binary, login and sandbox permission as `check-claude-adapter`, plus Go and `gopls` (or `FALINKS_GOPLS`), like `tests/regroup.rs`. It creates `/private/tmp/falinks-integration-*` with two live roots (`space0`, `space1`), engine `state`, one `scratch` and `controller` per agent, and `worker-tools`. The fixture is a small Go module used only for this gate, never a scored evaluation fixture. Required checks are `go vet ./...` and `go test ./...`. Failed runs exit nonzero; a saved report never authorizes another run.
+It needs the same pinned binary, login and sandbox permission as `check-claude-adapter`, plus Go and `gopls` (or `FALINKS_GOPLS`), like `tests/regroup.rs`. It creates `/private/tmp/falinks-integration-*` with two live roots (`space0`, `space1`), engine `state`, one `scratch` and `controller` per agent, and `worker-tools`. The fixture is a small Go module used only for this gate, never a scored evaluation fixture. Required checks are `go vet ./...` and `go test ./...`. Failed runs exit nonzero; a saved report never authorizes another run. `evidence/2026-10-10-integration.json` is the first fully passing report (audit material only).
 
 ### Host-scripted phases
 
@@ -89,7 +89,7 @@ Real agents make every tool call; the host sets turn order, barriers and faults:
 7. **accepted_recovery**: agent 0's steering is checked the same way, against a declared dependency on agent 1's `Summary`. Agent 0 then requests feedback on the exact two-member revision, and agent 1 drafts past it before the held run is processed (**team_checks_while_drafting**). Both offer the exact team candidate. A child host process validates and exits at `Stage::Accepted`, after the commit and before the Git mirror. Engine and workers restart. The mirror is repaired, both workers observe `Accepted`, and their duplicate offers return the recorded checkpoint.
 8. **deferral_and_jobs**: agent 0 changes `Label`. Agent 1 defers its first unhandled event, and its worker restarts with `--resume`. The resumed prompt replays the deferred event and the pending obligation. The resumed worker's related write must come back `Unreviewed` until it reviews. It then formats its draft with the enrolled gofmt job and applies the job output.
 9. **completion_race**: on both workers, a notice sent after `result` is presented in a new turn, and the engine event stays unhandled.
-10. **unknown_change**: host bytes written into the live root halt the engine. Both workers' next mediated calls latch their gates. A host-queued check run cannot publish afterwards, and the injected bytes are preserved.
+10. **unknown_change**: host bytes written into the live root halt the engine. Both workers' next mediated calls latch their gates, the published state does not change, and the injected bytes are preserved. A feedback run queued after the halt still runs its checks; it can never publish. The halt's publication gate is covered deterministically by `unexplained_source_writes_stop_publication_and_keep_evidence`.
 
 The report keeps runtime, binary, probe, tool, Go and gopls hashes, launches and settings, every stream event without reasoning, mediated calls, deliveries, history, runs, validator results and per-worker controls. The gate passes only when every phase passes and both workers verified all `REQUIRED` controls.
 
