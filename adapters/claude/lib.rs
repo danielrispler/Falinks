@@ -388,6 +388,8 @@ impl Session {
                 if line["isReplay"] == true {
                     require(self.in_turn, "presentation outside a turn")?;
                     // Messages queued during one tool call are replayed as one merged message.
+                    // shortcut: substring match; host messages carry unique event IDs or prompts,
+                    // revisit if one sent text can be a fragment of another.
                     let content = &line["message"]["content"];
                     let text = content
                         .as_str()
@@ -772,7 +774,7 @@ impl Runtime {
     }
     /// Wait until every host message is presented and the runtime's turn has ended.
     pub fn wait(&mut self) -> Result<()> {
-        // shortcut: fixed bound for short fixture turns; production integration sets per-task budgets.
+        // shortcut: fixed bound for short fixture turns; check-integration drives `step` under its own phase bound.
         let deadline = Instant::now() + Duration::from_secs(600);
         while !self.session.idle() {
             self.pump(deadline)?;

@@ -71,16 +71,12 @@ impl EngineHost {
                 json!({"accepted":true,"revision":capture.revision,"tree":capture.tree,
                     "space":capture.space,"files":files})
             }
-            "edit" => {
-                let outcome = engine.apply(client, edit(request)?)?;
-                json!({"accepted":matches!(outcome, Outcome::Applied{..}),"outcome":outcome})
-            }
-            "retry" | "incorporate" => {
+            "edit" | "retry" | "incorporate" => {
                 let request = edit(request)?;
-                let outcome = if operation == "retry" {
-                    engine.retry(client, request)?
-                } else {
-                    engine.incorporate(client, request)?
+                let outcome = match operation {
+                    "edit" => engine.apply(client, request)?,
+                    "retry" => engine.retry(client, request)?,
+                    _ => engine.incorporate(client, request)?,
                 };
                 json!({"accepted":matches!(outcome, Outcome::Applied{..}),"outcome":outcome})
             }
