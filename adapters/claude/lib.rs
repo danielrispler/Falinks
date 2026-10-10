@@ -58,6 +58,74 @@ const SYSTEM: &[&str] = &[
 
 pub mod engine_host;
 
+/// Every `sandbox-probe` check name for the given protected storage labels.
+pub fn probe_names(protected: &[&str]) -> Vec<String> {
+    let mut names: Vec<String> = [
+        "read",
+        "scratch",
+        "source_write",
+        "source_delete",
+        "source_rename",
+        "source_create",
+        "source_replace",
+        "alias_write",
+        "child_write",
+    ]
+    .map(String::from)
+    .to_vec();
+    for label in protected {
+        names.extend([format!("{label}_read"), format!("{label}_write")]);
+    }
+    names
+}
+/// The exact probe command must have completed through the real Bash tool, reporting
+/// exactly `names`, all passing.
+pub fn probe_controls(events: &[Value], command: &str, names: &[String]) -> Result<Value> {
+    let blocks = |kind: &'static str| {
+        events
+            .iter()
+            .filter(move |e| e["type"] == kind)
+            .flat_map(|e| {
+                e["message"]["content"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+    };
+    let ids: Vec<Value> = blocks("assistant")
+        .filter(|b| {
+            b["type"] == "tool_use" && b["name"] == "Bash" && b["input"]["command"] == command
+        })
+        .map(|b| b["id"].clone())
+        .collect();
+    for event in events.iter().filter(|e| e["type"] == "user") {
+        let content = event["message"]["content"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if !content.iter().any(|b| {
+            b["type"] == "tool_result" && ids.contains(&b["tool_use_id"]) && b["is_error"] != true
+        }) {
+            continue;
+        }
+        let Some(text) = event["tool_use_result"]["stdout"].as_str().and_then(|out| {
+            out.lines()
+                .find_map(|l| l.strip_prefix("FALINKS_CONTROLS="))
+        }) else {
+            continue;
+        };
+        let checks: Value = serde_json::from_str(text)?;
+        require(
+            checks.as_object().is_some_and(|c| {
+                c.len() == names.len() && names.iter().all(|n| c.get(n) == Some(&json!(true)))
+            }),
+            &format!("filesystem controls failed: {checks}"),
+        )?;
+        return Ok(checks);
+    }
+    Err("exact probe command did not complete through the actual Bash tool".into())
+}
+
 pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
     let binary = binary.canonicalize()?;
     // Hash first: an unpinned executable is never run, and no other installed CLI is tried.

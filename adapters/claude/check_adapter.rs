@@ -1,6 +1,8 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
-use falinks_claude::{Launch, Runtime, launch_args, settings, verify_binary};
+use falinks_claude::{
+    Launch, Runtime, launch_args, probe_controls, probe_names, settings, verify_binary,
+};
 use falinks_host::{
     Result, controlled_host::ControlledHost, file_hash, hash, require, runtime::Engine,
 };
@@ -16,23 +18,6 @@ use std::{
 };
 
 const AGENT: &str = "fixture-agent";
-const PROBES: &[&str] = &[
-    "read",
-    "scratch",
-    "source_write",
-    "source_delete",
-    "source_rename",
-    "source_create",
-    "source_replace",
-    "alias_write",
-    "controller_read",
-    "controller_write",
-    "snapshots_read",
-    "snapshots_write",
-    "validation_read",
-    "validation_write",
-    "child_write",
-];
 
 fn fixture(probe: &Path, tool: &Path) -> Result<PathBuf> {
     let root = tempfile::Builder::new()
@@ -69,55 +54,20 @@ fn probe_command(root: &Path, expected: &str) -> Result<String> {
 }
 /// The exact probe command must have run through the real Bash tool with every control passing.
 fn bash_controls(runtime: &mut Runtime, root: &Path, expected: &str) -> Result<Value> {
-    let command = probe_command(root, expected)?;
-    let events = &runtime.session.events;
-    let ids = events
-        .iter()
-        .filter(|e| e["type"] == "assistant")
-        .flat_map(|e| {
-            e["message"]["content"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-        })
-        .filter(|b| {
-            b["type"] == "tool_use" && b["name"] == "Bash" && b["input"]["command"] == command
-        })
-        .map(|b| b["id"].clone())
-        .collect::<Vec<_>>();
-    for event in events.iter().filter(|e| e["type"] == "user") {
-        let blocks = event["message"]["content"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        if !blocks.iter().any(|b| {
-            b["type"] == "tool_result" && ids.contains(&b["tool_use_id"]) && b["is_error"] != true
-        }) {
-            continue;
-        }
-        let Some(text) = event["tool_use_result"]["stdout"].as_str().and_then(|out| {
-            out.lines()
-                .find_map(|l| l.strip_prefix("FALINKS_CONTROLS="))
-        }) else {
-            continue;
-        };
-        let checks: Value = serde_json::from_str(text)?;
-        require(
-            checks.as_object().is_some_and(|c| {
-                c.len() == PROBES.len() && PROBES.iter().all(|n| c.get(*n) == Some(&json!(true)))
-            }),
-            &format!("filesystem controls failed: {checks}"),
-        )?;
-        for name in [
-            "source_write_denial",
-            "storage_protection",
-            "scratch_access",
-        ] {
-            runtime.session.gate.record(name, true)?;
-        }
-        return Ok(checks);
+    let names = probe_names(&["controller", "snapshots", "validation"]);
+    let checks = probe_controls(
+        &runtime.session.events,
+        &probe_command(root, expected)?,
+        &names,
+    )?;
+    for name in [
+        "source_write_denial",
+        "storage_protection",
+        "scratch_access",
+    ] {
+        runtime.session.gate.record(name, true)?;
     }
-    Err("exact probe command did not complete through the actual Bash tool".into())
+    Ok(checks)
 }
 fn calls(host: &Rc<RefCell<ControlledHost>>, operation: &str) -> Vec<Value> {
     host.borrow()

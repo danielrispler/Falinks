@@ -12,6 +12,10 @@ name = "check-claude-adapter"
 path = "check_adapter.rs"
 
 [[bin]]
+name = "check-integration"
+path = "check_integration.rs"
+
+[[bin]]
 name = "falinks-claude-tool"
 path = "tool.rs"
 

@@ -139,6 +139,15 @@ impl Boundary {
         self.turn = None;
         Ok(())
     }
+    /// Host-applied regrouping moved this agent: rebind its thread to this boundary's
+    /// workspace so resume accepts the new root. Never an agent capability.
+    pub fn relocate(&self, thread: &str, agent: &str) -> Result<()> {
+        let changed = self.db.execute(
+            "UPDATE binding SET workspace=? WHERE thread=? AND agent=?",
+            params![self.workspace, thread, agent],
+        )?;
+        require(changed == 1, "no binding to relocate")
+    }
     pub fn begin(&mut self, turn: &str) -> Result<()> {
         require(
             self.thread.is_some() && self.turn.is_none() && !turn.is_empty(),
