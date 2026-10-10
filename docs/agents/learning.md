@@ -43,6 +43,6 @@ Ground claims in inspected code, tests, current decisions, and primary sources w
 
 When an explanation is requested, record its path, core reading pointers, concepts explored, and any understanding gaps Daniel raises with the relevant ticket's session outcome. Local HTML paths are for Daniel's machine; the ticket's durable decision and evidence must remain understandable without access to those files. At the next session, briefly recap the model and any gap Daniel raised; use the existing HTML check rather than repeating its questions in chat.
 
-Resolve a meaningful ticket when its agreed work and verification are complete, then follow `docs/agents/issue-tracker.md` for closure, reading-link updates, and the map pointer. Keep canonical decisions in their ticket resolutions, domain vocabulary in `CONTEXT.md`, and architecture records in `docs/adr/` when warranted.
+Resolve a meaningful ticket when its agreed work and verification are complete, then follow `docs/agents/ticket-authoring.md` for closure, reading-link updates, and the map pointer. Keep canonical decisions in their ticket resolutions, domain vocabulary in `CONTEXT.md`, and architecture records in `docs/adr/` when warranted.
 
 This guide is the source of the Falinks learning defaults. The global explanation skill supplies the reusable artifact format. Optional learning activities leave the engine's **checkpoint offer** meaning in `CONTEXT.md` unchanged.
