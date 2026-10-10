@@ -850,3 +850,40 @@ fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
     }
     assert!(reopened.is_ok());
 }
+
+#[test]
+fn different_functions_in_one_file_both_survive_an_explicit_reread_and_rebuild() {
+    let (_dir, engine, alice, bob) = fixture();
+    let base = engine.capture().unwrap();
+    let two = "fn a() {}\nfn c() {}\n";
+    let bytes = |capture: &Capture| capture.files["a.rs"].file.clone().unwrap().bytes;
+    // Both start from the same capture; each changes a different function of a.rs.
+    engine
+        .apply(&alice, edit("alice", &base, "a.rs", "fn a() { 1; }\n"))
+        .unwrap();
+    let stale = engine.apply(&bob, edit("bob", &base, "a.rs", two)).unwrap();
+    let Outcome::Stale { conflicts } = stale else {
+        panic!("{stale:?}");
+    };
+    // Bob rereads the current bytes from the conflict, rebuilds on them, and resubmits.
+    let current = conflicts["a.rs"].current.file.clone().unwrap().bytes;
+    assert_eq!(current, b"fn a() { 1; }\n");
+    let reread = engine.capture().unwrap();
+    let rebuilt = format!("{}fn c() {{}}\n", String::from_utf8(current).unwrap());
+    let outcome = engine
+        .apply(&bob, edit("bob-rebuilt", &reread, "a.rs", &rebuilt))
+        .unwrap();
+    assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
+    assert_eq!(
+        bytes(&engine.capture().unwrap()),
+        b"fn a() { 1; }\nfn c() {}\n"
+    );
+    // The rejected attempt stays retained beside the applied rebuild.
+    assert_eq!(
+        engine.request(&bob, "bob").unwrap().unwrap().request.output["a.rs"]
+            .as_ref()
+            .unwrap()
+            .bytes,
+        two.as_bytes()
+    );
+}
