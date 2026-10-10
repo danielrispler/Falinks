@@ -50,7 +50,8 @@ jobs:
       - run: cargo fmt --manifest-path evaluation/Cargo.toml --check
       # Compile-only until Linux tests land (#35).
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo clippy --locked --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
+      - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
+      - run: cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check

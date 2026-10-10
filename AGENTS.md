@@ -8,21 +8,13 @@ The engine core is Rust only, along with its adapters, controlled hosts and repo
 
 ## Checks
 
-CI runs these commands (`cargo deny` through its GitHub action, on Linux); run them before handing off a change:
+Before handing off a change, run every CI check locally, in CI's order:
 
 ```sh
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo fmt --manifest-path evaluation/Cargo.toml --check
-cargo fetch --locked --manifest-path evaluation/Cargo.toml
-cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
-cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1
-cargo deny --locked check advisories bans
-cargo deny --locked --manifest-path evaluation/Cargo.toml check advisories bans
+cargo run --bin ci-checks
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`. The evaluation tests need Go on PATH.
+It stops at the first failing step and names it. Prerequisites: Go on PATH (evaluation tests) and `cargo-deny` (`cargo install cargo-deny --locked`). The list lives in `scripts/check_list.rs`; `tests/check_drift.rs` keeps it in step with `.github/workflows/`. The toolchain is pinned in `rust-toolchain.toml`.
 
 ## Agent skills
 
