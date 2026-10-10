@@ -1,3 +1,7 @@
+## Agent compatibility
+
+These docs are shared by Codex and Claude Code. `$skill` means `/skill` in Claude Code (plugin skills may appear as `/mattpocock-skills:<name>`). During session openings, planning, grilling, decision questions and explanations, `docs/agents/learning.md` overrides any terse or brevity output mode.
+
 ## Agent skills
 
 ### Learning
