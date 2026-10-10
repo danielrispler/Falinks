@@ -544,7 +544,7 @@ fn the_reusable_slot_holds_source_fixed_and_quarantines_dirty_or_mutated_state()
 }
 
 fn mirror(dir: &TempDir) -> String {
-    let output = std::process::Command::new("/usr/bin/git")
+    let output = std::process::Command::new("git")
         .arg("--git-dir")
         .arg(dir.path().join("state/objects.git"))
         .args(["show-ref", "--verify", "--hash", "refs/falinks/published"])

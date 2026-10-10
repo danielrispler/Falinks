@@ -1,10 +1,13 @@
 //! Host-owned, single-repository protocol. Clients have opaque authenticated handles.
 //! See docs/engine.md for the supported boundary.
 mod analysis;
+mod contain;
 mod coordination;
 mod publication;
 mod regroup;
 pub use analysis::{Evidence, Footprint, Language, Owner, Pin, Tool, Toolchain, Unit, sha256_file};
+#[doc(hidden)]
+pub use contain::helper_main;
 pub use coordination::{
     Availability, Body, Cancel, Checkpoint, Condition, Decision, Disposition, Event, Kind, Message,
     Obligation, Offer, Pending, Plan, Reply, Review, Scope, WaitOutcome, Work,
@@ -19,13 +22,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::{Read, Write},
-    os::unix::{
-        fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
-        process::CommandExt,
-    },
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Mutex, RwLock},
+    sync::{Mutex, OnceLock, RwLock},
 };
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -168,6 +168,7 @@ pub struct Engine {
     jobs: Mutex<()>,
     analysis: RwLock<Vec<Toolchain>>,
     checks: RwLock<Vec<publication::Check>>,
+    helper: RwLock<Option<PathBuf>>,
     // One reusable validation workspace; its lease serializes validation runs.
     validation: Mutex<()>,
     signal: std::sync::Arc<coordination::Signal>,
@@ -242,8 +243,48 @@ fn save_record(db: &Connection, record: &Record) -> Result<()> {
     )?;
     Ok(())
 }
+/// Git from the host's `PATH`, resolved once per process. 2.32 is the first release
+/// that honours `GIT_CONFIG_GLOBAL`, which isolates storage from user configuration.
+fn git_program() -> Result<&'static Path> {
+    static GIT: OnceLock<std::result::Result<PathBuf, String>> = OnceLock::new();
+    let find = || -> Result<PathBuf> {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let git = std::env::split_paths(&path)
+            .map(|dir| dir.join("git"))
+            .find(|git| fs::metadata(git).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0))
+            .ok_or("Git not found on PATH")?;
+        let git = fs::canonicalize(git)?;
+        let output = Command::new(&git)
+            .arg("--version")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .output()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        if !git_version_supported(&text) {
+            return fail(format!(
+                "{} reports {:?}; Git 2.32 or newer is required",
+                git.display(),
+                text.trim()
+            ));
+        }
+        Ok(git)
+    };
+    match GIT.get_or_init(|| find().map_err(|e| e.to_string())) {
+        Ok(git) => Ok(git),
+        Err(error) => fail(error.clone()),
+    }
+}
+fn git_version_supported(text: &str) -> bool {
+    let mut numbers = text
+        .trim()
+        .strip_prefix("git version ")
+        .unwrap_or("")
+        .split(['.', ' '])
+        .map(|n| n.parse::<u32>().ok());
+    matches!((numbers.next(), numbers.next()), (Some(Some(major)), Some(Some(minor))) if (major, minor) >= (2, 32))
+}
 fn git(state: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
-    let mut command = Command::new("/usr/bin/git");
+    let mut command = Command::new(git_program()?);
     command
         .arg("--git-dir")
         .arg(state.join("objects.git"))
@@ -544,6 +585,7 @@ fn writer_lease(path: &Path) -> Result<WriterLease> {
 
 impl Engine {
     pub fn open(live: &Path, state: &Path, enrolled: &[&str]) -> Result<Self> {
+        git_program()?;
         let live = fs::canonicalize(live)?;
         fs::create_dir_all(state)?;
         let state = fs::canonicalize(state)?;
@@ -603,7 +645,7 @@ impl Engine {
             if state.join("objects.git").exists() {
                 return fail("unrecorded controller storage; preserve for reconciliation");
             }
-            let output = Command::new("/usr/bin/git")
+            let output = Command::new(git_program()?)
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -676,6 +718,7 @@ impl Engine {
             jobs: Mutex::new(()),
             analysis: RwLock::new(Vec::new()),
             checks: RwLock::new(Vec::new()),
+            helper: RwLock::new(None),
             validation: Mutex::new(()),
             signal: coordination::Signal::new(),
             leases: Mutex::new(leases),
@@ -1190,7 +1233,7 @@ impl Engine {
 }
 
 /// Commands are host-enrolled, trusted, non-daemonizing tools; never accept arbitrary
-/// executable/arguments from an agent. macOS Seatbelt constrains their writable output.
+/// executable/arguments from an agent. They run as contained commands (see `contain`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobSpec {
     pub id: String,
@@ -1319,20 +1362,7 @@ impl Engine {
         Ok(job)
     }
     fn execute_job(&self, job: &Job) -> Result<()> {
-        if !cfg!(target_os = "macos") {
-            return fail("captured jobs require verified macOS Seatbelt; unsupported platform");
-        }
-        const SYSTEM_READS: &[&str] = &[
-            "/usr",
-            "/bin",
-            "/System",
-            "/Library",
-            "/opt",
-            "/private/etc",
-            "/private/var/db/dyld",
-            "/dev",
-        ];
-        for system in SYSTEM_READS {
+        for system in contain::SYSTEM_READS {
             if self.layout()?.roots.iter().any(|r| r.starts_with(system))
                 || self.state.starts_with(system)
             {
@@ -1341,30 +1371,35 @@ impl Engine {
         }
         let input = fs::canonicalize(job.directory.join("input"))?;
         let output = fs::canonicalize(job.directory.join("output"))?;
-        let system_reads = SYSTEM_READS
-            .iter()
-            .map(|p| Ok(format!("(subpath {})", quote(Path::new(p))?)))
-            .collect::<Result<Vec<_>>>()?
-            .join(" ");
-        let profile = format!(
-            "(version 1) (allow default) (deny network*) (deny file-write*) (deny file-read*) (allow file-read* (literal \"/\") {system_reads} (subpath {}) (subpath {})) (allow file-write* (subpath {}))",
-            quote(&input)?,
-            quote(&output)?,
-            quote(&output)?
-        );
-        let status = sandboxed(
-            &job.directory,
-            &profile,
-            &job.spec.program,
-            &job.spec.args,
-            &output,
-            &[("TMPDIR", &output), ("HOME", &output)],
-            std::time::Duration::from_secs(30),
+        let status = contain::run(
+            || self.helper(),
+            &contain::Contained {
+                evidence: &job.directory,
+                program: &job.spec.program,
+                args: &job.spec.args,
+                cwd: &output,
+                output: &output,
+                env: &[("TMPDIR", &output), ("HOME", &output)],
+                reads: contain::Reads::Only(vec![input.clone(), output.clone()]),
+                timeout: std::time::Duration::from_secs(30),
+            },
         )?;
         if !status.success() {
             return fail(format!("captured job failed: {status}"));
         }
         Ok(())
+    }
+    /// Host configuration: the Linux containment helper (ADR 2). Defaults to
+    /// `falinks-contain` beside the host executable; a missing helper fails closed.
+    pub fn configure_containment(&self, helper: PathBuf) -> Result<()> {
+        *self.helper.write().map_err(|_| "helper lock poisoned")? = Some(helper);
+        Ok(())
+    }
+    fn helper(&self) -> Result<PathBuf> {
+        match &*self.helper.read().map_err(|_| "helper lock poisoned")? {
+            Some(helper) => Ok(helper.clone()),
+            None => contain::default_helper(),
+        }
     }
     pub fn apply_job(&self, client: &Client, id: &str) -> Result<Outcome> {
         let job = self.job(client, id)?.ok_or("unknown captured job")?;
@@ -1377,71 +1412,6 @@ impl Engine {
         }
         self.apply(client, job.request)
     }
-}
-
-/// Serialize paths as quoted strings; prevent Seatbelt profile injection from storage paths.
-fn quote(p: &Path) -> Result<String> {
-    let s = p.to_str().ok_or("non-UTF8 sandbox path")?;
-    if s.contains(['\n', '\r']) {
-        return fail("unsupported sandbox path");
-    }
-    Ok(serde_json::to_string(s)?)
-}
-/// Runs a trusted host-enrolled tool under `profile` with a cleared environment, retaining
-/// the profile, stdout, stderr and process group in `evidence`.
-fn sandboxed(
-    evidence: &Path,
-    profile: &str,
-    program: &str,
-    args: &[String],
-    cwd: &Path,
-    env: &[(&str, &Path)],
-    timeout: std::time::Duration,
-) -> Result<std::process::ExitStatus> {
-    fs::write(evidence.join("sandbox.sb"), profile)?;
-    let stdout = fs::File::create(evidence.join("stdout"))?;
-    let stderr = fs::File::create(evidence.join("stderr"))?;
-    let mut child = Command::new("/usr/bin/sandbox-exec")
-        .args(["-p", profile, program])
-        .args(args)
-        .current_dir(cwd)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .envs(env.iter().copied())
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr)
-        .process_group(0)
-        .spawn()?;
-    let group = child.id() as i32;
-    // Persist running process identity as evidence; restart never adopts its output.
-    fs::write(evidence.join("process-group"), group.to_string())?;
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            // SAFETY: kill takes no pointers; the target is this tool's dedicated process group.
-            unsafe {
-                libc::kill(-group, libc::SIGKILL);
-            }
-            child.wait()?;
-            return fail("timed out; output retained");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-    // Trusted tools must keep descendants in this group and join them before exit.
-    // A surviving descendant makes completion ambiguous; kill the group, retain output.
-    // SAFETY: signal 0 only probes whether the tool's process group still exists.
-    if unsafe { libc::kill(-group, 0) } == 0 {
-        // SAFETY: kill takes no pointers; the target is this tool's dedicated process group.
-        unsafe {
-            libc::kill(-group, libc::SIGKILL);
-        }
-        return fail("ambiguous completion: surviving descendants");
-    }
-    Ok(status)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

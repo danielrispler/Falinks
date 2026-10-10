@@ -523,6 +523,160 @@ fn job_boundary_denies_source_and_controller_writes_and_detects_surviving_descen
     );
 }
 
+fn shell_job(engine: &Engine, client: &Client, id: &str, program: &str, script: &str) -> Job {
+    engine
+        .run_job(
+            client,
+            JobSpec {
+                id: id.into(),
+                revision: 0,
+                inputs: vec!["a.rs".into()],
+                outputs: vec!["b.rs".into()],
+                program: program.into(),
+                args: vec!["-ec".into(), script.into()],
+            },
+        )
+        .unwrap()
+}
+
+#[test]
+fn job_network_attempt_is_denied() {
+    let (_dir, engine, alice, _) = fixture();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let job = shell_job(
+        &engine,
+        &alice,
+        "network",
+        "/bin/bash",
+        &format!("exec 3<>/dev/tcp/127.0.0.1/{port}; printf connected > b.rs"),
+    );
+    assert!(job.error.is_some(), "network job acknowledged");
+    assert!(listener.accept().is_err(), "job reached the host network");
+    assert!(engine.apply_job(&alice, "network").is_err());
+}
+
+#[test]
+fn job_udp_attempt_is_denied() {
+    let (_dir, engine, alice, _) = fixture();
+    let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let job = shell_job(
+        &engine,
+        &alice,
+        "udp",
+        "/bin/bash",
+        &format!("printf leak > /dev/udp/127.0.0.1/{port}; printf sent > b.rs"),
+    );
+    assert!(job.error.is_some(), "UDP job acknowledged");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        listener.recv(&mut [0; 16]).is_err(),
+        "job reached the host network"
+    );
+}
+
+#[test]
+fn job_timeout_kills_the_command_and_retains_evidence() {
+    let (_dir, engine, alice, _) = fixture();
+    let job = shell_job(&engine, &alice, "timeout", "/bin/sh", "sleep 60");
+    assert!(job.error.as_deref().unwrap().contains("timed out"));
+    assert!(job.directory.join("stdout").exists());
+    assert!(engine.apply_job(&alice, "timeout").is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_missing_containment_helper_fails_closed() {
+    let (dir, engine, alice, _) = fixture();
+    engine
+        .configure_containment(dir.path().join("missing-helper"))
+        .unwrap();
+    let job = shell_job(
+        &engine,
+        &alice,
+        "no-helper",
+        "/bin/sh",
+        "cat ../input/a.rs > b.rs",
+    );
+    assert!(
+        job.error
+            .as_deref()
+            .unwrap()
+            .contains("containment unavailable")
+    );
+    assert!(engine.apply_job(&alice, "no-helper").is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_subreaper_sweep_kills_setsid_descendants() {
+    let (_dir, engine, alice, _) = fixture();
+    let job = shell_job(
+        &engine,
+        &alice,
+        "setsid",
+        "/bin/sh",
+        "setsid -f /bin/sh -c 'echo $$ > pid.tmp; mv pid.tmp pid; exec sleep 60'; \
+         while [ ! -f pid ]; do sleep 0.1; done",
+    );
+    assert!(
+        job.error
+            .as_deref()
+            .unwrap()
+            .contains("ambiguous completion")
+    );
+    let pid = fs::read_to_string(job.directory.join("output/pid")).unwrap();
+    assert!(
+        !std::path::Path::new(&format!("/proc/{}", pid.trim())).exists(),
+        "setsid descendant survived the sweep"
+    );
+}
+
+#[test]
+fn engine_open_fails_visibly_without_git_2_32() {
+    let bin = tempfile::tempdir().unwrap();
+    let old = bin.path().join("old");
+    fs::create_dir(&old).unwrap();
+    fs::write(old.join("git"), "#!/bin/sh\necho 'git version 2.31.8'\n").unwrap();
+    fs::set_permissions(
+        old.join("git"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    for (path, expected) in [
+        (bin.path().join("empty"), "Git not found on PATH"),
+        (old, "Git 2.32 or newer is required"),
+    ] {
+        fs::create_dir_all(&path).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "open_worker", "--nocapture"])
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(expected), "{expected}: {stdout}");
+    }
+}
+
+#[test]
+#[ignore = "subprocess Engine::open worker; invoked by engine_open_fails_visibly_without_git_2_32"]
+fn open_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("live")).unwrap();
+    fs::write(dir.path().join("live/a.rs"), "fn a() {}\n").unwrap();
+    let error = Engine::open(
+        &dir.path().join("live"),
+        &dir.path().join("state"),
+        &["a.rs"],
+    )
+    .err()
+    .expect("open succeeded");
+    println!("{error}");
+}
+
 #[test]
 #[ignore = "subprocess crash worker; invoked by crash_boundaries"]
 fn crash_worker() {

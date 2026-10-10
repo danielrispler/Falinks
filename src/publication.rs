@@ -4,8 +4,8 @@ use crate::coordination::{
     Availability, Body, captured, checkpoint, emit, obligations, save_checkpoint,
 };
 use crate::{
-    Capture, Client, Engine, Result, audit, connect, fail, install, meta, nonce, object, quote,
-    read_file, record, retain, revision, sandboxed, set_meta,
+    Capture, Client, Engine, Result, audit, connect, contain, fail, install, meta, nonce, object,
+    read_file, record, retain, revision, set_meta,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -280,9 +280,7 @@ impl Engine {
     }
     /// Host configuration: the fixed required check set. Not durable; results bind to it.
     pub fn configure_checks(&self, checks: Vec<Check>) -> Result<()> {
-        if !cfg!(target_os = "macos") {
-            return fail("validation checks require verified macOS Seatbelt; unsupported platform");
-        }
+        contain::supported()?;
         let mut names = BTreeSet::new();
         for check in &checks {
             if !names.insert(&check.name)
@@ -488,35 +486,32 @@ impl Engine {
             let evidence = outputs.join(&check.name);
             let out = evidence.join("out");
             fs::create_dir_all(&out)?;
-            let live = self
-                .layout()?
-                .roots
-                .iter()
-                .map(|r| Ok(format!("(subpath {})", quote(r)?)))
-                .collect::<Result<Vec<_>>>()?
-                .join(" ");
-            let profile = format!(
-                "(version 1) (allow default) (deny network*) (deny file-write*) (allow file-write* (subpath {out}) (literal \"/dev/null\")) (deny file-read-data (subpath {}) {live}) (allow file-read-data (subpath {}) (subpath {out}))",
-                quote(&self.state)?,
-                quote(&slot)?,
-                out = quote(&out)?,
-            );
-            let status = sandboxed(
-                &evidence,
-                &profile,
-                &check.program,
-                &check.args,
-                &slot,
-                &[
-                    ("TMPDIR", &out),
-                    ("HOME", &out),
-                    ("CARGO_TARGET_DIR", &out.join("target")),
-                    ("GOCACHE", &out.join("go-cache")),
-                    ("GOPATH", &out.join("go")),
-                    ("GOTOOLCHAIN", Path::new("local")),
-                    ("GOPROXY", Path::new("off")),
-                ],
-                Duration::from_secs(300),
+            let env: &[(&str, &Path)] = &[
+                ("TMPDIR", &out),
+                ("HOME", &out),
+                ("CARGO_TARGET_DIR", &out.join("target")),
+                ("GOCACHE", &out.join("go-cache")),
+                ("GOPATH", &out.join("go")),
+                ("GOTOOLCHAIN", Path::new("local")),
+                ("GOPROXY", Path::new("off")),
+            ];
+            let status = contain::run(
+                || self.helper(),
+                &contain::Contained {
+                    evidence: &evidence,
+                    program: &check.program,
+                    args: &check.args,
+                    cwd: &slot,
+                    output: &out,
+                    env,
+                    reads: contain::Reads::Except {
+                        denied: std::iter::once(self.state.clone())
+                            .chain(self.layout()?.roots.iter().cloned())
+                            .collect(),
+                        allowed: vec![slot.clone(), out.clone()],
+                    },
+                    timeout: Duration::from_secs(300),
+                },
             );
             let passed = status.as_ref().is_ok_and(|s| s.success());
             if !passed && failed.is_none() {

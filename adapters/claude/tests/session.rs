@@ -303,7 +303,12 @@ fn only_the_pinned_claude_executable_is_accepted() {
     let error = falinks_claude::verify_binary(&impostor)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("SHA-256"), "{error}");
+    // An unpinned platform refuses before hashing; a pinned one rejects the hash.
+    let expected = match falinks_claude::pin(std::env::consts::OS, std::env::consts::ARCH) {
+        Ok(_) => "SHA-256",
+        Err(_) => "unsupported platform",
+    };
+    assert!(error.contains(expected), "{error}");
     assert!(falinks_claude::verify_binary(&dir.path().join("missing")).is_err());
 }
 
