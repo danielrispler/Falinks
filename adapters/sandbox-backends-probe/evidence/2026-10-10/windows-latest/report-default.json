@@ -1,0 +1,406 @@
+{
+  "facts": {
+    "elevated": true,
+    "user": "runnervmfi6oq\\runneradmin",
+    "ver": "Microsoft Windows [Version 10.0.26100.33438]"
+  },
+  "platform": "windows",
+  "results": [
+    {
+      "child": {
+        "descendant": "breakaway refused (Access is denied. (os error 5)); detached pid 3800",
+        "dns_resolve": "resolved 2 addresses",
+        "env_canary_present": false,
+        "env_names": [
+          "PATH",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE"
+        ],
+        "list_root_fixture": "ok",
+        "list_user_home": "ok",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "ok",
+        "rename_input_into_output": "ok",
+        "tcp_bind": "ok",
+        "tcp_internet": "ok",
+        "tcp_loopback": "ok",
+        "udp_dns_8888": "reply 61 bytes",
+        "write_input": "ok",
+        "write_output": "ok",
+        "write_secret": "ok",
+        "write_system_temp": "ok"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": true,
+      "exit": "exit code 0",
+      "extra": {
+        "env_attempts": [
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE"
+            ],
+            "result": "ok"
+          }
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": true,
+      "mechanism": "none",
+      "platform": "windows",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": null
+    },
+    {
+      "child": {
+        "descendant": "breakaway refused (Access is denied. (os error 5)); detached pid 4608",
+        "dns_resolve": "resolved 2 addresses",
+        "env_canary_present": false,
+        "env_names": [
+          "PATH",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE"
+        ],
+        "list_root_fixture": "ok",
+        "list_user_home": "ok",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "ok",
+        "rename_input_into_output": "ok",
+        "tcp_bind": "ok",
+        "tcp_internet": "ok",
+        "tcp_loopback": "ok",
+        "udp_dns_8888": "reply 61 bytes",
+        "write_input": "ok",
+        "write_output": "ok",
+        "write_secret": "ok",
+        "write_system_temp": "ok"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": "exit code 0",
+      "extra": {
+        "active_processes_after_exit": 1,
+        "active_processes_after_kill": 0,
+        "env_attempts": [
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE"
+            ],
+            "result": "ok"
+          }
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": true,
+      "mechanism": "job",
+      "platform": "windows",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": true
+    },
+    {
+      "child": {
+        "descendant": "breakaway refused (Access is denied. (os error 5)); detached pid 4516",
+        "dns_resolve": "resolved 2 addresses",
+        "env_canary_present": false,
+        "env_names": [
+          "PATH",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE"
+        ],
+        "list_root_fixture": "ok",
+        "list_user_home": "ok",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "ok",
+        "rename_input_into_output": "ok",
+        "tcp_bind": "ok",
+        "tcp_internet": "ok",
+        "tcp_loopback": "ok",
+        "udp_dns_8888": "reply 61 bytes",
+        "write_input": "ok",
+        "write_output": "ok",
+        "write_secret": "ok",
+        "write_system_temp": "ok"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": null,
+      "extra": {
+        "active_processes_after_kill": 0,
+        "env_attempts": [
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE"
+            ],
+            "result": "ok"
+          }
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": true,
+      "mechanism": "job",
+      "platform": "windows",
+      "scenario": "hang",
+      "started": true,
+      "stderr": "",
+      "stdout": null,
+      "timed_out": true,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": {
+        "descendant": "breakaway refused (Access is denied. (os error 5)); detached pid 3548",
+        "dns_resolve": "error: No such host is known. (os error 11001)",
+        "env_canary_present": false,
+        "env_names": [
+          "APPDATA",
+          "LOCALAPPDATA",
+          "PATH",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE"
+        ],
+        "list_root_fixture": "error: Access is denied. (os error 5)",
+        "list_user_home": "error: Access is denied. (os error 5)",
+        "open_null_device": "error: Access is denied. (os error 5)",
+        "read_input": "ok",
+        "read_secret": "error: Access is denied. (os error 5)",
+        "rename_input_into_output": "error: Access is denied. (os error 5)",
+        "tcp_bind": "ok",
+        "tcp_internet": "error: An attempt was made to access a socket in a way forbidden by its access permissions. (os error 10013)",
+        "tcp_loopback": "error: connection timed out",
+        "udp_dns_8888": "recv error: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (os error 10060)",
+        "write_input": "error: Access is denied. (os error 5)",
+        "write_output": "ok",
+        "write_secret": "error: Access is denied. (os error 5)",
+        "write_system_temp": "error: Access is denied. (os error 5)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": "exit code 0",
+      "extra": {
+        "active_processes_after_exit": 1,
+        "active_processes_after_kill": 0,
+        "container_sid": "S-1-15-2-3614103073-3115234358-2709477544-3397365239-2316577337-696356549-87601587",
+        "env_attempts": [
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE"
+            ],
+            "result": "CreateProcessW failed: error 203"
+          },
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE",
+              "LOCALAPPDATA",
+              "APPDATA"
+            ],
+            "result": "ok"
+          }
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "appcontainer",
+      "platform": "windows",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": true
+    },
+    {
+      "child": {
+        "descendant": "breakaway refused (Access is denied. (os error 5)); detached pid 1808",
+        "dns_resolve": "error: No such host is known. (os error 11001)",
+        "env_canary_present": false,
+        "env_names": [
+          "APPDATA",
+          "LOCALAPPDATA",
+          "PATH",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE"
+        ],
+        "list_root_fixture": "error: Access is denied. (os error 5)",
+        "list_user_home": "error: Access is denied. (os error 5)",
+        "open_null_device": "error: Access is denied. (os error 5)",
+        "read_input": "ok",
+        "read_secret": "error: Access is denied. (os error 5)",
+        "rename_input_into_output": "error: Access is denied. (os error 5)",
+        "tcp_bind": "ok",
+        "tcp_internet": "error: An attempt was made to access a socket in a way forbidden by its access permissions. (os error 10013)",
+        "tcp_loopback": "error: connection timed out",
+        "udp_dns_8888": "recv error: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond. (os error 10060)",
+        "write_input": "error: Access is denied. (os error 5)",
+        "write_output": "ok",
+        "write_secret": "error: Access is denied. (os error 5)",
+        "write_system_temp": "error: Access is denied. (os error 5)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": null,
+      "extra": {
+        "active_processes_after_kill": 0,
+        "container_sid": "S-1-15-2-999107762-3252245911-2635945551-235386824-3967417067-1743971832-411485827",
+        "env_attempts": [
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE"
+            ],
+            "result": "CreateProcessW failed: error 203"
+          },
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE",
+              "LOCALAPPDATA",
+              "APPDATA"
+            ],
+            "result": "ok"
+          }
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "appcontainer",
+      "platform": "windows",
+      "scenario": "hang",
+      "started": true,
+      "stderr": "",
+      "stdout": null,
+      "timed_out": true,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": {
+        "descendant": "breakaway error: Access is denied. (os error 5); detach error: Access is denied. (os error 5)",
+        "env_canary_present": false,
+        "env_names": [
+          "APPDATA",
+          "LOCALAPPDATA",
+          "PATH",
+          "SystemRoot",
+          "TEMP",
+          "TMP",
+          "USERPROFILE"
+        ],
+        "list_root_fixture": "error: Access is denied. (os error 5)",
+        "list_user_home": "error: Access is denied. (os error 5)",
+        "network_panic": "assertion `left == right` failed\n  left: 10107\n right: 0",
+        "open_null_device": "error: Access is denied. (os error 5)",
+        "read_input": "ok",
+        "read_secret": "error: Access is denied. (os error 5)",
+        "rename_input_into_output": "error: Access is denied. (os error 5)",
+        "write_input": "error: Access is denied. (os error 5)",
+        "write_output": "ok",
+        "write_secret": "error: Access is denied. (os error 5)",
+        "write_system_temp": "error: Access is denied. (os error 5)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit code 0",
+      "extra": {
+        "active_processes_after_exit": 0,
+        "active_processes_after_kill": 0,
+        "container_sid": "S-1-15-2-1493889294-4122428555-2138875510-3117276808-2162174688-1878687308-3631487248",
+        "env_attempts": [
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE"
+            ],
+            "result": "CreateProcessW failed: error 203"
+          },
+          {
+            "env": [
+              "PATH",
+              "SystemRoot",
+              "TEMP",
+              "TMP",
+              "USERPROFILE",
+              "LOCALAPPDATA",
+              "APPDATA"
+            ],
+            "result": "ok"
+          }
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "lpac",
+      "platform": "windows",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "\nthread 'main' (728) panicked at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library\\std\\src\\sys\\pal\\windows\\winsock.rs:25:9:\nassertion `left == right` failed\n  left: 10107\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": null,
+      "extra": null,
+      "launch_error": "CreateAppContainerProfile failed: HRESULT 0x80070057",
+      "loopback_reached_host": false,
+      "mechanism": "appcontainer",
+      "platform": "windows",
+      "scenario": "unavailable",
+      "started": false,
+      "stderr": "",
+      "stdout": "",
+      "timed_out": false,
+      "tree_survivors_after_exit": null
+    }
+  ]
+}

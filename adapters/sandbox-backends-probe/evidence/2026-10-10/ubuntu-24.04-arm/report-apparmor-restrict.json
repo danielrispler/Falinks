@@ -1,0 +1,545 @@
+{
+  "facts": {
+    "apparmor_restrict_unprivileged_userns": "1",
+    "arch": "aarch64",
+    "bwrap": "bubblewrap 0.9.0",
+    "cgroup": "0::/system.slice/hosted-compute-agent.service",
+    "kernel": "6.17.0-1022-azure",
+    "landlock_abi": 7,
+    "lsm": "lockdown,capability,landlock,yama,apparmor,ima,evm",
+    "max_user_namespaces": "63642",
+    "os_release": "PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"",
+    "systemd_run_user_scope": "exit status: 0 ",
+    "uid": 1001,
+    "unprivileged_userns_clone": "1"
+  },
+  "platform": "linux",
+  "results": [
+    {
+      "child": {
+        "descendant": "setsid pid 2756",
+        "dns_resolve": "resolved 4 addresses",
+        "env_canary_present": false,
+        "env_names": [
+          "HOME",
+          "PATH",
+          "TMPDIR"
+        ],
+        "list_root_fixture": "ok",
+        "list_user_home": "ok",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "ok",
+        "rename_input_into_output": "ok",
+        "tcp_bind": "ok",
+        "tcp_internet": "ok",
+        "tcp_loopback": "ok",
+        "udp_dns_8888": "reply 61 bytes",
+        "unix_abstract_connect_host": "ok",
+        "unix_connect /run/dbus/system_bus_socket": "ok",
+        "unix_connect /run/systemd/journal/stdout": "ok",
+        "unix_connect /run/systemd/resolve/io.systemd.Resolve": "ok",
+        "write_input": "ok",
+        "write_output": "ok",
+        "write_secret": "ok",
+        "write_system_temp": "ok"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": "exit 0",
+      "extra": {
+        "descendant_alive_after_group_kill": true,
+        "descendant_proc_stat_in_host_view": {
+          "pgrp": "2756",
+          "ppid": "2750",
+          "session": "2756",
+          "state": "S"
+        },
+        "host_pid": 2750,
+        "process_group": 2755,
+        "subreaper_swept_pids": [
+          2756
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": true,
+      "mechanism": "none",
+      "platform": "linux",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": {
+        "descendant": "setsid pid 2761",
+        "dns_resolve": "error: failed to lookup address information: Temporary failure in name resolution",
+        "env_canary_present": false,
+        "env_names": [
+          "HOME",
+          "PATH",
+          "TMPDIR"
+        ],
+        "list_root_fixture": "error: Permission denied (os error 13)",
+        "list_user_home": "error: Permission denied (os error 13)",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "error: Permission denied (os error 13)",
+        "rename_input_into_output": "error: Permission denied (os error 13)",
+        "tcp_bind": "error: Permission denied (os error 13)",
+        "tcp_internet": "error: Permission denied (os error 13)",
+        "tcp_loopback": "error: Permission denied (os error 13)",
+        "udp_dns_8888": "reply 61 bytes",
+        "unix_abstract_connect_host": "ok",
+        "unix_connect /run/dbus/system_bus_socket": "ok",
+        "unix_connect /run/systemd/journal/stdout": "ok",
+        "unix_connect /run/systemd/resolve/io.systemd.Resolve": "ok",
+        "write_input": "error: Permission denied (os error 13)",
+        "write_output": "ok",
+        "write_secret": "error: Permission denied (os error 13)",
+        "write_system_temp": "error: Permission denied (os error 13)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": "exit 0",
+      "extra": {
+        "descendant_alive_after_group_kill": true,
+        "descendant_proc_stat_in_host_view": {
+          "pgrp": "2761",
+          "ppid": "2750",
+          "session": "2761",
+          "state": "S"
+        },
+        "host_pid": 2750,
+        "process_group": 2760,
+        "subreaper_swept_pids": [
+          2761
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "landlock",
+      "platform": "linux",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "landlock: FullyEnforced no_new_privs=true\n",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": {
+        "descendant": "setsid pid 2765",
+        "dns_resolve": "error: failed to lookup address information: Temporary failure in name resolution",
+        "env_canary_present": false,
+        "env_names": [
+          "HOME",
+          "PATH",
+          "TMPDIR"
+        ],
+        "list_root_fixture": "error: Permission denied (os error 13)",
+        "list_user_home": "error: Permission denied (os error 13)",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "error: Permission denied (os error 13)",
+        "rename_input_into_output": "error: Permission denied (os error 13)",
+        "tcp_bind": "error: Permission denied (os error 13)",
+        "tcp_internet": "error: Permission denied (os error 13)",
+        "tcp_loopback": "error: Permission denied (os error 13)",
+        "udp_dns_8888": "reply 61 bytes",
+        "unix_abstract_connect_host": "ok",
+        "unix_connect /run/dbus/system_bus_socket": "ok",
+        "unix_connect /run/systemd/journal/stdout": "ok",
+        "unix_connect /run/systemd/resolve/io.systemd.Resolve": "ok",
+        "write_input": "error: Permission denied (os error 13)",
+        "write_output": "ok",
+        "write_secret": "error: Permission denied (os error 13)",
+        "write_system_temp": "error: Permission denied (os error 13)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": null,
+      "extra": {
+        "descendant_alive_after_group_kill": true,
+        "descendant_proc_stat_in_host_view": {
+          "pgrp": "2765",
+          "ppid": "2750",
+          "session": "2765",
+          "state": "S"
+        },
+        "host_pid": 2750,
+        "process_group": 2764,
+        "subreaper_swept_pids": [
+          2765
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "landlock",
+      "platform": "linux",
+      "scenario": "hang",
+      "started": true,
+      "stderr": "landlock: FullyEnforced no_new_privs=true\n",
+      "stdout": null,
+      "timed_out": true,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 1",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2775,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "landlock",
+      "platform": "linux",
+      "scenario": "unavailable",
+      "started": true,
+      "stderr": "fully incompatible access-rights: BitFlags<AccessFs>(0b111111111111111, Execute | WriteFile | ReadFile | ReadDir | RemoveDir | RemoveFile | MakeChar | MakeDir | MakeReg | MakeSock | MakeFifo | MakeBlock | MakeSym | Refer | Truncate)\n",
+      "stdout": "",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": {
+        "descendant": "setsid pid 2779",
+        "dns_resolve": "error: failed to lookup address information: Temporary failure in name resolution",
+        "env_canary_present": false,
+        "env_names": [
+          "HOME",
+          "PATH",
+          "TMPDIR"
+        ],
+        "list_root_fixture": "error: Permission denied (os error 13)",
+        "list_user_home": "error: Permission denied (os error 13)",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "error: Permission denied (os error 13)",
+        "rename_input_into_output": "error: Permission denied (os error 13)",
+        "tcp_bind": "error: Permission denied (os error 13)",
+        "tcp_internet": "error: Permission denied (os error 13)",
+        "tcp_loopback": "error: Permission denied (os error 13)",
+        "udp_dns_8888": "reply 61 bytes",
+        "unix_abstract_connect_host": "error: Operation not permitted (os error 1)",
+        "unix_connect /run/dbus/system_bus_socket": "ok",
+        "unix_connect /run/systemd/journal/stdout": "ok",
+        "unix_connect /run/systemd/resolve/io.systemd.Resolve": "ok",
+        "write_input": "error: Permission denied (os error 13)",
+        "write_output": "ok",
+        "write_secret": "error: Permission denied (os error 13)",
+        "write_system_temp": "error: Permission denied (os error 13)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": "exit 0",
+      "extra": {
+        "descendant_alive_after_group_kill": true,
+        "descendant_proc_stat_in_host_view": {
+          "pgrp": "2779",
+          "ppid": "2750",
+          "session": "2779",
+          "state": "S"
+        },
+        "host_pid": 2750,
+        "process_group": 2778,
+        "subreaper_swept_pids": [
+          2779
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "landlock-v6",
+      "platform": "linux",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "landlock: FullyEnforced no_new_privs=true\n",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": {
+        "descendant": "setsid pid 2788",
+        "dns_resolve": "error: failed to lookup address information: Temporary failure in name resolution",
+        "env_canary_present": false,
+        "env_names": [
+          "HOME",
+          "PATH",
+          "TMPDIR"
+        ],
+        "list_root_fixture": "error: Permission denied (os error 13)",
+        "list_user_home": "error: Permission denied (os error 13)",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "error: Permission denied (os error 13)",
+        "rename_input_into_output": "error: Permission denied (os error 13)",
+        "tcp_bind": "error: Operation not permitted (os error 1)",
+        "tcp_internet": "error: Operation not permitted (os error 1)",
+        "tcp_loopback": "error: Operation not permitted (os error 1)",
+        "udp_dns_8888": "bind error: Operation not permitted (os error 1)",
+        "unix_abstract_connect_host": "ok",
+        "unix_connect /run/dbus/system_bus_socket": "ok",
+        "unix_connect /run/systemd/journal/stdout": "ok",
+        "unix_connect /run/systemd/resolve/io.systemd.Resolve": "ok",
+        "write_input": "error: Permission denied (os error 13)",
+        "write_output": "ok",
+        "write_secret": "error: Permission denied (os error 13)",
+        "write_system_temp": "error: Permission denied (os error 13)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": "exit 0",
+      "extra": {
+        "descendant_alive_after_group_kill": true,
+        "descendant_proc_stat_in_host_view": {
+          "pgrp": "2788",
+          "ppid": "2750",
+          "session": "2788",
+          "state": "S"
+        },
+        "host_pid": 2750,
+        "process_group": 2787,
+        "subreaper_swept_pids": [
+          2788
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "landlock-seccomp",
+      "platform": "linux",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "landlock: FullyEnforced no_new_privs=true\n",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": {
+        "descendant": "setsid pid 2808",
+        "dns_resolve": "error: failed to lookup address information: Temporary failure in name resolution",
+        "env_canary_present": false,
+        "env_names": [
+          "HOME",
+          "PATH",
+          "TMPDIR"
+        ],
+        "list_root_fixture": "error: Permission denied (os error 13)",
+        "list_user_home": "error: Permission denied (os error 13)",
+        "open_null_device": "ok",
+        "read_input": "ok",
+        "read_secret": "error: Permission denied (os error 13)",
+        "rename_input_into_output": "error: Permission denied (os error 13)",
+        "tcp_bind": "error: Operation not permitted (os error 1)",
+        "tcp_internet": "error: Operation not permitted (os error 1)",
+        "tcp_loopback": "error: Operation not permitted (os error 1)",
+        "udp_dns_8888": "bind error: Operation not permitted (os error 1)",
+        "unix_abstract_connect_host": "error: Operation not permitted (os error 1)",
+        "unix_connect /run/dbus/system_bus_socket": "error: Operation not permitted (os error 1)",
+        "unix_connect /run/systemd/journal/stdout": "error: Operation not permitted (os error 1)",
+        "unix_connect /run/systemd/resolve/io.systemd.Resolve": "error: Operation not permitted (os error 1)",
+        "write_input": "error: Permission denied (os error 13)",
+        "write_output": "ok",
+        "write_secret": "error: Permission denied (os error 13)",
+        "write_system_temp": "error: Permission denied (os error 13)"
+      },
+      "child_ran": true,
+      "detached_descendant_alive_after_cleanup": false,
+      "exit": "exit 0",
+      "extra": {
+        "descendant_alive_after_group_kill": true,
+        "descendant_proc_stat_in_host_view": {
+          "pgrp": "2808",
+          "ppid": "2750",
+          "session": "2808",
+          "state": "S"
+        },
+        "host_pid": 2750,
+        "process_group": 2807,
+        "subreaper_swept_pids": [
+          2808
+        ]
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "landlock-seccomp-strict",
+      "platform": "linux",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "landlock: FullyEnforced no_new_privs=true\n",
+      "stdout": null,
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 0",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2811,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "none",
+      "platform": "linux",
+      "scenario": "tool",
+      "started": true,
+      "stderr": "",
+      "stdout": "/tmp/falinks-sandbox-probe-2750/none-tool/input/x.go\n",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 0",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2819,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "landlock-seccomp-strict",
+      "platform": "linux",
+      "scenario": "tool",
+      "started": true,
+      "stderr": "landlock: FullyEnforced no_new_privs=true\n",
+      "stdout": "/tmp/falinks-sandbox-probe-2750/landlock-seccomp-strict-tool/input/x.go\n",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 1",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2826,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "userns",
+      "platform": "linux",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "setgroups: Permission denied (os error 13)\n",
+      "stdout": "",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 1",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2829,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "userns",
+      "platform": "linux",
+      "scenario": "hang",
+      "started": true,
+      "stderr": "setgroups: Permission denied (os error 13)\n",
+      "stdout": "",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 1",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2832,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "userns",
+      "platform": "linux",
+      "scenario": "unavailable",
+      "started": true,
+      "stderr": "unshare: Operation not permitted (os error 1)\n",
+      "stdout": "",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 1",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2835,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "bwrap",
+      "platform": "linux",
+      "scenario": "normal",
+      "started": true,
+      "stderr": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
+      "stdout": "",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    },
+    {
+      "child": null,
+      "child_ran": false,
+      "detached_descendant_alive_after_cleanup": null,
+      "exit": "exit 1",
+      "extra": {
+        "descendant_alive_after_group_kill": null,
+        "descendant_proc_stat_in_host_view": null,
+        "host_pid": 2750,
+        "process_group": 2839,
+        "subreaper_swept_pids": []
+      },
+      "launch_error": null,
+      "loopback_reached_host": false,
+      "mechanism": "bwrap",
+      "platform": "linux",
+      "scenario": "hang",
+      "started": true,
+      "stderr": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
+      "stdout": "",
+      "timed_out": false,
+      "tree_survivors_after_exit": false
+    }
+  ]
+}
