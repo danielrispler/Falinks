@@ -17,7 +17,7 @@ cargo test --locked
 cargo fmt --manifest-path evaluation/Cargo.toml --check
 cargo fetch --locked --manifest-path evaluation/Cargo.toml
 cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
-cargo test --locked --offline --manifest-path evaluation/Cargo.toml
+cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1
 cargo deny --locked check advisories bans
 cargo deny --locked --manifest-path evaluation/Cargo.toml check advisories bans
 ```
