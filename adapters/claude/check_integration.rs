@@ -722,10 +722,13 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         unreviewed("summary-final-2"),
         root = gate.engine().root(gate.client(1))?.display()
     );
+    let before = gate.accepted(1, "edit").len();
     gate.prompt(1, &steps)?;
     // Host barrier: once agent 1's draft is in, only agent 0 runs until its incomplete
     // draft commits. Agent 1's next mediated call waits, inside the same turn.
-    gate.pump(&[1], false, |gate| Ok(!gate.accepted(1, "edit").is_empty()))?;
+    gate.pump(&[1], false, |gate| {
+        Ok(gate.accepted(1, "edit").len() > before)
+    })?;
     let broken = format!(
         "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — this is an intentionally unfinished draft that does not compile yet; use the price.go version step 1 returned.{}",
         edit_step("discount-broken", "price.go", DISCOUNT_BROKEN, "VERSION"),
@@ -830,10 +833,11 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         edit_step("discount-done", "price.go", DISCOUNT_FINAL, "VERSION"),
         unreviewed("discount-done-2")
     );
+    // Only calls from this phase count; the process may hold earlier captures.
+    let before = gate.accepted(0, "capture").len();
     gate.prompt(0, &steps)?;
     gate.pump(&[0], false, |gate| {
-        Ok(gate
-            .accepted(0, "capture")
+        Ok(gate.accepted(0, "capture")[before..]
             .iter()
             .any(|c| c["host_call"]["request"]["paths"] == json!(["price.go"])))
     })?;
