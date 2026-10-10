@@ -1187,11 +1187,11 @@ fn scenario(gate: &mut Gate) -> Result<()> {
             "1. falinks_post with request {{\"task\": \"gate\", \"scope\": [], \"work\": \"None\", \"text\": \"{text}\", \"reply_to\": null}}."
         )
     };
-    // One at a time: each post must reach an idle peer, not one still in its turn.
-    gate.run(&[(0, post("discount is published"))])?;
-    gate.run(&[(1, post("summary is published"))])?;
-    let mut races = vec![];
-    for agent in 0..2 {
+    // One pair at a time: a post reaches the idle peer only as the race notice; a prompt
+    // to the peer would replay it first.
+    let mut deliveries = vec![];
+    for (poster, agent) in [(1, 0), (0, 1)] {
+        gate.run(&[(poster, post(&format!("{} is done", name(poster))))])?;
         let events = gate.undelivered(agent)?;
         let last = events.last().ok_or("no race event")?.clone();
         gate.workers[agent].delivered = last.seq;
@@ -1203,11 +1203,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
             ),
             Some(&last.id),
         )?;
-        races.push(last);
-    }
-    gate.drive(|_| Ok(true))?;
-    let mut deliveries = vec![];
-    for (agent, last) in races.iter().enumerate() {
+        gate.drive(|_| Ok(true))?;
         let delivery = gate
             .runtime(agent)?
             .session
