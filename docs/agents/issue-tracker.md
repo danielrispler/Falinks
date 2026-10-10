@@ -27,11 +27,17 @@ GitHub shares one number space across issues and PRs, so a bare `#42` may be eit
 
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Before publishing a labelled issue, run the preflight in `docs/agents/triage-labels.md`. Create a GitHub issue.
+
+### Repository-specific `to-spec` confirmation
+
+Synthesize the complete draft independently from the settled conversation and repo evidence. Before publication, confirm the proposed testing seams with one focused question unless they were already explicitly agreed in the current conversation. Show the proposed checks and their limits, and wait for the answer before publishing. This confirmation concerns testing seams; preserve the settled design rather than reopening a design interview. The installed skill remains unchanged.
 
 ## When a skill says "fetch the relevant ticket"
 
 Use the **Read an issue** convention above; include relevant comments when the task depends on them.
+
+Read relevant linked decision resolutions directly before loading full issue histories, including when synthesizing a completed map. Expand into issue bodies or comments only to resolve identifiable gaps or supersession; follow replacement resolution links when present.
 
 ## Wayfinding operations
 
@@ -46,7 +52,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 
 ### Ticket context
 
-Before resolving a meaningful ticket, complete its explanation and learning stop using `docs/agents/learning.md`. Record remaining learning work with the session outcome when implementation or investigation finishes first.
+Resolve meaningful tickets when their agreed work and verification are complete. Follow `docs/agents/learning.md` for the optional explanation suggestion; explanation and readiness confirmation are not closure prerequisites.
 
 Every new Wayfinder ticket must include `## Reading` before linking it to the map. List relevant current decision resolutions and research artifacts by name, with one short reason per link. Use comment permalinks for specific resolutions. When no prior material applies, write `None — no prior decisions or research required.` Reading links are a starting set, not a limit on investigation; preserve the ticket's question, scope and stop condition.
 
