@@ -1,0 +1,394 @@
+{
+  "date": "2026-10-10",
+  "binary": {
+    "version": "2.1.287",
+    "sha256": "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea",
+    "platform": "macOS arm64"
+  },
+  "run1_isolation_init": {
+    "claude_code_version": "2.1.287",
+    "model": "claude-opus-5-5",
+    "permissionMode": "dontAsk",
+    "tools": [
+      "Bash",
+      "Glob",
+      "Grep",
+      "Read",
+      "mcp__falinks__falinks_edit",
+      "mcp__falinks__falinks_offer",
+      "mcp__falinks__falinks_review"
+    ],
+    "mcp_servers": [
+      {
+        "name": "falinks",
+        "source": "dynamic",
+        "status": "connected"
+      }
+    ],
+    "slash_commands": [],
+    "skills": [],
+    "plugins": [
+      "cc-plugin-agents-md@builtin",
+      "cc-plugin-telemetry@builtin",
+      "cc-plugin-plugin-authoring@builtin"
+    ],
+    "capabilities": [
+      "interrupt_receipt_v1",
+      "interrupt_cancel_queued_v1",
+      "interrupt_send_now_v1",
+      "msg_lifecycle_v1",
+      "sdk_mcp_tools_list_changed",
+      "sdk_mcp_manifests",
+      "mcp_read_resource_v1",
+      "mcp_tool_ui_meta_v1",
+      "ui_surface_v1"
+    ],
+    "apiKeySource": "none"
+  },
+  "run1_sandbox_controls_via_bash_tool": {
+    "alias_write": true,
+    "child_write": true,
+    "controller_read": true,
+    "controller_write": true,
+    "read": true,
+    "scratch": true,
+    "snapshots_read": true,
+    "snapshots_write": true,
+    "source_create": true,
+    "source_delete": true,
+    "source_rename": true,
+    "source_replace": true,
+    "source_write": true,
+    "validation_read": true,
+    "validation_write": true
+  },
+  "run1_permission_denials": [
+    {
+      "tool_input": {
+        "file_path": "/private/tmp/falinks-claude-7Tgc/validation/secret.txt"
+      },
+      "tool_name": "Read",
+      "tool_use_id": "toolu_014RvxiCvgT2q7tXiddbwzMp"
+    }
+  ],
+  "run1_model_refusal_fallback": {
+    "event": {
+      "api_refusal_category": "cyber"
+    },
+    "models_used": [
+      "claude-opus-4-8",
+      "claude-opus-5-5"
+    ]
+  },
+  "run1_identity": {
+    "mcp_env_has_CLAUDE_CODE_SESSION_ID": true,
+    "tools_call_meta_key": "claudecode/toolUseId",
+    "hook_stamp_matched_meta_and_env": true,
+    "note": "run1 hook/MCP raw logs were overwritten before archiving; runs 2-4 repeat the stamp observation"
+  },
+  "run2_steering_timeline": [
+    {
+      "t": 1791627773215,
+      "event": "sent",
+      "text": "Fixture workflow in /private/tmp/falinks"
+    },
+    {
+      "t": 1791627773976,
+      "event": "init",
+      "text": ""
+    },
+    {
+      "t": 1791627776372,
+      "event": "replayed_presentation",
+      "text": "Fixture workflow in /private/tmp/falinks"
+    },
+    {
+      "t": 1791627776378,
+      "event": "sent",
+      "text": "Host notice E1 (sent during your turn): "
+    },
+    {
+      "t": 1791627791951,
+      "event": "replayed_presentation",
+      "text": "Host notice E1 (sent during your turn): "
+    },
+    {
+      "t": 1791627812154,
+      "event": "result:success",
+      "text": ""
+    },
+    {
+      "t": 1791627812156,
+      "event": "sent",
+      "text": "Host notice E2 (sent after your turn end"
+    },
+    {
+      "t": 1791627812167,
+      "event": "init",
+      "text": ""
+    },
+    {
+      "t": 1791627814241,
+      "event": "replayed_presentation",
+      "text": "Host notice E2 (sent after your turn end"
+    },
+    {
+      "t": 1791627815821,
+      "event": "result:success",
+      "text": ""
+    },
+    {
+      "t": 1791627815824,
+      "event": "sent",
+      "text": "Run Bash `sleep 60; echo late` and then "
+    },
+    {
+      "t": 1791627815831,
+      "event": "init",
+      "text": ""
+    },
+    {
+      "t": 1791627818327,
+      "event": "replayed_presentation",
+      "text": "Run Bash `sleep 60; echo late` and then "
+    },
+    {
+      "t": 1791627821338,
+      "event": "sent_interrupt",
+      "text": ""
+    },
+    {
+      "t": 1791627821339,
+      "event": "sent",
+      "text": "Host notice E3 (sent right after an inte"
+    },
+    {
+      "t": 1791627821340,
+      "event": "interrupt_ack",
+      "text": ""
+    },
+    {
+      "t": 1791627821345,
+      "event": "result:error_during_execution",
+      "text": ""
+    },
+    {
+      "t": 1791627821355,
+      "event": "init",
+      "text": ""
+    },
+    {
+      "t": 1791627823349,
+      "event": "replayed_presentation",
+      "text": "Host notice E3 (sent right after an inte"
+    },
+    {
+      "t": 1791627825817,
+      "event": "result:success",
+      "text": ""
+    }
+  ],
+  "run2_hook_prompt_ids": [
+    {
+      "tool": "Bash",
+      "prompt_id": "f4557029-035f-47b0-b725-a397db932182"
+    },
+    {
+      "tool": "Bash",
+      "prompt_id": "f4557029-035f-47b0-b725-a397db932182"
+    },
+    {
+      "tool": "mcp__falinks__falinks_review",
+      "prompt_id": "f4557029-035f-47b0-b725-a397db932182"
+    },
+    {
+      "tool": "mcp__falinks__falinks_offer",
+      "prompt_id": "f4557029-035f-47b0-b725-a397db932182"
+    },
+    {
+      "tool": "mcp__falinks__falinks_review",
+      "prompt_id": "61ade42d-2278-4756-b500-dd5c0f6e4558"
+    },
+    {
+      "tool": "mcp__falinks__falinks_review",
+      "prompt_id": "39a93acb-b958-4713-a80c-433b55361aee"
+    }
+  ],
+  "run3_resume": [
+    {
+      "run": "run3a",
+      "session_id": "3f2b9c1e-7a4d-4e8f-9b21-5c6d7e8f9a01",
+      "tools": [
+        "Bash",
+        "Glob",
+        "Grep",
+        "Read",
+        "mcp__falinks__falinks_edit",
+        "mcp__falinks__falinks_offer",
+        "mcp__falinks__falinks_review"
+      ],
+      "mcp": [
+        "falinks"
+      ]
+    },
+    {
+      "run": "run3b",
+      "session_id": "3f2b9c1e-7a4d-4e8f-9b21-5c6d7e8f9a01",
+      "tools": [
+        "Bash",
+        "Glob",
+        "Grep",
+        "Read",
+        "mcp__falinks__falinks_edit",
+        "mcp__falinks__falinks_offer",
+        "mcp__falinks__falinks_review"
+      ],
+      "mcp": [
+        "falinks"
+      ]
+    },
+    {
+      "run": "run3c",
+      "session_id": "3f2b9c1e-7a4d-4e8f-9b21-5c6d7e8f9a01",
+      "tools": [
+        "Task",
+        "Bash",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "DesignSync",
+        "Edit",
+        "EnterWorktree",
+        "ExitWorktree",
+        "ListAgents",
+        "Monitor",
+        "NotebookEdit",
+        "PushNotification",
+        "Read",
+        "RemoteTrigger",
+        "ReportFindings",
+        "ScheduleWakeup",
+        "SendMessage",
+        "Skill",
+        "TaskStop",
+        "ToolSearch",
+        "WebFetch",
+        "WebSearch",
+        "Workflow",
+        "Write"
+      ],
+      "mcp": []
+    }
+  ],
+  "run3b_resumed_sandbox_controls": {
+    "alias_write": true,
+    "child_write": true,
+    "controller_read": true,
+    "controller_write": true,
+    "read": true,
+    "scratch": true,
+    "snapshots_read": true,
+    "snapshots_write": true,
+    "source_create": true,
+    "source_delete": true,
+    "source_rename": true,
+    "source_replace": true,
+    "source_write": true,
+    "validation_read": true,
+    "validation_write": true
+  },
+  "run4_concurrent_workers": [
+    {
+      "subtype": "success",
+      "duration_ms": 17308,
+      "session_id": "51ac8be9-6887-4bb2-9150-e0a8578640c9"
+    },
+    {
+      "subtype": "success",
+      "duration_ms": 17290,
+      "session_id": "c5438fb6-385e-4264-ac07-06ca82917724"
+    }
+  ],
+  "run4_rate_limit_event": {
+    "rateLimitType": "five_hour",
+    "status": "allowed",
+    "unifiedWindows": {
+      "five_hour": {
+        "resetsAt": 1791639000,
+        "utilization": 0.12
+      },
+      "seven_day": {
+        "resetsAt": 1791774000,
+        "utilization": 0.01
+      }
+    }
+  },
+  "host_forgery_check": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "allow",
+      "updatedInput": {
+        "falinks_session": "runtime-session",
+        "falinks_tool_use": "toolu_runtime",
+        "request": "x",
+        "workspace": "w"
+      }
+    }
+  },
+  "model_checks": [
+    {
+      "run": "run2",
+      "expected": "claude-opus-5-5",
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "passed": true,
+      "refusal_fallback": false
+    },
+    {
+      "run": "run3a",
+      "expected": "claude-opus-5-5",
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "passed": true,
+      "refusal_fallback": false
+    },
+    {
+      "run": "run3b",
+      "expected": "claude-opus-5-5",
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "passed": true,
+      "refusal_fallback": false
+    },
+    {
+      "run": "run3c",
+      "expected": "claude-opus-5-5",
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "passed": true,
+      "refusal_fallback": false
+    },
+    {
+      "run": "run4A",
+      "expected": "claude-opus-5-5",
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "passed": true,
+      "refusal_fallback": false
+    },
+    {
+      "run": "run4B",
+      "expected": "claude-opus-5-5",
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "passed": true,
+      "refusal_fallback": false
+    }
+  ]
+}

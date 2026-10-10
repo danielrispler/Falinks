@@ -1,0 +1,4 @@
+[
+  {"send": "Fixture workflow in {ROOT}. Bash: run `sleep 10; echo concurrent`. Then call falinks_review with event C1, action keep, reviewed_hash h1. Reply ok."},
+  {"wait": "result", "timeout_s": 300}
+]

@@ -1,0 +1,14 @@
+[
+  {"send": "Fixture workflow in {ROOT}. Do these in order, one tool call each: 1) Bash `sleep 15; echo step1`. 2) Bash `sleep 15; echo step2`. 3) Call falinks_offer with expected_hash h1. Then reply with one line listing what you did."},
+  {"wait": "tool:Bash", "timeout_s": 120},
+  {"send": "Host notice E1 (sent during your turn): a peer changed source.txt. Before calling falinks_offer, call falinks_review with event E1, action defer, reviewed_hash h1."},
+  {"wait": "result", "timeout_s": 300},
+  {"send": "Host notice E2 (sent after your turn ended): call falinks_review with event E2, action keep, reviewed_hash h1, then reply done."},
+  {"wait": "result", "count": 2, "timeout_s": 300},
+  {"send": "Run Bash `sleep 60; echo late` and then reply finished."},
+  {"wait": "tool:Bash", "count": 3, "timeout_s": 120},
+  {"sleep_ms": 3000},
+  {"interrupt": true},
+  {"send": "Host notice E3 (sent right after an interrupt): call falinks_review with event E3, action defer, reviewed_hash h1."},
+  {"wait": "result", "count": 4, "timeout_s": 300}
+]
