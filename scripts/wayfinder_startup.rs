@@ -1,4 +1,4 @@
-//! Read the live map and ordered ticket metadata; never mutate the tracker.
+//! Read the live map and ordered ticket metadata. Only `--claim` writes: it assigns a ticket and sets up its worktree.
 use falinks_host::{Result, command_output, require};
 use serde_json::{Value, json};
 use std::{
@@ -96,6 +96,94 @@ pub fn open_blockers(pages: &Value) -> Result<Vec<u64>> {
     }
     Ok(numbers)
 }
+#[derive(Debug, PartialEq)]
+pub enum Workspace {
+    /// A worktree already has the ticket branch checked out; use it as is.
+    Reuse,
+    /// The ticket branch exists without a worktree; check it out.
+    CheckoutBranch,
+    /// Neither exists; branch from up-to-date `origin/main`.
+    Create,
+}
+#[derive(Debug, PartialEq)]
+pub struct ClaimPlan {
+    pub assign: bool,
+    pub branch: String,
+    pub path: String,
+    pub workspace: Workspace,
+}
+/// Decide whether `--claim` may take `issue` and how to set up its worktree.
+/// `worktrees` is `git worktree list --porcelain`; `branches` lists local branch names one per line.
+pub fn claim_plan(
+    issue: &Value,
+    open_blockers: &[u64],
+    caller: &str,
+    root: &str,
+    worktrees: &str,
+    branches: &str,
+) -> Result<ClaimPlan> {
+    let number = issue["number"].as_u64().ok_or("missing issue number")?;
+    let title = issue["title"].as_str().ok_or("missing issue title")?;
+    let slug = title
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_ascii_lowercase();
+    require(issue["state"] == "OPEN", &format!("#{number} is closed"))?;
+    let assignees = issue["assignees"]
+        .as_array()
+        .ok_or("missing issue assignees")?
+        .iter()
+        .map(|person| person["login"].as_str().ok_or("missing assignee login"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let others = assignees
+        .iter()
+        .filter(|login| **login != caller)
+        .copied()
+        .collect::<Vec<_>>();
+    require(
+        others.is_empty(),
+        &format!("#{number} is assigned to {}", others.join(", ")),
+    )?;
+    let blockers = open_blockers
+        .iter()
+        .map(|n| format!("#{n}"))
+        .collect::<Vec<_>>();
+    require(
+        blockers.is_empty(),
+        &format!("#{number} is blocked by {}", blockers.join(", ")),
+    )?;
+    let prefix = format!("issue-{number}-");
+    let ours = |name: &str| name.starts_with(&prefix);
+    let assign = assignees.is_empty();
+    let mut path = "";
+    for line in worktrees.lines() {
+        if let Some(worktree) = line.strip_prefix("worktree ") {
+            path = worktree;
+        } else if let Some(branch) = line.strip_prefix("branch refs/heads/")
+            && ours(branch)
+        {
+            return Ok(ClaimPlan {
+                assign,
+                branch: branch.into(),
+                path: path.into(),
+                workspace: Workspace::Reuse,
+            });
+        }
+    }
+    let (branch, workspace) = match branches.lines().map(str::trim).find(|name| ours(name)) {
+        Some(existing) => (existing.to_owned(), Workspace::CheckoutBranch),
+        None => (format!("{prefix}{slug}"), Workspace::Create),
+    };
+    Ok(ClaimPlan {
+        assign,
+        path: format!("{root}/.claude/worktrees/{branch}"),
+        branch,
+        workspace,
+    })
+}
 fn check() -> Result<()> {
     let free = json!({"number":17,"title":"Free","html_url":"https://example.com/17","state":"open","assignees":[],"issue_dependencies_summary":{"blocked_by":0}});
     let mut claimed = free.clone();
@@ -134,16 +222,105 @@ fn check() -> Result<()> {
     }
     Ok(())
 }
-fn gh(args: &[&str]) -> Result<Value> {
-    let mut command = Command::new("gh");
+fn stdout(program: &str, args: &[&str]) -> Result<String> {
+    let mut command = Command::new(program);
     command.args(args);
-    let output = command_output(command, Duration::from_secs(60))?;
+    let output = command_output(command, Duration::from_secs(120))?;
     require(
         output.status.success(),
-        &String::from_utf8_lossy(&output.stderr),
+        &format!(
+            "{program} {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        ),
     )?;
-    Ok(serde_json::from_slice(&output.stdout)?)
+    Ok(String::from_utf8(output.stdout)?)
 }
+fn gh(args: &[&str]) -> Result<Value> {
+    Ok(serde_json::from_str(&stdout("gh", args)?)?)
+}
+fn blockers_of(number: impl std::fmt::Display) -> Result<Vec<u64>> {
+    open_blockers(&gh(&[
+        "api",
+        "--paginate",
+        "--slurp",
+        &format!("repos/{REPO}/issues/{number}/dependencies/blocked_by"),
+    ])?)
+}
+/// The only write path: assign the ticket, then create or reuse its worktree.
+fn claim(number: u64) -> Result<()> {
+    let id = number.to_string();
+    let issue = gh(&[
+        "issue",
+        "view",
+        &id,
+        "--repo",
+        REPO,
+        "--json",
+        "number,state,title,assignees",
+    ])?;
+    let caller = gh(&["api", "user"])?["login"]
+        .as_str()
+        .ok_or("missing caller login")?
+        .to_owned();
+    let common = stdout(
+        "git",
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let root = std::path::Path::new(common.trim())
+        .parent()
+        .ok_or("git common dir has no parent")?
+        .to_str()
+        .ok_or("non-UTF-8 repo path")?
+        .to_owned();
+    let plan = claim_plan(
+        &issue,
+        &blockers_of(number)?,
+        &caller,
+        &root,
+        &stdout("git", &["worktree", "list", "--porcelain"])?,
+        &stdout(
+            "git",
+            &[
+                "branch",
+                "--list",
+                &format!("issue-{number}-*"),
+                "--format=%(refname:short)",
+            ],
+        )?,
+    )?;
+    if plan.assign {
+        stdout(
+            "gh",
+            &["issue", "edit", &id, "--repo", REPO, "--add-assignee", "@me"],
+        )?;
+    }
+    match plan.workspace {
+        Workspace::Reuse => {}
+        Workspace::CheckoutBranch => {
+            stdout("git", &["worktree", "add", &plan.path, &plan.branch])?;
+        }
+        Workspace::Create => {
+            stdout("git", &["fetch", "origin", "main"])?;
+            // --no-track: a plain `git push` must not target main.
+            stdout(
+                "git",
+                &[
+                    "worktree",
+                    "add",
+                    "--no-track",
+                    "-b",
+                    &plan.branch,
+                    &plan.path,
+                    "origin/main",
+                ],
+            )?;
+        }
+    }
+    println!("{}", plan.path);
+    Ok(())
+}
+const USAGE: &str = "usage: wayfinder-startup [map-number] | --claim <issue> | --check";
 fn run() -> Result<()> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args == ["--check"] {
@@ -153,14 +330,16 @@ fn run() -> Result<()> {
     }
     if args == ["--help"] {
         println!(
-            "Usage: wayfinder-startup [map-number] | --check\nDefault map: newest open issue labelled wayfinder:map. This command only reads GitHub."
+            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, creates or reuses its worktree under .claude/worktrees/ on branch issue-<n>-<slug> from origin/main, and prints the path."
         );
         return Ok(());
     }
-    require(
-        args.len() <= 1,
-        "usage: wayfinder-startup [map-number] | --check",
-    )?;
+    if let [flag, number] = args.as_slice()
+        && flag == "--claim"
+    {
+        return claim(number.parse()?);
+    }
+    require(args.len() <= 1, USAGE)?;
     let requested = args
         .first()
         .map(|number| number.parse::<u64>())
@@ -222,15 +401,7 @@ fn run() -> Result<()> {
         let blockers = if ticket["blocked_by"] == 0 {
             vec![]
         } else {
-            open_blockers(&gh(&[
-                "api",
-                "--paginate",
-                "--slurp",
-                &format!(
-                    "repos/{REPO}/issues/{}/dependencies/blocked_by",
-                    ticket["number"]
-                ),
-            ])?)?
+            blockers_of(&ticket["number"])?
         };
         ticket["blocked_by"] = json!(blockers);
         println!("{ticket}");
@@ -293,5 +464,83 @@ mod map_tests {
         ]);
         assert_eq!(open_blockers(&pages).unwrap(), [46, 48]);
         assert!(open_blockers(&json!([[{"state":"open"}]])).is_err());
+    }
+}
+#[cfg(test)]
+mod claim_tests {
+    use super::*;
+    const ROOT: &str = "/repo";
+    const WORKTREES: &str = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n";
+    fn ticket() -> Value {
+        json!({"number":47,"state":"OPEN","title":"wayfinder-startup --claim: assign and set up worktree","assignees":[]})
+    }
+    #[test]
+    fn eligible_ticket_is_assigned_and_gets_a_new_worktree_from_main() {
+        let plan = claim_plan(&ticket(), &[], "dev", ROOT, WORKTREES, "").unwrap();
+        assert_eq!(
+            plan,
+            ClaimPlan {
+                assign: true,
+                branch: "issue-47-wayfinder-startup-claim-assign".into(),
+                path: "/repo/.claude/worktrees/issue-47-wayfinder-startup-claim-assign".into(),
+                workspace: Workspace::Create,
+            }
+        );
+    }
+    fn refusal(issue: &Value, blockers: &[u64]) -> String {
+        claim_plan(issue, blockers, "dev", ROOT, WORKTREES, "")
+            .unwrap_err()
+            .to_string()
+    }
+    #[test]
+    fn ticket_assigned_to_another_user_is_refused() {
+        let mut issue = ticket();
+        issue["assignees"] = json!([{"login":"other"}]);
+        let error = refusal(&issue, &[]);
+        assert!(error.contains("#47 is assigned to other"), "{error}");
+    }
+    #[test]
+    fn ticket_already_assigned_to_caller_is_not_reassigned() {
+        let mut issue = ticket();
+        issue["assignees"] = json!([{"login":"dev"}]);
+        let plan = claim_plan(&issue, &[], "dev", ROOT, WORKTREES, "").unwrap();
+        assert!(!plan.assign);
+    }
+    #[test]
+    fn blocked_ticket_is_refused_naming_open_blockers() {
+        let error = refusal(&ticket(), &[46, 48]);
+        assert!(error.contains("#47 is blocked by #46, #48"), "{error}");
+    }
+    #[test]
+    fn existing_worktree_for_the_ticket_is_reused_wherever_it_lives() {
+        let worktrees = format!(
+            "{WORKTREES}\nworktree /repo/.claude/worktrees/issue-470-other\nHEAD def\nbranch refs/heads/issue-470-other\n\nworktree /elsewhere/agent-1\nHEAD 123\nbranch refs/heads/issue-47-older-title\n"
+        );
+        let plan = claim_plan(&ticket(), &[], "dev", ROOT, &worktrees, "").unwrap();
+        assert_eq!(plan.workspace, Workspace::Reuse);
+        assert_eq!(plan.path, "/elsewhere/agent-1");
+        assert_eq!(plan.branch, "issue-47-older-title");
+    }
+    #[test]
+    fn existing_branch_without_worktree_is_checked_out() {
+        let plan = claim_plan(
+            &ticket(),
+            &[],
+            "dev",
+            ROOT,
+            WORKTREES,
+            "main\nissue-470-other\nissue-47-older-title\n",
+        )
+        .unwrap();
+        assert_eq!(plan.workspace, Workspace::CheckoutBranch);
+        assert_eq!(plan.branch, "issue-47-older-title");
+        assert_eq!(plan.path, "/repo/.claude/worktrees/issue-47-older-title");
+    }
+    #[test]
+    fn closed_ticket_is_refused() {
+        let mut issue = ticket();
+        issue["state"] = json!("CLOSED");
+        let error = refusal(&issue, &[]);
+        assert!(error.contains("#47 is closed"), "{error}");
     }
 }
