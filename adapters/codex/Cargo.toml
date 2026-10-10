@@ -16,6 +16,10 @@ name = "sandbox-probe"
 path = "sandbox_probe.rs"
 
 [[bin]]
+name = "ci-checks"
+path = "../../scripts/ci_checks.rs"
+
+[[bin]]
 name = "wayfinder-startup"
 path = "../../scripts/wayfinder_startup.rs"
 

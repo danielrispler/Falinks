@@ -50,7 +50,8 @@ jobs:
       - run: cargo fmt --manifest-path evaluation/Cargo.toml --check
       # Compile-only until Linux tests land (#35).
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo clippy --locked --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
+      - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
+      - run: cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
@@ -64,3 +65,30 @@ jobs:
           arguments: --locked
           rust-version: "1.99.0"
           manifest-path: evaluation/Cargo.toml
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The image bundles shellcheck, so run: steps are linted too.
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
+
+  probes:
+    # Probe crates stay standalone (own [workspace] and Cargo.lock), so discover them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache: false
+      - run: |
+          for probe in adapters/*/Cargo.toml; do
+            grep -qx '\[workspace\]' "$probe" || continue
+            echo "::group::$probe"
+            cargo fmt --manifest-path "$probe" --check
+            cargo clippy --locked --manifest-path "$probe" --all-targets -- -D warnings
+            echo "::endgroup::"
+          done
