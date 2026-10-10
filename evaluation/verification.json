@@ -1,17 +1,17 @@
 {
-  "verified_utc": "2026-10-10T08:02:23Z",
-  "command": "python3 -m unittest discover -s evaluation/tests -v",
+  "verified_utc": "2026-10-10T09:09:03Z",
+  "command": "cd evaluation && cargo test --offline",
   "outcome": "passed",
-  "checks": 6,
-  "elapsed_seconds": 79.642,
+  "checks": 7,
+  "integration_checks": 6,
+  "elapsed_seconds": 52.40,
   "environment": {
     "platform": "macOS arm64",
-    "rust": "1.90.0",
-    "go": "1.27.1",
-    "python": "3.14.8",
-    "git": "2.56.0"
+    "rust": "1.99.0",
+    "go": "1.27.2",
+    "git": "2.54.0"
   },
-  "manifest_sha256": "a419e6c1d9137f92478e47123eb9e06700e7121848611802dca368eba150316f",
+  "manifest_sha256": "047f1327ffa0ea3bd96c0c812af9ee9cc1b9a2bd9ed37be1bff65d3646882d03",
   "fixtures": {
     "go-page": {
       "initial_commit": "0a9b7fb1c3ffc994d6748860c0c2dafb4a1d969b",
@@ -42,14 +42,10 @@
     "two fresh communicating worktrees and fixed task developments",
     "same-handler ordinary merge conflict, resolution and exact final recheck",
     "Codex bridge tested with scripted runtime: peer waits and complete per-turn usage",
-    "controller read denied to both workers",
+    "controller read denied to both workers (mutation without the denial fails the test)",
     "prior-arm reads denied during checks; export-ignore cannot hide failing tests"
   ],
-  "syntax_check": "python3 -m compileall -q evaluation: passed",
-  "review": {
-    "standards": "pass",
-    "spec": "pass"
-  },
+  "lint": "cargo clippy --all-targets --offline: no warnings",
   "limitations": [
     "No authenticated model run or scored batch.",
     "The checked-in run configuration is a template; actual batch identities must be frozen before pilots/scoring.",

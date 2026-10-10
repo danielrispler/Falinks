@@ -1,18 +1,23 @@
 # Frozen evaluation setup (issue #24)
 
 This is an engine-independent evaluation harness, not an engine or performance result.
-It needs Python 3.9+, Git, macOS `sandbox-exec`, Rust/Cargo and Go on PATH. The
-fixtures have no third-party dependencies. Verification used Rust 1.90.0 and
-Go 1.27.1 on macOS arm64. Unsupported/missing sandbox execution fails closed.
+It is a standalone Rust crate (independent of the engine crate) and needs Git,
+macOS `sandbox-exec`, Rust/Cargo and Go on PATH. The fixtures have no third-party
+dependencies. Verification used Rust 1.99.0 and Go 1.27.2 on macOS arm64.
+Unsupported/missing sandbox execution fails closed.
+
+Binaries: `falinks-eval` (the host CLI), `codex-worker` (the baseline Codex
+bridge) and `scripted-worker` (test-only scripted workers and fake runtime).
 
 ## Run the checks
 
 ```sh
-python3 evaluation/run.py verify
-python3 -m unittest discover -s evaluation/tests -v
-python3 evaluation/run.py schedule
-python3 evaluation/run.py prepare go-page --output /tmp/fresh-go-page
-python3 evaluation/run.py oracle go-page --repo /tmp/fresh-go-page --evidence /tmp/fresh-check-evidence
+cd evaluation
+cargo test --offline
+cargo run --offline -- verify
+cargo run --offline -- schedule
+cargo run --offline -- prepare go-page --output /tmp/fresh-go-page
+cargo run --offline -- oracle go-page --repo /tmp/fresh-go-page --evidence /tmp/fresh-check-evidence
 ```
 
 `verify` reconstructs every initial Git commit using frozen author/committer
@@ -36,13 +41,14 @@ instructions, developments and `oracle` seam, with its engine/adapter controls a
 Copy `config.json` to a host-only run configuration. Fill in the actual shared
 model, resolved model version, reasoning setting, runtime version, absolute
 runtime binary and its SHA-256, worker script path, and auth file. Use an absolute
-path to `evaluation/codex_worker.py`; credentials are copied into each isolated
+path to the `codex-worker` binary (`cargo build --release` puts it in
+`evaluation/target/release/`); credentials are copied into each isolated
 fresh CODEX_HOME rather than reusing previous session storage. Set `denied_roots`
 to all previous run directories and any additional solution/reference/transcript
 copies. Never put a run beneath a denied root or beneath this checkout.
 
 ```sh
-python3 evaluation/run.py baseline go-relationships \
+cargo run --release --offline -- baseline go-relationships \
   --config /tmp/batch-config.json --output /tmp/new-unique-run \
   --pair go-relationships-1 --order 0
 ```
@@ -52,12 +58,12 @@ Two worker **processes run concurrently**, each with a fresh context and its own
 Git worktree. Peers receive messages and full unfinished diffs. Neither a shared
 draft nor an individual contribution needs to compile. The JSON-line protocol
 is documented in `instructions/git.md`; an alternative runtime can supply a
-worker script and argv with `{worker}`. The host copies the worker into each
+worker program and argv with `{worker}`. The host copies the worker into each
 scratch directory before sandbox launch. Runtime identity is checked against
 the configured binary hash; model/version/reasoning are supplied identically to
 both workers and recorded, rather than guessed from a marketing alias.
 
-`codex_worker.py` uses `codex exec --json`, a structured action response and
+`codex-worker` uses `codex exec --json`, a structured action response and
 explicit session-ID resume within a run. No `--last` or cross-run resume is used.
 It queues peer context at turn boundaries and waits for share capture replies
 before allowing more edits. Raw runtime events remain in scratch; usage is
@@ -166,8 +172,8 @@ for safety gates, run interpretation and continuation criteria.
 
 ## Verification record
 
-`verification.json` records the six passing public CLI checks, fixture identities,
+`verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger conservatively charges 2,769 seconds (about 46 minutes), leaving 26,031
+ledger conservatively charges 3,789 seconds (about 63 minutes), leaving 25,011
 seconds of the shared eight-hour setup allowance for subsequent setup.

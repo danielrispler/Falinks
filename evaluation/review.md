@@ -25,3 +25,19 @@ scored evaluation remain explicitly unverified downstream work.
 
 Summary: Standards 0 unresolved; Spec 0 unresolved. Execution evidence is in
 `verification.json`; reviewers inspected code and tests rather than rerunning them.
+
+## Rust port (2026-10-10)
+
+The harness (`run.py`), Codex bridge (`codex_worker.py`) and CLI tests were
+ported to the standalone Rust crate in this directory; fixture, protected and
+instruction bytes are unchanged. Behavior is a one-to-one port of the reviewed
+Python, with two deliberate differences: checks default `RUSTUP_HOME` to the
+host's `~/.rustup` (rustup proxies otherwise resolve toolchains through the
+isolated `HOME`), and the scripted run timeout in tests is 90 seconds because
+Rust runs the six integration tests in parallel.
+
+`freeze` was rerun because harness bytes are hashed: only harness/crate hashes
+changed; all three initial commits reproduce identically. No scored batch has
+used the previous manifest. A mutation removing the controller denial makes the
+baseline isolation test fail. The port was not re-reviewed by independent
+Standards/Spec agents.

@@ -12,7 +12,6 @@
   "runtime_version": "REQUIRED: reverified adapter version",
   "runtime_sha256": "REQUIRED: actual binary hash",
   "worker_command": [
-    "python3",
     "{worker}"
   ],
   "tool_differences": {
@@ -20,7 +19,7 @@
     "falinks": "Live group workspace; engine-mediated mutations and revision-bound reviews/offers; host-captured checks. Adapter/engine supplied by downstream tickets.",
     "shared": "Same two fresh identities, allocation, model/version/reasoning, requirements, dependency information, announcements, feedback opportunities, frozen milestones and trusted checks. No oracle/reference access."
   },
-  "worker_script": "evaluation/codex_worker.py",
+  "worker_script": "evaluation/target/release/codex-worker",
   "runtime_binary": "REQUIRED: absolute pinned codex binary",
   "auth_file": "REQUIRED: auth.json for the isolated fresh CODEX_HOME",
   "denied_roots": [

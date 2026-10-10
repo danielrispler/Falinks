@@ -1,7 +1,8 @@
 {
   "hashes": {
-    "codex_worker.py": "59f3dd868ee4bcf91269c771ce707130603323f562f6dde18f7bfdb4f0bf9f8c",
-    "config.json": "81fca5a854d0ac5a3c9b095f4b286d7e2acaff1a56e759ba71b172f0e5f20307",
+    "Cargo.lock": "099dd6b53ea7191438c1712e4dc59789c8c0deff562d93a8a035e6977cf30cdf",
+    "Cargo.toml": "8ee2ba755137eb2ef516278f529b5be53aa74f8995cb1a6023114d49ec4beec3",
+    "config.json": "3f56886dd0ee4b16d851cbddb2089a39d3a74b8dc842515d19e4e353613f0846",
     "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
     "fixtures/go-relationships.json": "3f3cdd1d1b061b9dcee056ea77a9fec999326684309b1ece06785ffb346b764e",
     "fixtures/rust-errors.json": "c1ef8768913cd2e7278ae92bf64be61e6b25782814345d0e56d74bfe92002b0e",
@@ -11,7 +12,10 @@
     "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
     "result-schema.json": "4c3158f3ab4b617b009e213a7511eadc3a0c11c48330471b18fd324fee027c95",
-    "run.py": "c0fc0f7dc5a0c7ba6cc1cf61a07b640222d7b6275d5c5b2774944c5eaf730aba"
+    "src/baseline.rs": "aea7c4e09a9932544fd5ec2a3f4e38cd00622a62e2217385f06d5ceb8b1d67fc",
+    "src/bin/codex-worker.rs": "39d633c90d1c7d37c41d3d759dd20b5f9a0663320195fd82ef81c929389933d4",
+    "src/bin/scripted-worker.rs": "b01f9aa3faa64a4c82c1cf26ea5c8cfa12f7e45c0cdab4b873bff6d318682838",
+    "src/main.rs": "c0f2fd185b7dc8ef8d764ad9ce98c2dc13e761b7d8a49428c774100eb34e8f21"
   },
   "initial_commits": {
     "go-page": "0a9b7fb1c3ffc994d6748860c0c2dafb4a1d969b",

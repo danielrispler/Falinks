@@ -17,9 +17,18 @@
       "measured_seconds": 789,
       "startup_allowance_seconds": 60,
       "handoff_allowance_seconds": 120
+    },
+    {
+      "start_utc": "2026-10-10T08:55:00Z",
+      "charged_seconds": 1020,
+      "measurement": "Session wall time from PR reading through verification, plus a commit/PR handoff allowance.",
+      "work": "Merge main; port the harness, Codex bridge and tests from Python to a standalone Rust crate; refreeze harness hashes (initial commits unchanged); reverify.",
+      "stop_utc": "2026-10-10T09:10:00Z",
+      "measured_seconds": 900,
+      "handoff_allowance_seconds": 120
     }
   ],
-  "charged_total_seconds": 2769,
-  "remaining_seconds": 26031,
+  "charged_total_seconds": 3789,
+  "remaining_seconds": 25011,
   "status": "issue_24_complete; shared budget continues in downstream setup"
 }
