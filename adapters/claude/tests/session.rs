@@ -372,3 +372,24 @@ fn the_launch_tool_profile_sets_init_and_registered_operations() {
         false
     );
 }
+
+#[test]
+fn queued_messages_merged_into_one_presentation_each_count_as_presented() {
+    let mut f = fixture();
+    f.session.sent("prompt", None);
+    f.session.line(&init(&f.workspace)).unwrap();
+    f.session.line(&replay("prompt")).unwrap();
+    // Two notices sent during one tool call reach the model as one replayed message.
+    f.session.sent("notice E1", Some("E1"));
+    f.session.sent("notice E2", Some("E2"));
+    f.session.line(&replay("notice E1\nnotice E2")).unwrap();
+    f.session.line(&result()).unwrap();
+    assert!(f.session.idle(), "both merged notices were presented");
+    let spans: Vec<_> = f
+        .session
+        .deliveries
+        .iter()
+        .map(|d| d["presented_span"].clone())
+        .collect();
+    assert_eq!(spans, [json!(1), json!(1)]);
+}

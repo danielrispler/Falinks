@@ -265,8 +265,8 @@ pub struct Session {
     engine: Engine,
     spans: u64,
     in_turn: bool,
-    sent: u64,
-    presented: u64,
+    /// Host messages sent but not yet presented by a replay.
+    unpresented: Vec<String>,
     hooks: BTreeMap<String, Value>,
     ended: BTreeSet<String>,
 }
@@ -303,8 +303,7 @@ impl Session {
             engine,
             spans: 0,
             in_turn: false,
-            sent: 0,
-            presented: 0,
+            unpresented: vec![],
             hooks: BTreeMap::new(),
             ended: BTreeSet::new(),
         })
@@ -321,11 +320,11 @@ impl Session {
     }
     /// The runtime has presented every host message and finished its turn.
     pub fn idle(&self) -> bool {
-        !self.in_turn && self.presented >= self.sent
+        !self.in_turn && self.unpresented.is_empty()
     }
     /// Record a host message written to the runtime. Sending never implies handling.
     pub fn sent(&mut self, text: &str, event: Option<&str>) {
-        self.sent += 1;
+        self.unpresented.push(text.into());
         if let Some(event) = event {
             self.deliveries
                 .push(json!({"event":event,"text":text,"sent_span":self.spans,
@@ -388,13 +387,17 @@ impl Session {
             ("user", _) => {
                 if line["isReplay"] == true {
                     require(self.in_turn, "presentation outside a turn")?;
-                    self.presented += 1;
-                    let text = &line["message"]["content"];
-                    if let Some(delivery) = self
-                        .deliveries
-                        .iter_mut()
-                        .find(|d| d["text"] == *text && d["presented_span"].is_null())
-                    {
+                    // Messages queued during one tool call are replayed as one merged message.
+                    let content = &line["message"]["content"];
+                    let text = content
+                        .as_str()
+                        .map_or_else(|| content.to_string(), String::from);
+                    self.unpresented
+                        .retain(|sent| !text.contains(sent.as_str()));
+                    for delivery in self.deliveries.iter_mut().filter(|d| {
+                        d["presented_span"].is_null()
+                            && d["text"].as_str().is_some_and(|t| text.contains(t))
+                    }) {
                         delivery["presented_span"] = json!(self.spans);
                     }
                 }
