@@ -835,6 +835,10 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     );
     // Only calls from this phase count; the process may hold earlier captures.
     let before = gate.accepted(0, "capture").len();
+    let (edits_before, reviews_before) = (
+        gate.calls(0, "edit").len(),
+        gate.accepted(0, "review").len(),
+    );
     gate.prompt(0, &steps)?;
     gate.pump(&[0], false, |gate| {
         Ok(gate.accepted(0, "capture")[before..]
@@ -888,7 +892,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .find(|d| event_seq(d) >= Some(obligation.seq))
         .cloned()
         .ok_or("obligation notice not sent to agent 0")?;
-    let edits = gate.calls(0, "edit");
+    let edits = gate.calls(0, "edit").split_off(edits_before);
     let refused = edits
         .iter()
         .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
@@ -901,7 +905,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
             && delivery["presented_span"] == delivery["sent_span"]
             && refused.is_some()
             && applied > refused
-            && !gate.accepted(0, "review").is_empty(),
+            && gate.accepted(0, "review").len() > reviews_before,
         "agent 0 steering or review-before-write failed",
     )?;
     gate.control(0, "steering")?;
