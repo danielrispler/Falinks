@@ -91,6 +91,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "falinks-claude"
+version = "0.1.0"
+dependencies = [
+ "falinks-host",
+ "libc",
+ "serde_json",
+ "shlex",
+ "tempfile",
+]
+
+[[package]]
 name = "falinks-host"
 version = "0.1.0"
 dependencies = [
