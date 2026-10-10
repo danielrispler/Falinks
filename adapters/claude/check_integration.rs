@@ -37,6 +37,7 @@ const LABEL_FINAL: &str =
 const SUMMARY_DRAFT: &str =
     "package gate\n\nfunc Summary(gross int, name string) string {\n\treturn Label(name)\n}\n";
 const SUMMARY_FINAL: &str = "package gate\n\nimport \"strconv\"\n\nfunc Summary(gross int, name string) string {\n\treturn Label(name) + \" costs \" + strconv.Itoa(Net(gross))\n}\n";
+const SUMMARY_NET: &str = "package gate\n\nimport \"strconv\"\n\nfunc Summary(gross int, name string) string {\n\treturn Label(name) + \" nets \" + strconv.Itoa(Net(gross))\n}\n";
 const TEST: &str = "package gate\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestNetStaysWithinGross(t *testing.T) {\n\tfor gross := 0; gross <= 1000; gross++ {\n\t\tif n := Net(gross); n < 0 || n > gross {\n\t\t\tt.Fatalf(\"Net(%d) = %d\", gross, n)\n\t\t}\n\t}\n}\n\nfunc TestLabelNamesTheItem(t *testing.T) {\n\tif !strings.Contains(Label(\"lamp\"), \"lamp\") {\n\t\tt.Fatal(Label(\"lamp\"))\n\t}\n}\n";
 /// Enrolled source; `summary.go` is absent until agent 1 creates it.
 const FILES: &[(&str, Option<&str>)] = &[
@@ -496,6 +497,12 @@ impl Gate {
     }
 }
 
+/// A notice names the last engine event of its batch.
+fn event_seq(delivery: &Value) -> Option<u64> {
+    delivery["event"]
+        .as_str()
+        .and_then(|id| id.rsplit(':').next()?.parse().ok())
+}
 /// What to do when an edit is refused for a pending obligation.
 fn unreviewed(retry: &str) -> String {
     format!(
@@ -745,17 +752,11 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .find(|e| matches!(&e.body, falinks::Body::Obligation { agent: 1, .. }))
         .ok_or("no obligation reached agent 1")?;
     let runtime = gate.runtime(1)?;
-    // A notice names the last event of its batch.
-    let seq = |d: &Value| {
-        d["event"]
-            .as_str()
-            .and_then(|id| id.rsplit(':').next()?.parse::<u64>().ok())
-    };
     let delivery = runtime
         .session
         .deliveries
         .iter()
-        .find(|d| seq(d) >= Some(obligation.seq))
+        .find(|d| event_seq(d) >= Some(obligation.seq))
         .cloned()
         .ok_or("obligation notice not sent mid-turn")?;
     let saw_draft = runtime.session.events.iter().any(|e| {
@@ -822,16 +823,85 @@ fn scenario(gate: &mut Gate) -> Result<()> {
 
     // Phase 7: finish, review, offer the exact team candidate; acceptance commits but the
     // host faults before acknowledging it, then restarts the engine and both workers.
+    // Steering for agent 0 too: it declares a dependency on Summary, the host holds it
+    // at its edit call, and agent 1's Summary change reaches it inside that turn.
     let steps = format!(
-        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned.{}",
+        "1. falinks_register with request {{\"id\": \"summary-check\", \"task\": \"discount\", \"nodes\": [\"price.go#Net\"], \"depends\": [\"summary.go#Summary\"]}}.\n2. falinks_pending with request {{}}.\n3. falinks_capture with request {{}}.\n4. For each pending obligation, falinks_review with request {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using step 3's revision. If none is pending, do nothing.\n5. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n6. {} — use the price.go version step 5 returned.{}",
         edit_step("discount-done", "price.go", DISCOUNT_FINAL, "VERSION"),
         unreviewed("discount-done-2")
     );
-    gate.run(&[(0, steps)])?;
+    gate.prompt(0, &steps)?;
+    gate.pump(&[0], false, |gate| {
+        Ok(gate
+            .accepted(0, "capture")
+            .iter()
+            .any(|c| c["host_call"]["request"]["paths"] == json!(["price.go"])))
+    })?;
+    let since = gate
+        .engine()
+        .events(gate.client(0), 0)?
+        .last()
+        .map_or(0, |e| e.seq);
+    let summary = gate.engine().capture()?.files["summary.go"].version;
+    let steps = format!(
+        "1. {}{}",
+        edit_step(
+            "summary-net",
+            "summary.go",
+            SUMMARY_NET,
+            &summary.to_string()
+        ),
+        unreviewed("summary-net-2")
+    );
+    gate.prompt(1, &steps)?;
+    gate.pump(&[1], false, |gate| {
+        Ok(gate.read_live(1, "summary.go")? == SUMMARY_NET
+            && gate.workers[1]
+                .runtime
+                .as_ref()
+                .is_some_and(|r| r.session.idle()))
+    })?;
+    require(
+        gate.runtime(0)?.session.in_turn(),
+        "agent 0's turn ended before the peer edit",
+    )?;
+    gate.drive(|_| Ok(true))?;
     require(
         gate.read_live(0, "price.go")? == DISCOUNT_FINAL,
         "final discount not applied",
     )?;
+    let obligation = gate
+        .engine()
+        .events(gate.client(0), since)?
+        .into_iter()
+        .find(|e| matches!(&e.body, falinks::Body::Obligation { agent: 0, .. }))
+        .ok_or("no obligation reached agent 0")?;
+    let delivery = gate
+        .runtime(0)?
+        .session
+        .deliveries
+        .iter()
+        .find(|d| event_seq(d) >= Some(obligation.seq))
+        .cloned()
+        .ok_or("obligation notice not sent to agent 0")?;
+    let edits = gate.calls(0, "edit");
+    let refused = edits
+        .iter()
+        .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
+    let applied = edits.iter().position(|c| {
+        c["host_call"]["request"]["output"]["price.go"]["content"] == DISCOUNT_FINAL
+            && c["result"]["accepted"] == true
+    });
+    require(
+        delivery["sent_in_turn"] == true
+            && delivery["presented_span"] == delivery["sent_span"]
+            && refused.is_some()
+            && applied > refused
+            && !gate.accepted(0, "review").is_empty(),
+        "agent 0 steering or review-before-write failed",
+    )?;
+    gate.control(0, "steering")?;
+    gate.evidence["phases"]["steering"]["agent0"] = json!({"delivery":delivery,"edits":edits});
     let review = "1. falinks_pending with request {}.\n2. falinks_capture with request {}.\n3. For each pending obligation, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If none is pending, do nothing.";
     gate.run(&[(0, review.into()), (1, review.into())])?;
     for agent in 0..2 {
