@@ -1,6 +1,10 @@
+## Agent compatibility
+
+These docs are shared by Codex and Claude Code. `$skill` means `/skill` in Claude Code (plugin skills may appear as `/mattpocock-skills:<name>`). During session openings, planning, grilling, decision questions and explanations, `docs/agents/learning.md` overrides any terse or brevity output mode.
+
 ## Implementation language
 
-Falinks is 100% Rust. Write all executable project code in Rust, including the engine, adapters, controlled hosts, tests, verification probes, fixtures and repository automation. Use Cargo for builds, checks and tool entry points; implement helpers in Rust rather than introducing another language.
+The engine core is Rust only, along with its adapters, controlled hosts and repository automation. Falinks supports Rust and Go projects, so tests and fixtures may also be written in Go. Use Cargo for builds, checks and tool entry points; introduce no other language.
 
 ## Agent skills
 
