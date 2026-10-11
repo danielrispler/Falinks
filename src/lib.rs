@@ -169,6 +169,7 @@ pub struct Engine {
     analysis: RwLock<Vec<Toolchain>>,
     checks: RwLock<Vec<publication::Check>>,
     helper: RwLock<Option<PathBuf>>,
+    job_timeout: RwLock<std::time::Duration>,
     // One reusable validation workspace; its lease serializes validation runs.
     validation: Mutex<()>,
     signal: std::sync::Arc<coordination::Signal>,
@@ -719,6 +720,7 @@ impl Engine {
             analysis: RwLock::new(Vec::new()),
             checks: RwLock::new(Vec::new()),
             helper: RwLock::new(None),
+            job_timeout: RwLock::new(std::time::Duration::from_secs(30)),
             validation: Mutex::new(()),
             signal: coordination::Signal::new(),
             leases: Mutex::new(leases),
@@ -1381,7 +1383,10 @@ impl Engine {
                 output: &output,
                 env: &[("TMPDIR", &output), ("HOME", &output)],
                 reads: contain::Reads::Only(vec![input.clone(), output.clone()]),
-                timeout: std::time::Duration::from_secs(30),
+                timeout: *self
+                    .job_timeout
+                    .read()
+                    .map_err(|_| "job timeout lock poisoned")?,
             },
         )?;
         if !status.success() {
@@ -1393,6 +1398,15 @@ impl Engine {
     /// `falinks-contain` beside the host executable; a missing helper fails closed.
     pub fn configure_containment(&self, helper: PathBuf) -> Result<()> {
         *self.helper.write().map_err(|_| "helper lock poisoned")? = Some(helper);
+        Ok(())
+    }
+    /// Host configuration: how long a captured job may run before it is killed
+    /// (default 30s).
+    pub fn configure_job_timeout(&self, timeout: std::time::Duration) -> Result<()> {
+        *self
+            .job_timeout
+            .write()
+            .map_err(|_| "job timeout lock poisoned")? = timeout;
         Ok(())
     }
     fn helper(&self) -> Result<PathBuf> {

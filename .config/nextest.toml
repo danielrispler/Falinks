@@ -1,0 +1,4 @@
+# Start the longest tests first so they do not finish last (measured locally).
+[[profile.default.overrides]]
+filter = "binary(arm) | test(rust_relationships_notify_related_scopes) | test(publication_crash_boundaries)"
+priority = 100

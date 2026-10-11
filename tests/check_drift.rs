@@ -103,6 +103,31 @@ fn check_list_matches_ci_workflows() {
 }
 
 #[test]
+fn evaluation_inputs_match_the_evaluation_workflow_filter() {
+    let workflow = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/evaluation.yml"),
+    )
+    .expect("evaluation workflow");
+    let filters: BTreeSet<Vec<String>> = workflow
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("paths:"))
+        .map(|list| {
+            list.trim()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .split(',')
+                .map(|glob| unquote(glob).trim_end_matches("**").to_string())
+                .collect()
+        })
+        .collect();
+    let inputs: Vec<String> = check_list::EVALUATION_INPUTS
+        .iter()
+        .map(|i| i.to_string())
+        .collect();
+    assert_eq!(filters, BTreeSet::from([inputs]));
+}
+
+#[test]
 fn workflow_parsing_maps_deny_action_and_skips_non_checks() {
     let workflow = "\
 jobs:

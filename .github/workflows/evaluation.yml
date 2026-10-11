@@ -19,14 +19,17 @@ permissions:
 jobs:
   macos-evaluation:
     # Sandboxed Go/Cargo checks are slow and time out under contention, so each
-    # shard runs serially on its own runner. The last shard takes every other test.
+    # shard runs serially on its own runner. Shards are balanced by measured test
+    # time; the last shard takes every other test, so keep its skips in step.
     runs-on: macos-latest
     strategy:
       matrix:
         tests:
-          - frozen_oracles
-          - oracle_blocks oracles_reject_compiling
-          - --skip frozen_oracles --skip oracle_blocks --skip oracles_reject_compiling
+          - batch_gates_pauses
+          - batch_tells_a_gate
+          - fixture_shard_runs
+          - frozen_oracles oracle_blocks claude_bridge codex_bridge
+          - --skip batch_gates_pauses --skip batch_tells_a_gate --skip fixture_shard_runs --skip frozen_oracles --skip oracle_blocks --skip claude_bridge --skip codex_bridge
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2

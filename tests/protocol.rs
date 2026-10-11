@@ -581,6 +581,9 @@ fn job_udp_attempt_is_denied() {
 #[test]
 fn job_timeout_kills_the_command_and_retains_evidence() {
     let (_dir, engine, alice, _) = fixture();
+    engine
+        .configure_job_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
     let job = shell_job(&engine, &alice, "timeout", "/bin/sh", "sleep 60");
     assert!(job.error.as_deref().unwrap().contains("timed out"));
     assert!(job.directory.join("stdout").exists());
