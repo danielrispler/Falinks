@@ -20,6 +20,7 @@ You need:
 - Git 2.32 or newer.
 - Go on `PATH`, and `gopls` v0.22.0 (`go install golang.org/x/tools/gopls@v0.22.0`).
 - `cargo-deny`: `cargo install cargo-deny --locked`.
+- `cargo-nextest`: `cargo install cargo-nextest --locked`.
 - A [supported platform](docs/platforms.md).
 
 ## Run the checks
@@ -30,7 +31,7 @@ Run every CI check locally, in CI's order, before you open a pull request:
 cargo run --bin ci-checks
 ```
 
-It stops at the first failing step and names it. The list lives in `scripts/check_list.rs`, and `tests/check_drift.rs` keeps it in step with `.github/workflows/`. If you add a workflow step, add it to the list too.
+It stops at the first failing step and names it. The slow evaluation tests run only when `evaluation/`, `rust-toolchain.toml` or `.cargo/` changed since `origin/main`, as in CI; `cargo run --bin ci-checks -- --all` runs them anyway. The list lives in `scripts/check_list.rs`, and `tests/check_drift.rs` keeps it in step with `.github/workflows/`. If you add a workflow step, add it to the list too.
 
 ## Evaluation sources
 

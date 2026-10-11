@@ -1,4 +1,6 @@
 //! Run every CI check locally, in order; stop at the first failure and name it.
+//! The evaluation tests run only when their inputs changed since `origin/main`,
+//! as in CI; pass `--all` to run them anyway.
 use std::{
     fs,
     path::Path,
@@ -26,18 +28,56 @@ fn probe_manifests(root: &Path) -> Vec<String> {
     manifests
 }
 
+/// Files changed since the merge base with `origin/main`, committed or not, plus
+/// untracked files. `None` when git cannot tell, so the caller runs everything.
+fn changed_files(root: &Path) -> Option<Vec<String>> {
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let base = git(&["merge-base", "origin/main", "HEAD"])?;
+    let diff = git(&["diff", "--name-only", base.trim()])?;
+    let untracked = git(&["ls-files", "--others", "--exclude-standard"])?;
+    Some(
+        diff.lines()
+            .chain(untracked.lines())
+            .map(String::from)
+            .collect(),
+    )
+}
+
+fn evaluation_changed(changed: &[String]) -> bool {
+    changed.iter().any(|file| {
+        check_list::EVALUATION_INPUTS
+            .iter()
+            .any(|input| file.starts_with(input))
+    })
+}
+
 fn main() -> ExitCode {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let deny = Command::new("cargo").args(["deny", "--version"]).output();
-    if !deny.is_ok_and(|out| out.status.success()) {
-        eprintln!(
-            "ci-checks: cargo-deny is missing; install it with:\n  cargo install cargo-deny --locked"
-        );
-        return ExitCode::FAILURE;
+    for (tool, install) in [
+        ("deny", "cargo install cargo-deny --locked"),
+        ("nextest", "cargo install cargo-nextest --locked"),
+    ] {
+        let found = Command::new("cargo").args([tool, "--version"]).output();
+        if !found.is_ok_and(|out| out.status.success()) {
+            eprintln!("ci-checks: cargo-{tool} is missing; install it with:\n  {install}");
+            return ExitCode::FAILURE;
+        }
     }
+    let all = std::env::args().any(|arg| arg == "--all");
+    let run_evaluation = all || changed_files(&root).is_none_or(|c| evaluation_changed(&c));
     let probes = probe_manifests(&root);
     let checks: Vec<String> = check_list::CHECKS
         .iter()
+        .filter(|check| run_evaluation || **check != check_list::EVALUATION_TESTS)
         .flat_map(|check| {
             if check.contains(PROBE_ARG) {
                 probes.iter().map(|p| check.replace(PROBE_ARG, p)).collect()
@@ -46,6 +86,11 @@ fn main() -> ExitCode {
             }
         })
         .collect();
+    if !run_evaluation {
+        eprintln!(
+            "ci-checks: evaluation inputs unchanged since origin/main; skipping its tests (--all runs them)"
+        );
+    }
     let total = checks.len();
     for (index, check) in checks.iter().enumerate() {
         let step = index + 1;
@@ -62,4 +107,22 @@ fn main() -> ExitCode {
     }
     eprintln!("ci-checks: all {total} checks passed");
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_evaluation_inputs_trigger_the_evaluation_tests() {
+        let changed = |files: &[&str]| {
+            evaluation_changed(&files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
+        };
+        assert!(changed(&["src/lib.rs", "evaluation/src/main.rs"]));
+        assert!(changed(&[".cargo/config.toml"]));
+        assert!(changed(&["rust-toolchain.toml"]));
+        assert!(!changed(&["src/lib.rs", ".github/workflows/checks.yml"]));
+        assert!(!changed(&["evaluation.md"]));
+        assert!(!changed(&[]));
+    }
 }
