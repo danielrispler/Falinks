@@ -35,6 +35,8 @@ jobs:
         run: go install golang.org/x/tools/gopls@v0.22.0
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # The engine suite builds the offline evaluation CLI, so fetch its crates first.
+      - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
       - run: cargo test --locked
 
   linux:
@@ -64,9 +66,10 @@ jobs:
       - run: grep -qw landlock /sys/kernel/security/lsm
       - run: cargo fmt --manifest-path evaluation/Cargo.toml --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # The engine suite builds the offline evaluation CLI, so fetch its crates first.
+      - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
       # The engine suite runs unchanged on Linux (#54).
       - run: cargo test --locked
-      - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
       - run: cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:

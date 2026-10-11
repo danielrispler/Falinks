@@ -6,9 +6,9 @@
 pub const CHECKS: &[&str] = &[
     "cargo fmt --check",
     "cargo clippy --locked --all-targets -- -D warnings",
+    "cargo fetch --locked --manifest-path evaluation/Cargo.toml",
     "cargo test --locked",
     "cargo fmt --manifest-path evaluation/Cargo.toml --check",
-    "cargo fetch --locked --manifest-path evaluation/Cargo.toml",
     "cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings",
     "cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1",
     "cargo fmt --manifest-path \"$probe\" --check",
