@@ -154,6 +154,10 @@ fn enrollment_adds_optional_test_files_and_skips_reserved_paths() {
 
 /// The engine runs the Git arm's visible Rust commands with the pinned toolchain in its sandbox.
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
 fn rust_visible_checks_pass_the_reference_under_the_engine() {
     let mut run = setup("rust-errors");
     let reference = read(repo().join("evaluation/protected/rust-errors.json"))["reference"].clone();
@@ -188,6 +192,10 @@ fn rust_visible_checks_pass_the_reference_under_the_engine() {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
 fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     let mut run = setup("go-relationships");
     let reference =
