@@ -3,12 +3,13 @@
 
 use std::{fs, path::Path, process::Command};
 
-const DATA_EXTENSIONS: &[&str] = &["md", "json", "toml", "lock", "yml", "yaml"];
+const DATA_EXTENSIONS: &[&str] = &["md", "json", "toml", "lock", "yml", "yaml", "svg"];
+const DATA_NAMES: &[&str] = &[".gitignore", "CODEOWNERS", "LICENSE-MIT", "LICENSE-APACHE"];
 
 fn violation(path: &str) -> Option<&'static str> {
     let name = path.rsplit('/').next().unwrap_or(path);
     let extension = name.rsplit_once('.').map(|(_, e)| e);
-    let allowed = name == ".gitignore"
+    let allowed = DATA_NAMES.contains(&name)
         || matches!(extension, Some(e) if e == "rs" || DATA_EXTENSIONS.contains(&e))
         || (extension == Some("go") && path.starts_with("evaluation/"));
     if !allowed {

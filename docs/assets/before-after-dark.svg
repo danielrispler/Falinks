@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="290" viewBox="0 0 1000 290" role="img" aria-label="Git worktrees take six steps with a redo loop, about 184k tokens and 21 minutes. Falinks takes five steps with no merge, about 101k tokens and 13 minutes.">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#eab308"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f87171"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="290" rx="16" fill="#0d1117" stroke="#30363d"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" text-anchor="middle">
+    <text x="20" y="36" font-size="17" font-weight="700" text-anchor="start" fill="#f8fafc">Git worktrees + merge</text>
+    <text x="980" y="36" font-size="15" font-weight="700" text-anchor="end" fill="#94a3b8">~184k tokens · 21 min</text>
+
+    <g fill="#161b22" stroke="#475569">
+      <rect x="20" y="52" width="150" height="44" rx="10"/>
+      <rect x="182" y="52" width="150" height="44" rx="10"/>
+    </g>
+    <g fill="#2d1517" stroke="#7f1d1d">
+      <rect x="344" y="52" width="150" height="44" rx="10"/>
+      <rect x="506" y="52" width="150" height="44" rx="10"/>
+      <rect x="668" y="52" width="150" height="44" rx="10"/>
+      <rect x="830" y="52" width="150" height="44" rx="10"/>
+    </g>
+    <text x="95" y="79" fill="#f8fafc">Separate copies</text>
+    <text x="257" y="79" fill="#f8fafc">Both edit handler.go</text>
+    <text x="419" y="79" fill="#fca5a5">Merge conflict</text>
+    <text x="581" y="79" fill="#fca5a5">Re-read + rewrite</text>
+    <text x="743" y="79" fill="#fca5a5">Tests fail</text>
+    <text x="905" y="79" fill="#fca5a5">Fix again</text>
+    <path d="M743 98 C743 146 581 146 581 100" fill="none" stroke="#f87171" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <text x="662" y="148" font-size="12" fill="#f87171">redo</text>
+
+    <text x="20" y="196" font-size="17" font-weight="700" text-anchor="start" fill="#f8fafc">Falinks</text>
+    <text x="980" y="196" font-size="15" font-weight="700" text-anchor="end" fill="#fb923c">~101k tokens · 13 min</text>
+
+    <g fill="#2b1a0e" stroke="#9a3412">
+      <rect x="20" y="212" width="150" height="44" rx="10"/>
+      <rect x="182" y="212" width="150" height="44" rx="10"/>
+      <rect x="344" y="212" width="150" height="44" rx="10"/>
+      <rect x="506" y="212" width="150" height="44" rx="10"/>
+    </g>
+    <rect x="668" y="212" width="150" height="44" rx="10" fill="url(#g)"/>
+    <text x="95" y="239" fill="#fdba74">Shared live code</text>
+    <text x="257" y="239" fill="#fdba74">Stale edit bounces</text>
+    <text x="419" y="239" fill="#fdba74">Rebase in one step</text>
+    <text x="581" y="239" fill="#fdba74">A told of impact</text>
+    <text x="743" y="239" fill="#0d1117">Checks pass, lands</text>
+    <text x="899" y="239" font-size="14" fill="#4ade80">✓ no merge</text>
+  </g>
+</svg>
