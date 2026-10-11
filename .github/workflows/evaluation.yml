@@ -28,12 +28,12 @@ jobs:
           - oracle_blocks oracles_reject_compiling
           - --skip frozen_oracles --skip oracle_blocks --skip oracles_reject_compiling
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           rustflags: ""
           cache-workspaces: evaluation -> target
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
           cache: false
