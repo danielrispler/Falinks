@@ -62,9 +62,19 @@
       "charged_seconds": 8495,
       "measurement": "Session wall time from claiming #65 through the commit, minus only the unattended clean pilot-6 gate and run (805 s); failed pilots 2-5 are charged because they were spent diagnosing and repairing. Plus a commit/handoff allowance.",
       "work": "#65 pilot repairs from real-runtime failures, bundled because pilot-6 validated them together: pass USER to the runtime (Keychain login; pilot-2 auth failure); CLAUDE_CODE_TMPDIR and zsh TMPPREFIX into scratch (pilot-4 Bash EPERM; TMPPREFIX untested); any bridge argument is a host command, as the prompt says (pilot-5 host commands never reached the host); init check tested against the recorded real init (#65 retro note); scripted runtime mirrors these shapes; versioned re-freeze v4 -> v5 (harness changed; initial commits unchanged). Clean unscored pilot pair: /private/tmp/ev/pilot-6."
+    },
+    {
+      "start_utc": "2026-10-11T13:08:37Z",
+      "stop_utc": "2026-10-11T13:20:14Z",
+      "measured_seconds": 697,
+      "startup_allowance_seconds": 300,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 1297,
+      "measurement": "Session wall time from creating the #73 worktree through final CI, plus allowances for reading before the worktree existed and for commit/handoff. No real runs.",
+      "work": "#73 setup checks from the pilot retro: freeze lists changed frozen paths and refuses unstaged changes to them; check-integration names a missing sandbox-probe/falinks-claude-tool before any runtime launch; batch checks the gate binary and its siblings first and records 'gate could not start' apart from a failed gate scenario; README re-freeze note; platform-bound test rule in CODING_STANDARDS.md; versioned re-freeze v5 -> v6 (harness changed; initial commits unchanged)."
     }
   ],
-  "charged_total_seconds": 18751,
-  "remaining_seconds": 10049,
-  "status": "pilot repair v5; clean unscored pilot pair in pilot-6"
+  "charged_total_seconds": 20048,
+  "remaining_seconds": 8752,
+  "status": "setup checks hardened (#73); manifest v6"
 }

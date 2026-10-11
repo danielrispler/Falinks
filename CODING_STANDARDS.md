@@ -23,3 +23,7 @@ Add a rule when a review finding is a judgement call that will come up again. Ke
 ## Frozen and pinned material
 
 - Do not edit hash-frozen evaluation material as a side effect of another change. Plan a versioned re-freeze, as described in `evaluation/README.md`.
+
+## Platform-bound tests
+
+- A test that needs the evaluation sandbox or `/private/tmp` carries `#[cfg_attr(not(target_os = "macos"), ignore = "the evaluation sandbox is macOS-only")]`. Linux CI runs the root suite, so an ungated test fails there (#62). Reviewers check this; no test enforces it.

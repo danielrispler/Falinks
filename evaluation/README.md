@@ -263,6 +263,9 @@ covers this preparation plus remaining pilot/evaluation setup, **not engine
 implementation**. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
 for safety gates, run interpretation and continuation criteria.
+`freeze` lists each changed frozen path and refuses unstaged changes to them, so
+stage your repair first. Re-freeze before observing a red harness test, or the
+freeze guard fails first and masks the real failure.
 
 ## Verification record
 

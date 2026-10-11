@@ -108,6 +108,27 @@ fn active_siblings(runs: &Path) -> Result<Vec<String>> {
     Ok(active)
 }
 
+/// The first path the gate needs but lacks: its program and, for `check-integration`, the
+/// worker tools it copies (`--probe`/`--tool`, else its siblings). The names mirror the
+/// defaults in `adapters/claude/check_integration.rs`; this crate cannot import them.
+fn gate_missing(argv: &[String]) -> Option<PathBuf> {
+    let program = Path::new(&argv[0]);
+    let mut needed = vec![program.to_path_buf()];
+    if program.file_name() == Some("check-integration".as_ref()) {
+        for (flag, sibling) in [
+            ("--probe", "sandbox-probe"),
+            ("--tool", "falinks-claude-tool"),
+        ] {
+            let given = argv
+                .iter()
+                .position(|a| a == flag)
+                .and_then(|i| argv.get(i + 1));
+            needed.push(given.map_or_else(|| program.with_file_name(sibling), PathBuf::from));
+        }
+    }
+    needed.into_iter().find(|path| !path.is_file())
+}
+
 /// `after_pilot` names the completed pilot batch directory; without it this is the pilot.
 /// `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
 pub fn batch(
@@ -212,16 +233,30 @@ pub fn batch(
                         .replace("{output}", &output.to_string_lossy())
                 })
                 .collect();
-            let status = Command::new(&argv[0]).args(&argv[1..]).status()?;
-            ledger["gates"].as_array_mut().unwrap().push(
-                json!({"utc": utc_now(), "argv": argv, "report": output, "passed": status.success()}),
-            );
-            if !status.success() {
-                return pause(
-                    &mut ledger,
-                    &ledger_path,
-                    "safety gate failed; scoring blocked".into(),
-                );
+            let started = match gate_missing(&argv) {
+                Some(path) => Err(format!("missing {}", path.display())),
+                None => Command::new(&argv[0])
+                    .args(&argv[1..])
+                    .status()
+                    .map_err(|e| format!("{}: {e}", argv[0])),
+            };
+            let mut gate = json!({"utc": utc_now(), "argv": argv, "report": output,
+                "started": started.is_ok(), "passed": started.as_ref().is_ok_and(|s| s.success())});
+            let blocked = match &started {
+                Err(reason) => {
+                    gate["failure"] = reason.as_str().into();
+                    Some(format!(
+                        "safety gate could not start ({reason}); scoring blocked"
+                    ))
+                }
+                Ok(status) if !status.success() => {
+                    Some("safety gate scenario failed; scoring blocked".into())
+                }
+                Ok(_) => None,
+            };
+            ledger["gates"].as_array_mut().unwrap().push(gate);
+            if let Some(reason) = blocked {
+                return pause(&mut ledger, &ledger_path, reason);
             }
             gated = true;
         }
