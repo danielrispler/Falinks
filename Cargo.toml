@@ -2,6 +2,9 @@
 name = "falinks"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Many coding agents, one live repo: dependency-aware edits and exact, tested publication"
+repository = "https://github.com/danielrispler/Falinks"
 publish = false
 
 [dependencies]

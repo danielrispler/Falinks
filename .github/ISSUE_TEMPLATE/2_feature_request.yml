@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest a capability, agent runtime or language for Falinks.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What goes wrong or costs too much today when several agents work on one repository?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Worktrees, merge queues, agent teams or other tools you tried.
