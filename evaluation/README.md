@@ -269,6 +269,6 @@ for safety gates, run interpretation and continuation criteria.
 `verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger charges 10,256 seconds (about 171 minutes) through the #66 fixture shards,
-leaving 18,544 seconds of the shared eight-hour setup allowance for the pilot and any
-pilot repairs.
+ledger charges 18,751 seconds (about 313 minutes) through the #65 pilot repairs,
+leaving 10,049 seconds of the shared eight-hour setup allowance for any further
+repairs before scoring.

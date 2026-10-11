@@ -3,7 +3,7 @@
 //! `claude-worker` runs one long-lived `claude -p` stream-json session with the same pinned
 //! model, turn cap and isolation flags as the Falinks adapter, but ordinary Git-worktree
 //! tools. The agent talks to the host by running `"$FALINKS_HOST" <action>` through Bash
-//! (`claude-worker host ...`), which this process forwards as JSON lines. Host events are
+//! (`claude-worker <action> ...`), which this process forwards as JSON lines. Host events are
 //! written to the runtime at once: like the Falinks arm, they are presented at the next
 //! tool-result boundary or start a new turn.
 use serde_json::{Value, json};
@@ -33,17 +33,15 @@ enum Input {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    let outcome = match args.first().map(String::as_str) {
-        Some("host") => host(&args[1..]),
-        _ => run(),
-    };
+    // The bridge itself takes no arguments; with any, this is the agent's `"$FALINKS_HOST" ACTION`.
+    let outcome = if args.is_empty() { run() } else { host(&args) };
     if let Err(error) = outcome {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-/// `host message TEXT | share | ack ID | check [RESOLVED] | ready`: one request, one reply.
+/// `message TEXT | share | ack ID | check [RESOLVED] | ready`: one request, one reply.
 fn host(args: &[String]) -> Result<()> {
     let arg = |i: usize| args.get(i).cloned().unwrap_or_default();
     let request = match args.first().map(String::as_str) {
@@ -54,9 +52,7 @@ fn host(args: &[String]) -> Result<()> {
         Some("check") => json!({"action": "check"}),
         Some("ready") => json!({"action": "ready"}),
         _ => {
-            return Err(
-                "usage: host message TEXT | share | ack ID | check [RESOLVED] | ready".into(),
-            );
+            return Err("usage: message TEXT | share | ack ID | check [RESOLVED] | ready".into());
         }
     };
     // Relative to the worker directory: absolute run paths can exceed the 104-byte socket limit.
@@ -158,23 +154,7 @@ impl Bridge {
         let model = self.model.as_str();
         match (event["type"].as_str(), event["subtype"].as_str()) {
             (Some("system"), Some("init")) => {
-                // The runtime lists tools sorted, not in `--tools` order.
-                let mut tools: Vec<&str> = event["tools"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .collect();
-                tools.sort();
-                if event["model"] != model
-                    || event["claude_code_version"] != self.version.as_str()
-                    || event["permissionMode"] != "dontAsk"
-                    || tools != {
-                        let mut expected: Vec<&str> = TOOLS.split(',').collect();
-                        expected.sort();
-                        expected
-                    }
-                {
+                if !init_matches(&event, model, &self.version, TOOLS) {
                     return Err(format!("unsupported runtime init; run invalid: {event}").into());
                 }
             }
@@ -316,6 +296,10 @@ fn run() -> Result<()> {
         ])
         .current_dir(&scratch)
         .env("DISABLE_AUTOUPDATER", "1")
+        // Bash's temp folder defaults to `/tmp/claude-<uid>`, which the host sandbox denies.
+        .env("CLAUDE_CODE_TMPDIR", &scratch)
+        // zsh heredocs write `$TMPPREFIX*` files (default `/tmp/zsh`), also denied.
+        .env("TMPPREFIX", scratch.join("zsh"))
         .env("FALINKS_HOST", &worker)
         .env("FALINKS_HOST_DIR", &cwd)
         .stdin(Stdio::piped())
@@ -425,5 +409,57 @@ fn run() -> Result<()> {
                 }
             }
         }
+    }
+}
+
+/// Whether a `system/init` event shows the pinned model, version, `dontAsk` and exactly `tools`
+/// (a `--tools` value). The runtime lists tools sorted, not in `--tools` order.
+fn init_matches(event: &Value, model: &str, version: &str, tools: &str) -> bool {
+    let mut listed: Vec<&str> = event["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let mut expected: Vec<&str> = tools.split(',').collect();
+    listed.sort();
+    expected.sort();
+    event["model"] == model
+        && event["claude_code_version"] == version
+        && event["permissionMode"] == "dontAsk"
+        && listed == expected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The init a real 2.1.287 runtime emitted in the #26 integration (Falinks arm's tools).
+    fn recorded_init() -> Value {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../adapters/claude/evidence/2026-10-10-integration.json"
+        );
+        let evidence: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        evidence["evidence"]["transcripts"][0][0]["events"][0].clone()
+    }
+
+    #[test]
+    fn recorded_real_init_passes_the_init_check() {
+        let init = recorded_init();
+        assert_eq!(init["subtype"], "init");
+        let mut tools: Vec<&str> = init["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t.as_str().unwrap())
+            .collect();
+        // Real shape: sorted, whatever the `--tools` order.
+        assert!(tools.is_sorted(), "recorded tools not sorted: {tools:?}");
+        tools.reverse();
+        let flag = tools.join(",");
+        assert!(init_matches(&init, "claude-opus-5-5", "2.1.287", &flag));
+        assert!(!init_matches(&init, "claude-opus-5-5", "2.1.287", TOOLS));
+        assert!(!init_matches(&init, "claude-sonnet-5-5", "2.1.287", &flag));
     }
 }

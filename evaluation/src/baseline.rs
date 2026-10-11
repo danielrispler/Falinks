@@ -249,6 +249,8 @@ fn execute(
         let mut env: Vec<(String, String)> = env::vars()
             .filter(|(k, _)| {
                 [
+                    // Claude Code finds its Keychain login by `USER`.
+                    "USER",
                     "PATH",
                     "CARGO_HOME",
                     "RUSTUP_HOME",
