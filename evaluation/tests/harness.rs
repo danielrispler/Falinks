@@ -372,6 +372,42 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
 }
 
 #[test]
+fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
+    let tmp = tmp("falinks-gate-test-");
+    let mut config = read(config(tmp.path(), SCRIPTED, json!(["{worker}"]), SCRIPTED));
+    let mut batch = |name: &str, gate: Value| {
+        config["gate_command"] = gate;
+        let path = tmp.path().join(format!("{name}.json"));
+        fs::write(&path, config.to_string()).unwrap();
+        let runs = tmp.path().join(name);
+        let output = Command::new(CLI)
+            .args(["batch", "--config"])
+            .arg(&path)
+            .arg("--runs")
+            .arg(&runs)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+        let ledger = read(runs.join("batch.json"));
+        assert!(ledger["runs"].as_array().unwrap().is_empty());
+        (text(&output), ledger["gates"][0].clone())
+    };
+    let missing = tmp.path().join("check-integration");
+    let (message, gate) = batch("missing", json!([missing, "--binary", SCRIPTED]));
+    assert!(message.contains("gate could not start"), "{message}");
+    assert!(
+        message.contains(&missing.display().to_string()),
+        "{message}"
+    );
+    assert_eq!(gate["started"], false);
+
+    let (message, gate) = batch("failed", json!(["/usr/bin/false", SCRIPTED]));
+    assert!(message.contains("gate scenario failed"), "{message}");
+    assert_eq!(gate["started"], true);
+    assert_eq!(gate["passed"], false);
+}
+
+#[test]
 fn fixture_shard_runs_only_its_slots_denies_siblings_and_records_concurrency() {
     let tmp = tmp("falinks-shard-test-");
     let base = fs::canonicalize(tmp.path()).unwrap();

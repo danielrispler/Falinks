@@ -1320,11 +1320,17 @@ fn main() {
             }
         }
         let sibling = |name| env::current_exe().map(|exe| exe.with_file_name(name));
+        let probe = probe.map_or_else(|| sibling("sandbox-probe"), Ok)?;
+        let tool = tool.map_or_else(|| sibling("falinks-claude-tool"), Ok)?;
+        // Name a missing worker tool before any runtime launch, not a bare os error later.
+        for path in [&probe, &tool] {
+            require(path.is_file(), &format!("missing {}", path.display()))?;
+        }
         Ok((
             binary.ok_or("--binary required")?,
             output.ok_or("--output required")?,
-            probe.map_or_else(|| sibling("sandbox-probe"), Ok)?,
-            tool.map_or_else(|| sibling("falinks-claude-tool"), Ok)?,
+            probe,
+            tool,
         ))
     })();
     let (binary, output, probe, tool) = match arguments {

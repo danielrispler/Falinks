@@ -280,8 +280,7 @@ pub fn initial(dest: &Path, fixture: &Value) -> Result<String> {
     git(dest, &["rev-parse", "HEAD"], None)
 }
 
-fn material_hashes() -> Result<Value> {
-    let root = root();
+fn material_hashes(root: &Path) -> Result<Value> {
     let mut hashes = Map::new();
     let mut files: Vec<PathBuf> = ["fixtures", "protected", "instructions", "src"]
         .iter()
@@ -297,49 +296,87 @@ fn material_hashes() -> Result<Value> {
         .map(|f| root.join(f)),
     );
     for path in files {
-        let name = path.strip_prefix(&root)?.to_string_lossy().into_owned();
+        let name = path.strip_prefix(root)?.to_string_lossy().into_owned();
         hashes.insert(name, sha256(&fs::read(&path)?).into());
     }
     Ok(Value::Object(hashes))
 }
 
-fn freeze() -> Result<()> {
+/// Re-freezes the materials under `root` and returns the frozen paths whose hash changed.
+/// Refuses while a changed file has unstaged changes, so a freeze in a shared checkout never
+/// hashes another session's edit.
+fn freeze(root: &Path) -> Result<Vec<String>> {
     let tmp = tempfile::Builder::new()
         .prefix("falinks-freeze-")
         .tempdir()?;
     let mut commits = Map::new();
     for name in FIXTURES {
+        let fixture = read(root.join("fixtures").join(format!("{name}.json")))?;
         commits.insert(
             name.into(),
-            initial(&tmp.path().join(name), &fixture(name)?)?.into(),
+            initial(&tmp.path().join(name), &fixture)?.into(),
         );
     }
-    let (hashes, path) = (material_hashes()?, root().join("manifest.json"));
+    let (hashes, path) = (material_hashes(root)?, root.join("manifest.json"));
     let previous = read(&path).ok();
+    // Paths added or re-hashed since the last freeze, then paths it froze that are gone.
+    let previous_hashes = previous
+        .as_ref()
+        .map_or(Value::Null, |p| p["hashes"].clone());
+    let changed: Vec<String> = hashes
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(name, hash)| previous_hashes[name.as_str()] != **hash)
+        .map(|(name, _)| name.clone())
+        .chain(
+            previous_hashes
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(name, _)| name.clone())
+                .filter(|name| hashes[name].is_null()),
+        )
+        .collect();
+    if !changed.is_empty() {
+        let mut args = vec!["status", "--porcelain=v1", "--"];
+        args.extend(changed.iter().map(String::as_str));
+        // Second status column: worktree differs from the index, or untracked (`??`).
+        let unstaged: Vec<String> = String::from_utf8_lossy(&git_raw(root, &args, None)?)
+            .lines()
+            .filter(|line| line.as_bytes().get(1).is_some_and(|c| *c != b' '))
+            .map(String::from)
+            .collect();
+        if !unstaged.is_empty() {
+            bail!(
+                "Refusing to freeze unstaged changes to frozen files; stage or revert them:\n{}",
+                unstaged.join("\n")
+            );
+        }
+    }
     let mut version = 1;
     if let Some(previous) = previous {
-        if previous["hashes"] == hashes
-            && previous["initial_commits"] == Value::Object(commits.clone())
-        {
-            return Ok(());
+        if changed.is_empty() && previous["initial_commits"] == Value::Object(commits.clone()) {
+            return Ok(changed);
         }
         // Retain every superseded freeze; a repair is versioned, never silently overwritten.
         version = previous["version"].as_u64().unwrap_or(1) + 1;
-        fs::create_dir_all(root().join("manifests"))?;
+        fs::create_dir_all(root.join("manifests"))?;
         write(
-            root().join(format!("manifests/v{}.json", version - 1)),
+            root.join(format!("manifests/v{}.json", version - 1)),
             &previous,
         )?;
     }
     write(
         path,
         &json!({"version": version, "hashes": hashes, "initial_commits": commits}),
-    )
+    )?;
+    Ok(changed)
 }
 
 pub fn frozen() -> Result<Value> {
     let manifest = read(root().join("manifest.json"))?;
-    if material_hashes()? != manifest["hashes"] {
+    if material_hashes(&root())? != manifest["hashes"] {
         bail!(
             "Frozen materials changed: version repairs and explicitly run freeze before a new batch"
         );
@@ -697,7 +734,12 @@ impl Args {
 fn run() -> Result<i32> {
     let args = Args::parse(env::args().skip(1).collect())?;
     match args.positional.first().map(String::as_str) {
-        Some("freeze") => freeze().map(|_| 0),
+        Some("freeze") => {
+            for path in freeze(&root())? {
+                println!("changed {path}");
+            }
+            Ok(0)
+        }
         Some("verify") => verify(),
         Some("schedule") => {
             println!("{}", serde_json::to_string_pretty(&schedule())?);
@@ -779,6 +821,43 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn freeze_refuses_unstaged_frozen_changes_and_lists_changed_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let copy = tmp.path().join("evaluation");
+        for path in walk(&root())
+            .into_iter()
+            .filter(|p| !p.starts_with(root().join("target")))
+        {
+            let to = copy.join(path.strip_prefix(root()).unwrap());
+            fs::create_dir_all(to.parent().unwrap()).unwrap();
+            fs::copy(&path, to).unwrap();
+        }
+        let run = |args: &[&str]| git(&copy, args, None).unwrap();
+        run(&["init", "-q"]);
+        run(&["add", "."]);
+        run(&["commit", "-qm", "frozen"]);
+        freeze(&copy).unwrap();
+        let version = read(copy.join("manifest.json")).unwrap()["version"].clone();
+
+        fs::write(copy.join("config.json"), "{}\n").unwrap();
+        let refused = freeze(&copy).unwrap_err().to_string();
+        assert!(refused.contains("config.json"), "{refused}");
+        assert_eq!(
+            read(copy.join("manifest.json")).unwrap()["version"],
+            version
+        );
+
+        run(&["add", "config.json"]);
+        assert_eq!(freeze(&copy).unwrap(), ["config.json"]);
+        assert_ne!(
+            read(copy.join("manifest.json")).unwrap()["version"],
+            version
+        );
+    }
+
     #[test]
     fn utc_formats_known_instants() {
         assert_eq!(super::utc(0), "1970-01-01T00:00:00Z");
