@@ -25,6 +25,7 @@ jobs:
       matrix:
         runner: [ubuntu-latest, ubuntu-22.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     env:
       PROBE: adapters/sandbox-backends-probe/target/release/sandbox-backends-probe
     steps:
@@ -65,6 +66,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2

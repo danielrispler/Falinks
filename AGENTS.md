@@ -12,7 +12,7 @@ The current list, per component, is `docs/platforms.md`. Do not infer support fr
 
 ## Checks
 
-Before handing off a change, run every CI check locally, in CI's order:
+Before handing off a change, run every CI check locally, cheapest first:
 
 ```sh
 cargo run --bin ci-checks

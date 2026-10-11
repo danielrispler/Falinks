@@ -1,10 +1,11 @@
-//! Run every CI check locally, in order; stop at the first failure and name it.
+//! Run every CI check locally, cheapest first; stop at the first failure and name it.
 //! The evaluation tests run only when their inputs changed since `origin/main`,
 //! as in CI; pass `--all` to run them anyway.
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, ExitCode},
+    time::Instant,
 };
 
 #[path = "check_list.rs"]
@@ -30,6 +31,7 @@ fn probe_manifests(root: &Path) -> Vec<String> {
 
 /// Files changed since the merge base with `origin/main`, committed or not, plus
 /// untracked files. `None` when git cannot tell, so the caller runs everything.
+/// Renames list both paths, so moving a file out of `evaluation/` still counts.
 fn changed_files(root: &Path) -> Option<Vec<String>> {
     let git = |args: &[&str]| {
         let out = Command::new("git")
@@ -42,7 +44,7 @@ fn changed_files(root: &Path) -> Option<Vec<String>> {
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     };
     let base = git(&["merge-base", "origin/main", "HEAD"])?;
-    let diff = git(&["diff", "--name-only", base.trim()])?;
+    let diff = git(&["diff", "--no-renames", "--name-only", base.trim()])?;
     let untracked = git(&["ls-files", "--others", "--exclude-standard"])?;
     Some(
         diff.lines()
@@ -72,6 +74,23 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
+    // The engine suite unwraps `go env` and pins gopls, so fail here, not after the build.
+    let go_path = Command::new("go").args(["env", "GOPATH"]).output();
+    let Some(go_path) = go_path.ok().filter(|out| out.status.success()) else {
+        eprintln!("ci-checks: Go is missing from PATH; install the version in docs/platforms.md");
+        return ExitCode::FAILURE;
+    };
+    let gopls = std::env::var_os("FALINKS_GOPLS").map_or_else(
+        || PathBuf::from(String::from_utf8_lossy(&go_path.stdout).trim()).join("bin/gopls"),
+        PathBuf::from,
+    );
+    if !gopls.is_file() {
+        eprintln!(
+            "ci-checks: gopls is missing at {}; install it with:\n  go install golang.org/x/tools/gopls@v0.22.0",
+            gopls.display()
+        );
+        return ExitCode::FAILURE;
+    }
     let all = std::env::args().any(|arg| arg == "--all");
     let run_evaluation = all || changed_files(&root).is_none_or(|c| evaluation_changed(&c));
     let probes = probe_manifests(&root);
@@ -92,20 +111,28 @@ fn main() -> ExitCode {
         );
     }
     let total = checks.len();
+    let started = Instant::now();
+    let mut times = vec![];
     for (index, check) in checks.iter().enumerate() {
         let step = index + 1;
         eprintln!("ci-checks [{step}/{total}]: {check}");
         let mut args = check.split_whitespace();
+        let step_started = Instant::now();
         let status = Command::new(args.next().expect("non-empty check"))
             .args(args)
             .current_dir(&root)
             .status();
+        times.push((step_started.elapsed().as_secs_f64(), check));
         if !status.is_ok_and(|s| s.success()) {
             eprintln!("ci-checks: step {step}/{total} failed: {check}");
             return ExitCode::FAILURE;
         }
     }
-    eprintln!("ci-checks: all {total} checks passed");
+    for (seconds, check) in times {
+        eprintln!("ci-checks: {seconds:>6.1}s  {check}");
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    eprintln!("ci-checks: all {total} checks passed in {seconds:.1}s");
     ExitCode::SUCCESS
 }
 
@@ -124,5 +151,40 @@ mod tests {
         assert!(!changed(&["src/lib.rs", ".github/workflows/checks.yml"]));
         assert!(!changed(&["evaluation.md"]));
         assert!(!changed(&[]));
+    }
+
+    #[test]
+    fn moving_a_file_out_of_evaluation_counts_as_an_evaluation_change() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "git {args:?}");
+        };
+        fs::create_dir(repo.path().join("evaluation")).unwrap();
+        fs::write(repo.path().join("evaluation/notes.txt"), "same content\n").unwrap();
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&["mv", "evaluation/notes.txt", "notes.txt"]);
+        let changed = changed_files(repo.path()).unwrap();
+        assert!(
+            changed.contains(&"evaluation/notes.txt".to_string()),
+            "{changed:?}"
+        );
+        assert!(evaluation_changed(&changed));
     }
 }
