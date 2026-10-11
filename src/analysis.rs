@@ -75,14 +75,17 @@ pub struct Evidence {
     pub errors: Vec<String>,
 }
 
+pub(crate) fn sha256(bytes: impl AsRef<[u8]>) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 pub fn sha256_file(path: &Path) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
+    Ok(sha256(fs::read(path)?))
 }
 pub(crate) fn toolchain_key(toolchain: &Toolchain) -> Result<String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(toolchain)?)
-    ))
+    Ok(sha256(serde_json::to_vec(toolchain)?))
 }
 fn tool<'a>(toolchain: &'a Toolchain, name: &str) -> Result<&'a Pin> {
     toolchain
