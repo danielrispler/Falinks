@@ -28,13 +28,13 @@ jobs:
     env:
       PROBE: adapters/sandbox-backends-probe/target/release/sandbox-backends-probe
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           rustflags: ""
           cache-workspaces: adapters/sandbox-backends-probe -> target
       # The Tool scenario runs the real gofmt under the sandbox.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
           cache: false
@@ -57,7 +57,7 @@ jobs:
           sudo sysctl -w user.max_user_namespaces=0
           $PROBE host report-no-userns.json
           sudo sysctl -w user.max_user_namespaces="$old"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: sandbox-probe-${{ matrix.runner }}
@@ -66,14 +66,14 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           rustflags: ""
           cache-workspaces: adapters/sandbox-backends-probe -> target
       - run: cargo build --release --locked --manifest-path adapters/sandbox-backends-probe/Cargo.toml
       - run: adapters/sandbox-backends-probe/target/release/sandbox-backends-probe.exe host report-default.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: sandbox-probe-windows-latest

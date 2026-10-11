@@ -16,18 +16,18 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Reads rust-toolchain.toml.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           rustflags: ""
       # Related-scope checks run the real pinned Go analyzer (#21).
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
           cache: false
       - id: gopls
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/bin/gopls
           key: gopls-v0.22.0-go1.27-${{ runner.os }}-${{ runner.arch }}
@@ -40,8 +40,8 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           rustflags: ""
           cache-workspaces: |
@@ -49,12 +49,12 @@ jobs:
             evaluation -> target
       # Repeated from the macos job (keep the versions in step): steps cannot be
       # shared across jobs without a composite action.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
           cache: false
       - id: gopls
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/bin/gopls
           key: gopls-v0.22.0-go1.27-${{ runner.os }}-${{ runner.arch }}
@@ -85,7 +85,7 @@ jobs:
   actionlint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The image bundles shellcheck, so run: steps are linted too.
       - uses: docker://rhysd/actionlint:1.7.12
         with:
@@ -95,8 +95,8 @@ jobs:
     # Probe crates stay standalone (own [workspace] and Cargo.lock), so discover them.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           rustflags: ""
           cache: false
