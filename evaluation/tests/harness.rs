@@ -372,6 +372,87 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
 }
 
 #[test]
+fn fixture_shard_runs_only_its_slots_denies_siblings_and_records_concurrency() {
+    let tmp = tmp("falinks-shard-test-");
+    let base = fs::canonicalize(tmp.path()).unwrap();
+    let config_path = config(
+        &base,
+        SCRIPTED,
+        json!(["{worker}", "relationships"]),
+        SCRIPTED,
+    );
+    // A completed pilot ledger; its runs are not needed to authorize scoring.
+    let pilot = base.join("pilot");
+    fs::create_dir(&pilot).unwrap();
+    let done = |slot: &str| json!({"slot": slot, "run_id": slot, "outcome": "success"});
+    fs::write(
+        pilot.join("batch.json"),
+        json!({"runs": [done("pilot-git"), done("pilot-falinks")]}).to_string(),
+    )
+    .unwrap();
+    // A sibling shard with a run in progress.
+    let sibling = base.join("shard-page");
+    fs::create_dir(&sibling).unwrap();
+    fs::write(
+        sibling.join("active.json"),
+        json!({"run_id": "go-page-1-git"}).to_string(),
+    )
+    .unwrap();
+    let shard = base.join("shard-relationships");
+    let result = Command::new(CLI)
+        .args(["batch", "--config"])
+        .arg(&config_path)
+        .arg("--runs")
+        .arg(&shard)
+        .arg("--after-pilot")
+        .arg(&pilot)
+        .args(["--fixtures", "go-relationships"])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", text(&result));
+    let ledger = read(shard.join("batch.json"));
+    let slots: Vec<&str> = ledger["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["slot"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        slots,
+        [
+            "go-relationships-1-git",
+            "go-relationships-1-falinks",
+            "go-relationships-2-falinks",
+            "go-relationships-2-git",
+            "go-relationships-3-git",
+            "go-relationships-3-falinks",
+        ]
+    );
+    assert_eq!(ledger["runs"][1]["order"], 1);
+    for run in ledger["runs"].as_array().unwrap() {
+        let id = run["run_id"].as_str().unwrap();
+        let denied = read(shard.join(format!("configs/{id}.json")))["denied_roots"].clone();
+        assert!(
+            denied
+                .as_array()
+                .unwrap()
+                .contains(&json!(sibling.to_string_lossy())),
+            "{id}: {denied}"
+        );
+        let concurrency = &read(shard.join(id).join("controller/result.json"))["concurrency"];
+        assert_eq!(concurrency["start"], json!(["go-page-1-git"]), "{id}");
+        assert_eq!(concurrency["stop"], json!(["go-page-1-git"]), "{id}");
+    }
+    assert!(!shard.join("active.json").exists());
+    let summary = read(shard.join("report.json"));
+    assert_eq!(
+        summary["concurrent_runs"].as_array().unwrap().len(),
+        6,
+        "{summary}"
+    );
+}
+
+#[test]
 fn baseline_retains_resolved_same_handler_merge_for_final_check() {
     let tmp = tmp("falinks-conflict-test-");
     let config = config(

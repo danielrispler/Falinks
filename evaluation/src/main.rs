@@ -646,8 +646,8 @@ const USAGE: &str = "usage: falinks-eval <command>
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true]
-  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR]
-  report --runs DIR";
+  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR] [--fixtures NAME[,NAME]]
+  report --runs DIR [--runs DIR]...";
 
 struct Args {
     positional: Vec<String>,
@@ -754,9 +754,15 @@ fn run() -> Result<i32> {
             Path::new(args.required("config")?),
             Path::new(args.required("runs")?),
             args.get("after-pilot").map(Path::new),
+            &match args.get("fixtures") {
+                Some(list) => list.split(',').collect(),
+                None => FIXTURES.to_vec(),
+            },
         ),
         Some("report") => {
-            let summary = report::report(&batch::results(Path::new(args.required("runs")?))?);
+            args.required("runs")?;
+            let dirs: Vec<&Path> = args.all("runs").into_iter().map(Path::new).collect();
+            let summary = report::report(&batch::merged(&dirs)?);
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(0)
         }
