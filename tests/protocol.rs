@@ -635,6 +635,42 @@ fn linux_subreaper_sweep_kills_setsid_descendants() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_sweep_kills_setsid_descendants() {
+    let (_dir, engine, alice, _) = fixture();
+    let job = shell_job(
+        &engine,
+        &alice,
+        "setsid",
+        "/bin/sh",
+        "/usr/bin/perl -MPOSIX -e 'exit if fork; POSIX::setsid(); \
+         open F, q(>pid.tmp); print F $$; close F; rename q(pid.tmp), q(pid); sleep 60'; \
+         while [ ! -f pid ]; do sleep 0.1; done",
+    );
+    assert!(
+        job.error
+            .as_deref()
+            .unwrap()
+            .contains("ambiguous completion")
+    );
+    let pid = fs::read_to_string(job.directory.join("output/pid")).unwrap();
+    let alive = || {
+        std::process::Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    // launchd reaps the killed escapee asynchronously.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while alive() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!alive(), "setsid descendant survived the sweep");
+}
+
 #[test]
 fn engine_open_fails_visibly_without_git_2_32() {
     let bin = tempfile::tempdir().unwrap();
