@@ -142,16 +142,108 @@ fn seatbelt(command: &Contained) -> Result<ExitStatus> {
     let group = child.id() as i32;
     // Persist running process identity as evidence; restart never adopts its output.
     fs::write(command.evidence.join("process-group"), group.to_string())?;
-    let Some(status) = wait_bounded(&mut child, group, Instant::now() + command.timeout)? else {
+    let status = wait_bounded(&mut child, group, Instant::now() + command.timeout)?;
+    // This profile, and no other, may write `output` but not the evidence's stdout.
+    let denied = command.evidence.join("stdout");
+    debug_assert_eq!(fs::canonicalize(command.output)?, command.output);
+    // Trusted tools must keep descendants in this group and join them before exit.
+    // A surviving descendant, in the group or escaped from it with `setsid`, makes
+    // completion ambiguous; kill them all, retain output.
+    let survivors = sweep(group, || under_profile(command.output, &denied))?;
+    let Some(status) = status else {
         return fail("timed out; output retained");
     };
-    // Trusted tools must keep descendants in this group and join them before exit.
-    // A surviving descendant makes completion ambiguous; kill the group, retain output.
-    if group_alive(group) {
-        kill_group(group);
+    if survivors {
         return fail("ambiguous completion: surviving descendants");
     }
     Ok(status)
+}
+
+/// Kills the command's group and every escaped descendant `find` lists, until none
+/// remain. Returns whether anything outlived the command.
+fn sweep(group: i32, mut find: impl FnMut() -> Result<Vec<i32>>) -> Result<bool> {
+    let mut survivors = false;
+    for _ in 0..100 {
+        // Only signal the group while it exists, so a reused group id is never hit.
+        let alive = group_alive(group);
+        if alive {
+            kill_group(group);
+        }
+        let pids = find()?;
+        if pids.is_empty() && !alive {
+            return Ok(survivors);
+        }
+        survivors = true;
+        for pid in pids {
+            // shortcut: a pid that exits and is reused right after `find` could be hit;
+            // use pidfd (Linux) or a start-time check (macOS) if this ever matters.
+            // SAFETY: kill takes no pointers; pid is an escaped descendant.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    fail("descendants survived the sweep")
+}
+
+/// Every process whose sandbox may write `allowed` but not `denied`, both existing
+/// paths. Sandboxes are inherited across `fork`, `exec` and `setsid`, so this finds
+/// descendants that left the group. Unsandboxed processes may write both.
+/// `allowed` must be canonical, as in the profile, or nothing matches.
+#[cfg(target_os = "macos")]
+fn under_profile(allowed: &Path, denied: &Path) -> Result<Vec<i32>> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    unsafe extern "C" {
+        // libsystem_sandbox; returns 0 when the operation is allowed for `pid`.
+        fn sandbox_check(
+            pid: libc::pid_t,
+            operation: *const libc::c_char,
+            filter: libc::c_int,
+            ...
+        ) -> libc::c_int;
+        static SANDBOX_CHECK_NO_REPORT: libc::c_int;
+    }
+    const SANDBOX_FILTER_PATH: libc::c_int = 1;
+    let path = |p: &Path| CString::new(p.as_os_str().as_bytes());
+    let (allowed, denied) = (path(allowed)?, path(denied)?);
+    let may_write = |pid: i32, p: &CString| {
+        // SAFETY: both strings are NUL-terminated and outlive the call.
+        unsafe {
+            sandbox_check(
+                pid,
+                c"file-write-data".as_ptr(),
+                SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT,
+                p.as_ptr(),
+            ) == 0
+        }
+    };
+    // Far above macOS's default process limit; a full buffer fails closed below.
+    let mut pids = vec![0i32; 16384];
+    let bytes = std::mem::size_of_val(pids.as_slice()) as libc::c_int;
+    // SAFETY: the buffer is valid for `bytes` bytes.
+    let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+    if n <= 0 || n as usize >= pids.len() {
+        return fail("cannot list processes to find escaped descendants");
+    }
+    pids.truncate(n as usize);
+    // An exiting process or zombie still reports its profile but is already dead.
+    let live = |pid: i32| {
+        // SAFETY: proc_bsdinfo is plain integers and byte arrays; all-zero is valid.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is valid for `size` bytes.
+        let n = unsafe {
+            libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
+        };
+        n == size && info.pbi_status != libc::SZOMB
+    };
+    Ok(pids
+        .into_iter()
+        .filter(|&pid| pid > 0 && may_write(pid, &allowed) && !may_write(pid, &denied) && live(pid))
+        .collect())
+}
+#[cfg(not(target_os = "macos"))]
+fn under_profile(_: &Path, _: &Path) -> Result<Vec<i32>> {
+    fail("profile lookup runs only on macOS")
 }
 
 fn kill_group(group: i32) {
@@ -439,37 +531,16 @@ mod linux_helper {
         let status = status.map(|s| s.into_raw());
         // Escaped descendants that already exited are reaped, not counted.
         std::thread::sleep(Duration::from_millis(50));
-        reap();
-        let survivors = super::group_alive(group) || !adopted()?.is_empty();
-        sweep(group)?;
+        let survivors = super::sweep(group, || {
+            reap();
+            adopted()
+        })?;
         Ok(Report {
             status,
             timed_out,
             survivors,
             ..Report::default()
         })
-    }
-
-    /// Kills the command's group and every adopted descendant, including `setsid` escapes.
-    fn sweep(group: i32) -> Result<()> {
-        for _ in 0..100 {
-            // Only signal the group while it exists, so a reused group id is never hit.
-            let alive = super::group_alive(group);
-            if alive {
-                super::kill_group(group);
-            }
-            let pids = adopted()?;
-            if pids.is_empty() && !alive {
-                return Ok(());
-            }
-            for pid in pids {
-                // SAFETY: kill takes no pointers; pid is a child of this helper.
-                unsafe { libc::kill(pid, libc::SIGKILL) };
-            }
-            std::thread::sleep(Duration::from_millis(10));
-            reap();
-        }
-        fail("descendants survived the sweep")
     }
 
     fn reap() {

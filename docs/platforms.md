@@ -20,7 +20,7 @@ The engine's Linux x86_64 cell rests on the `linux` CI job (#54). Linux aarch64 
 
 ## Known differences
 
-- **Escaped descendants.** On Linux, a descendant that leaves the command's process group (for example with `setsid`) is swept and reported as ambiguous completion. On macOS it is not detected; it keeps its sandbox but can outlive the command. Tracked in #58.
+- **Escaped descendants.** On both platforms, a descendant that leaves the command's process group (for example with `setsid`) is swept and reported as ambiguous completion. Linux finds it as an orphan adopted by the helper (subreaper). macOS finds it by its inherited Seatbelt profile: after the command exits, the engine lists every process and uses the private `sandbox_check` call to keep those that may write the command's output but not its evidence (#58). A process outside the profile would not be found; we know of no way for a contained process to leave its Seatbelt profile.
 - **Directory listings.** On Linux a contained command cannot list `/` or the ancestors of its readable trees; Seatbelt allows that. Reading files inside readable trees is unaffected.
 - **Signals.** On both platforms a contained command can signal other processes of the same user.
 
