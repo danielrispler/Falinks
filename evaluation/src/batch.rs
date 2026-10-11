@@ -3,7 +3,9 @@
 //! subscription exhaustion or near-exhaustion, an infrastructure failure (rerun to add an
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
-use crate::{Result, bail, read, report::report, schedule, sha256, utc_now, verify, write};
+use crate::{
+    FIXTURES, Result, bail, read, report::report, schedule, sha256, utc_now, verify, write,
+};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -78,8 +80,45 @@ fn replaceable(run: &Value) -> bool {
     REPLACEABLE.contains(&run["outcome"].as_str().unwrap_or("infrastructure_failure"))
 }
 
+/// A batch directory's lock naming its run in progress, read by sibling shards.
+const ACTIVE: &str = "active.json";
+
+/// Removes the lock on every exit, including errors, so siblings never see a finished run.
+struct Lock(PathBuf);
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// Runs in progress in sibling batch directories (other shards, the pilot), by their locks.
+/// shortcut: a shard killed (not erroring) mid-run leaves a stale lock, which over-reports concurrency (never
+/// under-reports); delete the dead shard's `active.json` before resuming others if that matters.
+fn active_siblings(runs: &Path) -> Result<Vec<String>> {
+    let parent = runs.parent().ok_or("runs directory needs a parent")?;
+    let mut active: Vec<String> = fs::read_dir(parent)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p != runs)
+        .filter_map(|p| read(p.join(ACTIVE)).ok())
+        .filter_map(|lock| lock["run_id"].as_str().map(String::from))
+        .collect();
+    active.sort();
+    Ok(active)
+}
+
 /// `after_pilot` names the completed pilot batch directory; without it this is the pilot.
-pub fn batch(config_path: &Path, runs: &Path, after_pilot: Option<&Path>) -> Result<i32> {
+/// `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
+pub fn batch(
+    config_path: &Path,
+    runs: &Path,
+    after_pilot: Option<&Path>,
+    fixtures: &[&str],
+) -> Result<i32> {
+    if let Some(name) = fixtures.iter().find(|f| !FIXTURES.contains(f)) {
+        bail!("Unknown fixture {name}; expected some of {FIXTURES:?}");
+    }
     let config = read(config_path)?;
     let runtime = &config["runtime_binary"];
     if !config["gate_command"]
@@ -124,9 +163,19 @@ pub fn batch(config_path: &Path, runs: &Path, after_pilot: Option<&Path>) -> Res
     {
         bail!("Run configuration changed inside this batch; record a new batch directory");
     }
-    ledger["invocations"].as_array_mut().unwrap().push(
-        json!({"utc": utc_now(), "pilot": pilot, "config_sha256": config_sha, "configuration": config}),
-    );
+    let slots: Vec<Value> = slots(pilot)
+        .into_iter()
+        .filter(|s| fixtures.contains(&s["fixture"].as_str().unwrap()))
+        .collect();
+    if slots.is_empty() {
+        bail!("No slots for fixtures {fixtures:?} in this batch");
+    }
+    let after_pilot = match after_pilot {
+        Some(dir) => Value::from(dir.canonicalize()?.to_string_lossy().into_owned()),
+        None => Value::Null,
+    };
+    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot,
+        "after_pilot": after_pilot, "fixtures": fixtures, "config_sha256": config_sha, "configuration": config}));
     if verify()? != 0 {
         return pause(
             &mut ledger,
@@ -135,7 +184,7 @@ pub fn batch(config_path: &Path, runs: &Path, after_pilot: Option<&Path>) -> Res
         );
     }
     let mut gated = false;
-    for slot in slots(pilot) {
+    for slot in slots {
         let id = slot["slot"].as_str().unwrap().to_string();
         let previous: Vec<Value> = ledger["runs"]
             .as_array()
@@ -181,6 +230,10 @@ pub fn batch(config_path: &Path, runs: &Path, after_pilot: Option<&Path>) -> Res
             n => format!("{id}-r{n}"),
         };
         let run_dir = runs.join(&run_id);
+        // Locked before denials are listed, so this run's own lock is denied too.
+        let lock = Lock(runs.join(ACTIVE));
+        write(&lock.0, &json!({"run_id": run_id, "utc": utc_now()}))?;
+        let concurrent_at_start = active_siblings(&runs)?;
         let mut run_config = config.clone();
         // Deny every other run, ledger, configuration and gate output in both arms, and sibling
         // batch directories such as the pilot, plus configured roots.
@@ -227,15 +280,18 @@ pub fn batch(config_path: &Path, runs: &Path, after_pilot: Option<&Path>) -> Res
             .args(["--scored", &slot["scored"].to_string()]);
         eprintln!("Running {run_id}");
         let status = command.status()?;
+        let concurrency = json!({"start": concurrent_at_start, "stop": active_siblings(&runs)?});
+        drop(lock);
         let result_path = run_dir.join("controller/result.json");
         let mut result = read(&result_path).unwrap_or_else(|_| {
             json!({"outcome": "infrastructure_failure", "failure_reason": format!("runner exited {status} without evidence")})
         });
+        result["concurrency"] = concurrency.clone();
         if let Some(replaced) = previous.last() {
             result["replaces"] = replaced["run_id"].clone();
-            if result_path.exists() {
-                write(&result_path, &result)?;
-            }
+        }
+        if result_path.exists() {
+            write(&result_path, &result)?;
         }
         archive(&config, &run_dir)?;
         let outcome = result["outcome"]
@@ -247,6 +303,7 @@ pub fn batch(config_path: &Path, runs: &Path, after_pilot: Option<&Path>) -> Res
         entry["run_dir"] = run_dir.to_string_lossy().into_owned().into();
         entry["outcome"] = outcome.clone().into();
         entry["replaces"] = result["replaces"].clone();
+        entry["concurrency"] = concurrency;
         ledger["runs"].as_array_mut().unwrap().push(entry);
         write(&ledger_path, &ledger)?;
         match outcome.as_str() {
@@ -305,13 +362,36 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
             Path::new(entry["run_dir"].as_str().unwrap_or_default()).join("controller/result.json"),
         )
         .unwrap_or_else(|_| json!({"outcome": "infrastructure_failure"}));
-        for key in ["run_id", "pair", "fixture", "arm", "scored"] {
+        for key in ["run_id", "pair", "fixture", "arm", "scored", "concurrency"] {
             result[key] = entry[key].clone();
         }
         if !entry["replaces"].is_null() {
             result["replaces"] = entry["replaces"].clone();
         }
         out.push(result);
+    }
+    Ok(out)
+}
+
+/// Every run of one batch split across shard directories. The shards must share one
+/// configuration and one pilot, and no run may appear in two of them.
+pub fn merged(dirs: &[&Path]) -> Result<Vec<Value>> {
+    let mut identity = None;
+    let mut out: Vec<Value> = vec![];
+    for dir in dirs {
+        let ledger = read(dir.join("batch.json"))?;
+        for invocation in ledger["invocations"].as_array().into_iter().flatten() {
+            let this = json!([invocation["config_sha256"], invocation["after_pilot"]]);
+            if *identity.get_or_insert_with(|| this.clone()) != this {
+                bail!("Shards must share one configuration and one pilot");
+            }
+        }
+        for result in results(dir)? {
+            if out.iter().any(|r| r["run_id"] == result["run_id"]) {
+                bail!("Run {} appears in more than one shard", result["run_id"]);
+            }
+            out.push(result);
+        }
     }
     Ok(out)
 }
@@ -369,6 +449,75 @@ mod tests {
         assert_eq!(scored[0]["slot"], "rust-errors-1-git");
         assert_eq!(scored[2]["slot"], "rust-errors-2-falinks");
         assert_eq!(scored[1]["order"], 1);
+    }
+
+    /// Writes a batch directory of successful `slots`: Git 1000 s; Falinks 900 s on go-page, else 700 s.
+    fn recorded(dir: &Path, slots: &[Value], pilot: &str) {
+        fs::create_dir_all(dir).unwrap();
+        let mut entries = vec![];
+        for slot in slots {
+            let mut entry = slot.clone();
+            let id = slot["slot"].as_str().unwrap();
+            let run_dir = dir.join(id);
+            fs::create_dir_all(run_dir.join("controller")).unwrap();
+            let secs = match (slot["arm"].as_str(), slot["fixture"].as_str()) {
+                (Some("git"), _) => 1000.0,
+                (_, Some("go-page")) => 900.0,
+                _ => 700.0,
+            };
+            write(
+                run_dir.join("controller/result.json"),
+                &json!({"outcome": "success", "timing": {"elapsed_seconds": secs}, "transitions": 0}),
+            )
+            .unwrap();
+            entry["run_id"] = id.into();
+            entry["run_dir"] = run_dir.to_string_lossy().into_owned().into();
+            entries.push(entry);
+        }
+        let invocation = json!({"config_sha256": "c0", "after_pilot": pilot});
+        write(
+            dir.join("batch.json"),
+            &json!({"runs": entries, "invocations": [invocation]}),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn report_over_fixture_shards_equals_report_over_one_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let all = slots(false);
+        recorded(&tmp.path().join("one"), &all, "/p");
+        let one = report(&results(&tmp.path().join("one")).unwrap());
+        let shards: Vec<PathBuf> = FIXTURES.map(|f| tmp.path().join(f)).to_vec();
+        for (fixture, dir) in FIXTURES.iter().zip(&shards) {
+            let only: Vec<Value> = all
+                .iter()
+                .filter(|s| s["fixture"] == *fixture)
+                .cloned()
+                .collect();
+            recorded(dir, &only, "/p");
+        }
+        let dirs: Vec<&Path> = shards.iter().map(PathBuf::as_path).collect();
+        let split = report(&merged(&dirs).unwrap());
+        assert_eq!(one["verdict"], "continuation_signal");
+        for key in [
+            "verdict",
+            "fixtures",
+            "successes",
+            "fixtures_meeting_threshold",
+        ] {
+            assert_eq!(split[key], one[key], "{key}");
+        }
+        assert_eq!(
+            split["fixtures"]["go-page"]["median_seconds"],
+            json!({"git": 1000.0, "falinks": 900.0})
+        );
+
+        // Shards of another pilot, or the same shard twice, are refused.
+        let other = tmp.path().join("other");
+        recorded(&other, &[], "/q");
+        assert!(merged(&[dirs[0], &other]).is_err());
+        assert!(merged(&[dirs[0], dirs[0]]).is_err());
     }
 
     #[test]

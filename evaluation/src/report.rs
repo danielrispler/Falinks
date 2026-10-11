@@ -28,6 +28,15 @@ pub fn report(runs: &[Value]) -> Value {
         .filter(|r| r["outcome"] != "usage_limit")
         .collect();
     let elapsed = |r: &Value| r["timing"]["elapsed_seconds"].as_f64();
+    // A run overlapped another if it saw one active at its start or stop, or one saw it: a
+    // run entirely inside another sees it at start without being seen.
+    let seen = |r: &Value| {
+        ["start", "stop"]
+            .map(|k| r["concurrency"][k].as_array().cloned().unwrap_or_default())
+            .concat()
+    };
+    let named: Vec<Value> = runs.iter().flat_map(seen).collect();
+    let concurrent = |r: &Value| !seen(r).is_empty() || named.contains(&r["run_id"]);
     let mut fixtures = serde_json::Map::new();
     let (mut counted, mut successes) = (0, BTreeMap::from([("git", 0), ("falinks", 0)]));
     let mut inconclusive = Vec::new();
@@ -82,7 +91,8 @@ pub fn report(runs: &[Value]) -> Value {
             json!({
                 "pairs": pairs.iter().map(|(pair, arms)| json!({"pair": pair,
                     "arms": arms.iter().map(|(arm, r)| (arm.to_string(), json!({"run_id": r["run_id"],
-                        "outcome": r["outcome"], "elapsed_seconds": elapsed(r)}))).collect::<serde_json::Map<_, _>>()}))
+                        "outcome": r["outcome"], "elapsed_seconds": elapsed(r), "concurrent": concurrent(r)})))
+                        .collect::<serde_json::Map<_, _>>()}))
                     .collect::<Vec<_>>(),
                 "successes": arm_successes, "qualifying_pairs": qualifying,
                 "median_seconds": {"git": git, "falinks": falinks},
@@ -123,7 +133,9 @@ pub fn report(runs: &[Value]) -> Value {
         "qualification": "Exploratory: three repetitions per fixture; not statistical proof, general superiority or a cost claim.",
         "runs": runs.iter().map(|r| json!({"run_id": r["run_id"], "pair": r["pair"], "arm": r["arm"],
             "scored": r["scored"], "outcome": r["outcome"], "replaces": r.get("replaces"),
-            "failure_reason": r.get("failure_reason")})).collect::<Vec<_>>(),
+            "failure_reason": r.get("failure_reason"), "concurrency": r.get("concurrency")})).collect::<Vec<_>>(),
+        "concurrent_runs": runs.iter().filter(|r| concurrent(r)).map(|r| &r["run_id"]).collect::<Vec<_>>(),
+        "concurrency_note": "Times of concurrent_runs were measured while another shard's run was active.",
         "fixtures": fixtures,
         "successes": successes,
         "fixtures_meeting_threshold": counted,
@@ -240,6 +252,30 @@ mod tests {
         let out = report(&runs);
         assert_eq!(out["fixtures"]["rust-errors"]["qualifying_pairs"], 3);
         assert_eq!(out["replaced_runs"], json!(["rust-errors-0-g"]));
+    }
+
+    #[test]
+    fn runs_overlapping_a_sibling_shard_are_flagged_both_ways() {
+        let mut runs = batch([[700.0; 3], [700.0; 3], [700.0; 3]]);
+        // go-page-0-g started while rust-errors-0-g ran; rust-errors-0-g saw nothing itself.
+        let page = runs
+            .iter()
+            .position(|r| r["run_id"] == "go-page-0-g")
+            .unwrap();
+        runs[page]["concurrency"] = json!({"start": ["rust-errors-0-g"], "stop": []});
+        let out = report(&runs);
+        assert_eq!(
+            out["concurrent_runs"],
+            json!(["rust-errors-0-g", "go-page-0-g"])
+        );
+        let arms = |f: &str| out["fixtures"][f]["pairs"][0]["arms"].clone();
+        assert_eq!(arms("go-page")["git"]["concurrent"], true);
+        assert_eq!(arms("rust-errors")["git"]["concurrent"], true);
+        assert_eq!(arms("rust-errors")["falinks"]["concurrent"], false);
+        assert_eq!(
+            out["runs"][page]["concurrency"]["start"][0],
+            "rust-errors-0-g"
+        );
     }
 
     #[test]

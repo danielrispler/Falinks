@@ -209,8 +209,17 @@ it as `usage_limit`.
     renew the gates and start a new batch directory.
   - **Configuration**: one batch directory keeps one configuration, so limits change
     only between batches.
-  - **Report**: `report --runs DIR` lists every run's outcome, paired successes, medians
-    over jointly successful pairs and the continuation signal.
+  - **Shards**: `--fixtures NAME[,NAME]` runs only those fixtures' slots, keeping each
+    slot's pair ID and arm order. Run one shard per fixture in parallel sessions, in
+    sibling directories under one parent, so each shard denies the others. While a run is
+    active, its directory holds `active.json`. Each run records in `concurrency` the sibling
+    runs active at its start and stop: any sibling directory's lock counts, the pilot's too. A
+    shard killed mid-run leaves a stale lock: delete it, or the others over-report concurrency.
+  - **Report**: `report --runs DIR [--runs DIR]...` lists every run's outcome, paired
+    successes, medians over jointly successful pairs and the continuation signal. Several
+    directories are merged as one batch: they must share one configuration and one pilot,
+    and no run may appear twice. `concurrent_runs` lists the runs whose times overlapped
+    a run in a sibling directory.
   - **Agent mistakes** in either arm are refusals counted in `rejected_operations`. They
     are never infrastructure failures.
 
@@ -223,6 +232,15 @@ cargo build --release --bins                       # repository root: falinks-ar
 cp evaluation/config.json /private/tmp/eval-config.json  # fill every REQUIRED field
 evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/pilot
 evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/scored --after-pilot /private/tmp/ev/pilot
+```
+
+Or shard the scored batch across three sessions, then report over all shards:
+
+```sh
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/s-rust --after-pilot /private/tmp/ev/pilot --fixtures rust-errors
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/s-page --after-pilot /private/tmp/ev/pilot --fixtures go-page
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/s-rel --after-pilot /private/tmp/ev/pilot --fixtures go-relationships
+evaluation/target/release/falinks-eval report --runs /private/tmp/ev/s-rust --runs /private/tmp/ev/s-page --runs /private/tmp/ev/s-rel
 ```
 
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
@@ -251,6 +269,6 @@ for safety gates, run interpretation and continuation criteria.
 `verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger charges 8,471 seconds (about 141 minutes) through the first #27 pilot repair,
-leaving 20,329 seconds of the shared eight-hour setup allowance for the pilot and any
+ledger charges 10,256 seconds (about 171 minutes) through the #66 fixture shards,
+leaving 18,544 seconds of the shared eight-hour setup allowance for the pilot and any
 pilot repairs.

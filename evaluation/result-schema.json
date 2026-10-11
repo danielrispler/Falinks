@@ -30,6 +30,8 @@
     "final_snapshot": {"type": ["string", "null"]},
     "oracle": {"type": ["object", "null"]},
     "failure_reason": {"type": "string"},
-    "replaces": {"type": "string", "description": "Run ID of the infrastructure failure this run replaces"}
+    "replaces": {"type": "string", "description": "Run ID of the infrastructure failure this run replaces"},
+    "concurrency": {"type": "object", "description": "Run IDs active in sibling shard batch directories when this run started and stopped",
+      "properties": {"start": {"type": "array", "items": {"type": "string"}}, "stop": {"type": "array", "items": {"type": "string"}}}}
   }
 }
