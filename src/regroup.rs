@@ -178,9 +178,8 @@ fn scopes(db: &Connection) -> Result<[Vec<Scope>; 2]> {
 }
 /// Task and group context: any change voids agreement to an earlier proposal.
 fn current_context(db: &Connection) -> Result<String> {
-    use sha2::Digest;
     let bytes = serde_json::to_vec(&(crate::placement(db)?, scopes(db)?))?;
-    Ok(format!("{:x}", sha2::Sha256::digest(bytes)))
+    Ok(crate::analysis::sha256(bytes))
 }
 /// The latest publication whose operations a workspace already contains.
 fn base_of(db: &Connection, workspace: &Capture) -> Result<Capture> {

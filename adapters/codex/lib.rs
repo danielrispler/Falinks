@@ -68,7 +68,10 @@ pub fn require(condition: bool, message: &str) -> Result<()> {
     }
 }
 pub fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 pub fn file_hash(path: &Path) -> Result<String> {
     Ok(hash(&std::fs::read(path)?))
