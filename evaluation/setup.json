@@ -53,9 +53,18 @@
       "charged_seconds": 1785,
       "measurement": "Session wall time from claiming #66 through final CI, plus a commit/handoff allowance. No real runs.",
       "work": "#66: batch --fixtures shards, report merging several shard directories (one config sha, one pilot), per-run concurrency from sibling active.json locks surfaced in the report; result schema concurrency field; versioned re-freeze v3 -> v4 (harness/schema changed; initial commits unchanged)."
+    },
+    {
+      "start_utc": "2026-10-11T10:20:00Z",
+      "stop_utc": "2026-10-11T12:50:00Z",
+      "measured_seconds": 8195,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 8495,
+      "measurement": "Session wall time from claiming #65 through the commit, minus only the unattended clean pilot-6 gate and run (805 s); failed pilots 2-5 are charged because they were spent diagnosing and repairing. Plus a commit/handoff allowance.",
+      "work": "#65 pilot repairs from real-runtime failures, bundled because pilot-6 validated them together: pass USER to the runtime (Keychain login; pilot-2 auth failure); CLAUDE_CODE_TMPDIR and zsh TMPPREFIX into scratch (pilot-4 Bash EPERM; TMPPREFIX untested); any bridge argument is a host command, as the prompt says (pilot-5 host commands never reached the host); init check tested against the recorded real init (#65 retro note); scripted runtime mirrors these shapes; versioned re-freeze v4 -> v5 (harness changed; initial commits unchanged). Clean unscored pilot pair: /private/tmp/ev/pilot-6."
     }
   ],
-  "charged_total_seconds": 10256,
-  "remaining_seconds": 18544,
-  "status": "fixture shards v4; pilot pending a clean pair"
+  "charged_total_seconds": 18751,
+  "remaining_seconds": 10049,
+  "status": "pilot repair v5; clean unscored pilot pair in pilot-6"
 }

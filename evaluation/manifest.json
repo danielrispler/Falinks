@@ -12,11 +12,11 @@
     "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
     "result-schema.json": "146b1594e9a262b2e1677d0b6cd557752eae9e95c1e9b6a6bbf0172a84af9c3c",
-    "src/baseline.rs": "3a490d146cb6a95b66377033d5dfa10710dba13df53d2cf468b191721990acde",
+    "src/baseline.rs": "7671202b0f54a3fefdeeb43e51f571a5f2b99b3eb5eb028642eb3b27344f164e",
     "src/batch.rs": "29ed6950526f90a9b1f468aa520ef4e056a421071172f0b592cb3e6b911cc265",
-    "src/bin/claude-worker.rs": "25b7f0606be176e49246a2c4ffc95fbf4b6633959a6d2d9d58213aeb97539385",
+    "src/bin/claude-worker.rs": "d95b4dcf3dd37f6dbe2bfa19894675cbcaf09a1747ac256559f49e0da3bf9f2d",
     "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
-    "src/bin/scripted-worker.rs": "728c2afc7f70a498ff6f16573589e77a55571fc6b3c6a612649adc1a1146f83b",
+    "src/bin/scripted-worker.rs": "1ebaf2223124a99f09510b2c25c2f1f04a8b52853c64a69b3dc8c35dec58014a",
     "src/main.rs": "f6b4bc81ba31d8f7a5ce146767385fcbcd24476339cb22a5175180ff9af35640",
     "src/report.rs": "061d2d00a090220c3a9e1d36b24f96123678cc4dabe0378d0ecb7e5bc26b7e47"
   },
@@ -25,5 +25,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 4
+  "version": 5
 }

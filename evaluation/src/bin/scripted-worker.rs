@@ -274,10 +274,9 @@ fn fake_codex(argv: &[String]) {
     );
 }
 
-/// Runs a host command the way the agent's Bash tool would.
+/// Runs a host command the way the agent's Bash tool would: `"$FALINKS_HOST" ACTION ...`.
 fn host_command(args: &[&str]) -> (bool, Value) {
     let output = Command::new(env::var("FALINKS_HOST").unwrap())
-        .arg("host")
         .args(args)
         .output()
         .unwrap();
@@ -291,6 +290,15 @@ fn fake_claude(argv: &[String]) {
     assert_eq!(flag("--max-turns"), "12");
     let settings: Value = serde_json::from_str(&flag("--settings")).unwrap();
     assert_eq!(settings["sandbox"]["enabled"], false);
+    // The real runtime finds its Keychain login by `USER`; without it the session is expired.
+    assert!(
+        env::var_os("USER").is_some(),
+        "runtime launched without USER"
+    );
+    // Like the real runtime, Bash first creates its temp folder (default `/tmp/claude-<uid>`).
+    let tmp = env::var("CLAUDE_CODE_TMPDIR").unwrap_or("/tmp".into());
+    fs::create_dir_all(Path::new(&tmp).join("claude-scripted"))
+        .expect("runtime temp folder not writable");
     // The real runtime reports its tools sorted, not in `--tools` order.
     let mut tools: Vec<String> = flag("--tools").split(',').map(String::from).collect();
     tools.sort();
