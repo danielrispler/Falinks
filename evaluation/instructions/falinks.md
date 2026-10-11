@@ -4,4 +4,4 @@ Use the engine's live group workspace and authenticated tools for mutation. Revi
 
 The host must deliver the same allocation, dependency information, peer announcements and task developments as the Git arm. Share an unfinished draft at the first milestone; acknowledge each behavioral development and share another changed draft afterward. Final success requires all included contributions captured together and the exact accepted candidate passing the same trusted visible checks and independent protected oracle.
 
-Do not finish until all developments are implemented. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. Report usage or usage interruption explicitly if your runtime exposes it. The engine/adapter implements the host bridge in its own ticket; this instruction file does not claim that bridge exists yet.
+Do not finish until all developments are implemented. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The host records runtime usage and usage interruptions.

@@ -60,6 +60,7 @@ const SYSTEM: &[&str] = &[
     "task_notification",
 ];
 
+pub mod arm;
 pub mod engine_host;
 
 /// Every `sandbox-probe` check name for the given protected storage labels.

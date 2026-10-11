@@ -14,7 +14,7 @@
     "order": {"type": "integer"},
     "pair": {"type": "string"},
     "scored": {"type": "boolean"},
-    "outcome": {"enum": ["success", "task_failure", "timeout", "infrastructure_failure", "usage_limit"]},
+    "outcome": {"enum": ["success", "task_failure", "timeout", "infrastructure_failure", "usage_limit", "safety_failure"]},
     "usage": {"type": "object", "required": ["status"], "properties": {"status": {"enum": ["available", "partial", "unavailable"]}}},
     "usage_limit_interruptions": {"type": "array"},
     "rejected_operations": {"type": ["integer", "object"]},
@@ -29,6 +29,7 @@
     "initial_snapshot": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "final_snapshot": {"type": ["string", "null"]},
     "oracle": {"type": ["object", "null"]},
-    "failure_reason": {"type": "string"}
+    "failure_reason": {"type": "string"},
+    "replaces": {"type": "string", "description": "Run ID of the infrastructure failure this run replaces"}
   }
 }

@@ -26,9 +26,18 @@
       "stop_utc": "2026-10-10T09:10:00Z",
       "measured_seconds": 900,
       "handoff_allowance_seconds": 120
+    },
+    {
+      "start_utc": "2026-10-10T16:55:23Z",
+      "stop_utc": "2026-10-10T17:35:25Z",
+      "measured_seconds": 2402,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 2702,
+      "measurement": "Session wall time from claiming #27 through final CI, plus a commit/handoff allowance. Pilot/batch runs are not included.",
+      "work": "#27 harness: Claude Code Git-arm bridge, Falinks-arm runner (engine + adapter), batch orchestration with gates/pauses/replacements, report; review fixes; versioned re-freeze v1 -> v2 (harness/config/schema/instructions changed; initial commits unchanged)."
     }
   ],
-  "charged_total_seconds": 3789,
-  "remaining_seconds": 25011,
-  "status": "issue_24_complete; shared budget continues in downstream setup"
+  "charged_total_seconds": 6491,
+  "remaining_seconds": 22309,
+  "status": "issue_27_harness_built; pilot and scored batch pending (outside auto mode)"
 }

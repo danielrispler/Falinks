@@ -1,5 +1,7 @@
 //! Frozen fixture checks and a two-process communicating Git-worktree baseline.
 mod baseline;
+mod batch;
+mod report;
 
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -199,6 +201,13 @@ impl Sandbox {
         ];
         if self.network {
             profile.push("(allow network-outbound)".into());
+            // A worker bridge may serve its agent's host commands on a socket in its own writable tree.
+            profile.extend(self.writable.iter().map(|p| {
+                format!(
+                    "(allow network-bind network-inbound (local unix-socket (subpath {})))",
+                    quote(p)
+                )
+            }));
         }
         profile.extend(
             self.writable
@@ -305,9 +314,26 @@ fn freeze() -> Result<()> {
             initial(&tmp.path().join(name), &fixture(name)?)?.into(),
         );
     }
+    let (hashes, path) = (material_hashes()?, root().join("manifest.json"));
+    let previous = read(&path).ok();
+    let mut version = 1;
+    if let Some(previous) = previous {
+        if previous["hashes"] == hashes
+            && previous["initial_commits"] == Value::Object(commits.clone())
+        {
+            return Ok(());
+        }
+        // Retain every superseded freeze; a repair is versioned, never silently overwritten.
+        version = previous["version"].as_u64().unwrap_or(1) + 1;
+        fs::create_dir_all(root().join("manifests"))?;
+        write(
+            root().join(format!("manifests/v{}.json", version - 1)),
+            &previous,
+        )?;
+    }
     write(
-        root().join("manifest.json"),
-        &json!({"version": 1, "hashes": material_hashes()?, "initial_commits": commits}),
+        path,
+        &json!({"version": version, "hashes": hashes, "initial_commits": commits}),
     )
 }
 
@@ -619,7 +645,9 @@ const USAGE: &str = "usage: falinks-eval <command>
   schedule
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
-  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N]";
+  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true]
+  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR]
+  report --runs DIR";
 
 struct Args {
     positional: Vec<String>,
@@ -720,7 +748,18 @@ fn run() -> Result<i32> {
             Path::new(args.required("output")?),
             args.get("pair").unwrap_or("unscored"),
             args.get("order").unwrap_or("0").parse()?,
+            args.get("scored") == Some("true"),
         ),
+        Some("batch") => batch::batch(
+            Path::new(args.required("config")?),
+            Path::new(args.required("runs")?),
+            args.get("after-pilot").map(Path::new),
+        ),
+        Some("report") => {
+            let summary = report::report(&batch::results(Path::new(args.required("runs")?))?);
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+            Ok(0)
+        }
         _ => bail!("{USAGE}"),
     }
 }
