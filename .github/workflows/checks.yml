@@ -1,20 +1,29 @@
 name: Workflow checks
 
+# Markdown-only changes skip the run; tests read docs/platforms.md, so it still counts.
 on:
   pull_request:
+    paths: ["**", "!*.md", "!docs/**/*.md", "docs/platforms.md"]
   push:
     branches: [main]
+    paths: ["**", "!*.md", "!docs/**/*.md", "docs/platforms.md"]
 
+# A new push cancels its pull request's older run; every main commit runs to completion.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  # Keep in step with evaluation.yml.
+  GO_VERSION: "1.27.2"
+
 jobs:
   macos:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       # Reads rust-toolchain.toml.
@@ -25,15 +34,20 @@ jobs:
           cache-workspaces: |
             . -> target
             evaluation -> target
-      # Related-scope checks run the real pinned Go analyzer (#21).
+      # Related-scope checks run the real pinned Go analyzer (#21). setup-go spends
+      # most of its time copying a fresh download into the tool cache, so restore it.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.tool_cache }}/go/${{ env.GO_VERSION }}
+          key: go-${{ env.GO_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: ${{ env.GO_VERSION }}
           cache: false
       # nextest runs every test binary in one pool instead of one binary at a time.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.148
       - id: gopls
         uses: actions/cache@v6
         with:
@@ -49,6 +63,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
@@ -59,14 +74,18 @@ jobs:
             evaluation -> target
       # Repeated from the macos job (keep the versions in step): steps cannot be
       # shared across jobs without a composite action.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.tool_cache }}/go/${{ env.GO_VERSION }}
+          key: go-${{ env.GO_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: ${{ env.GO_VERSION }}
           cache: false
       # nextest runs every test binary in one pool instead of one binary at a time.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.148,cargo-deny@0.20.2
       - id: gopls
         uses: actions/cache@v6
         with:
@@ -83,22 +102,12 @@ jobs:
       # The engine suite runs unchanged on Linux (#54).
       - run: cargo nextest run --locked
       - run: cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          command-arguments: advisories bans
-          arguments: --locked
-          rust-version: "1.99.0"
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          command-arguments: advisories bans
-          arguments: --locked
-          rust-version: "1.99.0"
-          manifest-path: evaluation/Cargo.toml
+      - run: cargo deny --locked check advisories bans
+      - run: cargo deny --locked --manifest-path evaluation/Cargo.toml check advisories bans
 
   actionlint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       # The image bundles shellcheck, so run: steps are linted too.
@@ -109,6 +118,7 @@ jobs:
   probes:
     # Probe crates stay standalone (own [workspace] and Cargo.lock), so discover them.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
