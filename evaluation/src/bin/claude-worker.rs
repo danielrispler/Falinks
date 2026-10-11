@@ -158,16 +158,22 @@ impl Bridge {
         let model = self.model.as_str();
         match (event["type"].as_str(), event["subtype"].as_str()) {
             (Some("system"), Some("init")) => {
-                let tools: Vec<&str> = event["tools"]
+                // The runtime lists tools sorted, not in `--tools` order.
+                let mut tools: Vec<&str> = event["tools"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter_map(Value::as_str)
                     .collect();
+                tools.sort();
                 if event["model"] != model
                     || event["claude_code_version"] != self.version.as_str()
                     || event["permissionMode"] != "dontAsk"
-                    || tools != TOOLS.split(',').collect::<Vec<_>>()
+                    || tools != {
+                        let mut expected: Vec<&str> = TOOLS.split(',').collect();
+                        expected.sort();
+                        expected
+                    }
                 {
                     return Err(format!("unsupported runtime init; run invalid: {event}").into());
                 }

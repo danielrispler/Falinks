@@ -35,9 +35,18 @@
       "charged_seconds": 2702,
       "measurement": "Session wall time from claiming #27 through final CI, plus a commit/handoff allowance. Pilot/batch runs are not included.",
       "work": "#27 harness: Claude Code Git-arm bridge, Falinks-arm runner (engine + adapter), batch orchestration with gates/pauses/replacements, report; review fixes; versioned re-freeze v1 -> v2 (harness/config/schema/instructions changed; initial commits unchanged)."
+    },
+    {
+      "start_utc": "2026-10-11T09:35:00Z",
+      "stop_utc": "2026-10-11T10:03:00Z",
+      "measured_seconds": 1680,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 1980,
+      "measurement": "Session wall time from run-config setup through the pilot repair commit, plus a commit/handoff allowance. Pilot gate and run time are not included.",
+      "work": "Pilot repairs: built the gate sibling binaries (sandbox-probe, falinks-claude-tool); the Git-arm bridge rejected the real runtime init because Claude Code lists tools sorted, not in --tools order (pilot-git infrastructure_failure); compare as sorted and make the scripted runtime report sorted tools; re-freeze v2 -> v3."
     }
   ],
-  "charged_total_seconds": 6491,
-  "remaining_seconds": 22309,
-  "status": "issue_27_harness_built; pilot and scored batch pending (outside auto mode)"
+  "charged_total_seconds": 8471,
+  "remaining_seconds": 20329,
+  "status": "pilot repair v3; pilot pending a clean pair"
 }

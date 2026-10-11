@@ -291,7 +291,9 @@ fn fake_claude(argv: &[String]) {
     assert_eq!(flag("--max-turns"), "12");
     let settings: Value = serde_json::from_str(&flag("--settings")).unwrap();
     assert_eq!(settings["sandbox"]["enabled"], false);
-    let tools: Vec<String> = flag("--tools").split(',').map(String::from).collect();
+    // The real runtime reports its tools sorted, not in `--tools` order.
+    let mut tools: Vec<String> = flag("--tools").split(',').map(String::from).collect();
+    tools.sort();
     let agent = env::var("FALINKS_AGENT").unwrap();
     // The runtime runs in scratch/; the agent's worktree is its parent.
     let file = format!(

@@ -251,6 +251,6 @@ for safety gates, run interpretation and continuation criteria.
 `verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger charges 6,491 seconds (about 108 minutes) through the #27 harness session,
-leaving 22,309 seconds of the shared eight-hour setup allowance for the pilot and any
+ledger charges 8,471 seconds (about 141 minutes) through the first #27 pilot repair,
+leaving 20,329 seconds of the shared eight-hour setup allowance for the pilot and any
 pilot repairs.
