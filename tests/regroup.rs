@@ -1,53 +1,32 @@
 //! Join/split/keep recommendations, agreement and work-preserving transitions (#25).
 //! Relevance uses the real pinned gopls/Go toolchain; checks are a trivial trusted command.
+mod support;
+
 use falinks::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
-    process::Command,
+    path::Path,
     time::Duration,
 };
+use support::{GO, edit, go_toolchain};
 use tempfile::TempDir;
 
-const GO: &[(&str, &str)] = &[
-    ("go.mod", "module example.com/probe\n\ngo 1.22\n"),
-    (
-        "siblings.go",
-        "package probe\n\nfunc Left() int {\n\treturn 1\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n",
-    ),
-    (
-        "callee.go",
-        "package probe\n\nfunc Callee() int {\n\treturn 7\n}\n",
-    ),
-];
 const LEFT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n";
 const CALLEE: &str = "package probe\n\nfunc Callee() int {\n\treturn 8\n}\n";
 
-fn pin(path: PathBuf) -> Pin {
-    assert!(path.is_file(), "missing pinned tool {}", path.display());
-    Pin {
-        sha256: sha256_file(&path).unwrap(),
-        path,
-    }
+fn reopen(root: &Path) -> (Engine, Client, Client) {
+    let (engine, alice, bob) = support::reopen(root, GO);
+    configure(&engine);
+    (engine, alice, bob)
 }
-fn go_toolchain() -> Toolchain {
-    let env = |key: &str| {
-        let out = Command::new("go").args(["env", key]).output().unwrap();
-        PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
-    };
-    let gopls = std::env::var_os("FALINKS_GOPLS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env("GOPATH").join("bin/gopls"));
-    Toolchain {
-        language: Language::Go,
-        executables: vec![pin(gopls), pin(env("GOROOT").join("bin/go"))],
-        features: Vec::new(),
-    }
+fn fixture() -> (TempDir, Engine, Client, Client) {
+    let (dir, engine, alice, bob) = support::fixture(GO);
+    fs::create_dir_all(dir.path().join("second")).unwrap();
+    configure(&engine);
+    (dir, engine, alice, bob)
 }
-fn open(root: &Path) -> (Engine, Client, Client) {
-    let enrolled: Vec<_> = GO.iter().map(|(p, _)| *p).collect();
-    let engine = Engine::open(&root.join("live"), &root.join("state"), &enrolled).unwrap();
+fn configure(engine: &Engine) {
     engine.configure_analysis(vec![go_toolchain()]).unwrap();
     engine
         .configure_checks(vec![Check {
@@ -56,19 +35,6 @@ fn open(root: &Path) -> (Engine, Client, Client) {
             args: Vec::new(),
         }])
         .unwrap();
-    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
-    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
-    (engine, alice, bob)
-}
-fn fixture() -> (TempDir, Engine, Client, Client) {
-    let dir = tempfile::tempdir().unwrap();
-    for (path, bytes) in GO {
-        fs::create_dir_all(dir.path().join("live").join(path).parent().unwrap()).unwrap();
-        fs::write(dir.path().join("live").join(path), bytes).unwrap();
-    }
-    fs::create_dir_all(dir.path().join("second")).unwrap();
-    let (engine, alice, bob) = open(dir.path());
-    (dir, engine, alice, bob)
 }
 fn register(engine: &Engine, client: &Client, id: &str, task: &str, nodes: &[&str]) {
     declare(engine, client, id, task, nodes, &[]);
@@ -98,26 +64,13 @@ fn declare(
 fn independent(engine: &Engine, alice: &Client, bob: &Client) {
     register(engine, alice, "left", "left task", &["siblings.go#Left"]);
     register(engine, bob, "callee", "callee task", &["callee.go#Callee"]);
-    edit(engine, alice, "left", "siblings.go", LEFT);
-    edit(engine, bob, "callee", "callee.go", CALLEE);
+    applied(engine, alice, "left", "siblings.go", LEFT);
+    applied(engine, bob, "callee", "callee.go", CALLEE);
 }
-fn edit(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
+fn applied(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
     let current = engine.capture_for(client).unwrap();
     let outcome = engine
-        .apply(
-            client,
-            Request {
-                id: id.into(),
-                expected: BTreeMap::from([(path.into(), current.files[path].version)]),
-                output: BTreeMap::from([(
-                    path.into(),
-                    Some(File {
-                        bytes: bytes.as_bytes().to_vec(),
-                        executable: false,
-                    }),
-                )]),
-            },
-        )
+        .apply(client, edit(id, &current, path, bytes))
         .unwrap();
     assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
     engine.capture_for(client).unwrap()
@@ -262,7 +215,7 @@ fn useful_split_moves_unfinished_drafts_and_preserves_history_and_offers() {
 
     // Restart keeps the arrangement, roots and proposals.
     drop(engine);
-    let (engine, alice, bob) = open(dir.path());
+    let (engine, alice, bob) = reopen(dir.path());
     assert_eq!(engine.placement().unwrap(), [0, 1]);
     assert_eq!(engine.root(&bob).unwrap(), second);
     assert_eq!(engine.root(&alice).unwrap(), live);
@@ -393,9 +346,9 @@ fn changed_task_context_invalidates_agreement() {
 fn interleaved_drafts_stay_pending_until_published_then_split_applies() {
     let (dir, engine, alice, bob) = fixture();
     engine.add_workspace(&dir.path().join("second")).unwrap();
-    edit(&engine, &alice, "left", "siblings.go", LEFT);
+    applied(&engine, &alice, "left", "siblings.go", LEFT);
     let both = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
-    edit(&engine, &bob, "right", "siblings.go", both);
+    applied(&engine, &bob, "right", "siblings.go", both);
     let proposal = engine
         .propose(
             &alice,
@@ -473,7 +426,7 @@ fn overlapping_publication_waits_for_explicit_incorporation() {
     let (dir, engine, alice, bob) = fixture();
     split(&dir, &engine, &alice, &bob);
     let right = "package probe\n\nfunc Left() int {\n\treturn 1\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
-    let mine = edit(&engine, &bob, "right", "siblings.go", right);
+    let mine = applied(&engine, &bob, "right", "siblings.go", right);
     offer(&engine, &alice, "left");
     engine.validate().unwrap();
     let second = engine.root(&bob).unwrap();
@@ -495,43 +448,14 @@ fn overlapping_publication_waits_for_explicit_incorporation() {
 
     let merged = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
     let unresolved = engine
-        .incorporate(
-            &bob,
-            Request {
-                id: "nothing".into(),
-                expected: BTreeMap::from([("callee.go".into(), mine.files["callee.go"].version)]),
-                output: BTreeMap::from([(
-                    "callee.go".into(),
-                    Some(File {
-                        bytes: CALLEE.as_bytes().to_vec(),
-                        executable: false,
-                    }),
-                )]),
-            },
-        )
+        .incorporate(&bob, edit("nothing", &mine, "callee.go", CALLEE))
         .unwrap();
     assert!(
         matches!(unresolved, Outcome::Rejected { .. }),
         "{unresolved:?}"
     );
     let outcome = engine
-        .incorporate(
-            &bob,
-            Request {
-                id: "merge".into(),
-                expected: BTreeMap::from([(
-                    "siblings.go".into(),
-                    mine.files["siblings.go"].version,
-                )]),
-                output: BTreeMap::from([(
-                    "siblings.go".into(),
-                    Some(File {
-                        bytes: merged.as_bytes().to_vec(),
-                        executable: false,
-                    }),
-                )]),
-            },
-        )
+        .incorporate(&bob, edit("merge", &mine, "siblings.go", merged))
         .unwrap();
     assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
     assert_eq!(read(&second, "siblings.go"), merged);
@@ -585,7 +509,7 @@ fn interrupted_transition_restores_both_roots_and_retries_after_restart() {
     );
 
     drop(engine);
-    let (engine, alice, bob) = open(dir.path());
+    let (engine, alice, bob) = reopen(dir.path());
     assert_eq!(engine.placement().unwrap(), [0, 0]);
     assert!(
         !dir.path().join("second/callee.go").exists(),
@@ -608,7 +532,7 @@ fn join_waits_while_both_workspaces_drafted_the_same_file() {
     let (dir, engine, alice, bob) = fixture();
     split(&dir, &engine, &alice, &bob);
     let right = "package probe\n\nfunc Left() int {\n\treturn 1\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
-    edit(&engine, &bob, "right", "siblings.go", right);
+    applied(&engine, &bob, "right", "siblings.go", right);
     let join = engine
         .propose(
             &bob,
@@ -636,7 +560,7 @@ fn join_waits_while_both_workspaces_drafted_the_same_file() {
 fn retained_candidate_keeps_its_membership_across_a_split() {
     let (dir, engine, alice, bob) = fixture();
     engine.require_members(agents(&[0, 1])).unwrap();
-    edit(&engine, &alice, "left", "siblings.go", LEFT);
+    applied(&engine, &alice, "left", "siblings.go", LEFT);
     let held = engine.capture().unwrap();
     let alices = offer(&engine, &alice, "held");
     assert_eq!(alices.members, agents(&[0, 1]), "Bob is a required member");
@@ -700,7 +624,7 @@ fn obligations_a_transition_raised_are_not_evidence_to_reverse_it() {
         "callee task",
         &["callee.go#Callee"],
     );
-    edit(&engine, &bob, "callee", "callee.go", CALLEE);
+    applied(&engine, &bob, "callee", "callee.go", CALLEE);
     engine
         .review(
             &alice,

@@ -1,35 +1,12 @@
-use falinks::*;
-use std::{collections::BTreeMap, fs};
-use tempfile::TempDir;
+mod support;
 
-fn fixture() -> (TempDir, Engine, Client, Client) {
-    let dir = tempfile::tempdir().unwrap();
-    let live = dir.path().join("live");
-    fs::create_dir(&live).unwrap();
-    fs::write(live.join("a.rs"), "fn a() {}\n").unwrap();
-    fs::write(live.join("b.rs"), "fn b() {}\n").unwrap();
-    let engine = Engine::open(&live, &dir.path().join("state"), &["a.rs", "b.rs"]).unwrap();
-    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
-    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
-    (dir, engine, alice, bob)
-}
-fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
-    Request {
-        id: id.into(),
-        expected: BTreeMap::from([(path.into(), capture.files[path].version)]),
-        output: BTreeMap::from([(
-            path.into(),
-            Some(File {
-                bytes: bytes.as_bytes().to_vec(),
-                executable: false,
-            }),
-        )]),
-    }
-}
+use falinks::*;
+use std::fs;
+use support::{PAIR, edit, fixture, open, reopen};
 
 #[test]
 fn two_clients_preserve_independent_drafts_and_reject_stale_output_in_full() {
-    let (_dir, engine, alice, bob) = fixture();
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let first = engine
         .apply(&alice, edit("a", &base, "a.rs", "fn a( unfinished"))
@@ -80,7 +57,7 @@ fn two_clients_preserve_independent_drafts_and_reject_stale_output_in_full() {
 
 #[test]
 fn capture_during_installation_keeps_the_previous_completed_revision() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let mut request = edit("multi", &base, "a.rs", "new a");
     request.expected.insert("b.rs".into(), 0);
@@ -118,7 +95,7 @@ fn capture_during_installation_keeps_the_previous_completed_revision() {
 
 #[test]
 fn restored_bytes_are_a_new_occurrence_and_duplicate_requests_do_not_apply_twice() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let request = edit("change", &base, "a.rs", "different");
     let outcome = engine.apply(&alice, request.clone()).unwrap();
@@ -137,12 +114,7 @@ fn restored_bytes_are_a_new_occurrence_and_duplicate_requests_do_not_apply_twice
     assert_ne!(restored.files["a.rs"].version, base.files["a.rs"].version);
     assert_eq!(changed.files["b.rs"].blob, base.files["b.rs"].blob);
     drop(engine);
-    let reopened = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        &["a.rs", "b.rs"],
-    )
-    .unwrap();
+    let reopened = open(dir.path(), PAIR).unwrap();
     let alice = reopened
         .authenticate(0, reopened.credentials()[0].as_str())
         .unwrap();
@@ -152,7 +124,7 @@ fn restored_bytes_are_a_new_occurrence_and_duplicate_requests_do_not_apply_twice
 
 #[test]
 fn interrupted_installation_retains_evidence_and_requires_explicit_retry() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let mut request = edit("crash", &base, "a.rs", "draft a");
     request.expected.insert("b.rs".into(), 0);
@@ -182,12 +154,7 @@ fn interrupted_installation_retains_evidence_and_requires_explicit_retry() {
             .is_some()
     );
     drop(engine);
-    let engine = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        &["a.rs", "b.rs"],
-    )
-    .unwrap();
+    let engine = open(dir.path(), PAIR).unwrap();
     let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
     assert_eq!(engine.capture().unwrap(), base);
     assert_eq!(
@@ -206,7 +173,7 @@ fn interrupted_installation_retains_evidence_and_requires_explicit_retry() {
 
 #[test]
 fn recovered_interruption_is_not_replayed_over_later_work_and_keeps_attempt_evidence() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let request = edit("interrupted", &base, "a.rs", "abandoned output");
     engine
@@ -218,12 +185,7 @@ fn recovered_interruption_is_not_replayed_over_later_work_and_keeps_attempt_evid
         })
         .unwrap();
     drop(engine);
-    let engine = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        &["a.rs", "b.rs"],
-    )
-    .unwrap();
+    let engine = open(dir.path(), PAIR).unwrap();
     let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
     engine
         .apply(&alice, edit("later", &base, "a.rs", "later draft"))
@@ -242,12 +204,7 @@ fn recovered_interruption_is_not_replayed_over_later_work_and_keeps_attempt_evid
             .is_empty()
     );
     drop(engine);
-    let engine = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        &["a.rs", "b.rs"],
-    )
-    .unwrap();
+    let engine = open(dir.path(), PAIR).unwrap();
     assert_eq!(engine.capture().unwrap(), current);
     assert_eq!(
         fs::read(dir.path().join("live/a.rs")).unwrap(),
@@ -257,7 +214,7 @@ fn recovered_interruption_is_not_replayed_over_later_work_and_keeps_attempt_evid
 
 #[test]
 fn captured_job_applies_coherent_output_with_invoker_attribution() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let spec = JobSpec {
         id: "generator".into(),
@@ -291,7 +248,7 @@ fn captured_job_applies_coherent_output_with_invoker_attribution() {
 
 #[test]
 fn stale_captured_job_retains_all_output_and_rejects_the_whole_application() {
-    let (_dir, engine, alice, bob) = fixture();
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let spec = JobSpec {
         id: "stale-job".into(),
@@ -340,7 +297,7 @@ fn stale_captured_job_retains_all_output_and_rejects_the_whole_application() {
 
 #[test]
 fn unmediated_writes_halt_mutations_without_overwriting_evidence() {
-    let (dir, engine, alice, bob) = fixture();
+    let (dir, engine, alice, bob) = fixture(PAIR);
     let base = engine.capture().unwrap();
     fs::write(dir.path().join("live/a.rs"), "unknown author").unwrap();
     assert!(matches!(
@@ -365,29 +322,15 @@ fn unmediated_writes_halt_mutations_without_overwriting_evidence() {
     );
     assert!(engine.request(&alice, "blocked").unwrap().is_some());
     drop(engine);
-    assert!(
-        Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            &["a.rs", "b.rs"]
-        )
-        .is_err()
-    );
+    assert!(open(dir.path(), PAIR).is_err());
 }
 
 #[test]
 fn ownership_authentication_path_aliases_and_modes_fail_closed() {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     assert!(engine.authenticate(1, &engine.credentials()[0]).is_err());
-    assert!(
-        Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            &["a.rs", "b.rs"]
-        )
-        .is_err()
-    );
+    assert!(open(dir.path(), PAIR).is_err());
     let base = engine.capture().unwrap();
     let mut bad = edit("traversal", &base, "a.rs", "bad");
     bad.expected.insert("../outside".into(), 0);
@@ -421,7 +364,7 @@ fn ownership_authentication_path_aliases_and_modes_fail_closed() {
 
 #[test]
 fn duplicate_inflight_submissions_join_the_recorded_operation() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let request = edit("duplicate", &base, "a.rs", "one occurrence");
     let started = std::sync::Barrier::new(2);
@@ -450,7 +393,7 @@ fn duplicate_inflight_submissions_join_the_recorded_operation() {
 
 #[test]
 fn missing_objects_fail_capture_and_restart_without_resetting_drafts() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     engine
         .apply(&alice, edit("draft", &base, "a.rs", "unfinished draft"))
@@ -465,14 +408,7 @@ fn missing_objects_fail_capture_and_restart_without_resetting_drafts() {
     .unwrap();
     assert!(engine.capture().is_err());
     drop(engine);
-    assert!(
-        Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            &["a.rs", "b.rs"]
-        )
-        .is_err()
-    );
+    assert!(open(dir.path(), PAIR).is_err());
     assert_eq!(
         fs::read(dir.path().join("live/a.rs")).unwrap(),
         b"unfinished draft"
@@ -481,7 +417,7 @@ fn missing_objects_fail_capture_and_restart_without_resetting_drafts() {
 
 #[test]
 fn job_boundary_denies_source_and_controller_writes_and_detects_surviving_descendants() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     for (id, script) in [
         (
@@ -541,7 +477,7 @@ fn shell_job(engine: &Engine, client: &Client, id: &str, program: &str, script: 
 
 #[test]
 fn job_network_attempt_is_denied() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -559,7 +495,7 @@ fn job_network_attempt_is_denied() {
 
 #[test]
 fn job_udp_attempt_is_denied() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -580,7 +516,7 @@ fn job_udp_attempt_is_denied() {
 
 #[test]
 fn job_timeout_kills_the_command_and_retains_evidence() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     engine
         .configure_job_timeout(std::time::Duration::from_secs(1))
         .unwrap();
@@ -593,7 +529,7 @@ fn job_timeout_kills_the_command_and_retains_evidence() {
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_missing_containment_helper_fails_closed() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     engine
         .configure_containment(dir.path().join("missing-helper"))
         .unwrap();
@@ -616,7 +552,7 @@ fn linux_missing_containment_helper_fails_closed() {
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_subreaper_sweep_kills_setsid_descendants() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let job = shell_job(
         &engine,
         &alice,
@@ -641,7 +577,7 @@ fn linux_subreaper_sweep_kills_setsid_descendants() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_sweep_kills_setsid_descendants() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let job = shell_job(
         &engine,
         &alice,
@@ -721,7 +657,7 @@ fn open_worker() {
 fn crash_worker() {
     let root = std::path::PathBuf::from(std::env::var("FALINKS_CRASH_ROOT").unwrap());
     let phase = std::env::var("FALINKS_CRASH_PHASE").unwrap();
-    let engine = Engine::open(&root.join("live"), &root.join("state"), &["a.rs", "b.rs"]).unwrap();
+    let engine = open(&root, PAIR).unwrap();
     let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
     let base = engine.capture().unwrap();
     let mut request = edit("process-crash", &base, "a.rs", "new a");
@@ -761,7 +697,7 @@ fn crash_boundaries_preserve_drafts_and_never_promote_incomplete_installations()
         "before-commit",
         "committed",
     ] {
-        let (dir, engine, _, _) = fixture();
+        let (dir, engine, _, _) = fixture(PAIR);
         let base = engine.capture().unwrap();
         drop(engine);
         let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -771,12 +707,7 @@ fn crash_boundaries_preserve_drafts_and_never_promote_incomplete_installations()
             .status()
             .unwrap();
         assert_eq!(status.code(), Some(73));
-        let engine = Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            &["a.rs", "b.rs"],
-        )
-        .unwrap();
+        let engine = open(dir.path(), PAIR).unwrap();
         let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
         let record = engine.request(&alice, "process-crash").unwrap().unwrap();
         if phase == "committed" {
@@ -807,7 +738,7 @@ fn crash_boundaries_preserve_drafts_and_never_promote_incomplete_installations()
 
 #[test]
 fn ambiguous_restart_preserves_all_files_instead_of_partially_restoring() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let mut request = edit("ambiguous", &base, "a.rs", "partial a");
     request.expected.insert("b.rs".into(), 0);
@@ -828,14 +759,7 @@ fn ambiguous_restart_preserves_all_files_instead_of_partially_restoring() {
         .unwrap();
     drop(engine);
     fs::write(dir.path().join("live/b.rs"), "external draft").unwrap();
-    assert!(
-        Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            &["a.rs", "b.rs"]
-        )
-        .is_err()
-    );
+    assert!(open(dir.path(), PAIR).is_err());
     assert_eq!(
         fs::read(dir.path().join("live/a.rs")).unwrap(),
         b"partial a"
@@ -848,7 +772,7 @@ fn ambiguous_restart_preserves_all_files_instead_of_partially_restoring() {
 
 #[test]
 fn unknown_write_evidence_survives_even_if_live_bytes_are_later_changed() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     fs::write(dir.path().join("live/a.rs"), "unattributed evidence").unwrap();
     engine
@@ -865,7 +789,7 @@ fn unknown_write_evidence_survives_even_if_live_bytes_are_later_changed() {
 
 #[test]
 fn retention_failure_never_installs_or_acknowledges_the_proposal() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let request = edit("retention-failure", &base, "a.rs", "retained draft");
     let git = dir.path().join("state/objects.git");
@@ -897,7 +821,7 @@ fn retention_failure_never_installs_or_acknowledges_the_proposal() {
 
 #[test]
 fn lost_committed_response_recovers_the_same_outcome() {
-    let (_dir, engine, alice, _) = fixture();
+    let (_dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let request = edit("lost-response", &base, "a.rs", "committed draft");
     assert!(
@@ -924,7 +848,7 @@ fn lost_committed_response_recovers_the_same_outcome() {
 
 #[test]
 fn repository_writer_ownership_cannot_be_bypassed_with_a_second_state_directory() {
-    let (dir, _engine, _, _) = fixture();
+    let (dir, _engine, _, _) = fixture(PAIR);
     assert!(
         Engine::open(
             &dir.path().join("live"),
@@ -937,17 +861,10 @@ fn repository_writer_ownership_cannot_be_bypassed_with_a_second_state_directory(
 
 #[test]
 fn startup_incidents_remain_halted_after_external_bytes_are_put_back() {
-    let (dir, engine, _, _) = fixture();
+    let (dir, engine, _, _) = fixture(PAIR);
     drop(engine);
     fs::write(dir.path().join("live/a.rs"), "startup external evidence").unwrap();
-    assert!(
-        Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            &["a.rs", "b.rs"]
-        )
-        .is_err()
-    );
+    assert!(open(dir.path(), PAIR).is_err());
     let incident = Engine::incident_at(&dir.path().join("state"))
         .unwrap()
         .unwrap();
@@ -956,19 +873,12 @@ fn startup_incidents_remain_halted_after_external_bytes_are_put_back() {
         Some(b"startup external evidence".as_slice())
     );
     fs::write(dir.path().join("live/a.rs"), "fn a() {}\n").unwrap();
-    assert!(
-        Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            &["a.rs", "b.rs"]
-        )
-        .is_err()
-    );
+    assert!(open(dir.path(), PAIR).is_err());
 }
 
 #[test]
 fn explicit_retry_after_independent_progress_creates_a_later_completed_occurrence() {
-    let (dir, engine, alice, _) = fixture();
+    let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let request = edit("retry-later", &base, "a.rs", "alice draft");
     let interrupted = engine
@@ -981,14 +891,7 @@ fn explicit_retry_after_independent_progress_creates_a_later_completed_occurrenc
         .unwrap();
     assert!(engine.retry(&alice, request.clone()).is_err());
     drop(engine);
-    let engine = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        &["a.rs", "b.rs"],
-    )
-    .unwrap();
-    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
-    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
+    let (engine, alice, bob) = reopen(dir.path(), PAIR);
     assert_eq!(engine.apply(&alice, request.clone()).unwrap(), interrupted);
     engine
         .apply(&bob, edit("independent", &base, "b.rs", "bob draft"))
@@ -1009,7 +912,7 @@ fn explicit_retry_after_independent_progress_creates_a_later_completed_occurrenc
 
 #[test]
 fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
-    let (dir, engine, _, _) = fixture();
+    let (dir, engine, _, _) = fixture(PAIR);
     let mut pipe = [0; 2];
     // SAFETY: `pipe` points to a writable array of two c_ints.
     assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
@@ -1030,11 +933,7 @@ fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
         libc::close(pipe[0]);
     }
     drop(engine);
-    let reopened = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        &["a.rs", "b.rs"],
-    );
+    let reopened = open(dir.path(), PAIR);
     // SAFETY: the buffer is a valid one-byte static; the fds and child pid were created above.
     unsafe {
         libc::write(pipe[1], b"x".as_ptr().cast(), 1);
@@ -1046,7 +945,7 @@ fn dropping_an_engine_releases_ownership_even_while_a_fork_copy_exists() {
 
 #[test]
 fn different_functions_in_one_file_both_survive_an_explicit_reread_and_rebuild() {
-    let (_dir, engine, alice, bob) = fixture();
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let two = "fn a() {}\nfn c() {}\n";
     let bytes = |capture: &Capture| capture.files["a.rs"].file.clone().unwrap().bytes;
