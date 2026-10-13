@@ -58,8 +58,11 @@ fn list_maps(maps: &[&Value]) -> String {
         .collect()
 }
 /// Pick the requested issue if open, else the newest open `wayfinder:map`; never a closed map.
-/// `maps` fetches the map list; an open requested issue never calls it.
-pub fn select_map(requested: Option<&Value>, maps: impl FnOnce() -> Result<Value>) -> Result<u64> {
+/// `fetch_maps` fetches the map list; an open requested issue never calls it.
+pub fn select_map(
+    requested: Option<&Value>,
+    fetch_maps: impl FnOnce() -> Result<Value>,
+) -> Result<u64> {
     if let Some(issue) = requested
         && issue["state"] == "OPEN"
     {
@@ -67,7 +70,7 @@ pub fn select_map(requested: Option<&Value>, maps: impl FnOnce() -> Result<Value
             .as_u64()
             .ok_or_else(|| "missing map number".into());
     }
-    let maps = maps()?;
+    let maps = fetch_maps()?;
     let maps = maps.as_array().ok_or("expected a map list")?;
     let mut open = maps
         .iter()
@@ -404,6 +407,7 @@ fn run() -> Result<()> {
         issue["body"].as_str().unwrap_or("")
     );
     // One thread per blocked ticket; joining in order keeps rows in map order.
+    // shortcut: no cap on concurrent `gh api` calls; batch them if a large map hits GitHub's secondary rate limit.
     let blockers = std::thread::scope(|scope| {
         let fetches = tickets
             .iter()
