@@ -63,7 +63,7 @@ fn evaluation_changed(changed: &[String]) -> bool {
 }
 
 fn main() -> ExitCode {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     for (tool, install) in [
         ("deny", "cargo install cargo-deny --locked"),
         ("nextest", "cargo install cargo-nextest --locked"),

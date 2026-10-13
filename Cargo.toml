@@ -24,8 +24,8 @@ tempfile = "3"
 workspace = true
 
 [workspace]
-members = ["adapters/codex", "adapters/claude"]
-default-members = [".", "adapters/codex", "adapters/claude"]
+members = ["adapters/codex", "adapters/claude", "scripts"]
+default-members = [".", "adapters/codex", "adapters/claude", "scripts"]
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
