@@ -1,5 +1,6 @@
 # No `[dependencies]`: Cargo builds dependencies per package, so any here would
-# delay the first check until they compile.
+# delay the first check until they compile. A test in `ci_checks.rs` enforces it.
+# `wayfinder_startup.rs` lives here too but is built by `falinks-host`.
 [package]
 name = "falinks-ci-checks"
 version = "0.1.0"

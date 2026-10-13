@@ -154,6 +154,16 @@ mod tests {
     }
 
     #[test]
+    fn the_package_has_no_dependencies_outside_its_tests() {
+        let sections: Vec<&str> = include_str!("Cargo.toml")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('[') && line.contains("dependencies"))
+            .collect();
+        assert_eq!(sections, ["[dev-dependencies]"]);
+    }
+
+    #[test]
     fn moving_a_file_out_of_evaluation_counts_as_an_evaluation_change() {
         let repo = tempfile::tempdir().unwrap();
         let git = |args: &[&str]| {
