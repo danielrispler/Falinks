@@ -63,7 +63,7 @@ fn evaluation_changed(changed: &[String]) -> bool {
 }
 
 fn main() -> ExitCode {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     for (tool, install) in [
         ("deny", "cargo install cargo-deny --locked"),
         ("nextest", "cargo install cargo-nextest --locked"),
@@ -86,7 +86,7 @@ fn main() -> ExitCode {
     );
     if !gopls.is_file() {
         eprintln!(
-            "ci-checks: gopls is missing at {}; install it with:\n  go install golang.org/x/tools/gopls@v0.22.0",
+            "ci-checks: gopls is missing at {}; install the version in CONTRIBUTING.md",
             gopls.display()
         );
         return ExitCode::FAILURE;
@@ -151,6 +151,16 @@ mod tests {
         assert!(!changed(&["src/lib.rs", ".github/workflows/checks.yml"]));
         assert!(!changed(&["evaluation.md"]));
         assert!(!changed(&[]));
+    }
+
+    #[test]
+    fn the_package_has_no_dependencies_outside_its_tests() {
+        let sections: Vec<&str> = include_str!("Cargo.toml")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('[') && line.contains("dependencies"))
+            .collect();
+        assert_eq!(sections, ["[dev-dependencies]"]);
     }
 
     #[test]

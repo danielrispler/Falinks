@@ -278,5 +278,6 @@ freeze guard fails first and masks the real failure.
 `verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger `setup.json` holds the charged total and what remains of the shared eight-hour
-setup allowance for any further repairs before scoring.
+ledger `setup.json` holds the charged total and the remaining balance of the shared
+eight-hour setup allowance; `setup_ledger_totals_match_its_sessions` checks the total
+against its sessions and the balance against the limit.

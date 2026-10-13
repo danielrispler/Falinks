@@ -1,11 +1,14 @@
 //! Exact checkpoint offers, combined validation and atomic publication (#22).
 //! Checks compile and test the exact candidate with the pinned rustc under macOS Seatbelt.
+mod support;
+
 use falinks::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
 };
+use support::{edit, open};
 use tempfile::TempDir;
 
 const FILES: &[(&str, &str)] = &[
@@ -16,26 +19,15 @@ const FILES: &[(&str, &str)] = &[
     ("a.rs", "pub fn a() -> i32 {\n    1\n}\n"),
     ("b.rs", "pub fn b() -> i32 {\n    2\n}\n"),
 ];
-const ENROLLED: &[&str] = &["lib.rs", "a.rs", "b.rs"];
 
 fn fixture() -> (TempDir, Engine, Client, Client) {
-    let dir = tempfile::tempdir().unwrap();
-    let live = dir.path().join("live");
-    fs::create_dir_all(&live).unwrap();
-    for (path, bytes) in FILES {
-        fs::write(live.join(path), bytes).unwrap();
-    }
-    let engine = Engine::open(&live, &dir.path().join("state"), ENROLLED).unwrap();
+    let (dir, engine, alice, bob) = support::fixture(FILES);
     engine.configure_checks(checks()).unwrap();
-    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
-    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
     (dir, engine, alice, bob)
 }
 fn reopen(root: &Path) -> (Engine, Client, Client) {
-    let engine = Engine::open(&root.join("live"), &root.join("state"), ENROLLED).unwrap();
+    let (engine, alice, bob) = support::reopen(root, FILES);
     engine.configure_checks(checks()).unwrap();
-    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
-    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
     (engine, alice, bob)
 }
 /// Trusted compilation plus the fixed tests, built into the isolated output directory.
@@ -59,19 +51,6 @@ fn checks() -> Vec<Check> {
             ),
         ),
     ]
-}
-fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
-    Request {
-        id: id.into(),
-        expected: BTreeMap::from([(path.into(), capture.files[path].version)]),
-        output: BTreeMap::from([(
-            path.into(),
-            Some(File {
-                bytes: bytes.as_bytes().to_vec(),
-                executable: false,
-            }),
-        )]),
-    }
 }
 fn applied(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
     let current = engine.capture().unwrap();
@@ -687,12 +666,7 @@ fn unconfigured_checks_are_retryable_and_committed_acceptance_survives_observer_
         .unwrap();
     drop(engine);
     // Restart without reconfiguring the in-memory check set: a host gap, not a verdict.
-    let engine = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        ENROLLED,
-    )
-    .unwrap();
+    let engine = open(dir.path(), FILES).unwrap();
     let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
     let run = engine.validate().unwrap().unwrap();
     assert!(
@@ -769,14 +743,7 @@ fn missing_published_evidence_stops_restart_without_replacing_drafts() {
             .join(&blob[2..]),
     )
     .unwrap();
-    assert!(
-        Engine::open(
-            &dir.path().join("live"),
-            &dir.path().join("state"),
-            ENROLLED
-        )
-        .is_err()
-    );
+    assert!(open(dir.path(), FILES).is_err());
     assert_eq!(fs::read(dir.path().join("live/b.rs")).unwrap(), b"draft");
 }
 

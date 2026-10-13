@@ -121,7 +121,25 @@ fn successful_evidence(result: &Output, run: &Path) -> Value {
         stderr("A"),
         stderr("B")
     );
-    read(evidence_path)
+    let evidence = read(evidence_path);
+    assert_schema_required_keys(&read(root().join("result-schema.json")), &evidence, "");
+    evidence
+}
+
+/// Recorded evidence carries every key `result-schema.json` requires, at every depth.
+fn assert_schema_required_keys(schema: &Value, value: &Value, path: &str) {
+    for key in schema["required"].as_array().into_iter().flatten() {
+        let key = key.as_str().unwrap();
+        assert!(value.get(key).is_some(), "evidence lacks {path}/{key}");
+    }
+    for (key, property) in schema["properties"].as_object().into_iter().flatten() {
+        if let Some(field) = value.get(key) {
+            assert_schema_required_keys(property, field, &format!("{path}/{key}"));
+        }
+    }
+    for item in value.as_array().into_iter().flatten() {
+        assert_schema_required_keys(&schema["items"], item, &format!("{path}[]"));
+    }
 }
 
 #[test]
@@ -140,6 +158,21 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
         assert_eq!(fixture["initial_visible"]["passed"], true);
         assert_eq!(fixture["reference_visible"]["passed"], true);
     }
+}
+
+/// README.md points at `setup.json` for the budget figures, so its totals must add up.
+#[test]
+fn setup_ledger_totals_match_its_sessions() {
+    let ledger = read(root().join("setup.json"));
+    let charged: i64 = ledger["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["charged_seconds"].as_i64().unwrap())
+        .sum();
+    assert_eq!(ledger["charged_total_seconds"], charged);
+    let limit = ledger["limit_seconds"].as_i64().unwrap();
+    assert_eq!(ledger["remaining_seconds"], limit - charged);
 }
 
 #[test]
