@@ -149,18 +149,50 @@ impl Tools {
     }
 }
 
+/// The configured `denied_roots`, resolved: the one list behind the worker sandbox, engine
+/// checks and the host `check`. A malformed, placeholder or misspelled entry fails setup
+/// rather than leaving its root readable.
+pub fn denied_roots(config: &Value) -> Result<Vec<PathBuf>> {
+    let roots = config["denied_roots"]
+        .as_array()
+        .ok_or("denied_roots must be a list of paths")?;
+    roots
+        .iter()
+        .map(|root| {
+            let root = root.as_str().ok_or("denied_roots must be paths")?;
+            Path::new(root)
+                .canonicalize()
+                .map_err(|error| format!("denied root {root}: {error}").into())
+        })
+        .collect()
+}
+
 /// Roots no check may read, as the Git arm's checks cannot: the whole run directory (the slot
-/// and output stay readable beneath it) and every configured `denied_roots` entry that resolves.
-pub fn deny_check_reads(engine: &Engine, run: &Path, config: &Value) -> Result<Vec<PathBuf>> {
-    let mut roots = vec![run.canonicalize()?];
-    for root in config["denied_roots"].as_array().into_iter().flatten() {
-        let root = Path::new(root.as_str().ok_or("denied_roots must be paths")?);
-        if let Ok(root) = root.canonicalize() {
-            roots.push(root);
+/// and output stay readable beneath it) and every configured root.
+pub fn deny_check_reads(engine: &Engine, run: &Path, roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut denied = vec![run.canonicalize()?];
+    denied.extend_from_slice(roots);
+    engine.configure_denied_roots(denied.clone())?;
+    Ok(denied)
+}
+
+/// Every entry beneath `root` except the directories leading down to `keep`, listed at each
+/// call so entries created since setup are included.
+fn around(root: &Path, keep: &Path) -> Result<Vec<PathBuf>> {
+    let (mut out, mut dir) = (vec![], root.to_path_buf());
+    while dir != keep {
+        let mut next = None;
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if keep.starts_with(&path) {
+                next = Some(path);
+            } else {
+                out.push(path);
+            }
         }
+        dir = next.ok_or("the oracle directory is missing from its denied root")?;
     }
-    engine.configure_denied_roots(roots.clone())?;
-    Ok(roots)
+    Ok(out)
 }
 
 pub struct Arm {
@@ -409,7 +441,15 @@ impl Arm {
             .arg("--evidence")
             .arg(&evidence);
         for root in &self.denied {
-            command.arg("--deny-root").arg(root);
+            // The oracle runner splits its own directory; everything around it stays denied.
+            let roots = if self.private.starts_with(root) {
+                around(root, &self.private)?
+            } else {
+                vec![root.clone()]
+            };
+            for root in roots {
+                command.arg("--deny-root").arg(root);
+            }
         }
         let output = command.output()?;
         let line: Value = serde_json::from_slice(&output.stdout)

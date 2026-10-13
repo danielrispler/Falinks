@@ -101,10 +101,10 @@ pub fn report(runs: &[Value]) -> Value {
         );
     }
     for run in interrupted {
-        inconclusive.push(format!(
-            "unreplaced interruption {}: {}",
-            run["run_id"], run["outcome"]
-        ));
+        // As `replaceable` reads it: no outcome is an infrastructure failure.
+        let outcome = run["outcome"].as_str().unwrap_or("infrastructure_failure");
+        let id = run["run_id"].as_str().unwrap_or_default();
+        inconclusive.push(format!("unreplaced interruption {id}: {outcome}"));
     }
     let unsafe_runs: Vec<&Value> = runs
         .iter()
@@ -302,18 +302,32 @@ mod tests {
     #[test]
     fn unreplaced_interruptions_in_either_arm_are_inconclusive_and_named() {
         let f0 = FIXTURES[0];
-        for (id, outcome) in [
-            (format!("{f0}-0-f"), "infrastructure_failure"),
-            (format!("{f0}-1-g"), "infrastructure_failure"),
-            (format!("{f0}-2-f"), "usage_limit"),
+        // A result with no outcome reads as an infrastructure failure.
+        for (id, outcome, named) in [
+            (
+                format!("{f0}-0-f"),
+                json!("infrastructure_failure"),
+                "infrastructure_failure",
+            ),
+            (
+                format!("{f0}-1-g"),
+                json!("infrastructure_failure"),
+                "infrastructure_failure",
+            ),
+            (format!("{f0}-2-f"), json!("usage_limit"), "usage_limit"),
+            (format!("{f0}-2-g"), Value::Null, "infrastructure_failure"),
         ] {
             let mut runs = signalling();
-            runs.iter_mut().find(|r| r["run_id"] == *id).unwrap()["outcome"] = outcome.into();
+            runs.iter_mut().find(|r| r["run_id"] == *id).unwrap()["outcome"] = outcome;
             let out = report(&runs);
             assert_eq!(out["verdict"], "inconclusive", "{id}: {out}");
             assert_eq!(out["fixtures"][f0]["pairs"].as_array().unwrap().len(), 3);
+            let reason = json!(format!("unreplaced interruption {id}: {named}"));
             assert!(
-                out["inconclusive_reasons"].to_string().contains(&id),
+                out["inconclusive_reasons"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&reason),
                 "{id}: {out}"
             );
         }

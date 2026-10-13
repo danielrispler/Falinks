@@ -184,8 +184,12 @@ it as `usage_limit`.
   reserves them; the host adds their frozen bytes back to every candidate. The engine
   enrolls the fixture files plus `x_test.go` / `tests/x.rs`. Engine checks are the Git
   arm's visible commands with the pinned toolchain. Like the Git arm's checks, they cannot
-  read the run directory (except their slot and output) or any denied root that resolves;
-  the run records these in `check_denied_roots`. Workers use the #26 launch profile and
+  read the contents of the run directory (except their slot and output) or of any denied
+  root; the run records these in `check_denied_roots`. The host `check` and the final
+  oracle deny agent tests the same roots, apart from the oracle's own directory. A
+  `denied_roots` entry that does not resolve fails the run. Unlike the Git arm, this arm
+  does not derive the checkout's Git directories: list the main checkout, which holds the
+  Git common directory, and every worktree outside it (`git worktree list`). Workers use the #26 launch profile and
   every `engine_host` tool, plus host `ack`, `check` (visible checks and oracle on an exact
   capture, pass/fail only) and `ready`. `ready` succeeds once every development is
   acknowledged and the agent's workspace equals the published state. When both agents are
@@ -223,9 +227,10 @@ it as `usage_limit`.
     and no run may appear twice. `concurrent_runs` lists the runs whose times overlapped
     a run in a sibling directory. An infrastructure failure or usage limit on a scored run
     is an interruption, not a task outcome: until replaced, its pair stays incomplete and
-    the verdict is `inconclusive`, naming the run. A missing result reads as an
-    infrastructure failure, so the report stays usable mid-batch. An interrupted pilot
-    run never affects the verdict.
+    the verdict is `inconclusive`, naming the run. A recorded run without a result reads
+    as an infrastructure failure. A run still in progress is not recorded yet: its pair
+    is only incomplete, so the verdict is `inconclusive` without naming it. An
+    interrupted pilot run never affects the verdict.
   - **Agent mistakes** in either arm are refusals counted in `rejected_operations`. They
     are never infrastructure failures.
 

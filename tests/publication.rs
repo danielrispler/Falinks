@@ -832,6 +832,8 @@ fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
             .configure_denied_roots(vec![outside.path().join("missing")])
             .is_err()
     );
+    // Seatbelt would deny everything and the Linux complement nothing.
+    assert!(engine.configure_denied_roots(vec!["/".into()]).is_err());
     // The alias for the secrets, and the whole tree holding the state, slot and output.
     engine
         .configure_denied_roots(vec![alias, dir.path().to_owned()])

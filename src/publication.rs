@@ -302,7 +302,11 @@ impl Engine {
                 return fail("denied roots must be absolute");
             }
             // Containment matches resolved paths: `/private/tmp`, never `/tmp`.
-            canonical.push(root.canonicalize()?);
+            let root = root.canonicalize()?;
+            if root.parent().is_none() {
+                return fail("the filesystem root cannot be a denied root");
+            }
+            canonical.push(root);
         }
         *self
             .denied_roots
@@ -498,6 +502,16 @@ impl Engine {
         observer(Stage::Prepared)?;
         let slot = self.slot();
         let outputs = self.state.join("validation-runs").join(nonce()?);
+        // One boundary for every check of the attempt.
+        let denied: Vec<PathBuf> = std::iter::once(self.state.clone())
+            .chain(self.layout()?.roots.iter().cloned())
+            .chain(
+                self.denied_roots
+                    .read()
+                    .map_err(|_| "denied roots lock poisoned")?
+                    .clone(),
+            )
+            .collect();
         let mut failed = None;
         for check in checks {
             let evidence = outputs.join(&check.name);
@@ -522,15 +536,7 @@ impl Engine {
                     output: &out,
                     env,
                     reads: contain::Reads::Except {
-                        denied: std::iter::once(self.state.clone())
-                            .chain(self.layout()?.roots.iter().cloned())
-                            .chain(
-                                self.denied_roots
-                                    .read()
-                                    .map_err(|_| "denied roots lock poisoned")?
-                                    .clone(),
-                            )
-                            .collect(),
+                        denied: denied.clone(),
                         allowed: vec![slot.clone(), out.clone()],
                     },
                     timeout: Duration::from_secs(300),

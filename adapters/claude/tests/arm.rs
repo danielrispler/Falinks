@@ -2,7 +2,9 @@
 //! `go-relationships` fixture drive drafts, milestones, checks, publication and readiness.
 use falinks::Language;
 use falinks::{Check, Engine};
-use falinks_claude::arm::{Arm, Tools, agent_name, deny_check_reads, enrollment, language};
+use falinks_claude::arm::{
+    Arm, Tools, agent_name, denied_roots, deny_check_reads, enrollment, language,
+};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -45,7 +47,7 @@ fn go_env(key: &str) -> PathBuf {
 
 struct Run {
     arm: Arm,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 impl Run {
     fn call(&mut self, agent: usize, operation: &str, request: Value) -> Value {
@@ -109,7 +111,7 @@ fn setup(name: &str) -> Run {
     };
     tools.configure(&engine, language).unwrap();
     // Legitimate checks pass under the runner's boundary: the whole run directory denied.
-    deny_check_reads(&engine, &root, &json!({})).unwrap();
+    let denied = deny_check_reads(&engine, &root, &[]).unwrap();
     let clients = [0, 1].map(|a| engine.authenticate(a, &engine.credentials()[a]).unwrap());
     let private = root.join("controller");
     fs::create_dir(&private).unwrap();
@@ -120,9 +122,9 @@ fn setup(name: &str) -> Run {
         fixture,
         eval,
         private,
-        vec![],
+        denied,
     );
-    Run { arm, _dir: dir }
+    Run { arm, dir }
 }
 
 /// `claude-worker` (standalone evaluation crate) copies the adapter's turn cap.
@@ -195,8 +197,13 @@ fn checks_are_denied_the_run_directory_and_every_resolved_root() {
     fs::create_dir(&checkout).unwrap();
     fs::write(checkout.join("oracle"), "SECRET").unwrap();
     let engine = Engine::open(&space, &run.join("controller/state"), &["a.txt"]).unwrap();
-    let config = json!({"denied_roots": [checkout, tmp.path().join("missing")]});
-    let denied = deny_check_reads(&engine, &run, &config).unwrap();
+    // A misspelled, placeholder or malformed entry fails setup instead of failing open.
+    assert!(
+        denied_roots(&json!({"denied_roots": [checkout, tmp.path().join("missing")]})).is_err()
+    );
+    assert!(denied_roots(&json!({"denied_roots": checkout})).is_err());
+    let roots = denied_roots(&json!({"denied_roots": [checkout]})).unwrap();
+    let denied = deny_check_reads(&engine, &run, &roots).unwrap();
     let canonical = |p: &Path| p.canonicalize().unwrap();
     assert_eq!(denied, [canonical(&run), canonical(&checkout)]);
 
@@ -220,6 +227,49 @@ fn checks_are_denied_the_run_directory_and_every_resolved_root() {
         .clone();
     let passed: Vec<bool> = results.iter().map(|r| r.passed).collect();
     assert_eq!(passed, [true, false, false], "{results:?}");
+}
+
+/// The host `check` runs the agents' tests in the oracle seam; they cannot read anything else
+/// in the run, such as the peer's controller material (#80).
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn the_host_check_denies_agent_tests_the_rest_of_the_run() {
+    let mut run = setup("go-relationships");
+    let peer = run
+        .dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("agent-1/controller");
+    fs::create_dir_all(&peer).unwrap();
+    fs::write(peer.join("settings.json"), "SECRET").unwrap();
+    let mut files = read(repo().join("evaluation/protected/go-relationships.json"))["reference"]
+        .as_object()
+        .unwrap()
+        .clone();
+    let probe = format!(
+        "package fixture\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestPeerIsUnreadable(t *testing.T) {{\n\tif _, err := os.ReadFile({:?}); err == nil {{\n\t\tt.Fatal(\"peer controller material readable\")\n\t}}\n}}\n",
+        peer.join("settings.json").to_str().unwrap()
+    );
+    files.insert("producer_test.go".into(), json!(probe));
+    let capture = run.call(0, "capture", json!({}));
+    let mut expected = serde_json::Map::new();
+    let mut output = serde_json::Map::new();
+    for (path, text) in &files {
+        expected.insert(path.clone(), capture["files"][path]["version"].clone());
+        output.insert(path.clone(), json!({"content": text}));
+    }
+    let edit = run.call(
+        0,
+        "edit",
+        json!({"id": "probe", "expected": expected, "output": output}),
+    );
+    assert_eq!(edit["accepted"], true, "{edit}");
+    let check = run.call(0, "check", json!({}));
+    assert_eq!(check["passed"], true, "{check}");
 }
 
 /// The engine runs the Git arm's visible Rust commands with the pinned toolchain in its sandbox.
