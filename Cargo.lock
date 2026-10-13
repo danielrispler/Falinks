@@ -118,6 +118,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "falinks-ci-checks"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "falinks-claude"
 version = "0.1.0"
 dependencies = [
