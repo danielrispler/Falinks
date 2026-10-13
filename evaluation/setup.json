@@ -72,9 +72,29 @@
       "charged_seconds": 1297,
       "measurement": "Session wall time from creating the #73 worktree through final CI, plus allowances for reading before the worktree existed and for commit/handoff. No real runs.",
       "work": "#73 setup checks from the pilot retro: freeze lists changed frozen paths and refuses unstaged changes to them; check-integration names a missing sandbox-probe/falinks-claude-tool before any runtime launch; batch checks the gate binary and its siblings first and records 'gate could not start' apart from a failed gate scenario; README re-freeze note; platform-bound test rule in CODING_STANDARDS.md; versioned re-freeze v5 -> v6 (harness changed; initial commits unchanged)."
+    },
+    {
+      "start_utc": "2026-10-13T19:19:10Z",
+      "stop_utc": "2026-10-13T19:39:30Z",
+      "measured_seconds": 1220,
+      "startup_allowance_seconds": 300,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 1820,
+      "measurement": "Session wall time from creating the #80 worktree through final CI, plus allowances for reading before the worktree existed and for commit/handoff. Includes the P1 engine and adapter change, charged conservatively. No real runs.",
+      "work": "#80: P1, required and feedback checks in the Falinks arm deny the whole run directory and every resolved denied root through the engine's new configure_denied_roots (slot and output stay readable; recorded as check_denied_roots); P8, the report treats every replaceable outcome on a scored run as an interruption, names each unreplaced one as an inconclusive reason, and ignores replaced and pilot interruptions; versioned re-freeze v6 -> v7 (report.rs and batch.rs changed; initial commits unchanged). The renewed unscored pilot follows after merge."
+    },
+    {
+      "start_utc": "2026-10-13T20:07:16Z",
+      "stop_utc": "2026-10-13T20:16:44Z",
+      "measured_seconds": 568,
+      "startup_allowance_seconds": 900,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 1768,
+      "measurement": "Session wall time from starting the #104 review fixes through final CI, plus an allowance for the untimed review triage before it (two reviews checked against the code; a Seatbelt hard-link probe) and for commit/handoff. Includes engine and adapter work, charged conservatively. No real runs.",
+      "work": "#80 review fixes (#104): the host check and final oracle deny agent tests everything in the run except the oracle's own directory; one denied_roots parser that fails closed on a malformed or unresolvable entry feeds the worker sandbox, engine checks and host check; the engine refuses / as a denied root and builds one check boundary per attempt; report reasons name runs in plain text; README states what operators must list and what an in-progress run looks like; re-freeze v6 -> v7 redone on the final report.rs (initial commits unchanged)."
     }
   ],
-  "charged_total_seconds": 20048,
-  "remaining_seconds": 8752,
-  "status": "setup checks hardened (#73); manifest v6"
+  "charged_total_seconds": 23636,
+  "remaining_seconds": 5164,
+  "status": "evaluation integrity: check read boundary and report interruptions (#80); manifest v7"
 }

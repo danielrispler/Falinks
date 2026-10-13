@@ -168,6 +168,7 @@ pub struct Engine {
     jobs: Mutex<()>,
     analysis: RwLock<Vec<Toolchain>>,
     checks: RwLock<Vec<publication::Check>>,
+    denied_roots: RwLock<Vec<PathBuf>>,
     helper: RwLock<Option<PathBuf>>,
     job_timeout: RwLock<std::time::Duration>,
     // One reusable validation workspace; its lease serializes validation runs.
@@ -719,6 +720,7 @@ impl Engine {
             jobs: Mutex::new(()),
             analysis: RwLock::new(Vec::new()),
             checks: RwLock::new(Vec::new()),
+            denied_roots: RwLock::new(Vec::new()),
             helper: RwLock::new(None),
             job_timeout: RwLock::new(std::time::Duration::from_secs(30)),
             validation: Mutex::new(()),

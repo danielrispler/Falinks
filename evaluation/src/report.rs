@@ -1,6 +1,6 @@
 //! Scored-batch interpretation: every outcome, paired successes, medians and the agreed
 //! continuation signal. Exploratory evidence only; never a statistical or cost claim.
-use crate::FIXTURES;
+use crate::{FIXTURES, batch::replaceable};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -19,14 +19,14 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
 
 /// `runs` are every recorded result (pilot included) in batch order; all are listed. Scoring
 /// uses scored runs only. A record naming an earlier one in `replaces` supersedes it. A
-/// usage-limited run is an interruption, not a task outcome: its pair stays incomplete.
+/// replaceable outcome is an interruption, not a task outcome: its pair stays incomplete and,
+/// until replaced, it is named as a reason the verdict is inconclusive.
 pub fn report(runs: &[Value]) -> Value {
     let replaced: Vec<&Value> = runs.iter().filter_map(|r| r.get("replaces")).collect();
-    let scored: Vec<&Value> = runs
+    let (interrupted, scored): (Vec<&Value>, Vec<&Value>) = runs
         .iter()
         .filter(|r| r["scored"] == true && !replaced.contains(&&r["run_id"]))
-        .filter(|r| r["outcome"] != "usage_limit")
-        .collect();
+        .partition(|r| replaceable(r));
     let elapsed = |r: &Value| r["timing"]["elapsed_seconds"].as_f64();
     // A run overlapped another if it saw one active at its start or stop, or one saw it: a
     // run entirely inside another sees it at start without being seen.
@@ -100,13 +100,11 @@ pub fn report(runs: &[Value]) -> Value {
             }),
         );
     }
-    let limited: Vec<&Value> = runs
-        .iter()
-        .filter(|r| r["outcome"] == "usage_limit")
-        .map(|r| &r["run_id"])
-        .collect();
-    if !limited.is_empty() {
-        inconclusive.push(format!("usage exhaustion in {limited:?}"));
+    for run in interrupted {
+        // As `replaceable` reads it: no outcome is an infrastructure failure.
+        let outcome = run["outcome"].as_str().unwrap_or("infrastructure_failure");
+        let id = run["run_id"].as_str().unwrap_or_default();
+        inconclusive.push(format!("unreplaced interruption {id}: {outcome}"));
     }
     let unsafe_runs: Vec<&Value> = runs
         .iter()
@@ -285,8 +283,80 @@ mod tests {
         runs[15]["outcome"] = "usage_limit".into();
         let out = report(&runs);
         assert_eq!(out["verdict"], "inconclusive");
-        assert_eq!(out["inconclusive_reasons"].as_array().unwrap().len(), 2);
+        let reasons = out["inconclusive_reasons"].as_array().unwrap();
+        assert_eq!(reasons.len(), 2);
+        assert!(
+            reasons[1]
+                .to_string()
+                .contains(runs[15]["run_id"].as_str().unwrap())
+        );
         runs[3]["outcome"] = "safety_failure".into();
         assert_eq!(report(&runs)["verdict"], "paused_unsafe");
+    }
+
+    /// Two fixtures meet the threshold: a continuation signal when nothing is interrupted.
+    fn signalling() -> Vec<Value> {
+        batch([[700.0; 3], [800.0; 3], [1100.0; 3]])
+    }
+
+    #[test]
+    fn unreplaced_interruptions_in_either_arm_are_inconclusive_and_named() {
+        let f0 = FIXTURES[0];
+        // A result with no outcome reads as an infrastructure failure.
+        for (id, outcome, named) in [
+            (
+                format!("{f0}-0-f"),
+                json!("infrastructure_failure"),
+                "infrastructure_failure",
+            ),
+            (
+                format!("{f0}-1-g"),
+                json!("infrastructure_failure"),
+                "infrastructure_failure",
+            ),
+            (format!("{f0}-2-f"), json!("usage_limit"), "usage_limit"),
+            (format!("{f0}-2-g"), Value::Null, "infrastructure_failure"),
+        ] {
+            let mut runs = signalling();
+            runs.iter_mut().find(|r| r["run_id"] == *id).unwrap()["outcome"] = outcome;
+            let out = report(&runs);
+            assert_eq!(out["verdict"], "inconclusive", "{id}: {out}");
+            assert_eq!(out["fixtures"][f0]["pairs"].as_array().unwrap().len(), 3);
+            let reason = json!(format!("unreplaced interruption {id}: {named}"));
+            assert!(
+                out["inconclusive_reasons"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&reason),
+                "{id}: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn replaced_interruptions_of_either_kind_leave_the_verdict_alone() {
+        let mut runs = signalling();
+        for (i, outcome) in [(0, "infrastructure_failure"), (3, "usage_limit")] {
+            let mut replacement = runs[i].clone();
+            replacement["run_id"] = format!("{}-r1", runs[i]["run_id"].as_str().unwrap()).into();
+            replacement["replaces"] = runs[i]["run_id"].clone();
+            runs[i]["outcome"] = outcome.into();
+            runs.push(replacement);
+        }
+        let out = report(&runs);
+        assert_eq!(out["verdict"], "continuation_signal", "{out}");
+        assert_eq!(out["replaced_runs"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_usage_limited_pilot_run_does_not_affect_the_verdict() {
+        let mut runs = signalling();
+        let mut pilot = runs[0].clone();
+        pilot["run_id"] = "pilot-g".into();
+        pilot["pair"] = "pilot".into();
+        pilot["scored"] = false.into();
+        pilot["outcome"] = "usage_limit".into();
+        runs.insert(0, pilot);
+        assert_eq!(report(&runs)["verdict"], "continuation_signal");
     }
 }

@@ -293,6 +293,27 @@ impl Engine {
         *self.checks.write().map_err(|_| "checks lock poisoned")? = checks;
         Ok(())
     }
+    /// Host configuration: extra roots no required or feedback check may read, beyond engine
+    /// state and live roots. The slot and output stay readable beneath them. Not durable.
+    pub fn configure_denied_roots(&self, roots: Vec<PathBuf>) -> Result<()> {
+        let mut canonical = Vec::new();
+        for root in roots {
+            if !root.is_absolute() {
+                return fail("denied roots must be absolute");
+            }
+            // Containment matches resolved paths: `/private/tmp`, never `/tmp`.
+            let root = root.canonicalize()?;
+            if root.parent().is_none() {
+                return fail("the filesystem root cannot be a denied root");
+            }
+            canonical.push(root);
+        }
+        *self
+            .denied_roots
+            .write()
+            .map_err(|_| "denied roots lock poisoned")? = canonical;
+        Ok(())
+    }
     /// Host configuration: explicitly required group members join every candidate's coverage.
     pub fn require_members(&self, members: BTreeSet<usize>) -> Result<()> {
         if members.iter().any(|m| *m >= 2) {
@@ -481,6 +502,16 @@ impl Engine {
         observer(Stage::Prepared)?;
         let slot = self.slot();
         let outputs = self.state.join("validation-runs").join(nonce()?);
+        // One boundary for every check of the attempt.
+        let denied: Vec<PathBuf> = std::iter::once(self.state.clone())
+            .chain(self.layout()?.roots.iter().cloned())
+            .chain(
+                self.denied_roots
+                    .read()
+                    .map_err(|_| "denied roots lock poisoned")?
+                    .clone(),
+            )
+            .collect();
         let mut failed = None;
         for check in checks {
             let evidence = outputs.join(&check.name);
@@ -505,9 +536,7 @@ impl Engine {
                     output: &out,
                     env,
                     reads: contain::Reads::Except {
-                        denied: std::iter::once(self.state.clone())
-                            .chain(self.layout()?.roots.iter().cloned())
-                            .collect(),
+                        denied: denied.clone(),
                         allowed: vec![slot.clone(), out.clone()],
                     },
                     timeout: Duration::from_secs(300),

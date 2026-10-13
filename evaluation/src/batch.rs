@@ -76,7 +76,7 @@ fn pause(ledger: &mut Value, path: &Path, reason: String) -> Result<i32> {
 /// Outcomes whose slot is rerun, as an identified replacement, when the batch resumes.
 const REPLACEABLE: [&str; 2] = ["infrastructure_failure", "usage_limit"];
 
-fn replaceable(run: &Value) -> bool {
+pub(crate) fn replaceable(run: &Value) -> bool {
     REPLACEABLE.contains(&run["outcome"].as_str().unwrap_or("infrastructure_failure"))
 }
 

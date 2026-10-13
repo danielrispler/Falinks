@@ -595,6 +595,9 @@ fn setup(
             .to_owned(),
     };
     evidence["toolchain"] = tools.configure(&engine, language)?;
+    let roots = arm::denied_roots(config)?;
+    let denied = arm::deny_check_reads(&engine, dir, &roots)?;
+    evidence["check_denied_roots"] = json!(denied);
     evidence["enrolled"] = json!(enrolled);
     fs::create_dir(dir.join("space1"))?;
     engine.add_workspace(&dir.join("space1"))?;
@@ -617,16 +620,8 @@ fn setup(
     let oracle = dir.join("controller/oracle");
     fs::create_dir(&oracle)?;
     let mut protected = vec![dir.join("controller")];
-    let mut denied = vec![dir.join("controller/state")];
-    for root in config["denied_roots"].as_array().into_iter().flatten() {
-        let root = PathBuf::from(root.as_str().ok_or("denied_roots must be paths")?);
-        denied.push(root.clone());
-        if let Ok(root) = root.canonicalize()
-            && root.is_dir()
-        {
-            protected.push(root);
-        }
-    }
+    // The worker launch accepts only directories.
+    protected.extend(roots.into_iter().filter(|root| root.is_dir()));
     let arm = Arm::new(
         Arc::clone(&engine),
         clients,
