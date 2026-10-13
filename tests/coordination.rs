@@ -1,14 +1,10 @@
 //! Related-scope analysis, obligations, reviews, typed messages, replay and waits (#21).
 //! Analyzer checks use the real pinned rust-analyzer/Cargo and gopls/Go toolchains.
+mod support;
+
 use falinks::*;
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
-};
-use tempfile::TempDir;
+use std::{path::Path, time::Duration};
+use support::{GO, PAIR, edit, fixture, go_toolchain, open, pin};
 
 const RUST: &[(&str, &str)] = &[
     (
@@ -25,25 +21,7 @@ const RUST: &[(&str, &str)] = &[
     ),
     ("src/dep.rs", "pub fn callee() -> i32 {\n    7\n}\n"),
 ];
-const GO: &[(&str, &str)] = &[
-    ("go.mod", "module example.com/probe\n\ngo 1.22\n"),
-    (
-        "siblings.go",
-        "package probe\n\nfunc Left() int {\n\treturn 1\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n",
-    ),
-    (
-        "callee.go",
-        "package probe\n\nfunc Callee() int {\n\treturn 7\n}\n",
-    ),
-];
 
-fn pin(path: PathBuf) -> Pin {
-    assert!(path.is_file(), "missing pinned tool {}", path.display());
-    Pin {
-        sha256: sha256_file(&path).unwrap(),
-        path,
-    }
-}
 fn rust_toolchain() -> Toolchain {
     let bin = Path::new(env!("CARGO")).parent().unwrap();
     Toolchain {
@@ -53,46 +31,6 @@ fn rust_toolchain() -> Toolchain {
             .map(|t| pin(bin.join(t)))
             .collect(),
         features: Vec::new(),
-    }
-}
-fn go_toolchain() -> Toolchain {
-    let env = |key: &str| {
-        let out = Command::new("go").args(["env", key]).output().unwrap();
-        PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
-    };
-    let gopls = std::env::var_os("FALINKS_GOPLS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env("GOPATH").join("bin/gopls"));
-    Toolchain {
-        language: Language::Go,
-        executables: vec![pin(gopls), pin(env("GOROOT").join("bin/go"))],
-        features: Vec::new(),
-    }
-}
-fn fixture(files: &[(&str, &str)]) -> (TempDir, Engine, Client, Client) {
-    let dir = tempfile::tempdir().unwrap();
-    let live = dir.path().join("live");
-    for (path, bytes) in files {
-        fs::create_dir_all(live.join(path).parent().unwrap()).unwrap();
-        fs::write(live.join(path), bytes).unwrap();
-    }
-    let enrolled: Vec<_> = files.iter().map(|(p, _)| *p).collect();
-    let engine = Engine::open(&live, &dir.path().join("state"), &enrolled).unwrap();
-    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
-    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
-    (dir, engine, alice, bob)
-}
-fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
-    Request {
-        id: id.into(),
-        expected: BTreeMap::from([(path.into(), capture.files[path].version)]),
-        output: BTreeMap::from([(
-            path.into(),
-            Some(File {
-                bytes: bytes.as_bytes().to_vec(),
-                executable: false,
-            }),
-        )]),
     }
 }
 fn text(capture: &Capture, path: &str) -> String {
@@ -378,13 +316,9 @@ fn changed_pins_and_unknown_input_universes_fail_closed() {
     assert_eq!(engine.capture().unwrap(), base);
 }
 
-fn plain() -> (TempDir, Engine, Client, Client) {
-    fixture(&[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")])
-}
-
 #[test]
 fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment() {
-    let (_dir, engine, alice, bob) = plain();
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     engine.register(&alice, scope("a", &["a.rs"])).unwrap();
     let base = engine.capture().unwrap();
     engine
@@ -445,7 +379,7 @@ fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment(
 
 #[test]
 fn replay_restores_deferred_context_and_obligations_without_duplicates_after_restart() {
-    let (dir, engine, alice, bob) = plain();
+    let (dir, engine, alice, bob) = fixture(PAIR);
     engine.register(&alice, scope("a", &["a.rs"])).unwrap();
     let base = engine.capture().unwrap();
     engine
@@ -468,12 +402,7 @@ fn replay_restores_deferred_context_and_obligations_without_duplicates_after_res
         )
         .unwrap();
     drop(engine);
-    let engine = Engine::open(
-        &dir.path().join("live"),
-        &dir.path().join("state"),
-        &["a.rs", "b.rs"],
-    )
-    .unwrap();
+    let engine = open(dir.path(), PAIR).unwrap();
     let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
     let restored = engine.pending(&alice).unwrap();
     assert_eq!(restored.handled, events[0].seq);
@@ -506,7 +435,7 @@ fn replay_restores_deferred_context_and_obligations_without_duplicates_after_res
 
 #[test]
 fn waits_catch_up_on_missed_wakeups_and_report_explicit_outcomes() {
-    let (_dir, engine, alice, bob) = plain();
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     let plan = |text: &str| Plan {
         task: "consumer".into(),
         scope: vec!["b.rs".into()],
@@ -576,7 +505,7 @@ fn waits_catch_up_on_missed_wakeups_and_report_explicit_outcomes() {
 
 #[test]
 fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding() {
-    let (_dir, engine, alice, bob) = plain();
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     engine.register(&bob, scope("b", &["b.rs"])).unwrap();
     let base = engine.capture().unwrap();
     let offer = |id: &str, revision: u64, supersedes: Option<&str>| Offer {
