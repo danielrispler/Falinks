@@ -76,6 +76,10 @@ The agent harness that runs one agent session and presents its tools and message
 **Presentation boundary**:
 A point at which a worker runtime shows pending messages to its agent. Presentation is not processing, acknowledgment or revalidation.
 
+**Trusted host**:
+The process that opens the engine, enrolls its captured jobs and required checks, and gives each worker-runtime session its agent identity. It authenticates every tool call from that session before the engine sees it. Agents, worker runtimes and their tool relays never hold its authority.
+_Avoid_: host library (`falinks-host` is code a trusted host is built from, not the role)
+
 **Captured job**:
 A host-enrolled trusted formatter or generator run against a captured revision of a client's workspace. Its declared output can be applied as that client's edit.
 _Avoid_: Job command, generator run
