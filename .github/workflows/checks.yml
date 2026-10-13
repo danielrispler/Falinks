@@ -19,6 +19,9 @@ permissions:
 env:
   # Keep in step with evaluation.yml.
   GO_VERSION: "1.27.2"
+  NEXTEST_VERSION: "0.9.148"
+  # Keep in step with CONTRIBUTING.md and docs/engine.md.
+  GOPLS_VERSION: "v0.22.0"
 
 jobs:
   macos:
@@ -47,14 +50,14 @@ jobs:
       # nextest runs every test binary in one pool instead of one binary at a time.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
       - id: gopls
         uses: actions/cache@v6
         with:
           path: ~/go/bin/gopls
-          key: gopls-v0.22.0-go1.27-${{ runner.os }}-${{ runner.arch }}
+          key: gopls-${{ env.GOPLS_VERSION }}-go${{ env.GO_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - if: steps.gopls.outputs.cache-hit != 'true'
-        run: go install golang.org/x/tools/gopls@v0.22.0
+        run: go install "golang.org/x/tools/gopls@$GOPLS_VERSION"
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       # The engine suite builds the offline evaluation CLI, so fetch its crates first.
@@ -72,8 +75,8 @@ jobs:
           cache-workspaces: |
             . -> target
             evaluation -> target
-      # Repeated from the macos job (keep the versions in step): steps cannot be
-      # shared across jobs without a composite action.
+      # Repeated from the macos job: steps cannot be shared across jobs without a
+      # composite action.
       - uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/go/${{ env.GO_VERSION }}
@@ -85,25 +88,27 @@ jobs:
       # nextest runs every test binary in one pool instead of one binary at a time.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148,cargo-deny@0.20.2
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }},cargo-deny@0.20.2
       - id: gopls
         uses: actions/cache@v6
         with:
           path: ~/go/bin/gopls
-          key: gopls-v0.22.0-go1.27-${{ runner.os }}-${{ runner.arch }}
+          key: gopls-${{ env.GOPLS_VERSION }}-go${{ env.GO_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - if: steps.gopls.outputs.cache-hit != 'true'
-        run: go install golang.org/x/tools/gopls@v0.22.0
+        run: go install "golang.org/x/tools/gopls@$GOPLS_VERSION"
       # Contained commands need Landlock in the LSM list (docs/platforms.md).
       - run: grep -qw landlock /sys/kernel/security/lsm
       - run: cargo fmt --manifest-path evaluation/Cargo.toml --check
       - run: cargo clippy --locked --all-targets -- -D warnings
-      # The engine suite builds the offline evaluation CLI, so fetch its crates first.
+      # Before the offline evaluation clippy and before nextest, whose arm tests build
+      # the evaluation CLI offline.
       - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
-      # The engine suite runs unchanged on Linux (#54).
-      - run: cargo nextest run --locked
+      # Cheap lint and advisory failures surface before the slow engine suite.
       - run: cargo clippy --locked --offline --manifest-path evaluation/Cargo.toml --all-targets -- -D warnings
       - run: cargo deny --locked check advisories bans
       - run: cargo deny --locked --manifest-path evaluation/Cargo.toml check advisories bans
+      # The engine suite runs unchanged on Linux (#54).
+      - run: cargo nextest run --locked
 
   actionlint:
     runs-on: ubuntu-latest

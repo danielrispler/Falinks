@@ -133,6 +133,28 @@ fn git_arm_bridge_uses_the_adapter_turn_cap() {
     assert!(language("python").is_err());
 }
 
+/// Both arms launch with the same isolation flags (evaluation/README.md "Paired evaluation").
+#[test]
+fn git_arm_bridge_launches_with_the_adapter_isolation_flags() {
+    let args = falinks_claude::launch_args(Path::new("/c"), "s", false);
+    let bridge = fs::read_to_string(repo().join("evaluation/src/bin/claude-worker.rs")).unwrap();
+    let bridge: String = bridge.split_whitespace().collect();
+    for flag in [
+        "--setting-sources",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--permission-mode",
+    ] {
+        let at = args.iter().position(|a| a == flag).unwrap();
+        // A flag's value follows it, unless the next argument is another flag.
+        let literal = match args.get(at + 1).filter(|v| !v.starts_with("--")) {
+            Some(value) => format!("\"{flag}\",\"{value}\","),
+            None => format!("\"{flag}\","),
+        };
+        assert!(bridge.contains(&literal), "claude-worker lacks {literal}");
+    }
+}
+
 #[test]
 fn enrollment_adds_optional_test_files_and_skips_reserved_paths() {
     let files = ["go.mod", ".gitignore", "producer.go"].map(String::from);

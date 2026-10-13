@@ -86,7 +86,7 @@ fn main() -> ExitCode {
     );
     if !gopls.is_file() {
         eprintln!(
-            "ci-checks: gopls is missing at {}; install it with:\n  go install golang.org/x/tools/gopls@v0.22.0",
+            "ci-checks: gopls is missing at {}; install the version in CONTRIBUTING.md",
             gopls.display()
         );
         return ExitCode::FAILURE;
