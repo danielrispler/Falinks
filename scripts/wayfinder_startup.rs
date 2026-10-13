@@ -58,7 +58,19 @@ fn list_maps(maps: &[&Value]) -> String {
         .collect()
 }
 /// Pick the requested issue if open, else the newest open `wayfinder:map`; never a closed map.
-pub fn select_map(requested: Option<&Value>, maps: &Value) -> Result<u64> {
+/// `fetch_maps` fetches the map list; an open requested issue never calls it.
+pub fn select_map(
+    requested: Option<&Value>,
+    fetch_maps: impl FnOnce() -> Result<Value>,
+) -> Result<u64> {
+    if let Some(issue) = requested
+        && issue["state"] == "OPEN"
+    {
+        return issue["number"]
+            .as_u64()
+            .ok_or_else(|| "missing map number".into());
+    }
+    let maps = fetch_maps()?;
     let maps = maps.as_array().ok_or("expected a map list")?;
     let mut open = maps
         .iter()
@@ -67,9 +79,6 @@ pub fn select_map(requested: Option<&Value>, maps: &Value) -> Result<u64> {
     open.sort_by_key(|map| std::cmp::Reverse(map["number"].as_u64()));
     if let Some(issue) = requested {
         let number = issue["number"].as_u64().ok_or("missing map number")?;
-        if issue["state"] == "OPEN" {
-            return Ok(number);
-        }
         return Err(format!("Map #{number} is closed. Open maps:{}", list_maps(&open)).into());
     }
     match open.first() {
@@ -194,44 +203,6 @@ pub fn claim_plan(
         workspace,
     })
 }
-fn check() -> Result<()> {
-    let free = json!({"number":17,"title":"Free","html_url":"https://example.com/17","state":"open","assignees":[],"issue_dependencies_summary":{"blocked_by":0}});
-    let mut claimed = free.clone();
-    claimed["number"] = json!(11);
-    claimed["assignees"] = json!([{"login":"dev"}]);
-    let mut blocked = free.clone();
-    blocked["number"] = json!(12);
-    blocked["issue_dependencies_summary"]["blocked_by"] = json!(2);
-    let mut later = free.clone();
-    later["number"] = json!(18);
-    let rows = open_tickets(&json!([[{"state":"closed"},claimed,free],[blocked,later]]))?;
-    assert_eq!(
-        rows.iter()
-            .map(|r| r["number"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        [11, 17, 12, 18]
-    );
-    assert_eq!(
-        rows.iter()
-            .filter(|r| r["frontier"] == true)
-            .map(|r| r["number"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        [17, 18]
-    );
-    assert_eq!(rows[0]["assignees"], json!(["dev"]));
-    assert!(open_tickets(&json!([[]]))?.is_empty());
-    for unknown in [
-        json!({}),
-        json!({"blocked_by":null}),
-        json!({"blocked_by":-1}),
-        json!({"blocked_by":true}),
-    ] {
-        let mut ticket = free.clone();
-        ticket["issue_dependencies_summary"] = unknown;
-        assert!(open_tickets(&json!([[ticket]])).is_err());
-    }
-    Ok(())
-}
 fn stdout(program: &str, args: &[&str]) -> Result<String> {
     let mut command = Command::new(program);
     command.args(args);
@@ -355,14 +326,9 @@ fn claim(number: u64) -> Result<()> {
     println!("{}", plan.path);
     Ok(())
 }
-const USAGE: &str = "usage: wayfinder-startup [map-number] | --claim <issue> | --check";
+const USAGE: &str = "usage: wayfinder-startup [map-number] | --claim <issue>";
 fn run() -> Result<()> {
     let args = env::args().skip(1).collect::<Vec<_>>();
-    if args == ["--check"] {
-        check()?;
-        println!("Startup checks passed");
-        return Ok(());
-    }
     if args == ["--help"] {
         println!(
             "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path."
@@ -397,7 +363,7 @@ fn run() -> Result<()> {
             "number,title,state",
         ])
     };
-    let maps = maps_in("open", "100")?;
+    let open_maps = || maps_in("open", "100");
     let view = |number: u64| {
         gh(&[
             "issue",
@@ -412,17 +378,19 @@ fn run() -> Result<()> {
     let (map, issue) = match requested {
         Some(number) => {
             let issue = view(number).map_err(|error| {
-                let open = select_map(None, &maps)
+                let open = select_map(None, open_maps)
                     .map(|newest| format!("; newest open map is #{newest}"))
                     .unwrap_or_default();
                 format!("Map #{number} not found: {error}{open}")
             })?;
-            (select_map(Some(&issue), &maps)?, issue)
+            (select_map(Some(&issue), open_maps)?, issue)
         }
         None => {
+            // Fetched up front so a failed fetch errs rather than falling through to the closed list.
+            let maps = open_maps()?;
             // With no open map, the closed-only list always errs, naming recent maps.
-            let map =
-                select_map(None, &maps).or_else(|_| select_map(None, &maps_in("closed", "20")?))?;
+            let map = select_map(None, || Ok(maps))
+                .or_else(|_| select_map(None, || maps_in("closed", "20")))?;
             (map, view(map)?)
         }
     };
@@ -438,12 +406,25 @@ fn run() -> Result<()> {
         issue["url"].as_str().unwrap_or(""),
         issue["body"].as_str().unwrap_or("")
     );
-    for ticket in &mut tickets {
-        let blockers = if ticket["blocked_by"] == 0 {
-            vec![]
-        } else {
-            blockers_of(&ticket["number"])?
-        };
+    // One thread per blocked ticket; joining in order keeps rows in map order.
+    // shortcut: no cap on concurrent `gh api` calls; batch them if a large map hits GitHub's secondary rate limit.
+    let blockers = std::thread::scope(|scope| {
+        let fetches = tickets
+            .iter()
+            .map(|ticket| {
+                (ticket["blocked_by"] != 0)
+                    .then(|| scope.spawn(move || blockers_of(&ticket["number"])))
+            })
+            .collect::<Vec<_>>();
+        fetches
+            .into_iter()
+            .map(|fetch| match fetch {
+                None => Ok(vec![]),
+                Some(thread) => thread.join().map_err(|_| "blocker fetch panicked")?,
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    for (ticket, blockers) in tickets.iter_mut().zip(blockers) {
         ticket["blocked_by"] = json!(blockers);
         println!("{ticket}");
     }
@@ -457,9 +438,45 @@ fn main() {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
-    fn startup_preserves_order_and_rejects_unknown_blockers() {
-        super::check().unwrap();
+    fn startup_preserves_order_and_rejects_unknown_blockers() -> Result<()> {
+        let free = json!({"number":17,"title":"Free","html_url":"https://example.com/17","state":"open","assignees":[],"issue_dependencies_summary":{"blocked_by":0}});
+        let mut claimed = free.clone();
+        claimed["number"] = json!(11);
+        claimed["assignees"] = json!([{"login":"dev"}]);
+        let mut blocked = free.clone();
+        blocked["number"] = json!(12);
+        blocked["issue_dependencies_summary"]["blocked_by"] = json!(2);
+        let mut later = free.clone();
+        later["number"] = json!(18);
+        let rows = open_tickets(&json!([[{"state":"closed"},claimed,free],[blocked,later]]))?;
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["number"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [11, 17, 12, 18]
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r["frontier"] == true)
+                .map(|r| r["number"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [17, 18]
+        );
+        assert_eq!(rows[0]["assignees"], json!(["dev"]));
+        assert!(open_tickets(&json!([[]]))?.is_empty());
+        for unknown in [
+            json!({}),
+            json!({"blocked_by":null}),
+            json!({"blocked_by":-1}),
+            json!({"blocked_by":true}),
+        ] {
+            let mut ticket = free.clone();
+            ticket["issue_dependencies_summary"] = unknown;
+            assert!(open_tickets(&json!([[ticket]])).is_err());
+        }
+        Ok(())
     }
 }
 #[cfg(test)]
@@ -474,19 +491,23 @@ mod map_tests {
     }
     #[test]
     fn default_map_is_newest_open_map() {
-        assert_eq!(select_map(None, &maps()).unwrap(), 30);
+        assert_eq!(select_map(None, || Ok(maps())).unwrap(), 30);
     }
     #[test]
     fn no_open_map_is_an_error_listing_recent_maps() {
         let only_closed = json!([{"number":1,"state":"CLOSED","title":"Map: old"}]);
-        let error = select_map(None, &only_closed).unwrap_err().to_string();
+        let error = select_map(None, || Ok(only_closed))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("No open wayfinder:map"), "{error}");
         assert!(error.contains("#1 Map: old (closed)"), "{error}");
     }
     #[test]
     fn explicit_closed_map_is_an_error_naming_open_maps() {
         let closed = json!({"number":1,"state":"CLOSED","title":"Map: old"});
-        let error = select_map(Some(&closed), &maps()).unwrap_err().to_string();
+        let error = select_map(Some(&closed), || Ok(maps()))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("#1 is closed"), "{error}");
         assert!(error.contains("#30 Map: newer"), "{error}");
         assert!(error.contains("#20 Map: older"), "{error}");
@@ -495,7 +516,10 @@ mod map_tests {
     #[test]
     fn explicit_open_issue_is_used_without_map_label() {
         let spec = json!({"number":19,"state":"OPEN","title":"Spec: x"});
-        assert_eq!(select_map(Some(&spec), &maps()).unwrap(), 19);
+        assert_eq!(
+            select_map(Some(&spec), || panic!("fetched the map list")).unwrap(),
+            19
+        );
     }
     #[test]
     fn blockers_render_open_numbers_only() {

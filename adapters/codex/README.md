@@ -7,16 +7,13 @@ Issue [#23](https://github.com/danielrispler/Falinks/issues/23) supplies the ada
 Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) (today macOS arm64) and the official `openai/codex` release `rust-v0.160.0`. Extract `codex-aarch64-apple-darwin.tar.gz` and `codex-code-mode-host-aarch64-apple-darwin.tar.gz` into a dedicated directory. Name the companion `codex-code-mode-host` alongside the CLI. Startup checks both executable hashes and the emitted experimental protocol schema; it never substitutes the installed CLI.
 
 ```sh
-cargo check --all-targets
-cargo test
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
 cargo build --release --bins
 ./target/release/check-adapter \
   --binary /path/to/codex-aarch64-apple-darwin \
   --output /path/to/current-rust-controls.json
-cargo run --bin wayfinder-startup -- --check
 ```
+
+The repository checks live in [`scripts/check_list.rs`](../../scripts/check_list.rs); `cargo run --bin ci-checks` runs them.
 
 The verifier expects its sibling `sandbox-probe` executable; `--probe /path/to/sandbox-probe` can select another build explicitly. It copies the compiled Rust probe into the fixture's read-only `worker-tools` directory and records its hash. Both standalone and actual app-server command tools execute that same program. Its new-session child is the same Rust executable; no language interpreter or embedded non-Rust script is involved.
 
