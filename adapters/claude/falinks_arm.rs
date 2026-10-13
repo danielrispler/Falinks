@@ -595,6 +595,7 @@ fn setup(
             .to_owned(),
     };
     evidence["toolchain"] = tools.configure(&engine, language)?;
+    evidence["check_denied_roots"] = json!(arm::deny_check_reads(&engine, dir, config)?);
     evidence["enrolled"] = json!(enrolled);
     fs::create_dir(dir.join("space1"))?;
     engine.add_workspace(&dir.join("space1"))?;

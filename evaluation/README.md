@@ -183,7 +183,9 @@ it as `usage_limit`.
   fixture into the live root. Its dot-paths (`.gitignore`) are removed, because the engine
   reserves them; the host adds their frozen bytes back to every candidate. The engine
   enrolls the fixture files plus `x_test.go` / `tests/x.rs`. Engine checks are the Git
-  arm's visible commands with the pinned toolchain. Workers use the #26 launch profile and
+  arm's visible commands with the pinned toolchain. Like the Git arm's checks, they cannot
+  read the run directory (except their slot and output) or any denied root that resolves;
+  the run records these in `check_denied_roots`. Workers use the #26 launch profile and
   every `engine_host` tool, plus host `ack`, `check` (visible checks and oracle on an exact
   capture, pass/fail only) and `ready`. `ready` succeeds once every development is
   acknowledged and the agent's workspace equals the published state. When both agents are
@@ -219,7 +221,11 @@ it as `usage_limit`.
     successes, medians over jointly successful pairs and the continuation signal. Several
     directories are merged as one batch: they must share one configuration and one pilot,
     and no run may appear twice. `concurrent_runs` lists the runs whose times overlapped
-    a run in a sibling directory.
+    a run in a sibling directory. An infrastructure failure or usage limit on a scored run
+    is an interruption, not a task outcome: until replaced, its pair stays incomplete and
+    the verdict is `inconclusive`, naming the run. A missing result reads as an
+    infrastructure failure, so the report stays usable mid-batch. An interrupted pilot
+    run never affects the verdict.
   - **Agent mistakes** in either arm are refusals counted in `rejected_operations`. They
     are never infrastructure failures.
 
@@ -272,6 +278,5 @@ freeze guard fails first and masks the real failure.
 `verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger charges 18,751 seconds (about 313 minutes) through the #65 pilot repairs,
-leaving 10,049 seconds of the shared eight-hour setup allowance for any further
-repairs before scoring.
+ledger `setup.json` holds the charged total and what remains of the shared eight-hour
+setup allowance for any further repairs before scoring.

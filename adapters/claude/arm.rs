@@ -149,6 +149,20 @@ impl Tools {
     }
 }
 
+/// Roots no check may read, as the Git arm's checks cannot: the whole run directory (the slot
+/// and output stay readable beneath it) and every configured `denied_roots` entry that resolves.
+pub fn deny_check_reads(engine: &Engine, run: &Path, config: &Value) -> Result<Vec<PathBuf>> {
+    let mut roots = vec![run.canonicalize()?];
+    for root in config["denied_roots"].as_array().into_iter().flatten() {
+        let root = Path::new(root.as_str().ok_or("denied_roots must be paths")?);
+        if let Ok(root) = root.canonicalize() {
+            roots.push(root);
+        }
+    }
+    engine.configure_denied_roots(roots.clone())?;
+    Ok(roots)
+}
+
 pub struct Arm {
     pub engine: Arc<Engine>,
     hosts: [EngineHost; 2],

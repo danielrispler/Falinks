@@ -1,8 +1,8 @@
 //! The Falinks evaluation arm without a model: host-scripted tool envelopes on the frozen
 //! `go-relationships` fixture drive drafts, milestones, checks, publication and readiness.
-use falinks::Engine;
 use falinks::Language;
-use falinks_claude::arm::{Arm, Tools, agent_name, enrollment, language};
+use falinks::{Check, Engine};
+use falinks_claude::arm::{Arm, Tools, agent_name, deny_check_reads, enrollment, language};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -108,6 +108,8 @@ fn setup(name: &str) -> Run {
         rust: Path::new(env!("CARGO")).parent().unwrap().to_owned(),
     };
     tools.configure(&engine, language).unwrap();
+    // Legitimate checks pass under the runner's boundary: the whole run directory denied.
+    deny_check_reads(&engine, &root, &json!({})).unwrap();
     let clients = [0, 1].map(|a| engine.authenticate(a, &engine.credentials()[a]).unwrap());
     let private = root.join("controller");
     fs::create_dir(&private).unwrap();
@@ -150,6 +152,52 @@ fn enrollment_adds_optional_test_files_and_skips_reserved_paths() {
             "tests/catalog.rs"
         ]
     );
+}
+
+/// Checks cannot read the run directory or any configured root, as the Git arm's cannot; the
+/// slot stays readable (#80).
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn checks_are_denied_the_run_directory_and_every_resolved_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run = tmp.path().join("run");
+    let space = run.join("space0");
+    fs::create_dir_all(&space).unwrap();
+    fs::write(space.join("a.txt"), "a").unwrap();
+    fs::create_dir(run.join("scratch")).unwrap();
+    fs::write(run.join("scratch/other"), "OTHER").unwrap();
+    let checkout = tmp.path().join("checkout");
+    fs::create_dir(&checkout).unwrap();
+    fs::write(checkout.join("oracle"), "SECRET").unwrap();
+    let engine = Engine::open(&space, &run.join("controller/state"), &["a.txt"]).unwrap();
+    let config = json!({"denied_roots": [checkout, tmp.path().join("missing")]});
+    let denied = deny_check_reads(&engine, &run, &config).unwrap();
+    let canonical = |p: &Path| p.canonicalize().unwrap();
+    assert_eq!(denied, [canonical(&run), canonical(&checkout)]);
+
+    let cat = |name: &str, path: &Path| Check {
+        name: name.into(),
+        program: "/bin/cat".into(),
+        args: vec![path.to_str().unwrap().into()],
+    };
+    engine
+        .configure_checks(vec![
+            cat("slot", Path::new("a.txt")),
+            cat("run", &run.join("scratch/other")),
+            cat("checkout", &checkout.join("oracle")),
+        ])
+        .unwrap();
+    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
+    engine.capture().unwrap();
+    engine.feedback(&alice, "probe", 0).unwrap();
+    let results = engine.validate().unwrap().unwrap().attempts[0]
+        .results
+        .clone();
+    let passed: Vec<bool> = results.iter().map(|r| r.passed).collect();
+    assert_eq!(passed, [true, false, false], "{results:?}");
 }
 
 /// The engine runs the Git arm's visible Rust commands with the pinned toolchain in its sandbox.

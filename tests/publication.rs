@@ -822,3 +822,55 @@ fn a_failing_check_on_a_two_member_candidate_accepts_neither_member() {
         );
     }
 }
+
+/// Host-denied roots bind every check, even when named through an alias, while the slot and
+/// output beneath one stay readable (#80).
+#[test]
+fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
+    let (dir, engine, alice, _) = fixture();
+    let outside = tempfile::tempdir().unwrap();
+    let secrets = outside.path().join("secrets");
+    fs::create_dir(&secrets).unwrap();
+    fs::write(secrets.join("oracle"), "SECRET").unwrap();
+    let alias = outside.path().join("alias");
+    std::os::unix::fs::symlink(&secrets, &alias).unwrap();
+    let secret = fs::canonicalize(secrets.join("oracle")).unwrap();
+    let mut attempts = checks();
+    attempts.push(Check {
+        name: "read-denied".into(),
+        program: "/bin/cat".into(),
+        args: vec![secret.to_str().unwrap().into()],
+    });
+    engine.configure_checks(attempts).unwrap();
+    engine.capture().unwrap();
+    let read = |id: &str| {
+        engine.feedback(&alice, id, 0).unwrap();
+        engine.validate().unwrap().unwrap().attempts[0]
+            .results
+            .clone()
+    };
+    let results = read("control");
+    assert!(
+        results[2].passed,
+        "readable without host roots: {results:?}"
+    );
+
+    assert!(
+        engine
+            .configure_denied_roots(vec!["relative".into()])
+            .is_err()
+    );
+    assert!(
+        engine
+            .configure_denied_roots(vec![outside.path().join("missing")])
+            .is_err()
+    );
+    // The alias for the secrets, and the whole tree holding the state, slot and output.
+    engine
+        .configure_denied_roots(vec![alias, dir.path().to_owned()])
+        .unwrap();
+    let results = read("denied");
+    assert!(results[0].passed && results[1].passed, "{results:?}");
+    assert!(!results[2].passed, "{results:?}");
+    assert!(!String::from_utf8_lossy(&results[2].stdout).contains("SECRET"));
+}
