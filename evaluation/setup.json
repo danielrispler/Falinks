@@ -92,9 +92,19 @@
       "charged_seconds": 1768,
       "measurement": "Session wall time from starting the #104 review fixes through final CI, plus an allowance for the untimed review triage before it (two reviews checked against the code; a Seatbelt hard-link probe) and for commit/handoff. Includes engine and adapter work, charged conservatively. No real runs.",
       "work": "#80 review fixes (#104): the host check and final oracle deny agent tests everything in the run except the oracle's own directory; one denied_roots parser that fails closed on a malformed or unresolvable entry feeds the worker sandbox, engine checks and host check; the engine refuses / as a denied root and builds one check boundary per attempt; report reasons name runs in plain text; README states what operators must list and what an in-progress run looks like; re-freeze v6 -> v7 redone on the final report.rs (initial commits unchanged)."
+    },
+    {
+      "start_utc": "2026-10-14T08:46:27Z",
+      "stop_utc": "2026-10-14T09:27:06Z",
+      "measured_seconds": 2036,
+      "startup_allowance_seconds": 0,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 2336,
+      "measurement": "Three timed segments, excluding the user pause before the batch started: pilot preparation 08:46:27-08:49:06Z (release builds, pinned runtime copy, configuration, verify; 159 s); the pilot batch invocation 08:55:38-09:05:49Z (verify, gate, both runs, pause; 611 s); the repair 09:06:00-09:27:06Z (diagnosis, grilling, fix, final CI; 1,266 s). Plus an allowance for commit/handoff.",
+      "work": "#110: the renewed #80 pilot (/private/tmp/ev/pilot) paused when pilot-falinks failed as infrastructure_failure. Bash kept its cwd at scratch/w across a turn boundary, and the adapter required every init cwd to equal scratch exactly. Repair: an init cwd, with symlinks resolved, may be scratch or beneath it; anything outside still fails closed. No frozen material changed. The pilot reruns in a fresh /private/tmp/ev/pilot2."
     }
   ],
-  "charged_total_seconds": 23636,
-  "remaining_seconds": 5164,
-  "status": "evaluation integrity: check read boundary and report interruptions (#80); manifest v7"
+  "charged_total_seconds": 25972,
+  "remaining_seconds": 2828,
+  "status": "pilot repair: runtime cwd beneath scratch (#110); manifest v7"
 }

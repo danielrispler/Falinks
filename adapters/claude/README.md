@@ -19,7 +19,7 @@ The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executabl
 
 The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Read,Glob,Grep`, `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables and sets `DISABLE_AUTOUPDATER=1`. Settings enable the sandbox with no unsandboxed escape: writes only to `scratch/`; source, tools and storage are write-denied; controller, snapshot and validation storage are read-denied. Edit, Write, web, Agent/Task and Skill are denied.
 
-The cwd is `scratch/`, not `source/`. At startup the trusted CLI creates `.claude/.cc-writes/` in its cwd. In `source/`, unknown-change detection correctly stopped the host before the first mediated edit.
+The cwd is `scratch/`, not `source/`. At startup the trusted CLI creates `.claude/.cc-writes/` in its cwd. In `source/`, unknown-change detection correctly stopped the host before the first mediated edit. Bash keeps its working directory across turns while it stays beneath the launch cwd; the pinned CLI resets it to the launch cwd when it leaves (#110).
 
 ## Engine-facing boundary
 
@@ -27,7 +27,7 @@ The cwd is `scratch/`, not `source/`. At startup the trusted CLI creates `.claud
 
 `Session` is the process-free core. The hook registers the runtime's own stamp before each falinks call: session, `prompt_id` (the turn) and `tool_use_id`, plus the tool name and input. The MCP call then carries `CLAUDE_CODE_SESSION_ID` and `_meta["claudecode/toolUseId"]`. The host rejects a call without a matching stamp. It also rejects a call from another session, outside an `init`…`result` span, or from a stale turn. Input different from what the hook saw is rejected too. The call is then shaped for `Boundary::authenticate`, which binds host identity (agent, connection, session, turn, canonical workspace) and rejects caller-supplied identity or another workspace.
 
-Every turn's `system/init` must match the pinned version, model, `dontAsk` mode, session, cwd, exact tool list, the single `falinks` MCP server, the three built-in plugins, and empty skills and slash commands. These cause a failure:
+Every turn's `system/init` must match the pinned version, model, `dontAsk` mode, session, exact tool list, the single `falinks` MCP server, the three built-in plugins, and empty skills and slash commands. Its cwd, with symlinks resolved, must be `scratch/` or a directory beneath it. These cause a failure:
 
 - any unrecorded stream-json shape
 - a `model_refusal_fallback`
