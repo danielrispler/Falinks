@@ -697,6 +697,10 @@ impl Runtime {
             .args(launch_args(&controller, &id, resume.is_some()))
             .current_dir(&launch.scratch)
             .env("DISABLE_AUTOUPDATER", "1")
+            // The Git arm's Go settings: the sandbox denies Go's default cache outside scratch (#112).
+            .env("GOCACHE", launch.scratch.join("go-cache"))
+            .env("GOTOOLCHAIN", "local")
+            .env("GOPROXY", "off")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(
