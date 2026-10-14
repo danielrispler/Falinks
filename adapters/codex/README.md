@@ -19,7 +19,7 @@ The verifier expects its sibling `sandbox-probe` executable; `--probe /path/to/s
 
 Runtime verification needs permission to launch macOS Seatbelt sandboxes, network access for two bounded real-model turns, and existing Codex authentication. An isolated `CODEX_HOME` links the existing `auth.json` without printing credentials or replacing the installed CLI/configuration. Apps, browser, computer, image generation, subagents, MCP and web search are disabled. The ordinary code-mode tool host stays enabled because the model router requires it. Extra permission requests are declined. Missing inference access or unavailable tools fails visibly.
 
-Fixtures and server diagnostics remain under `/private/tmp/falinks-rust-adapter-*`. Evidence records sacrificial tool/command outcomes, hashes and configuration, excluding account and reasoning events. Inspect `passed` and the failure reason; failed checks exit nonzero. Old Python-era JSON is historical data, not executable code or startup authorization.
+Fixtures and server diagnostics remain under `/tmp/falinks-rust-adapter-*` (`/private/tmp` on macOS). Evidence records sacrificial tool/command outcomes, hashes and configuration, excluding account and reasoning events. Inspect `passed` and the failure reason; failed checks exit nonzero. Old Python-era JSON is historical data, not executable code or startup authorization.
 
 ## Engine-facing boundary
 

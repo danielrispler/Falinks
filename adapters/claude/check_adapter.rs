@@ -22,7 +22,7 @@ const AGENT: &str = "fixture-agent";
 fn fixture(probe: &Path, tool: &Path) -> Result<PathBuf> {
     let root = tempfile::Builder::new()
         .prefix("falinks-claude-adapter-")
-        .tempdir_in("/private/tmp")?
+        .tempdir_in("/tmp")?
         .keep()
         .canonicalize()?;
     for name in [

@@ -13,7 +13,7 @@ cargo build --release --bins
   --output /path/to/current-claude-controls.json
 ```
 
-The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them). It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/private/tmp/falinks-claude-adapter-*` and removes only that fixture's session folder from `~/.claude/projects/`. Failed checks exit nonzero; inspect `passed` and `failure`.
+The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them). It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. Failed checks exit nonzero; inspect `passed` and `failure`.
 
 ## Launch profile
 
@@ -74,7 +74,7 @@ cargo build --release --bins
   --output /path/to/integration-report.json
 ```
 
-It needs the same pinned binary, login and sandbox permission as `check-claude-adapter`, plus Go and `gopls` (or `FALINKS_GOPLS`), like `tests/regroup.rs`. It creates `/private/tmp/falinks-integration-*` with two live roots (`space0`, `space1`), engine `state`, one `scratch` and `controller` per agent, and `worker-tools`. The fixture is a small Go module used only for this gate, never a scored evaluation fixture. Required checks are `go vet ./...` and `go test ./...`. Failed runs exit nonzero; a saved report never authorizes another run. `evidence/2026-10-10-integration.json` is the first fully passing report (audit material only).
+It needs the same pinned binary, login and sandbox permission as `check-claude-adapter`, plus Go and `gopls` (or `FALINKS_GOPLS`), like `tests/regroup.rs`. It creates `/tmp/falinks-integration-*` (`/private/tmp` on macOS) with two live roots (`space0`, `space1`), engine `state`, one `scratch` and `controller` per agent, and `worker-tools`. The fixture is a small Go module used only for this gate, never a scored evaluation fixture. Required checks are `go vet ./...` and `go test ./...`. Failed runs exit nonzero; a saved report never authorizes another run. `evidence/2026-10-10-integration.json` is the first fully passing report (audit material only).
 
 ### Host-scripted phases
 
