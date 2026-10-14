@@ -42,6 +42,7 @@ fn fixture_with(notice: Option<&'static str>) -> Fixture {
     let workspace = dir.path().canonicalize().unwrap().join("source");
     std::fs::create_dir(&workspace).unwrap();
     std::fs::create_dir(dir.path().join("controller")).unwrap();
+    std::fs::create_dir(dir.path().join("scratch")).unwrap();
     let calls = Rc::new(RefCell::new(vec![]));
     let seen = Rc::clone(&calls);
     let engine = Box::new(move |envelope: &Value| {
@@ -195,6 +196,26 @@ fn runtime_mismatch_latches_failure_and_blocks_engine() {
         Box::new(changed("skills", json!(["deploy"]))),
         Box::new(changed("claude_code_version", json!("2.1.288"))),
         Box::new(changed("session_id", json!("other-session"))),
+        // Outside scratch: the live source, a link to it from scratch, and a sibling (#110).
+        Box::new(|w| {
+            let mut line = init(w);
+            line["cwd"] = json!(w);
+            vec![line]
+        }),
+        Box::new(|w| {
+            let link = w.with_file_name("scratch").join("link");
+            std::os::unix::fs::symlink(w, &link).unwrap();
+            let mut line = init(w);
+            line["cwd"] = json!(link);
+            vec![line]
+        }),
+        Box::new(|w| {
+            let sibling = w.with_file_name("scratch2");
+            std::fs::create_dir(&sibling).unwrap();
+            let mut line = init(w);
+            line["cwd"] = json!(sibling);
+            vec![line]
+        }),
         Box::new(|w| {
             vec![
                 init(w),
@@ -233,6 +254,31 @@ fn runtime_mismatch_latches_failure_and_blocks_engine() {
         );
         assert!(f.calls.borrow().is_empty(), "case {index}");
     }
+}
+
+/// Bash keeps its cwd across turns while it stays beneath scratch (#110).
+#[test]
+fn a_later_turn_may_start_beneath_scratch() {
+    let mut f = fixture();
+    let moved = f.workspace.with_file_name("scratch").join("w");
+    std::fs::create_dir(&moved).unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    f.session.line(&result()).unwrap();
+    let mut line = init(&f.workspace);
+    line["cwd"] = json!(moved);
+    f.session.line(&line).unwrap();
+    let input = edit(&f.workspace);
+    assert_eq!(
+        f.session
+            .host(&hook("P2", "toolu_1", "falinks_edit", &input))
+            .0,
+        json!({"allow":true})
+    );
+    assert_eq!(
+        f.session.host(&call("toolu_1", "falinks_edit", &input)).0,
+        json!({"accepted":true})
+    );
+    assert!(!f.session.gate.failed);
 }
 
 fn replay(text: &str) -> Value {

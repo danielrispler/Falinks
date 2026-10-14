@@ -225,8 +225,9 @@ impl Launch {
     }
 }
 
-/// Every turn's `system/init` must match the pinned launch profile exactly.
-pub fn verify_init(init: &Value, cwd: &Path, session: &str, tools: &[String]) -> Result<()> {
+/// Every turn's `system/init` must match the pinned launch profile exactly, except that
+/// its cwd may be beneath scratch: Bash keeps its cwd across turns while it stays there (#110).
+pub fn verify_init(init: &Value, scratch: &Path, session: &str, tools: &[String]) -> Result<()> {
     let strings = |key: &str, field: Option<&str>| -> BTreeSet<String> {
         init[key]
             .as_array()
@@ -242,7 +243,9 @@ pub fn verify_init(init: &Value, cwd: &Path, session: &str, tools: &[String]) ->
             && init["model"] == MODEL
             && init["permissionMode"] == "dontAsk"
             && init["session_id"] == session
-            && init["cwd"].as_str().map(Path::new) == Some(cwd)
+            && init["cwd"]
+                .as_str()
+                .is_some_and(|cwd| beneath(Path::new(cwd), scratch))
             && init["tools"].as_array().map(Vec::len) == Some(tools.len())
             && strings("tools", None) == tools
             && init["mcp_servers"]
@@ -253,6 +256,14 @@ pub fn verify_init(init: &Value, cwd: &Path, session: &str, tools: &[String]) ->
             && strings("plugins", Some("source")) == set(PLUGINS),
         &format!("unsupported runtime init; publication/scoring disabled: {init}"),
     )
+}
+
+/// `path` is `root` or beneath it once symlinks resolve; a missing path is not.
+fn beneath(path: &Path, root: &Path) -> bool {
+    match (fs::canonicalize(path), fs::canonicalize(root)) {
+        (Ok(path), Ok(root)) => path.starts_with(root),
+        _ => false,
+    }
 }
 
 fn random_hex(bytes: usize) -> Result<String> {
