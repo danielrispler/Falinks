@@ -282,7 +282,7 @@ fn git_program() -> Result<&'static Path> {
             .find(|git| fs::metadata(git).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0))
             .ok_or("Git not found on PATH")?;
         let git = fs::canonicalize(git)?;
-        let output = isolated(&git).arg("--version").output()?;
+        let output = isolated_git(&git).arg("--version").output()?;
         let text = String::from_utf8_lossy(&output.stdout);
         if !git_version_supported(&text) {
             return fail(format!(
@@ -308,7 +308,7 @@ fn git_version_supported(text: &str) -> bool {
     matches!((numbers.next(), numbers.next()), (Some(Some(major)), Some(Some(minor))) if (major, minor) >= (2, 32))
 }
 /// Git with a cleared environment and no system or user configuration.
-fn isolated(git: &Path) -> Command {
+fn isolated_git(git: &Path) -> Command {
     let mut command = Command::new(git);
     command
         .env_clear()
@@ -319,7 +319,7 @@ fn isolated(git: &Path) -> Command {
 }
 /// Every storage Git call, including creating the bare store.
 fn git(state: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
-    let mut command = isolated(git_program()?);
+    let mut command = isolated_git(git_program()?);
     command
         .arg("--git-dir")
         .arg(state.join("objects.git"))
@@ -385,6 +385,7 @@ fn read_file(live: &Path, path: &str) -> Result<Option<File>> {
                 return fail(format!("unsupported file or hardlink: {path}"));
             }
             let mode = metadata.mode() & 0o7777;
+            // Supported only when the mode is exactly the one the file would derive.
             let file = File {
                 bytes: Vec::new(),
                 executable: mode & 0o111 != 0,
@@ -839,10 +840,18 @@ impl Engine {
             return fail("request ID required");
         }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let layout = self.layout()?;
-        let space = layout.of(client.agent);
-        let live = layout.roots[space].clone();
-        let before = layout.current(space)?.clone();
+        // Copied out: no layout guard is held while host observers run.
+        let (space, live, before, group) = {
+            let layout = self.layout()?;
+            let space = layout.of(client.agent);
+            let before = layout.current(space)?.clone();
+            (
+                space,
+                layout.roots[space].clone(),
+                before,
+                layout.group(space),
+            )
+        };
         let mut record: Record;
         if let Some(existing) = request_record(&db, client.agent, &request.id)? {
             record = existing;
@@ -899,7 +908,7 @@ impl Engine {
         }
         if let Err(error) = audit(&live, &before) {
             let reason = error.to_string();
-            self.save_incident(&db, &layout.roots, &reason)?;
+            self.save_incident(&db, &self.layout()?.roots, &reason)?;
             return self.finish(&db, &mut record, Outcome::Rejected { reason });
         }
         let invalid = request.output.is_empty()
@@ -988,7 +997,7 @@ impl Engine {
             let mut proposed = base.clone();
             proposed.revision = next_revision(&db)?;
             proposed.included.insert(record.operation);
-            proposed.group = layout.group(space);
+            proposed.group = group;
             for (path, file) in &request.output {
                 let blob = file
                     .as_ref()
@@ -1055,15 +1064,11 @@ impl Engine {
         };
         record.outcome = Some(outcome.clone());
         record.installation_pending = false;
-        // Published files an incorporation brought in are changes for the client too,
-        // judged on the evidence the gate gathered for the same two captures.
+        // Published files an incorporation brought in are changes for the client too.
         let synced: BTreeSet<String> = changed
             .into_iter()
             .filter(|p| !request.output.contains_key(p))
             .collect();
-        let view = (!synced.is_empty())
-            .then(|| analysis::change(&before, &proposed, &synced, &change.sides()));
-        drop(layout);
         let mut layout_guard = self.layout.write().map_err(|_| "layout lock poisoned")?;
         let tx = db.unchecked_transaction()?;
         tx.execute(
@@ -1076,15 +1081,10 @@ impl Engine {
         )?;
         save_record(&tx, &record)?;
         let cause = self.record_change(&tx, client, &request, &proposed, &change, &layout_guard)?;
-        if let Some(view) = &view {
-            coordination::renew(
-                &tx,
-                client.agent,
-                view,
-                &change.sides(),
-                proposed.revision,
-                cause,
-            )?;
+        if !synced.is_empty() {
+            // Judged on the evidence the gate gathered for the same two captures.
+            let view = change.for_paths(&before, &proposed, &synced);
+            self.renew_for_view(&tx, client.agent, &view, proposed.revision, cause)?;
         }
         tx.commit()?;
         layout_guard.completed[space] = Some(proposed);

@@ -363,8 +363,8 @@ fn events_after(db: &Connection, workspace: &str, agent: usize, after: u64) -> R
     })
     .collect()
 }
-/// The first event after `after` that `agent` can see, or only the first message from
-/// `sender`. SQL filters the rows, so no later event is parsed.
+/// The first event after `after` that `agent` can see; given `sender`, the first message
+/// from that sender instead. SQL filters the rows, so no later event is parsed.
 fn next_event(
     db: &Connection,
     agent: usize,
@@ -437,6 +437,16 @@ impl Change {
     /// Evidence for the before and after captures.
     pub(crate) fn sides(&self) -> [&[Evidence]; 2] {
         [&self.evidence[0], &self.evidence[1]]
+    }
+    /// The same evidence, with the footprint of changing `paths` from `before` to `after`.
+    pub(crate) fn for_paths(
+        mut self,
+        before: &Capture,
+        after: &Capture,
+        paths: &BTreeSet<String>,
+    ) -> Self {
+        self.footprint = analysis::change(before, after, paths, &self.sides());
+        self
     }
 }
 
@@ -599,8 +609,9 @@ impl Engine {
         }
         Ok(cause)
     }
-    /// An agent's live view changing without its own edit. Analyzes before any
-    /// transaction opens, since analysis writes its cache on another connection.
+    /// The change an agent's live view sees from `before` to `after`: its own edit at
+    /// the gate, or a transition or incorporation. Analyzes before any transaction
+    /// opens, since analysis writes its cache on another connection.
     pub(crate) fn view_change(
         &self,
         before: &Capture,
@@ -608,11 +619,11 @@ impl Engine {
         paths: &BTreeSet<String>,
     ) -> Result<Change> {
         let evidence = [self.evidence(before)?, self.evidence(after)?];
-        let footprint = analysis::change(before, after, paths, &[&evidence[0], &evidence[1]]);
         Ok(Change {
-            footprint,
+            footprint: Footprint::default(),
             evidence,
-        })
+        }
+        .for_paths(before, after, paths))
     }
     /// Inside the transaction committing `revision`: renew the agent's related scopes.
     pub(crate) fn renew_for_view(
