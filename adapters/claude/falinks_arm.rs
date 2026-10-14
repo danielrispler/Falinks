@@ -619,9 +619,7 @@ fn setup(
     }
     let oracle = dir.join("controller/oracle");
     fs::create_dir(&oracle)?;
-    let mut protected = vec![dir.join("controller")];
-    // The worker launch accepts only directories.
-    protected.extend(roots.into_iter().filter(|root| root.is_dir()));
+    let protected = arm::worker_protected(dir, &roots);
     let arm = Arm::new(
         Arc::clone(&engine),
         clients,
