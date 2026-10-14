@@ -37,43 +37,43 @@ fn run() -> Result<()> {
     let scratch_dir = Path::new(&args[3]);
     let scratch = scratch_dir.join("control.txt");
     let mut checks = Map::new();
+    let mut errors = Map::new();
     checks.insert("read".into(), json!(file_hash(source)? == args[2]));
     fs::write(&scratch, b"scratch\n")?;
     checks.insert("scratch".into(), json!(fs::read(&scratch)? == b"scratch\n"));
-    checks.insert(
-        "source_write".into(),
-        json!(denied(fs::write(source, b"BYPASS"))),
-    );
-    checks.insert(
-        "source_delete".into(),
-        json!(denied(fs::remove_file(source))),
-    );
-    checks.insert(
+    let mut record = |name: String, result: io::Result<()>| {
+        errors.insert(
+            name.clone(),
+            json!(
+                result
+                    .as_ref()
+                    .map_or_else(|e| e.to_string(), |_| "ok".into())
+            ),
+        );
+        checks.insert(name, json!(denied(result)));
+    };
+    record("source_write".into(), fs::write(source, b"BYPASS"));
+    record("source_delete".into(), fs::remove_file(source));
+    record(
         "source_rename".into(),
-        json!(denied(fs::rename(source, scratch_dir.join("renamed.txt")))),
+        fs::rename(source, scratch_dir.join("renamed.txt")),
     );
-    checks.insert(
+    record(
         "source_create".into(),
-        json!(denied(fs::write(directory.join("new.txt"), b"BYPASS"))),
+        fs::write(directory.join("new.txt"), b"BYPASS"),
     );
-    checks.insert(
-        "source_replace".into(),
-        json!(denied(fs::rename(&scratch, source))),
-    );
+    record("source_replace".into(), fs::rename(&scratch, source));
     // The host links `SCRATCH/alias` to the source file before the probe runs.
-    checks.insert(
+    record(
         "alias_write".into(),
-        json!(denied(fs::write(scratch_dir.join("alias"), b"BYPASS"))),
+        fs::write(scratch_dir.join("alias"), b"BYPASS"),
     );
     for protected in &args[4..] {
         let (name, secret) = protected
             .split_once('=')
             .ok_or("protected storage is NAME=FILE")?;
-        checks.insert(format!("{name}_read"), json!(denied(fs::read(secret))));
-        checks.insert(
-            format!("{name}_write"),
-            json!(denied(fs::write(secret, b"BYPASS"))),
-        );
+        record(format!("{name}_read"), fs::read(secret).map(drop));
+        record(format!("{name}_write"), fs::write(secret, b"BYPASS"));
     }
     let mut child = Command::new(env::current_exe()?);
     child.arg("--child-write").arg(source);
@@ -95,6 +95,8 @@ fn run() -> Result<()> {
         json!(child.status.success() && child.stdout == b"CHILD_DENIED\n"),
     );
     println!("FALINKS_CONTROLS={}", Value::Object(checks));
+    // Evidence only: how each check was denied, or "ok" where the operation succeeded.
+    println!("FALINKS_ERRORS={}", Value::Object(errors));
     Ok(())
 }
 fn main() {
