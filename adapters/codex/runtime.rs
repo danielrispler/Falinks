@@ -34,8 +34,15 @@ pub struct EngineOutcome {
 pub type Engine = Box<dyn FnMut(&Value) -> Result<EngineOutcome>>;
 
 pub fn configuration(root: &Path, binary: &Path) -> Vec<String> {
+    // Deny each protected directory, not the root: on Linux, Codex masks a denied
+    // directory over its read-only children, which would hide source and worker-tools.
     let paths = [
-        (root.to_owned(), "deny"),
+        (root.join("controller"), "deny"),
+        (root.join("snapshots"), "deny"),
+        (root.join("validation"), "deny"),
+        (root.join("worker-home"), "deny"),
+        (root.join("worker-state"), "deny"),
+        (root.join("worker-logs"), "deny"),
         (root.join("source"), "read"),
         (root.join("scratch"), "write"),
         (root.join("worker-tools"), "read"),

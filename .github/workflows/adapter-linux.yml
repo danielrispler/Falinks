@@ -7,7 +7,7 @@ name: Adapter checks on Linux
 on:
   workflow_dispatch:
   pull_request:
-    paths: [".github/workflows/adapter-linux.yml"]
+    paths: [".github/workflows/adapter-linux.yml", "adapters/codex/**", "adapters/claude/**"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
