@@ -9,8 +9,8 @@ pub use analysis::{Evidence, Footprint, Language, Owner, Pin, Tool, Toolchain, U
 #[doc(hidden)]
 pub use contain::helper_main;
 pub use coordination::{
-    Availability, Body, Cancel, Checkpoint, Condition, Decision, Disposition, Event, Kind, Message,
-    Obligation, Offer, Pending, Plan, Reply, Review, Scope, WaitOutcome, Work,
+    Availability, Body, Cancel, Checkpoint, Condition, Decision, Event, Kind, Message, Obligation,
+    Offer, Pending, Plan, Reply, Review, Scope, WaitOutcome, Work,
 };
 pub use publication::{
     Binding, Candidate, Check, CheckResult, Run, RunAttempt, RunKind, RunOutcome, Stage,

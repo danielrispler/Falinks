@@ -3,8 +3,8 @@
 mod support;
 
 use falinks::*;
-use std::{path::Path, time::Duration};
-use support::{GO, PAIR, edit, fixture, go_toolchain, open, pin};
+use std::{collections::BTreeMap, path::Path, time::Duration};
+use support::{GO, PAIR, edit, fixture, go_toolchain, open, pin, reopen};
 
 const RUST: &[(&str, &str)] = &[
     (
@@ -326,17 +326,15 @@ fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment(
         .unwrap();
     let events = engine.events(&alice, 0).unwrap();
     assert_eq!(events.len(), 2, "{events:?}");
-    for event in &events {
-        engine
-            .handle(
-                &alice,
-                event.seq,
-                Disposition::Deferred {
-                    note: "finish reasoning".into(),
-                },
-            )
-            .unwrap();
-    }
+    let note = |e: &Event| (e.seq, "finish reasoning".to_string());
+    engine
+        .handle(
+            &alice,
+            Some(events[1].seq),
+            &events.iter().map(note).collect(),
+            &[],
+        )
+        .unwrap();
     // Deferral and receipt are not reassessment.
     assert_eq!(pending(&engine, &alice), ["a"]);
     // Alice's write relies on b.rs as she last read it.
@@ -358,11 +356,10 @@ fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment(
             .unwrap(),
         Outcome::Unreviewed { .. }
     ));
-    for event in &events {
-        engine
-            .handle(&alice, event.seq, Disposition::Processed)
-            .unwrap();
-    }
+    engine
+        .handle(&alice, None, &BTreeMap::new(), &seqs(&events))
+        .unwrap();
+    assert!(engine.pending(&alice).unwrap().deferred.is_empty());
     assert_eq!(pending(&engine, &alice), ["a"]);
     reread(&engine, &alice, "a");
     assert!(matches!(
@@ -386,20 +383,9 @@ fn replay_restores_deferred_context_and_obligations_without_duplicates_after_res
         .apply(&bob, edit("peer", &base, "b.rs", "changed\n"))
         .unwrap();
     let events = engine.events(&alice, 0).unwrap();
-    assert!(
-        engine
-            .handle(&alice, events[1].seq, Disposition::Processed)
-            .is_err(),
-        "no skipping"
-    );
+    let defer = |note: &str| BTreeMap::from([(events[0].seq, note.to_string())]);
     engine
-        .handle(
-            &alice,
-            events[0].seq,
-            Disposition::Deferred {
-                note: "later".into(),
-            },
-        )
+        .handle(&alice, Some(events[0].seq), &defer("later"), &[])
         .unwrap();
     drop(engine);
     let engine = open(dir.path(), PAIR).unwrap();
@@ -413,16 +399,7 @@ fn replay_restores_deferred_context_and_obligations_without_duplicates_after_res
     // Redelivery after a crash before the cursor save is duplicate-safe.
     for _ in 0..2 {
         engine
-            .handle(
-                &alice,
-                events[0].seq,
-                Disposition::Deferred {
-                    note: "again".into(),
-                },
-            )
-            .unwrap();
-        engine
-            .handle(&alice, events[1].seq, Disposition::Processed)
+            .handle(&alice, Some(events[1].seq), &defer("again"), &[])
             .unwrap();
     }
     let again = engine.pending(&alice).unwrap();
@@ -433,16 +410,136 @@ fn replay_restores_deferred_context_and_obligations_without_duplicates_after_res
     assert_eq!(engine.events(&alice, 0).unwrap(), events);
 }
 
-#[test]
-fn waits_catch_up_on_missed_wakeups_and_report_explicit_outcomes() {
-    let (_dir, engine, alice, bob) = fixture(PAIR);
-    let plan = |text: &str| Plan {
+fn plan(text: &str) -> Plan {
+    Plan {
         task: "consumer".into(),
         scope: vec!["b.rs".into()],
         work: Work::None,
         text: text.into(),
         reply_to: None,
-    };
+    }
+}
+/// Bob's plans, in Alice's stream.
+fn plans(engine: &Engine, bob: &Client, count: usize) -> Vec<u64> {
+    (0..count)
+        .map(|n| engine.post(bob, plan(&format!("plan {n}"))).unwrap().seq)
+        .collect()
+}
+fn seqs(events: &[Event]) -> Vec<u64> {
+    events.iter().map(|e| e.seq).collect()
+}
+
+#[test]
+fn one_handle_call_processes_every_event_through_its_seq() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let posted = plans(&engine, &bob, 3);
+    engine
+        .handle(&alice, Some(posted[1]), &BTreeMap::new(), &[])
+        .unwrap();
+    let pending = engine.pending(&alice).unwrap();
+    assert_eq!(pending.handled, posted[1]);
+    assert_eq!(seqs(&pending.unhandled), [posted[2]]);
+    assert!(pending.deferred.is_empty());
+}
+
+#[test]
+fn deferrals_survive_reopen_until_processed_clears_them() {
+    let (dir, engine, alice, bob) = fixture(PAIR);
+    let posted = plans(&engine, &bob, 3);
+    let note = |seq: u64| BTreeMap::from([(seq, "after my edit".to_string())]);
+    engine
+        .handle(&alice, Some(posted[2]), &note(posted[0]), &[])
+        .unwrap();
+    // A deferral may name an event processed earlier.
+    engine.handle(&alice, None, &note(posted[1]), &[]).unwrap();
+    drop(engine);
+    let (engine, alice, _) = reopen(dir.path(), PAIR);
+    let restored = engine.pending(&alice).unwrap();
+    let events = engine.events(&alice, 0).unwrap();
+    assert_eq!(restored.handled, posted[2]);
+    assert!(restored.unhandled.is_empty());
+    assert_eq!(
+        restored.deferred,
+        [
+            (events[0].clone(), "after my edit".into()),
+            (events[1].clone(), "after my edit".into())
+        ]
+    );
+    engine
+        .handle(&alice, None, &BTreeMap::new(), &[posted[0]])
+        .unwrap();
+    assert_eq!(
+        engine.pending(&alice).unwrap().deferred,
+        [(events[1].clone(), "after my edit".into())]
+    );
+}
+
+#[test]
+fn repeated_handling_changes_nothing_and_may_end_at_an_own_post() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let theirs = plans(&engine, &bob, 1)[0];
+    // Alice's own post goes only to Bob, so it is not in her stream.
+    let own = engine.post(&alice, plan("mine")).unwrap().seq;
+    let note = |text: &str| BTreeMap::from([(theirs, text.to_string())]);
+    engine
+        .handle(&alice, Some(own), &note("later"), &[])
+        .unwrap();
+    let once = engine.pending(&alice).unwrap();
+    assert_eq!(once.handled, own);
+    assert!(once.unhandled.is_empty());
+    engine
+        .handle(&alice, Some(own), &note("later"), &[])
+        .unwrap();
+    engine
+        .handle(&alice, Some(theirs), &note("changed"), &[])
+        .unwrap();
+    assert_eq!(engine.pending(&alice).unwrap(), once);
+}
+
+#[test]
+fn refused_handling_changes_nothing() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let posted = plans(&engine, &bob, 2);
+    engine
+        .handle(&alice, Some(posted[0]), &BTreeMap::new(), &[])
+        .unwrap();
+    let own = engine.post(&alice, plan("mine")).unwrap().seq;
+    let before = engine.pending(&alice).unwrap();
+    let note = |seq: u64| BTreeMap::from([(seq, "later".to_string())]);
+    for (through, deferred, processed, why) in [
+        (
+            Some(posted[1]),
+            note(posted[1]),
+            vec![posted[1]],
+            "contradictory",
+        ),
+        (
+            Some(own + 1),
+            BTreeMap::new(),
+            vec![],
+            "beyond the newest event",
+        ),
+        (
+            None,
+            note(posted[1]),
+            vec![],
+            "deferral beyond the new cursor",
+        ),
+        (Some(own), note(own), vec![], "deferral outside the stream"),
+    ] {
+        assert!(
+            engine
+                .handle(&alice, through, &deferred, &processed)
+                .is_err(),
+            "{why}"
+        );
+        assert_eq!(engine.pending(&alice).unwrap(), before, "{why}");
+    }
+}
+
+#[test]
+fn waits_catch_up_on_missed_wakeups_and_report_explicit_outcomes() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     // Committed before the wait began: catch-up, not a lost wakeup.
     let early = engine.post(&bob, plan("early")).unwrap();
     assert!(

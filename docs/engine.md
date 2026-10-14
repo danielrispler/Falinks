@@ -70,7 +70,14 @@ A change covers the owners touched by its single per-file diff hunk in both the 
 
 Events carry the SQLite commit sequence and a stable `workspace:seq` ID. Message kinds: `Plan` (client `post`, reserves nothing), `LiveEdit` (engine, on commit), and `CheckpointOffer` (`offer`). Committed acceptance is a separate `Published` event, and check results are `Validated` events (see #22). Every message names its sender, workspace, task, scope and work. A reply must repeat the original message's exact work. Offers name a captured revision and stay available through later live edits until `withdraw` or an explicit `supersedes`.
 
-`events(client, after)` replays in order. `handle(client, seq, Processed | Deferred)` advances the durable handled position one event at a time. A deferral is stored in the same transaction, so a cursor never skips pending context. Duplicate or earlier handling is a no-op, apart from clearing a deferral. `pending(client)` restores unhandled events, deferred context and pending obligations after a reconnect or restart.
+`events(client, after)` replays in order. `handle(client, through, deferred, processed)` is one transaction that applies all of its parts or none:
+
+- `through: N` handles every event in the client's stream after the cursor, up to N, as processed unless deferred, and moves the cursor to N. At or below the cursor it does nothing. Beyond the newest event it is refused. N may be the client's own post, which is not in its stream.
+- `deferred: {seq: note}` stores a note for an event in the client's stream at or below the new cursor, including one processed earlier. A repeat keeps the first note.
+- `processed: [seq]` clears earlier deferrals.
+- The same seq in `deferred` and `processed` is refused.
+
+A deferral is stored in the same transaction as the cursor move, so a cursor never skips pending context. `pending(client)` restores unhandled events, deferred context and pending obligations after a reconnect or restart.
 
 ## Waits
 

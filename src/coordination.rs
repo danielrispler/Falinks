@@ -197,11 +197,6 @@ pub struct Event {
     pub id: String,
     pub body: Body,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Disposition {
-    Processed,
-    Deferred { note: String },
-}
 /// Everything a reconnecting client must restore before related writes/offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
@@ -866,38 +861,60 @@ impl Engine {
             after,
         )
     }
-    /// Advance the durable handled position in order. Deferral is stored in the
-    /// same transaction. Neither processing nor deferral touches obligations.
-    pub fn handle(&self, client: &Client, seq: u64, disposition: Disposition) -> Result<()> {
+    /// One atomic handling step. `through` handles every event in the client's stream
+    /// after the cursor up to it, as processed unless `deferred`, and moves the cursor
+    /// there; at or below the cursor it does nothing. `deferred` stores a note for a
+    /// handled event, keeping the first; `processed` clears earlier deferrals.
+    /// Neither processing nor deferral touches obligations.
+    pub fn handle(
+        &self,
+        client: &Client,
+        through: Option<u64>,
+        deferred: &BTreeMap<u64, String>,
+        processed: &[u64],
+    ) -> Result<()> {
         self.authorize(client)?;
+        if let Some(seq) = processed.iter().find(|seq| deferred.contains_key(seq)) {
+            return fail(format!("event {seq} cannot be both deferred and processed"));
+        }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let handled = cursor(&db, client.agent)?;
+        let newest = db.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| {
+            r.get::<_, i64>(0)
+        })? as u64;
+        let through = through.unwrap_or(0);
+        if through > newest {
+            return fail(format!(
+                "through {through} is beyond the newest event {newest}"
+            ));
+        }
+        let handled = cursor(&db, client.agent)?.max(through);
         let tx = db.unchecked_transaction()?;
-        if seq <= handled {
-            if disposition == Disposition::Processed {
-                tx.execute(
-                    "DELETE FROM deferred WHERE agent=? AND seq=?",
-                    params![client.agent as i64, seq as i64],
-                )?;
-            }
-        } else {
-            let next = events_after(&tx, &self.identity.workspace, client.agent, handled)?
-                .first()
-                .map(|e| e.seq);
-            if next != Some(seq) {
-                return fail(format!("handle events in order; next is {next:?}"));
-            }
-            if let Disposition::Deferred { note } = disposition {
-                tx.execute(
-                    "INSERT OR IGNORE INTO deferred VALUES(?,?,?)",
-                    params![client.agent as i64, seq as i64, note],
-                )?;
+        for (seq, note) in deferred {
+            let in_stream = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE seq=? AND audience & ? != 0)",
+                params![*seq as i64, mine(client.agent)],
+                |r| r.get::<_, bool>(0),
+            )?;
+            if *seq > handled || !in_stream {
+                return fail(format!(
+                    "event {seq} is not in your stream at or below {handled}"
+                ));
             }
             tx.execute(
-                "INSERT INTO cursors VALUES(?,?) ON CONFLICT(agent) DO UPDATE SET seq=excluded.seq",
-                params![client.agent as i64, seq as i64],
+                "INSERT OR IGNORE INTO deferred VALUES(?,?,?)",
+                params![client.agent as i64, *seq as i64, note],
             )?;
         }
+        for seq in processed {
+            tx.execute(
+                "DELETE FROM deferred WHERE agent=? AND seq=?",
+                params![client.agent as i64, *seq as i64],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO cursors VALUES(?,?) ON CONFLICT(agent) DO UPDATE SET seq=excluded.seq",
+            params![client.agent as i64, handled as i64],
+        )?;
         tx.commit()?;
         Ok(())
     }
