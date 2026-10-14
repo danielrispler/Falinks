@@ -7,12 +7,13 @@ use std::{
     path::Path,
     process::{self, Command},
 };
-// Seatbelt denies with EPERM; bubblewrap's read-only binds on Linux fail writes with EROFS.
+// Seatbelt denies with EPERM. On Linux, bubblewrap's read-only binds fail writes with
+// EROFS, and a rename between source and scratch (separate binds) fails with EXDEV.
 fn denied(result: io::Result<impl Sized>) -> bool {
     result.err().is_some_and(|error| {
         matches!(
             error.raw_os_error(),
-            Some(libc::EPERM) | Some(libc::EACCES) | Some(libc::EROFS)
+            Some(libc::EPERM) | Some(libc::EACCES) | Some(libc::EROFS) | Some(libc::EXDEV)
         )
     })
 }
