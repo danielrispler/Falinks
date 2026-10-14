@@ -1,0 +1,79 @@
+name: Claude Code adapter on Linux
+
+# Evidence for #57, not a required check. Runs check-claude-adapter with the pinned
+# Linux binary on real runners: first under the runner's default AppArmor policy, then
+# with unprivileged user namespaces allowed. It logs in with the CLAUDE_CODE_OAUTH_TOKEN
+# secret (`claude setup-token`, subscription).
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/adapter-linux.yml", "adapters/codex/**", "adapters/claude/**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            claude: linux-x64
+          - runner: ubuntu-24.04-arm
+            claude: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CLAUDE: runtimes/claude/claude
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          rustflags: ""
+      # Claude Code's Linux sandbox needs both.
+      - run: sudo apt-get install -y bubblewrap socat
+      - run: cargo build --release --locked -p falinks-host -p falinks-claude --bins
+      # The adapter verifies it against PINS before running it.
+      - name: Pinned runtime
+        env:
+          DIST: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
+        run: |
+          mkdir -p runtimes/claude
+          curl -fsSL -o "$CLAUDE" "$DIST/2.1.287/${{ matrix.claude }}/claude"
+          chmod +x "$CLAUDE"
+      - name: Host
+        run: |
+          {
+            uname -srm
+            grep PRETTY_NAME /etc/os-release
+            echo "lsm=$(cat /sys/kernel/security/lsm)"
+            sysctl kernel.apparmor_restrict_unprivileged_userns user.max_user_namespaces
+            bwrap --version
+          } | tee host.txt
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor by default.
+      - name: Default policy
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-default.json
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: User namespaces allowed
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-userns.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: adapter-linux-${{ matrix.claude }}
+          path: |
+            host.txt
+            claude-*.json

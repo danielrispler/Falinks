@@ -19,7 +19,7 @@ use std::{
 fn fixture(probe: &Path) -> Result<PathBuf> {
     let root = tempfile::Builder::new()
         .prefix("falinks-rust-adapter-")
-        .tempdir_in("/private/tmp")?
+        .tempdir_in("/tmp")?
         .keep()
         .canonicalize()?;
     for name in [

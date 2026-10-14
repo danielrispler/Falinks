@@ -131,7 +131,7 @@ impl Gate {
         let binary = verify_binary(binary)?;
         let dir = tempfile::Builder::new()
             .prefix("falinks-integration-")
-            .tempdir_in("/private/tmp")?
+            .tempdir_in("/tmp")?
             .keep()
             .canonicalize()?;
         for path in ["space0", "space1", "worker-tools"] {

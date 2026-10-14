@@ -4,7 +4,7 @@ Issue [#33](https://github.com/danielrispler/Falinks/issues/33) ports the [#23](
 
 ## Run
 
-Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) (today macOS arm64) and Claude Code `2.1.287` (SHA-256 `6eab8333…cb41ea`). Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
+Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) (macOS arm64, Linux x86_64 and aarch64) and Claude Code `2.1.287`, whose per-platform SHA-256 is in `PINS`. On Linux use the glibc `linux-x64`/`linux-arm64` release binary and meet the Linux adapter requirements there. Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
 
 ```sh
 cargo build --release --bins
@@ -13,11 +13,11 @@ cargo build --release --bins
   --output /path/to/current-claude-controls.json
 ```
 
-The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them). It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/private/tmp/falinks-claude-adapter-*` and removes only that fixture's session folder from `~/.claude/projects/`. Failed checks exit nonzero; inspect `passed` and `failure`.
+The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them). It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. Failed checks exit nonzero; inspect `passed` and `failure`.
 
 ## Launch profile
 
-The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Read,Glob,Grep`, `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables and sets `DISABLE_AUTOUPDATER=1`. Settings enable the sandbox with no unsandboxed escape: writes only to `scratch/`; source, tools and storage are write-denied; controller, snapshot and validation storage are read-denied. Edit, Write, web, Agent/Task and Skill are denied.
+The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Read,Glob,Grep`, `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables except `CLAUDE_CODE_OAUTH_TOKEN`, the subscription login that `claude setup-token` creates for CI, and sets `DISABLE_AUTOUPDATER=1`. Settings enable the sandbox with no unsandboxed escape: writes only to `scratch/`; source, tools and storage are write-denied; controller, snapshot and validation storage are read-denied. Edit, Write, web, Agent/Task and Skill are denied.
 
 The cwd is `scratch/`, not `source/`. At startup the trusted CLI creates `.claude/.cc-writes/` in its cwd. In `source/`, unknown-change detection correctly stopped the host before the first mediated edit.
 
@@ -53,7 +53,7 @@ Resume re-passes every launch flag with `--resume`, re-verifies `init` (same ses
 
 Unknown-change detection runs on a separate injected fixture before the grant. A final live injection preserves the bytes, stops the host and revokes capability.
 
-The steering and completion-race controls are verified in the first process and recorded again in the resumed gate within the same verifier run. A saved report never authorizes another process. `evidence/2026-10-10-controls.json` is audit material: it contains stream events without reasoning blocks, host calls, deliveries and controls. Current capability always requires a fresh run.
+The steering and completion-race controls are verified in the first process and recorded again in the resumed gate within the same verifier run. A saved report never authorizes another process. `evidence/2026-10-10-controls.json` (macOS) and `evidence/2026-10-14-linux/` (Ubuntu 24.04; its README records the hosts) are audit material: they contain stream events without reasoning blocks, host calls, deliveries and controls. Current capability always requires a fresh run.
 
 ## Limits
 
@@ -74,7 +74,7 @@ cargo build --release --bins
   --output /path/to/integration-report.json
 ```
 
-It needs the same pinned binary, login and sandbox permission as `check-claude-adapter`, plus Go and `gopls` (or `FALINKS_GOPLS`), like `tests/regroup.rs`. It creates `/private/tmp/falinks-integration-*` with two live roots (`space0`, `space1`), engine `state`, one `scratch` and `controller` per agent, and `worker-tools`. The fixture is a small Go module used only for this gate, never a scored evaluation fixture. Required checks are `go vet ./...` and `go test ./...`. Failed runs exit nonzero; a saved report never authorizes another run. `evidence/2026-10-10-integration.json` is the first fully passing report (audit material only).
+It needs the same pinned binary, login and sandbox permission as `check-claude-adapter`, plus Go and `gopls` (or `FALINKS_GOPLS`), like `tests/regroup.rs`. It creates `/tmp/falinks-integration-*` (`/private/tmp` on macOS) with two live roots (`space0`, `space1`), engine `state`, one `scratch` and `controller` per agent, and `worker-tools`. The fixture is a small Go module used only for this gate, never a scored evaluation fixture. Required checks are `go vet ./...` and `go test ./...`. Failed runs exit nonzero; a saved report never authorizes another run. `evidence/2026-10-10-integration.json` is the first fully passing report (audit material only).
 
 ### Host-scripted phases
 
