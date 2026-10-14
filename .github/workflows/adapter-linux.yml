@@ -7,7 +7,7 @@ name: Claude Code adapter on Linux
 on:
   workflow_dispatch:
   pull_request:
-    paths: [".github/workflows/adapter-linux.yml", "adapters/codex/**", "adapters/claude/**"]
+    paths: [".github/workflows/adapter-linux.yml", "adapters/host/**", "adapters/claude/**"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

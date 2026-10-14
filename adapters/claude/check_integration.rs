@@ -9,7 +9,7 @@ use falinks_claude::{
     Launch, MODEL, REQUIRED, Runtime, VERSION, engine_host::EngineHost, launch_args,
     probe_controls, probe_names, verify_binary,
 };
-use falinks_host::{Boundary, Result, file_hash, hash, require, runtime::EngineOutcome};
+use falinks_host::{Boundary, EngineOutcome, Result, file_hash, hash, require};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},

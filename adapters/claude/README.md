@@ -1,6 +1,6 @@
 # Pinned Claude Code worker adapter
 
-Issue [#33](https://github.com/danielrispler/Falinks/issues/33) ports the [#23](https://github.com/danielrispler/Falinks/issues/23) adapter to Claude Code, following the [#32 resolution](https://github.com/danielrispler/Falinks/issues/32#issuecomment-6096677771). It reuses `Boundary`, `ControlGate`, `ControlledHost`, unknown-change detection and `sandbox-probe` from `falinks-host` (`adapters/codex`). Only the transport (stream-json), pins and permission configuration are new. [#26](https://github.com/danielrispler/Falinks/issues/26) connects it to the production engine; see [Production integration](#production-integration-26).
+Issue [#33](https://github.com/danielrispler/Falinks/issues/33) ports the [#23](https://github.com/danielrispler/Falinks/issues/23) adapter to Claude Code, following the [#32 resolution](https://github.com/danielrispler/Falinks/issues/32#issuecomment-6096677771). It reuses `Boundary`, `ControlGate`, `ControlledHost`, unknown-change detection and `sandbox-probe` from `falinks-host` (`adapters/host`). Only the transport (stream-json), pins and permission configuration are new. [#26](https://github.com/danielrispler/Falinks/issues/26) connects it to the production engine; see [Production integration](#production-integration-26).
 
 ## Run
 

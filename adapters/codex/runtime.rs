@@ -1,4 +1,8 @@
-use crate::{Boundary, ControlGate, PinMap, Result, file_hash, platform_pin, require};
+//! Codex app-server runtime adapter on the shared trusted-host library.
+use falinks_host::{
+    Boundary, ControlGate, Engine, EngineOutcome, PinMap, Result, command_output, file_hash, hash,
+    platform_pin, require, tools,
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -23,15 +27,20 @@ pub const DISABLED: &[&str] = &[
     "web_search_request",
     "code_mode",
 ];
-pub struct Notice {
-    pub event: String,
-    pub context: Value,
-}
-pub struct EngineOutcome {
-    pub result: Value,
-    pub notice: Option<Notice>,
-}
-pub type Engine = Box<dyn FnMut(&Value) -> Result<EngineOutcome>>;
+/// The Codex adapter's fresh safety controls; every one must pass before engine calls.
+pub const REQUIRED: &[&str] = &[
+    "schema",
+    "profile",
+    "disabled_capabilities",
+    "mediated_calls",
+    "source_write_denial",
+    "storage_protection",
+    "scratch_access",
+    "unknown_change",
+    "steering",
+    "completion_race",
+    "resume_replay",
+];
 
 pub fn configuration(root: &Path, binary: &Path) -> Vec<String> {
     // Deny each protected directory, not the root: on Linux, Codex masks a denied
@@ -108,7 +117,7 @@ pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
     )?;
     let mut command = Command::new(&binary);
     command.arg("--version");
-    let version = crate::command_output(command, Duration::from_secs(10))?;
+    let version = command_output(command, Duration::from_secs(10))?;
     require(
         version.status.success()
             && String::from_utf8(version.stdout)?.trim() == "codex-cli 0.160.0",
@@ -129,7 +138,7 @@ fn verify_schema(binary: &Path) -> Result<Value> {
             "--out",
         ])
         .arg(dir.path());
-    let out = crate::command_output(command, Duration::from_secs(30))?;
+    let out = command_output(command, Duration::from_secs(30))?;
     require(out.status.success(), "schema generation failed")?;
     let actual = expected
         .keys()
@@ -137,9 +146,6 @@ fn verify_schema(binary: &Path) -> Result<Value> {
         .collect::<Result<BTreeMap<_, _>>>()?;
     require(actual == expected, "protocol schema mismatch")?;
     Ok(json!(actual))
-}
-pub fn tools(workspace: &str) -> Value {
-    json!(["edit","review","offer"].map(|operation|json!({"name":format!("falinks_{operation}"),"description":format!("Submit an engine {operation}. Workspace: {workspace}"),"inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},"required":["workspace","request"],"additionalProperties":false}})))
 }
 
 pub struct Runtime {
@@ -184,7 +190,7 @@ impl Runtime {
         let boundary = Boundary::new(
             &root.join("controller/context.sqlite"),
             &root.join("source"),
-            crate::hash(&random),
+            hash(&random),
         )?;
         let mut child = Command::new(&binary)
             .args(["app-server", "--stdio"])
@@ -216,7 +222,7 @@ impl Runtime {
         });
         let mut runtime = Self {
             boundary,
-            gate: ControlGate::default(),
+            gate: ControlGate::new(REQUIRED),
             events: vec![],
             deliveries: vec![],
             schema,
