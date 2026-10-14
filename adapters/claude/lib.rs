@@ -685,8 +685,11 @@ impl Runtime {
                     .open(controller.join("claude.stderr"))?,
             )
             .process_group(0);
-        // Keep an enclosing Claude Code session's identity out of the worker.
-        for (key, _) in std::env::vars().filter(|(k, _)| k.starts_with("CLAUDE")) {
+        // Keep an enclosing Claude Code session's identity out of the worker. A
+        // `claude setup-token` login (CI) is authentication only, so it passes through.
+        for (key, _) in std::env::vars()
+            .filter(|(k, _)| k.starts_with("CLAUDE") && k != "CLAUDE_CODE_OAUTH_TOKEN")
+        {
             command.env_remove(key);
         }
         let mut child = command.spawn()?;

@@ -3,7 +3,8 @@ name: Adapter checks on Linux
 # Evidence for #57, not a required check. Runs both adapter checks with the pinned
 # Linux binaries on real runners: first under the runner's default AppArmor policy,
 # then with unprivileged user namespaces allowed. Without a login each check stops at
-# its first model turn; the Codex sandbox controls before it still run.
+# its first model turn; the Codex sandbox controls before it still run. Claude Code logs in
+# with the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`, subscription).
 on:
   workflow_dispatch:
   pull_request:
@@ -74,6 +75,8 @@ jobs:
         run: target/release/check-adapter --binary "$CODEX" --output codex-default.json
       - name: Claude Code, default policy
         continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-default.json
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Codex, user namespaces allowed
@@ -81,6 +84,8 @@ jobs:
         run: target/release/check-adapter --binary "$CODEX" --output codex-userns.json
       - name: Claude Code, user namespaces allowed
         continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-userns.json
       - uses: actions/upload-artifact@v7
         if: always()

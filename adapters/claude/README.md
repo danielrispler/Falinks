@@ -17,7 +17,7 @@ The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executabl
 
 ## Launch profile
 
-The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Read,Glob,Grep`, `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables and sets `DISABLE_AUTOUPDATER=1`. Settings enable the sandbox with no unsandboxed escape: writes only to `scratch/`; source, tools and storage are write-denied; controller, snapshot and validation storage are read-denied. Edit, Write, web, Agent/Task and Skill are denied.
+The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Read,Glob,Grep`, `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables except `CLAUDE_CODE_OAUTH_TOKEN`, the subscription login that `claude setup-token` creates for CI, and sets `DISABLE_AUTOUPDATER=1`. Settings enable the sandbox with no unsandboxed escape: writes only to `scratch/`; source, tools and storage are write-denied; controller, snapshot and validation storage are read-denied. Edit, Write, web, Agent/Task and Skill are denied.
 
 The cwd is `scratch/`, not `source/`. At startup the trusted CLI creates `.claude/.cc-writes/` in its cwd. In `source/`, unknown-change detection correctly stopped the host before the first mediated edit.
 
