@@ -27,6 +27,16 @@ pub struct Pin {
     pub path: PathBuf,
     pub sha256: String,
 }
+impl Pin {
+    /// Pins the executable at `path` to its current bytes.
+    pub fn from_path(path: impl Into<PathBuf>) -> Result<Self> {
+        let path = path.into();
+        Ok(Self {
+            sha256: sha256_file(&path)?,
+            path,
+        })
+    }
+}
 /// Rust needs `rust-analyzer`, `cargo` and `rustc`; Go needs `gopls` and `go`.
 /// `features` are Cargo features or Go build tags.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,8 +170,7 @@ pub(crate) fn analyze(scratch: &Path, capture: &Capture, toolchain: &Toolchain) 
         }
         references(&src, &env, toolchain, capture, &mut evidence)?;
         // Analysis must not alter its inputs; otherwise its results describe other bytes.
-        let mut observed = Vec::new();
-        crate::paths(&src, Path::new(""), &mut observed, false)?;
+        let observed = crate::source_paths(&src, false)?;
         for path in &observed {
             let file = capture.files.get(path).and_then(|f| f.file.as_ref());
             if file.is_none_or(|f| fs::read(src.join(path)).ok().as_ref() != Some(&f.bytes)) {
@@ -803,8 +812,8 @@ fn owner_at(owners: &[Owner], at: usize) -> Option<&Owner> {
 }
 
 /// Nodes are `path` (the whole file) or `path#owner`. `all` means unbounded.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Footprint {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Footprint {
     pub all: bool,
     pub nodes: BTreeSet<String>,
 }

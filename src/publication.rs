@@ -97,6 +97,16 @@ pub struct Run {
     pub attempts: Vec<RunAttempt>,
     pub outcome: Option<RunOutcome>,
 }
+impl Run {
+    /// Ends the running attempt: the run and its last attempt record the same outcome.
+    fn finish(&mut self, outcome: RunOutcome) {
+        self.running = false;
+        if let Some(attempt) = self.attempts.last_mut() {
+            attempt.outcome = Some(outcome.clone());
+        }
+        self.outcome = Some(outcome);
+    }
+}
 /// Host fault/barrier seam for validation; never exposed to untrusted clients.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stage {
@@ -239,14 +249,9 @@ pub(crate) fn queue(db: &Connection, revision: u64) -> Result<()> {
 pub(crate) fn recover(db: &Connection) -> Result<()> {
     for mut run in runs(db)? {
         if run.running {
-            let outcome = RunOutcome::Interrupted {
+            run.finish(RunOutcome::Interrupted {
                 reason: "restart during validation; explicit retry required".into(),
-            };
-            run.running = false;
-            if let Some(attempt) = run.attempts.last_mut() {
-                attempt.outcome = Some(outcome.clone());
-            }
-            run.outcome = Some(outcome);
+            });
             save_run(db, &run)?;
         }
     }
@@ -453,9 +458,7 @@ impl Engine {
         // Runs are serialized by the lease: no other run's build output can be here.
         let _ = fs::remove_dir_all(self.state.join("validation-runs"));
         if !matches!(outcome, RunOutcome::Published { .. }) {
-            run.running = false;
-            run.attempts.last_mut().unwrap().outcome = Some(outcome.clone());
-            run.outcome = Some(outcome.clone());
+            run.finish(outcome.clone());
             let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
             let tx = db.unchecked_transaction()?;
             save_run(&tx, &run)?;
@@ -629,13 +632,15 @@ impl Engine {
         if let Err(reason) = self.recheck(&db, run, checks)? {
             return Ok(RunOutcome::Blocked { reason });
         }
-        if let Err(error) = self.audit_all(&self.layout()?) {
+        let layout = self.layout()?;
+        if let Err(error) = self.audit_all(&layout) {
             let reason = error.to_string();
-            self.save_incident(&db, &reason)?;
+            self.save_incident(&db, &layout.roots, &reason)?;
             return Ok(RunOutcome::Blocked {
                 reason: format!("unexplained source change stops publication: {reason}"),
             });
         }
+        drop(layout);
         retain(&self.state, candidate)?;
         let binding = &run.binding;
         // One commit: pointer, every member status, run outcome and the ordered event.
@@ -658,9 +663,7 @@ impl Engine {
             save_checkpoint(&tx, &accepted)?;
         }
         let outcome = RunOutcome::Published { event };
-        run.running = false;
-        run.attempts.last_mut().unwrap().outcome = Some(outcome.clone());
-        run.outcome = Some(outcome.clone());
+        run.finish(outcome.clone());
         save_run(&tx, run)?;
         observer(Stage::Committing)?;
         tx.commit()?;

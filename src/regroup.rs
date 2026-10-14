@@ -5,9 +5,9 @@ use crate::analysis::{self, Footprint};
 use crate::coordination::{Body, Scope, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
-    Capture, Client, Engine, Layout, Result, VersionedFile, audit, build_tree, connect,
-    ensure_empty, fail, install, meta, next_revision, paths, read_file, record, retain, revision,
-    set_meta,
+    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, audit, build_tree,
+    connect, ensure_empty, fail, install, meta, next_revision, read_file, record, retain, revision,
+    set_meta, source_paths,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -263,9 +263,10 @@ pub(crate) fn recover(engine: &Engine, db: &Connection, layout: &Layout) -> Resu
             retain(&engine.state, &change.after)?;
             let root = &layout.roots[change.space];
             let reliable = (|| -> Result<()> {
-                let mut observed = Vec::new();
-                paths(root, Path::new(""), &mut observed, true)?;
-                if observed.iter().any(|p| !change.after.files.contains_key(p)) {
+                if source_paths(root, true)?
+                    .iter()
+                    .any(|p| !change.after.files.contains_key(p))
+                {
                     return fail("unenrolled source during transition recovery; evidence retained");
                 }
                 for (path, after) in &change.after.files {
@@ -283,7 +284,7 @@ pub(crate) fn recover(engine: &Engine, db: &Connection, layout: &Layout) -> Resu
                 Ok(())
             })();
             if let Err(error) = reliable {
-                engine.save_incident(db, &error.to_string())?;
+                engine.save_incident(db, &layout.roots, &error.to_string())?;
                 return Err(error);
             }
         }
@@ -315,19 +316,21 @@ impl Engine {
     pub fn add_workspace(&self, root: &Path) -> Result<usize> {
         let root = std::fs::canonicalize(root)?;
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let layout = self.layout()?;
-        if root.starts_with(&self.state)
-            || self.state.starts_with(&root)
-            || layout
-                .roots
-                .iter()
-                .any(|r| r.starts_with(&root) || root.starts_with(r))
-        {
-            return fail("workspace roots must be separate from storage and each other");
-        }
-        let lease = crate::writer_lease(&root.join(".falinks-writer.lock"))?;
+        let space = {
+            let layout = self.layout()?;
+            if root.starts_with(&self.state)
+                || self.state.starts_with(&root)
+                || layout
+                    .roots
+                    .iter()
+                    .any(|r| r.starts_with(&root) || root.starts_with(r))
+            {
+                return fail("workspace roots must be separate from storage and each other");
+            }
+            layout.roots.len()
+        };
+        let lease = crate::writer_lease(&root.join(WRITER_LEASE))?;
         ensure_empty(&root).map_err(|_| "a new workspace root must be empty")?;
-        let space = layout.roots.len();
         db.execute(
             "INSERT INTO spaces VALUES(?,?,NULL)",
             params![space as i64, root.to_str().ok_or("non-UTF8 workspace")?],
@@ -451,7 +454,7 @@ impl Engine {
         }
         let mut evidence = Vec::new();
         for space in layout.placement.iter().collect::<BTreeSet<_>>() {
-            evidence.extend(self.evidence(&layout.current(*space)?)?);
+            evidence.extend(self.evidence(layout.current(*space)?)?);
         }
         for e in &evidence {
             if !e.errors.is_empty() || !e.unknown.is_empty() {
@@ -777,7 +780,7 @@ impl Engine {
                     return Ok(Err(format!("workspace {target} is occupied")));
                 }
                 let workspace = layout.current(stay)?;
-                let [kept, moved] = match drafts(&workspace)? {
+                let [kept, moved] = match drafts(workspace)? {
                     Ok(own) => own,
                     Err(blocker) => return Ok(Err(blocker)),
                 };
@@ -833,7 +836,7 @@ impl Engine {
                     .find(|s| **s != into)
                     .ok_or("join needs two workspaces")?;
                 let (host, guest) = (layout.current(into)?, layout.current(from)?);
-                let (host_drafts, guest_drafts) = match (drafts(&host)?, drafts(&guest)?) {
+                let (host_drafts, guest_drafts) = match (drafts(host)?, drafts(guest)?) {
                     (Ok([a, b]), Ok([c, d])) => (
                         a.union(&b).cloned().collect::<BTreeSet<_>>(),
                         c.union(&d).cloned().collect::<BTreeSet<_>>(),
@@ -883,15 +886,15 @@ impl Engine {
             let before = layout.current(layout.of(agent))?;
             let target = proposal.target[agent];
             let after = match moves.iter().find(|(s, _)| *s == target) {
-                Some((_, capture)) => capture.clone(),
+                Some((_, capture)) => capture,
                 None => layout.current(target)?,
             };
-            let paths = differing(&before, &after);
+            let paths = differing(before, after);
             if !paths.is_empty() {
                 views.push((
                     agent,
                     after.revision,
-                    self.view_change(&before, &after, &paths)?,
+                    self.view_change(before, after, &paths)?,
                 ));
             }
         }
@@ -902,7 +905,7 @@ impl Engine {
         let tx = db.unchecked_transaction()?;
         save(&tx, proposal)?;
         let event = announce(&tx, proposal)?;
-        let after = self.commit_moves(&tx, &layout, shift, &moves, proposal.target)?;
+        self.commit_moves(&tx, shift, &moves, proposal.target)?;
         for (agent, revision, view) in &views {
             self.renew_for_view(&tx, *agent, view, *revision, event)?;
         }
@@ -914,7 +917,8 @@ impl Engine {
         };
         set_meta(&tx, "regroup_mark", &serde_json::to_string(&mark)?)?;
         tx.commit()?;
-        *self.layout.write().map_err(|_| "layout lock poisoned")? = after;
+        drop(layout);
+        self.adopt(moves, proposal.target)?;
         Ok(true)
     }
 
@@ -931,7 +935,7 @@ impl Engine {
             }
             let members = layout.group(*space);
             let audience: i64 = members.iter().map(|a| crate::coordination::mine(*a)).sum();
-            let (mut merged, overlaps) = merge(db, &workspace, &published)?;
+            let (mut merged, overlaps) = merge(db, workspace, &published)?;
             if !overlaps.is_empty() {
                 let key = format!("behind:{space}");
                 let note = format!("{}:{overlaps:?}", published.revision);
@@ -959,7 +963,7 @@ impl Engine {
             merged.group = layout.group(*space);
             merged.tree = build_tree(&self.state, &merged.files, "")?;
             let moves = vec![(*space, merged.clone())];
-            let view = self.view_change(&workspace, &merged, &differing(&workspace, &merged))?;
+            let view = self.view_change(workspace, &merged, &differing(workspace, &merged))?;
             let shift = self.install_moves(db, &layout, &moves)?;
             let tx = db.unchecked_transaction()?;
             let event = emit(
@@ -971,12 +975,14 @@ impl Engine {
                     revision: merged.revision,
                 },
             )?;
-            let after = self.commit_moves(&tx, &layout, shift, &moves, layout.placement)?;
+            let placement = layout.placement;
+            self.commit_moves(&tx, shift, &moves, placement)?;
             for agent in members {
                 self.renew_for_view(&tx, agent, &view, merged.revision, event)?;
             }
             tx.commit()?;
-            *self.layout.write().map_err(|_| "layout lock poisoned")? = after;
+            drop(layout);
+            self.adopt(moves, placement)?;
             changed = true;
         }
         Ok(changed)
@@ -1008,7 +1014,7 @@ impl Engine {
                 None => ensure_empty(root),
             };
             if let Err(error) = verified {
-                self.save_incident(db, &error.to_string())?;
+                self.save_incident(db, &layout.roots, &error.to_string())?;
                 return Err(error);
             }
             retain(&self.state, &change.after)?;
@@ -1045,12 +1051,10 @@ impl Engine {
     fn commit_moves(
         &self,
         tx: &Connection,
-        layout: &Layout,
         shift: i64,
         moves: &[(usize, Capture)],
         placement: [usize; 2],
-    ) -> Result<Layout> {
-        let mut after = layout.clone();
+    ) -> Result<()> {
         for (space, capture) in moves {
             tx.execute(
                 "INSERT INTO revisions VALUES(?,?)",
@@ -1060,10 +1064,8 @@ impl Engine {
                 "UPDATE spaces SET completed=? WHERE id=?",
                 params![capture.revision as i64, *space as i64],
             )?;
-            after.completed[*space] = Some(capture.clone());
         }
         set_meta(tx, "placement", &serde_json::to_string(&placement)?)?;
-        after.placement = placement;
         let body: String =
             tx.query_row("SELECT body FROM shifts WHERE id=?", [shift], |r| r.get(0))?;
         let mut recorded: Installation = serde_json::from_str(&body)?;
@@ -1072,7 +1074,16 @@ impl Engine {
             "UPDATE shifts SET body=? WHERE id=?",
             params![serde_json::to_string(&recorded)?, shift],
         )?;
-        Ok(after)
+        Ok(())
+    }
+    /// After the commit: the layout takes the committed revisions and placement.
+    fn adopt(&self, moves: Vec<(usize, Capture)>, placement: [usize; 2]) -> Result<()> {
+        let mut layout = self.layout.write().map_err(|_| "layout lock poisoned")?;
+        for (space, capture) in moves {
+            layout.completed[space] = Some(capture);
+        }
+        layout.placement = placement;
+        Ok(())
     }
 }
 
