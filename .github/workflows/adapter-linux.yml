@@ -20,7 +20,9 @@ name: Claude Code adapter on Linux
 # Agents never start a live run; see "Live adapter checks" in docs/agents/ticket-authoring.md.
 #
 # The job name says which mode ran: `linux (<arch>, live)` or `linux (<arch>, prerequisites
-# only)`, so a green check shows whether a commit got a live run.
+# only)`, so a green check shows whether a commit got a live run. One exception: a labelled
+# pull request without the token (fork or Dependabot) is named `live` but skips the live
+# steps with a notice.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
@@ -39,8 +41,9 @@ on:
       - .cargo/**
   workflow_dispatch:
 
-# Live and prerequisites-only runs cancel only older runs of their own kind, so a push or an
-# unrelated label never cancels a live run in progress.
+# Live and prerequisites-only runs cancel only older runs of their own kind, so a push to a
+# pull request or an unrelated label never cancels a live run in progress. The live test
+# here is per run; the job name and the Token step repeat it per leg.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name != 'pull_request' || (github.event.action == 'labeled' && github.event.label.name == 'live-claude')) && 'live' || 'prerequisites' }}
   cancel-in-progress: true
@@ -54,8 +57,8 @@ defaults:
 
 jobs:
   linux:
-    # Whether this leg goes live. A job name cannot read env, so the Token step's `if:`
-    # repeats this test; keep the two in step.
+    # Whether this leg goes live. Neither a job name nor `concurrency` can read env, so the
+    # Token step's `if:` and the concurrency group repeat this test; keep all three in step.
     name: linux (${{ matrix.claude }}, ${{ (github.event_name != 'pull_request' || (github.event.action == 'labeled' && github.event.label.name == 'live-claude' && matrix.claude == 'linux-x64')) && 'live' || 'prerequisites only' }})
     strategy:
       fail-fast: false
@@ -79,13 +82,13 @@ jobs:
       - run: cargo build --release --locked --bin check-claude-adapter --bin falinks-claude-tool --bin sandbox-probe
       # Reports whether this leg goes live. The secret stays out of job env and `if:`.
       - name: Token
-        id: token
+        id: live
         if: github.event_name != 'pull_request' || (github.event.action == 'labeled' && github.event.label.name == 'live-claude' && matrix.claude == 'linux-x64')
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           if [[ -n $CLAUDE_CODE_OAUTH_TOKEN ]]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "token=true" >> "$GITHUB_OUTPUT"
           elif [[ $GITHUB_EVENT_NAME == pull_request ]]; then
             echo "::notice::Skipping the live adapter check: no CLAUDE_CODE_OAUTH_TOKEN on this pull request (fork or Dependabot)."
           else
@@ -94,7 +97,7 @@ jobs:
           fi
       # The adapter verifies it against PINS before running it.
       - name: Pinned runtime
-        if: steps.token.outputs.present == 'true'
+        if: steps.live.outputs.token == 'true'
         env:
           DIST: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
         run: |
@@ -129,7 +132,7 @@ jobs:
             exit 1
           fi
       - name: Live adapter check, default policy
-        if: steps.token.outputs.present == 'true'
+        if: steps.live.outputs.token == 'true'
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -138,12 +141,12 @@ jobs:
       - name: Worker-sandbox prerequisite, user namespaces allowed
         run: bwrap --unshare-net --ro-bind / / true
       - name: Live adapter check, user namespaces allowed
-        if: steps.token.outputs.present == 'true'
+        if: steps.live.outputs.token == 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-userns.json
       - uses: actions/upload-artifact@v7
-        if: always() && steps.token.outputs.present == 'true'
+        if: always() && steps.live.outputs.token == 'true'
         with:
           name: adapter-linux-${{ matrix.claude }}
           path: |
