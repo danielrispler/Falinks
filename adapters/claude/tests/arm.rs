@@ -3,7 +3,7 @@
 use falinks::Language;
 use falinks::{Check, Engine};
 use falinks_claude::arm::{
-    Arm, Tools, agent_name, denied_roots, deny_check_reads, enrollment, language,
+    Arm, Tools, agent_name, denied_roots, deny_check_reads, enrollment, language, worker_protected,
 };
 use serde_json::{Value, json};
 use std::{
@@ -193,19 +193,62 @@ fn checks_are_denied_the_run_directory_and_every_resolved_root() {
     fs::write(space.join("a.txt"), "a").unwrap();
     fs::create_dir(run.join("scratch")).unwrap();
     fs::write(run.join("scratch/other"), "OTHER").unwrap();
-    let checkout = tmp.path().join("checkout");
-    fs::create_dir(&checkout).unwrap();
-    fs::write(checkout.join("oracle"), "SECRET").unwrap();
+    let reference = tmp.path().join("reference");
+    fs::create_dir(&reference).unwrap();
+    fs::write(reference.join("oracle"), "SECRET").unwrap();
+    // The configured checkout is a worktree (#105): the main checkout, its `.git` and every
+    // other worktree are derived, not configured. A worktree whose directory is gone is skipped.
+    let main = tmp.path().join("main");
+    fs::create_dir_all(main.join("evaluation")).unwrap();
+    fs::write(main.join("evaluation/manifest.json"), "{}").unwrap();
+    fs::write(main.join("oracle"), "SECRET").unwrap();
+    let git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .arg("-C")
+            .arg(&main)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&["commit", "-qm", "fixture"]);
+    for name in ["checkout", "other", "gone"] {
+        git(&["worktree", "add", "-q", "--detach", &format!("../{name}")]);
+    }
+    let [checkout, other] = ["checkout", "other"].map(|name| tmp.path().join(name));
+    fs::remove_dir_all(tmp.path().join("gone")).unwrap();
+    let evaluation = checkout.join("evaluation");
+
     let engine = Engine::open(&space, &run.join("controller/state"), &["a.txt"]).unwrap();
     // A misspelled, placeholder or malformed entry fails setup instead of failing open.
     assert!(
-        denied_roots(&json!({"denied_roots": [checkout, tmp.path().join("missing")]})).is_err()
+        denied_roots(
+            &json!({"denied_roots": [reference, tmp.path().join("missing")],
+            "evaluation_root": evaluation})
+        )
+        .is_err()
     );
-    assert!(denied_roots(&json!({"denied_roots": checkout})).is_err());
-    let roots = denied_roots(&json!({"denied_roots": [checkout]})).unwrap();
-    let denied = deny_check_reads(&engine, &run, &roots).unwrap();
+    assert!(
+        denied_roots(&json!({"denied_roots": reference, "evaluation_root": evaluation})).is_err()
+    );
+    // An evaluation root outside Git leaves nothing to derive, so it fails setup too.
+    assert!(denied_roots(&json!({"denied_roots": [], "evaluation_root": reference})).is_err());
+    let roots =
+        denied_roots(&json!({"denied_roots": [reference], "evaluation_root": evaluation})).unwrap();
     let canonical = |p: &Path| p.canonicalize().unwrap();
-    assert_eq!(denied, [canonical(&run), canonical(&checkout)]);
+    let derived = [&checkout, &main.join(".git"), &main, &checkout, &other].map(|p| canonical(p));
+    assert_eq!(roots[0], canonical(&reference));
+    assert_eq!(roots[1..], derived);
+    let protected = worker_protected(&run, &roots);
+    assert!(derived.iter().all(|root| protected.contains(root)));
+    let denied = deny_check_reads(&engine, &run, &roots).unwrap();
+    assert_eq!(denied[0], canonical(&run));
+    assert_eq!(denied[1..], roots);
 
     let cat = |name: &str, path: &Path| Check {
         name: name.into(),
@@ -216,7 +259,11 @@ fn checks_are_denied_the_run_directory_and_every_resolved_root() {
         .configure_checks(vec![
             cat("slot", Path::new("a.txt")),
             cat("run", &run.join("scratch/other")),
+            cat("reference", &reference.join("oracle")),
             cat("checkout", &checkout.join("oracle")),
+            cat("git", &main.join(".git/HEAD")),
+            cat("main", &main.join("oracle")),
+            cat("other", &other.join("oracle")),
         ])
         .unwrap();
     let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
@@ -226,7 +273,11 @@ fn checks_are_denied_the_run_directory_and_every_resolved_root() {
         .results
         .clone();
     let passed: Vec<bool> = results.iter().map(|r| r.passed).collect();
-    assert_eq!(passed, [true, false, false], "{results:?}");
+    assert_eq!(
+        passed,
+        [true, false, false, false, false, false, false],
+        "{results:?}"
+    );
 }
 
 /// The host `check` runs the agents' tests in the oracle seam; they cannot read anything else

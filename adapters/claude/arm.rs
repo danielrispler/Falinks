@@ -149,14 +149,14 @@ impl Tools {
     }
 }
 
-/// The configured `denied_roots`, resolved: the one list behind the worker sandbox, engine
-/// checks and the host `check`. A malformed, placeholder or misspelled entry fails setup
-/// rather than leaving its root readable.
+/// The configured `denied_roots`, resolved, plus the evaluation checkout's Git directories: the
+/// one list behind the worker sandbox, engine checks and the host `check`. A malformed,
+/// placeholder or misspelled entry fails setup rather than leaving its root readable.
 pub fn denied_roots(config: &Value) -> Result<Vec<PathBuf>> {
     let roots = config["denied_roots"]
         .as_array()
         .ok_or("denied_roots must be a list of paths")?;
-    roots
+    let mut roots = roots
         .iter()
         .map(|root| {
             let root = root.as_str().ok_or("denied_roots must be paths")?;
@@ -164,7 +164,54 @@ pub fn denied_roots(config: &Value) -> Result<Vec<PathBuf>> {
                 .canonicalize()
                 .map_err(|error| format!("denied root {root}: {error}").into())
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    let evaluation = config["evaluation_root"]
+        .as_str()
+        .ok_or("evaluation_root must be a path")?;
+    roots.extend(checkout_roots(Path::new(evaluation))?);
+    Ok(roots)
+}
+
+/// The checkout holding `evaluation`, its Git common directory (which holds oracle bytes) and
+/// every worktree of it, as the Git arm's `protected_roots()` derives them. A worktree whose
+/// directory is gone has nothing left to read.
+fn checkout_roots(evaluation: &Path) -> Result<Vec<PathBuf>> {
+    let git = |args: &[&str]| -> Result<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(evaluation)
+            .args(args)
+            .output()?;
+        require(
+            output.status.success(),
+            "evaluation_root is not in a Git checkout",
+        )?;
+        Ok(String::from_utf8(output.stdout)?)
+    };
+    let checkout = evaluation
+        .parent()
+        .ok_or("evaluation_root has no checkout")?;
+    let common = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+    let mut roots = vec![
+        checkout.canonicalize()?,
+        Path::new(common.trim()).canonicalize()?,
+    ];
+    for line in git(&["worktree", "list", "--porcelain"])?.lines() {
+        if let Some(path) = line.strip_prefix("worktree ").map(Path::new)
+            && path.exists()
+        {
+            roots.push(path.canonicalize()?);
+        }
+    }
+    Ok(roots)
+}
+
+/// The worker sandbox's protected roots: the run's controller and every denied root, which the
+/// worker launch accepts only as directories.
+pub fn worker_protected(run: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut protected = vec![run.join("controller")];
+    protected.extend(roots.iter().filter(|root| root.is_dir()).cloned());
+    protected
 }
 
 /// Roots no check may read, as the Git arm's checks cannot: the whole run directory (the slot

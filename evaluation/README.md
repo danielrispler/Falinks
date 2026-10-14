@@ -187,9 +187,9 @@ it as `usage_limit`.
   read the contents of the run directory (except their slot and output) or of any denied
   root; the run records these in `check_denied_roots`. The host `check` and the final
   oracle deny agent tests the same roots, apart from the oracle's own directory. A
-  `denied_roots` entry that does not resolve fails the run. Unlike the Git arm, this arm
-  does not derive the checkout's Git directories: list the main checkout, which holds the
-  Git common directory, and every worktree outside it (`git worktree list`). Workers use the #26 launch profile and
+  `denied_roots` entry that does not resolve fails the run. Like the Git arm, this arm also
+  denies the checkout holding `evaluation_root`, its Git common directory and every worktree
+  of it, without listing them. Workers use the #26 launch profile and
   every `engine_host` tool, plus host `ack`, `check` (visible checks and oracle on an exact
   capture, pass/fail only) and `ready`. `ready` succeeds once every development is
   acknowledged and the agent's workspace equals the published state. When both agents are
