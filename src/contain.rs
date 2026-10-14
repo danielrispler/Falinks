@@ -103,10 +103,10 @@ fn quote(p: &Path) -> Result<String> {
     Ok(serde_json::to_string(s)?)
 }
 
-fn subpaths(paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Result<String> {
+fn filters(kind: &str, paths: impl IntoIterator<Item = impl AsRef<Path>>) -> Result<String> {
     Ok(paths
         .into_iter()
-        .map(|p| Ok(format!("(subpath {})", quote(p.as_ref())?)))
+        .map(|p| Ok(format!("({kind} {})", quote(p.as_ref())?)))
         .collect::<Result<Vec<_>>>()?
         .join(" "))
 }
@@ -117,13 +117,25 @@ fn seatbelt(command: &Contained) -> Result<ExitStatus> {
     let profile = match &command.reads {
         Reads::Only(trees) => format!(
             "(version 1) (allow default) (deny network*) (deny file-write*) (deny file-read*) (allow file-read* (literal \"/\") {} {}) {writes}",
-            subpaths(SYSTEM_READS)?,
-            subpaths(trees)?,
+            filters("subpath", SYSTEM_READS)?,
+            filters("subpath", trees)?,
         ),
+        // Denied roots hide metadata and existence too (#106). Cargo resolves paths through
+        // the parents of the slot and output, and tools `fstat` their stdout and stderr in
+        // the evidence, so only that metadata stays visible.
         Reads::Except { denied, allowed } => format!(
-            "(version 1) (allow default) (deny network*) (deny file-write*) {writes} (deny file-read-data {}) (allow file-read-data {})",
-            subpaths(denied)?,
-            subpaths(allowed)?,
+            "(version 1) (allow default) (deny network*) (deny file-write*) {writes} (deny file-read* file-test-existence {}) (allow file-read* file-test-existence {}) (allow file-read-metadata file-test-existence {})",
+            filters("subpath", denied)?,
+            filters("subpath", allowed)?,
+            filters(
+                "literal",
+                allowed
+                    .iter()
+                    .flat_map(|a| a.ancestors().skip(1))
+                    .map(Path::to_path_buf)
+                    .chain(["stdout", "stderr"].map(|f| command.evidence.join(f)))
+                    .collect::<std::collections::BTreeSet<_>>(),
+            )?,
         ),
     };
     fs::write(command.evidence.join("sandbox.sb"), &profile)?;

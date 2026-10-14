@@ -791,7 +791,7 @@ fn a_failing_check_on_a_two_member_candidate_accepts_neither_member() {
 }
 
 /// Host-denied roots bind every check, even when named through an alias, while the slot and
-/// output beneath one stay readable (#80).
+/// output beneath one stay readable (#80). On macOS they also hide metadata and existence (#106).
 #[test]
 fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
     let (dir, engine, alice, _) = fixture();
@@ -808,6 +808,14 @@ fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
         program: "/bin/cat".into(),
         args: vec![secret.to_str().unwrap().into()],
     });
+    attempts.push(Check {
+        name: "stat-denied".into(),
+        program: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            format!("stat '{0}' || test -e '{0}'", secret.display()),
+        ],
+    });
     engine.configure_checks(attempts).unwrap();
     engine.capture().unwrap();
     let read = |id: &str| {
@@ -818,7 +826,7 @@ fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
     };
     let results = read("control");
     assert!(
-        results[2].passed,
+        results[2].passed && results[3].passed,
         "readable without host roots: {results:?}"
     );
 
@@ -842,4 +850,8 @@ fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
     assert!(results[0].passed && results[1].passed, "{results:?}");
     assert!(!results[2].passed, "{results:?}");
     assert!(!String::from_utf8_lossy(&results[2].stdout).contains("SECRET"));
+    // Landlock cannot deny `stat` or `access`, so Linux keeps the metadata visible.
+    if cfg!(target_os = "macos") {
+        assert!(!results[3].passed, "{results:?}");
+    }
 }
