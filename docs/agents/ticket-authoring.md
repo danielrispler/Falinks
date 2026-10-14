@@ -22,6 +22,22 @@ Synthesize the complete draft independently from the settled conversation and re
 - **Evaluation freeze.** The evaluation sources are hash-frozen in `evaluation/manifest.json`. A spec or ticket that changes frozen evaluation material must say so and plan the versioned re-freeze. The procedure is in the "Freeze and setup budget" section of `evaluation/README.md`.
 - **Nested agents.** A ticket that launches nested agents (`claude -p`, Codex) needs a session outside auto mode. Auto mode blocks these runs. Say so in the ticket, and raise it with the user before you start the work.
 
+## Live adapter checks
+
+The live Claude Code adapter check (`adapter-linux.yml`) runs real model turns on the user's Claude subscription. Only the user starts it.
+
+- Never add the `live-claude` label, and never start `adapter-linux.yml` by hand (`gh workflow run`).
+- When a PR needs a live check before merge, add the `needs-live-check` label. Then tell the user in the session which PR it is, why it needs a live run, and that you are waiting for them. The user runs the check and removes the label.
+- A PR needs a live check before merge when it changes any of these:
+  - the pinned runtime: `VERSION`, `PINS` or `MODEL`;
+  - the worker launch: its arguments, settings or environment;
+  - `sandbox-probe` or the controls it reports;
+  - the falinks tool relay (`falinks-claude-tool`);
+  - `adapter-linux.yml`.
+
+  Other changes rely on the live run after merge. When unsure, ask the user.
+- Never merge a PR while it carries `needs-live-check`. If a merge will start the live run on `main`, say so before you merge.
+
 ## Ticket context
 
 Resolve meaningful tickets when their agreed work and verification are complete. Follow `docs/agents/learning.md` for the optional explanation suggestion; explanation and readiness confirmation are not closure prerequisites.

@@ -49,6 +49,8 @@ To rerun one engine test, filter by name: `cargo nextest run <name>`. For one ev
 
 Bugs and features use the issue forms. New issues get `needs-triage`. A maintainer then moves them to `ready-for-agent`, `ready-for-human` or `needs-info`.
 
+The live Claude Code adapter check on Linux spends the maintainer's Claude subscription, so only the maintainer starts it. If your PR needs one, ask in the PR. Maintainers mark such PRs `needs-live-check`. Agents follow the same rule; see "Live adapter checks" in [docs/agents/ticket-authoring.md](docs/agents/ticket-authoring.md).
+
 ## License
 
 By contributing, you agree that your contributions are dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at the user's option, without additional terms.
