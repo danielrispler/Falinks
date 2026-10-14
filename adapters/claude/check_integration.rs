@@ -628,7 +628,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     gate.stop_worker(1)?;
     gate.start(1)?;
     // Unfinished work moved with its author; readiness did not move with it.
-    let moved = gate.engine().capture_for(gate.client(1))?;
+    let moved = gate.engine().host_capture(gate.client(1))?;
     let after = gate.engine().candidate(moved.revision)?;
     require(
         gate.read_live(0, "label.go")? == LABEL

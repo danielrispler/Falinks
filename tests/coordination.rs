@@ -77,18 +77,18 @@ fn scope(id: &str, nodes: &[&str]) -> Scope {
         depends: Default::default(),
     }
 }
+fn keep(scope: &str, revision: u64) -> Review {
+    Review {
+        scope: scope.into(),
+        revision,
+        decision: Decision::Keep,
+        note: "reread current owners".into(),
+    }
+}
 fn reread(engine: &Engine, client: &Client, scope: &str) -> Obligation {
     let capture = engine.capture_for(client).unwrap();
     engine
-        .review(
-            client,
-            Review {
-                scope: scope.into(),
-                revision: capture.revision,
-                decision: Decision::Keep,
-                note: "reread current owners".into(),
-            },
-        )
+        .review(client, keep(scope, capture.revision))
         .unwrap()
 }
 fn pending(engine: &Engine, client: &Client) -> Vec<String> {
@@ -377,15 +377,6 @@ fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment(
     assert!(engine.request(&alice, "unreviewed").unwrap().is_some());
 }
 
-fn keep(scope: &str, revision: u64) -> Review {
-    Review {
-        scope: scope.into(),
-        revision,
-        decision: Decision::Keep,
-        note: "reread the change".into(),
-    }
-}
-
 #[test]
 fn a_review_names_only_a_revision_captured_for_the_reviewer() {
     let (_dir, engine, alice, bob) = fixture(PAIR);
@@ -429,7 +420,8 @@ fn a_host_internal_capture_authorizes_an_offer_but_no_review() {
     // The host read Bob's workspace without giving the read to Bob.
     let host = engine.host_capture(&bob).unwrap();
     assert_eq!(host.revision, base.revision + 1);
-    assert!(engine.review(&bob, keep("b", host.revision)).is_err());
+    let refused = engine.review(&bob, keep("b", host.revision)).unwrap_err();
+    assert!(refused.to_string().contains("captured"), "{refused}");
     assert_eq!(pending(&engine, &bob), ["b"]);
     // Any recorded capture still names an offerable revision.
     let offered = engine
