@@ -1,16 +1,51 @@
 name: Claude Code adapter on Linux
 
-# Evidence for #57, not a required check. Runs check-claude-adapter with the pinned
-# Linux binary on real runners: first under the runner's default AppArmor policy, then
-# with unprivileged user namespaces allowed. It logs in with the CLAUDE_CODE_OAUTH_TOKEN
-# secret (`claude setup-token`, subscription).
+# Evidence for the Claude Code adapter's Linux cells in docs/platforms.md (#57, #115), not
+# a required check.
+#
+# Every run builds the adapter binaries and runs the worker-sandbox prerequisite check on
+# both runners, with no model call: under the runner's default AppArmor policy, bubblewrap
+# with a new network namespace must fail with `loopback: Failed RTM_NEWADDR`, and once
+# unprivileged user namespaces are allowed it must succeed.
+#
+# The live adapter check runs check-claude-adapter with the pinned runtime under both
+# policies. It logs in with the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`), the
+# maintainer's own subscription: a live run on both runners adds about 2 points to its
+# 5-hour window. So it runs only at decision points the maintainer starts, never on every
+# push to a pull request:
+#   - the `live-claude` label added to a pull request: x64 only. The label is a one-shot
+#     request; later pushes run only the prerequisites. Remove and re-add it to re-run.
+#   - a push to main that changes the adapter's inputs: both runners.
+#   - a manual run: both runners.
+# Agents never start a live run; see "Live adapter checks" in docs/agents/ticket-authoring.md.
+#
+# The job name says which mode ran: `linux (<arch>, live)` or `linux (<arch>, prerequisites
+# only)`, so a green check shows whether a commit got a live run. One exception: a labelled
+# pull request without the token (fork or Dependabot) is named `live` but skips the live
+# steps with a notice.
 on:
-  workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths: [".github/workflows/adapter-linux.yml", "adapters/codex/**", "adapters/claude/**"]
+  push:
+    branches: [main]
+    # The adapter paths plus every other input of the tested binaries.
+    paths:
+      - .github/workflows/adapter-linux.yml
+      - adapters/codex/**
+      - adapters/claude/**
+      - src/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .cargo/**
+  workflow_dispatch:
 
+# Live and prerequisites-only runs cancel only older runs of their own kind, so a push to a
+# pull request or an unrelated label never cancels a live run in progress. The live test
+# here is per run; the job name and the Token step repeat it per leg.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name != 'pull_request' || (github.event.action == 'labeled' && github.event.label.name == 'live-claude')) && 'live' || 'prerequisites' }}
   cancel-in-progress: true
 
 permissions:
@@ -22,6 +57,9 @@ defaults:
 
 jobs:
   linux:
+    # Whether this leg goes live. Neither a job name nor `concurrency` can read env, so the
+    # Token step's `if:` and the concurrency group repeat this test; keep all three in step.
+    name: linux (${{ matrix.claude }}, ${{ (github.event_name != 'pull_request' || (github.event.action == 'labeled' && github.event.label.name == 'live-claude' && matrix.claude == 'linux-x64')) && 'live' || 'prerequisites only' }})
     strategy:
       fail-fast: false
       matrix:
@@ -36,19 +74,40 @@ jobs:
       CLAUDE: runtimes/claude/claude
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           rustflags: ""
       # Claude Code's Linux sandbox needs both.
       - run: sudo apt-get install -y bubblewrap socat
-      - run: cargo build --release --locked -p falinks-host -p falinks-claude --bins
+      - run: cargo build --release --locked --bin check-claude-adapter --bin falinks-claude-tool --bin sandbox-probe
+      # Reports whether this leg goes live. The secret stays out of job env and `if:`.
+      - name: Token
+        id: live
+        if: github.event_name != 'pull_request' || (github.event.action == 'labeled' && github.event.label.name == 'live-claude' && matrix.claude == 'linux-x64')
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [[ -n $CLAUDE_CODE_OAUTH_TOKEN ]]; then
+            echo "token=true" >> "$GITHUB_OUTPUT"
+          elif [[ $GITHUB_EVENT_NAME == pull_request ]]; then
+            echo "::notice::Skipping the live adapter check: no CLAUDE_CODE_OAUTH_TOKEN on this pull request (fork or Dependabot)."
+          else
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN is not set; a $GITHUB_EVENT_NAME run must go live."
+            exit 1
+          fi
       # The adapter verifies it against PINS before running it.
       - name: Pinned runtime
+        if: steps.live.outputs.token == 'true'
         env:
           DIST: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
         run: |
+          version=$(sed -n 's/^pub const VERSION: &str = "\(.*\)";$/\1/p' adapters/claude/lib.rs)
+          if [[ -z $version ]]; then
+            echo "::error::No 'pub const VERSION: &str = \"...\";' line in adapters/claude/lib.rs."
+            exit 1
+          fi
           mkdir -p runtimes/claude
-          curl -fsSL -o "$CLAUDE" "$DIST/2.1.287/${{ matrix.claude }}/claude"
+          curl -fsSL -o "$CLAUDE" "$DIST/$version/${{ matrix.claude }}/claude"
           chmod +x "$CLAUDE"
       - name: Host
         run: |
@@ -59,19 +118,35 @@ jobs:
             sysctl kernel.apparmor_restrict_unprivileged_userns user.max_user_namespaces
             bwrap --version
           } | tee host.txt
-      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor by default.
-      - name: Default policy
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor by default, so
+      # the worker sandbox cannot start (docs/platforms.md, "Linux adapters").
+      - name: Worker-sandbox prerequisite, default policy
+        run: |
+          if err=$(bwrap --unshare-net --ro-bind / / true 2>&1 >/dev/null); then
+            echo "::error::bubblewrap ran under the default policy; docs/platforms.md says it fails there."
+            exit 1
+          fi
+          echo "$err"
+          if [[ $err != *"loopback: Failed RTM_NEWADDR"* ]]; then
+            echo "::error::bubblewrap failed without 'loopback: Failed RTM_NEWADDR'; docs/platforms.md records that message."
+            exit 1
+          fi
+      - name: Live adapter check, default policy
+        if: steps.live.outputs.token == 'true'
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-default.json
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: User namespaces allowed
+      - name: Worker-sandbox prerequisite, user namespaces allowed
+        run: bwrap --unshare-net --ro-bind / / true
+      - name: Live adapter check, user namespaces allowed
+        if: steps.live.outputs.token == 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-userns.json
       - uses: actions/upload-artifact@v7
-        if: always()
+        if: always() && steps.live.outputs.token == 'true'
         with:
           name: adapter-linux-${{ matrix.claude }}
           path: |
