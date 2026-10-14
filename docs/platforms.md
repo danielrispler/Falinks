@@ -17,6 +17,7 @@ The engine's Linux x86_64 cell rests on the `linux` CI job (#54). Linux aarch64 
 - **macOS:** `/usr/bin/sandbox-exec`. Contained commands must not run inside an outer sandbox that forbids installing another profile.
 - **Linux:** kernel 6.2 or newer with Landlock in the LSM list (`/sys/kernel/security/lsm`) and Landlock ABI 3 or newer. Debian 12 (6.1) and stock RHEL 9 fail closed. No root and no user namespaces are needed. Ship the `falinks-contain` helper beside the host executable, or set its path with `configure_containment`.
 - **Linux mounts:** the controller state and live workspaces must not be reachable through another mount, such as a bind mount, because required checks may read everything outside those roots. The engine does not enforce this.
+- **Linux adapters:** Codex and Claude Code run worker commands under bubblewrap (`bubblewrap` package; Claude Code also needs `socat`). bubblewrap needs unprivileged user namespaces. Ubuntu 24.04 blocks them through AppArmor by default (`kernel.apparmor_restrict_unprivileged_userns=1`), and the Codex sandbox then fails closed with `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` (#57; Claude Code not yet observed). Setting the sysctl to `0` needs root once. The engine needs none of this.
 
 ## Known differences
 
