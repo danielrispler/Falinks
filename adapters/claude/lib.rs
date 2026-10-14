@@ -22,10 +22,20 @@ use std::{
 };
 
 /// SHA-256 of the `claude` binary per verified platform.
-pub const PINS: PinMap<&str> = &[(
-    ("macos", "aarch64"),
-    "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea",
-)];
+pub const PINS: PinMap<&str> = &[
+    (
+        ("macos", "aarch64"),
+        "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea",
+    ),
+    (
+        ("linux", "x86_64"),
+        "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+    ),
+    (
+        ("linux", "aarch64"),
+        "e4daf793d1e74fb0d9874dd09e98690bbfd7be515f78a87fd05b9e2b4bb33b03",
+    ),
+];
 pub const VERSION: &str = "2.1.287";
 pub const MODEL: &str = "claude-opus-5-5";
 /// Built-in tools every worker gets; the launch adds its `falinks` tools.

@@ -77,13 +77,29 @@ pub struct Pin {
     /// SHA-256 of the `codex-code-mode-host` beside it.
     pub host: &'static str,
 }
-pub const PINS: PinMap<Pin> = &[(
-    ("macos", "aarch64"),
-    Pin {
-        codex: "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
-        host: "679eedaea70529aa1cffc9bc0a0788c186412663544fa76c09d63b57f383a65a",
-    },
-)];
+pub const PINS: PinMap<Pin> = &[
+    (
+        ("macos", "aarch64"),
+        Pin {
+            codex: "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+            host: "679eedaea70529aa1cffc9bc0a0788c186412663544fa76c09d63b57f383a65a",
+        },
+    ),
+    (
+        ("linux", "x86_64"),
+        Pin {
+            codex: "12eb3e81114588aca3b7998f4f19e8997b056aca08e57a7ca7c8a3ec8c652aad",
+            host: "37cab1584302611e9936902219640ab5e7a79fcfccd2504c6e85ea8cb97d0e10",
+        },
+    ),
+    (
+        ("linux", "aarch64"),
+        Pin {
+            codex: "50b06603bdcdac39b714f5c3e68583c002b8ad8779ebfdaaf4932ff016b379c0",
+            host: "7e0004bd8b37936753981729365c448bdc67f0173d9bc6453e40e3ad28774b6c",
+        },
+    ),
+];
 pub fn pin(os: &str, arch: &str) -> Result<Pin> {
     platform_pin(PINS, os, arch)
 }
