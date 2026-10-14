@@ -96,6 +96,10 @@ _Avoid_: Sandboxed command, sandboxed tool
 What every contained command receives on every supported platform: no network, reads limited to its command kind's boundary, writes only under its output, a cleared environment, process-group containment within a bounded run time, and refusal to run when these cannot be enforced. It bounds trusted tools; it does not contain hostile programs.
 _Avoid_: Sandbox contract (a contract is an agreement a proposal depends on)
 
+**Worker sandbox**:
+The isolation a worker runtime applies to its own tool commands, such as bubblewrap on Linux or Seatbelt on macOS, which must refuse to run them when it cannot start. Distinct from the containment guarantee, which the engine gives contained commands.
+_Avoid_: Sandbox (alone), containment
+
 **Supported platform**:
 An operating system on which a Falinks component upholds its guarantees and CI or recorded evidence proves it. Support is claimed per component: the engine and each worker-runtime adapter separately.
 _Avoid_: Development platform (the OS Falinks is built on, currently macOS)
