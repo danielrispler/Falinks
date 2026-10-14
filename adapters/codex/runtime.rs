@@ -60,7 +60,7 @@ pub fn configuration(root: &Path, binary: &Path) -> Vec<String> {
         "default_permissions=\"falinks\"".into(),
         "-c".into(),
         format!(
-            "permissions.falinks={{extends=\":read-only\",filesystem={{{filesystem}}},network={{enabled=false}}}}"
+            "permissions.falinks={{extends=\":workspace\",filesystem={{{filesystem}}},network={{enabled=false}}}}"
         ),
         "-c".into(),
         format!("sqlite_home={}", json!(root.join("worker-state"))),
