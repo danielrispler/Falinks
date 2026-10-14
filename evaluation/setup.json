@@ -112,9 +112,19 @@
       "charged_seconds": 1890,
       "measurement": "Two timed segments, excluding the user pause between them: the pilot2 batch invocation 09:34:39-09:47:45Z (verify, gate, both runs, cleanup; 786 s); evidence review and repair 11:02:56-11:16:20Z (transcript review, issue, fix, final CI; 804 s). Plus an allowance for commit/handoff.",
       "work": "#112: the #80 pilot rerun (/private/tmp/ev/pilot2) passed both arms, but its transcripts showed unequal agent environments. The Git-arm worker sets GOCACHE in scratch, GOTOOLCHAIN=local and GOPROXY=off; the Falinks-arm launch set none, so an agent's first go test failed on Go's sandbox-denied default cache. Repair: the Falinks-arm launch sets the same three variables. No frozen material changed. The pilot reruns in a fresh /private/tmp/ev/pilot3."
+    },
+    {
+      "start_utc": "2026-10-14T11:22:51Z",
+      "stop_utc": "2026-10-14T11:39:23Z",
+      "measured_seconds": 838,
+      "startup_allowance_seconds": 0,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 1138,
+      "measurement": "Two timed segments, excluding the user pause between them: the pilot3 batch invocation 11:22:51-11:35:34Z (verify, gate, both runs, cleanup; 763 s); evidence review and recording 11:38:08-11:39:23Z (75 s). Plus an allowance for issue resolution and handoff.",
+      "work": "#80: the unscored pilot pair reran in /private/tmp/ev/pilot3 on the #112 repair and passed both arms with a fresh gate. Every Falinks-arm go test passed on its first run; no agent changed GOCACHE. This entry takes the ledger past the eight-hour setup ceiling. Scoring is not setup, so the scored shards add nothing here."
     }
   ],
-  "charged_total_seconds": 27862,
-  "remaining_seconds": 938,
-  "status": "pilot repair: equal Go environment in both arms (#112); manifest v7"
+  "charged_total_seconds": 29000,
+  "remaining_seconds": -200,
+  "status": "setup complete: pilot /private/tmp/ev/pilot3 passed (#80); manifest v7"
 }
