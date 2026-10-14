@@ -326,14 +326,12 @@ fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment(
         .unwrap();
     let events = engine.events(&alice, 0).unwrap();
     assert_eq!(events.len(), 2, "{events:?}");
-    let note = |e: &Event| (e.seq, "finish reasoning".to_string());
+    let deferred = events
+        .iter()
+        .map(|e| (e.seq, "finish reasoning".to_string()))
+        .collect();
     engine
-        .handle(
-            &alice,
-            Some(events[1].seq),
-            &events.iter().map(note).collect(),
-            &[],
-        )
+        .handle(&alice, Some(events[1].seq), &deferred, &[])
         .unwrap();
     // Deferral and receipt are not reassessment.
     assert_eq!(pending(&engine, &alice), ["a"]);
@@ -383,9 +381,13 @@ fn replay_restores_deferred_context_and_obligations_without_duplicates_after_res
         .apply(&bob, edit("peer", &base, "b.rs", "changed\n"))
         .unwrap();
     let events = engine.events(&alice, 0).unwrap();
-    let defer = |note: &str| BTreeMap::from([(events[0].seq, note.to_string())]);
     engine
-        .handle(&alice, Some(events[0].seq), &defer("later"), &[])
+        .handle(
+            &alice,
+            Some(events[0].seq),
+            &note(events[0].seq, "later"),
+            &[],
+        )
         .unwrap();
     drop(engine);
     let engine = open(dir.path(), PAIR).unwrap();
@@ -399,7 +401,12 @@ fn replay_restores_deferred_context_and_obligations_without_duplicates_after_res
     // Redelivery after a crash before the cursor save is duplicate-safe.
     for _ in 0..2 {
         engine
-            .handle(&alice, Some(events[1].seq), &defer("again"), &[])
+            .handle(
+                &alice,
+                Some(events[1].seq),
+                &note(events[0].seq, "again"),
+                &[],
+            )
             .unwrap();
     }
     let again = engine.pending(&alice).unwrap();
@@ -419,14 +426,17 @@ fn plan(text: &str) -> Plan {
         reply_to: None,
     }
 }
-/// Bob's plans, in Alice's stream.
-fn plans(engine: &Engine, bob: &Client, count: usize) -> Vec<u64> {
+/// The seqs of `count` plans from `sender`, in its peer's stream.
+fn plans(engine: &Engine, sender: &Client, count: usize) -> Vec<u64> {
     (0..count)
-        .map(|n| engine.post(bob, plan(&format!("plan {n}"))).unwrap().seq)
+        .map(|n| engine.post(sender, plan(&format!("plan {n}"))).unwrap().seq)
         .collect()
 }
 fn seqs(events: &[Event]) -> Vec<u64> {
     events.iter().map(|e| e.seq).collect()
+}
+fn note(seq: u64, text: &str) -> BTreeMap<u64, String> {
+    BTreeMap::from([(seq, text.into())])
 }
 
 #[test]
@@ -446,12 +456,18 @@ fn one_handle_call_processes_every_event_through_its_seq() {
 fn deferrals_survive_reopen_until_processed_clears_them() {
     let (dir, engine, alice, bob) = fixture(PAIR);
     let posted = plans(&engine, &bob, 3);
-    let note = |seq: u64| BTreeMap::from([(seq, "after my edit".to_string())]);
     engine
-        .handle(&alice, Some(posted[2]), &note(posted[0]), &[])
+        .handle(
+            &alice,
+            Some(posted[2]),
+            &note(posted[0], "after my edit"),
+            &[],
+        )
         .unwrap();
     // A deferral may name an event processed earlier.
-    engine.handle(&alice, None, &note(posted[1]), &[]).unwrap();
+    engine
+        .handle(&alice, None, &note(posted[1], "after my edit"), &[])
+        .unwrap();
     drop(engine);
     let (engine, alice, _) = reopen(dir.path(), PAIR);
     let restored = engine.pending(&alice).unwrap();
@@ -480,18 +496,17 @@ fn repeated_handling_changes_nothing_and_may_end_at_an_own_post() {
     let theirs = plans(&engine, &bob, 1)[0];
     // Alice's own post goes only to Bob, so it is not in her stream.
     let own = engine.post(&alice, plan("mine")).unwrap().seq;
-    let note = |text: &str| BTreeMap::from([(theirs, text.to_string())]);
     engine
-        .handle(&alice, Some(own), &note("later"), &[])
+        .handle(&alice, Some(own), &note(theirs, "later"), &[])
         .unwrap();
     let once = engine.pending(&alice).unwrap();
     assert_eq!(once.handled, own);
     assert!(once.unhandled.is_empty());
     engine
-        .handle(&alice, Some(own), &note("later"), &[])
+        .handle(&alice, Some(own), &note(theirs, "later"), &[])
         .unwrap();
     engine
-        .handle(&alice, Some(theirs), &note("changed"), &[])
+        .handle(&alice, Some(theirs), &note(theirs, "changed"), &[])
         .unwrap();
     assert_eq!(engine.pending(&alice).unwrap(), once);
 }
@@ -505,11 +520,10 @@ fn refused_handling_changes_nothing() {
         .unwrap();
     let own = engine.post(&alice, plan("mine")).unwrap().seq;
     let before = engine.pending(&alice).unwrap();
-    let note = |seq: u64| BTreeMap::from([(seq, "later".to_string())]);
     for (through, deferred, processed, why) in [
         (
             Some(posted[1]),
-            note(posted[1]),
+            note(posted[1], "later"),
             vec![posted[1]],
             "contradictory",
         ),
@@ -521,11 +535,16 @@ fn refused_handling_changes_nothing() {
         ),
         (
             None,
-            note(posted[1]),
+            note(posted[1], "later"),
             vec![],
             "deferral beyond the new cursor",
         ),
-        (Some(own), note(own), vec![], "deferral outside the stream"),
+        (
+            Some(own),
+            note(own, "later"),
+            vec![],
+            "deferral outside the stream",
+        ),
     ] {
         assert!(
             engine

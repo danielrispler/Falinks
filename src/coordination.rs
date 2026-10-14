@@ -2,6 +2,7 @@
 //! checkpoint offers, the durable event stream and voluntary waits.
 use crate::analysis::{self, Evidence, Footprint};
 use crate::publication::{self, RunOutcome};
+use crate::regroup::scalar;
 use crate::{Capture, Client, Engine, Layout, Result, connect, fail, meta, retain};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -358,6 +359,14 @@ fn events_after(db: &Connection, workspace: &str, agent: usize, after: u64) -> R
     })
     .collect()
 }
+/// Whether event `seq` was sent to `agent`.
+fn in_stream(db: &Connection, agent: usize, seq: u64) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE seq=? AND audience & ? != 0)",
+        params![seq as i64, mine(agent)],
+        |r| r.get(0),
+    )?)
+}
 pub(crate) fn emit(db: &Connection, audience: i64, body: &Body) -> Result<u64> {
     db.execute(
         "INSERT INTO events(audience, body) VALUES(?,?)",
@@ -687,14 +696,7 @@ impl Engine {
         self.check_work(&db, &plan.work)?;
         if let Some(reply) = &plan.reply_to {
             // Only a message this client was sent (or sent itself) can be answered.
-            let visible = db
-                .query_row(
-                    "SELECT 1 FROM events WHERE seq=? AND audience & ? != 0",
-                    params![reply.event as i64, mine(client.agent)],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
+            let visible = in_stream(&db, client.agent, reply.event)?;
             match event(&db, &self.identity.workspace, reply.event)? {
                 Some(Event {
                     body: Body::Message(original),
@@ -878,26 +880,19 @@ impl Engine {
             return fail(format!("event {seq} cannot be both deferred and processed"));
         }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let newest = db.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| {
-            r.get::<_, i64>(0)
-        })? as u64;
+        let newest = scalar(&db, "SELECT COALESCE(MAX(seq), 0) FROM events")?;
         let through = through.unwrap_or(0);
         if through > newest {
             return fail(format!(
                 "through {through} is beyond the newest event {newest}"
             ));
         }
-        let handled = cursor(&db, client.agent)?.max(through);
+        let new_cursor = cursor(&db, client.agent)?.max(through);
         let tx = db.unchecked_transaction()?;
         for (seq, note) in deferred {
-            let in_stream = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM events WHERE seq=? AND audience & ? != 0)",
-                params![*seq as i64, mine(client.agent)],
-                |r| r.get::<_, bool>(0),
-            )?;
-            if *seq > handled || !in_stream {
+            if *seq > new_cursor || !in_stream(&tx, client.agent, *seq)? {
                 return fail(format!(
-                    "event {seq} is not in your stream at or below {handled}"
+                    "event {seq} is not in your stream at or below {new_cursor}"
                 ));
             }
             tx.execute(
@@ -913,7 +908,7 @@ impl Engine {
         }
         tx.execute(
             "INSERT INTO cursors VALUES(?,?) ON CONFLICT(agent) DO UPDATE SET seq=excluded.seq",
-            params![client.agent as i64, handled as i64],
+            params![client.agent as i64, new_cursor as i64],
         )?;
         tx.commit()?;
         Ok(())

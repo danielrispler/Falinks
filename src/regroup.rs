@@ -161,7 +161,7 @@ fn commit_state(db: &Connection, proposal: &RegroupingProposal) -> Result<()> {
     Ok(())
 }
 const CONTEXT_CHANGED: &str = "task or group context changed; propose again";
-fn scalar(db: &Connection, sql: &str) -> Result<u64> {
+pub(crate) fn scalar(db: &Connection, sql: &str) -> Result<u64> {
     Ok(db.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
 }
 fn mark(db: &Connection) -> Result<Mark> {
