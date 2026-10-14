@@ -129,7 +129,17 @@ pub fn probe_controls(events: &[Value], command: &str, names: &[String]) -> Resu
         }) else {
             continue;
         };
-        let checks: Value = serde_json::from_str(text)?;
+        let mut checks: Value = serde_json::from_str(text)?;
+        // On Linux the sandbox hides protected storage behind an empty tmpfs, so a probe
+        // write there succeeds into the mask. The host decides: a protected write passes
+        // only if the real file still exists and never received the probe's bytes.
+        let args = shlex::split(command).ok_or("unparsable probe command")?;
+        for (label, secret) in args.iter().skip(4).filter_map(|a| a.split_once('=')) {
+            let unchanged = fs::read(secret)? != b"BYPASS";
+            if let Some(write) = checks.get_mut(format!("{label}_write")) {
+                *write = json!(unchanged);
+            }
+        }
         require(
             checks.as_object().is_some_and(|c| {
                 c.len() == names.len() && names.iter().all(|n| c.get(n) == Some(&json!(true)))

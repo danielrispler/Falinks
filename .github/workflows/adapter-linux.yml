@@ -1,10 +1,9 @@
-name: Adapter checks on Linux
+name: Claude Code adapter on Linux
 
-# Evidence for #57, not a required check. Runs both adapter checks with the pinned
-# Linux binaries on real runners: first under the runner's default AppArmor policy,
-# then with unprivileged user namespaces allowed. Without a login each check stops at
-# its first model turn; the Codex sandbox controls before it still run. Claude Code logs in
-# with the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`, subscription).
+# Evidence for #57, not a required check. Runs check-claude-adapter with the pinned
+# Linux binary on real runners: first under the runner's default AppArmor policy, then
+# with unprivileged user namespaces allowed. It logs in with the CLAUDE_CODE_OAUTH_TOKEN
+# secret (`claude setup-token`, subscription).
 on:
   workflow_dispatch:
   pull_request:
@@ -28,36 +27,27 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            arch: x86_64
             claude: linux-x64
           - runner: ubuntu-24.04-arm
-            arch: aarch64
             claude: linux-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
-      CODEX: runtimes/codex/codex-${{ matrix.arch }}-unknown-linux-musl
       CLAUDE: runtimes/claude/claude
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           rustflags: ""
-      # Claude Code's Linux sandbox needs both; Codex uses the system bubblewrap when present.
+      # Claude Code's Linux sandbox needs both.
       - run: sudo apt-get install -y bubblewrap socat
       - run: cargo build --release --locked -p falinks-host -p falinks-claude --bins
-      # The adapters verify these against PINS before running them.
-      - name: Pinned runtimes
+      # The adapter verifies it against PINS before running it.
+      - name: Pinned runtime
         env:
-          GH_TOKEN: ${{ github.token }}
           DIST: https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases
         run: |
-          mkdir -p runtimes/codex runtimes/claude
-          gh release download rust-v0.160.0 --repo openai/codex --dir runtimes/codex \
-            --pattern "codex-${{ matrix.arch }}-unknown-linux-musl.tar.gz" \
-            --pattern "codex-code-mode-host-${{ matrix.arch }}-unknown-linux-musl.tar.gz"
-          for archive in runtimes/codex/*.tar.gz; do tar -xzf "$archive" -C runtimes/codex; done
-          mv "runtimes/codex/codex-code-mode-host-${{ matrix.arch }}-unknown-linux-musl" runtimes/codex/codex-code-mode-host
+          mkdir -p runtimes/claude
           curl -fsSL -o "$CLAUDE" "$DIST/2.1.287/${{ matrix.claude }}/claude"
           chmod +x "$CLAUDE"
       - name: Host
@@ -70,28 +60,20 @@ jobs:
             bwrap --version
           } | tee host.txt
       # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor by default.
-      - name: Codex, default policy
-        continue-on-error: true
-        run: target/release/check-adapter --binary "$CODEX" --output codex-default.json
-      - name: Claude Code, default policy
+      - name: Default policy
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-default.json
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Codex, user namespaces allowed
-        continue-on-error: true
-        run: target/release/check-adapter --binary "$CODEX" --output codex-userns.json
-      - name: Claude Code, user namespaces allowed
-        continue-on-error: true
+      - name: User namespaces allowed
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-userns.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: adapter-linux-${{ matrix.arch }}
+          name: adapter-linux-${{ matrix.claude }}
           path: |
             host.txt
-            *-default.json
-            *-userns.json
+            claude-*.json

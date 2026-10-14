@@ -421,3 +421,41 @@ fn platforms_doc_lists_the_claude_pins() {
     let row = falinks_host::platforms_row("Claude Code adapter", falinks_claude::PINS);
     assert!(doc.lines().any(|line| line == row), "missing row: {row}");
 }
+
+#[test]
+fn a_masked_protected_write_passes_only_while_the_real_file_is_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("secret.txt");
+    std::fs::write(&secret, "protected fixture\n").unwrap();
+    let command = shlex::try_join([
+        "probe",
+        "source.txt",
+        "hash",
+        "scratch",
+        &format!("controller={}", secret.display()),
+    ])
+    .unwrap();
+    let names = falinks_claude::probe_names(&["controller"]);
+    let mut controls: serde_json::Map<String, Value> =
+        names.iter().map(|n| (n.clone(), json!(true))).collect();
+    // Linux Claude Code: the write succeeded into the tmpfs that hides the directory.
+    controls.insert("controller_write".into(), json!(false));
+    let events = [
+        json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"t1","name":"Bash","input":{"command":command}}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},
+            "tool_use_result":{"stdout":format!("FALINKS_CONTROLS={}\n", Value::Object(controls))}}),
+    ];
+    let checks = falinks_claude::probe_controls(&events, &command, &names).unwrap();
+    assert_eq!(checks["controller_write"], json!(true));
+
+    std::fs::write(&secret, "BYPASS").unwrap();
+    let error = falinks_claude::probe_controls(&events, &command, &names).unwrap_err();
+    assert!(
+        error.to_string().contains("filesystem controls failed"),
+        "{error}"
+    );
+
+    std::fs::remove_file(&secret).unwrap();
+    assert!(falinks_claude::probe_controls(&events, &command, &names).is_err());
+}
