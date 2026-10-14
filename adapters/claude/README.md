@@ -4,7 +4,7 @@ Issue [#33](https://github.com/danielrispler/Falinks/issues/33) ports the [#23](
 
 ## Run
 
-Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) (today macOS arm64) and Claude Code `2.1.287` (SHA-256 `6eab8333…cb41ea`). Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
+Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) (macOS arm64, Linux x86_64 and aarch64) and Claude Code `2.1.287`, whose per-platform SHA-256 is in `PINS`. On Linux use the glibc `linux-x64`/`linux-arm64` release binary and meet the Linux adapter requirements there. Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
 
 ```sh
 cargo build --release --bins
@@ -53,7 +53,7 @@ Resume re-passes every launch flag with `--resume`, re-verifies `init` (same ses
 
 Unknown-change detection runs on a separate injected fixture before the grant. A final live injection preserves the bytes, stops the host and revokes capability.
 
-The steering and completion-race controls are verified in the first process and recorded again in the resumed gate within the same verifier run. A saved report never authorizes another process. `evidence/2026-10-10-controls.json` is audit material: it contains stream events without reasoning blocks, host calls, deliveries and controls. Current capability always requires a fresh run.
+The steering and completion-race controls are verified in the first process and recorded again in the resumed gate within the same verifier run. A saved report never authorizes another process. `evidence/2026-10-10-controls.json` (macOS) and `evidence/2026-10-14-linux/` (Ubuntu 24.04; its README records the hosts) are audit material: they contain stream events without reasoning blocks, host calls, deliveries and controls. Current capability always requires a fresh run.
 
 ## Limits
 

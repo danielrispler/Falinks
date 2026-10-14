@@ -405,11 +405,16 @@ fn only_declared_platforms_have_a_claude_pin() {
         falinks_claude::pin("macos", "aarch64").unwrap(),
         "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea"
     );
-    for (os, arch) in [
-        ("macos", "x86_64"),
-        ("linux", "x86_64"),
-        ("windows", "x86_64"),
-    ] {
+    // Verified on Ubuntu 24.04 runners in #57 (evidence/2026-10-14-linux/).
+    assert_eq!(
+        falinks_claude::pin("linux", "x86_64").unwrap(),
+        "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0"
+    );
+    assert_eq!(
+        falinks_claude::pin("linux", "aarch64").unwrap(),
+        "e4daf793d1e74fb0d9874dd09e98690bbfd7be515f78a87fd05b9e2b4bb33b03"
+    );
+    for (os, arch) in [("macos", "x86_64"), ("windows", "x86_64")] {
         let error = falinks_claude::pin(os, arch).unwrap_err().to_string();
         assert!(error.contains("unsupported platform"), "{error}");
     }
