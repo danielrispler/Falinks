@@ -366,8 +366,8 @@ impl Session {
             &launch.controller.join("context.sqlite"),
             &launch.source,
             connection.clone(),
+            launch.operations(),
         )?;
-        boundary.operations = launch.operations();
         boundary.bind(session, agent, resume)?;
         Ok(Self {
             boundary,
