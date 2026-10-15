@@ -946,21 +946,25 @@ impl Engine {
         proposal.state = ProposalState::Applied {
             revisions: moves.iter().map(|(s, c)| (*s, c.revision)).collect(),
         };
-        let tx = db.unchecked_transaction()?;
-        save(&tx, proposal)?;
-        let event = announce(&tx, proposal)?;
-        self.commit_moves(&tx, shift, &moves, proposal.target)?;
-        for (agent, revision, view) in &views {
-            self.renew_for_view(&tx, *agent, view, *revision, event)?;
-        }
-        let mark = Mark {
-            event,
-            request: scalar(&tx, "SELECT COALESCE(MAX(id), 0) FROM requests")?,
-            wait: scalar(&tx, "SELECT COALESCE(MAX(id), 0) FROM waits")?,
-            proposal: scalar(&tx, "SELECT COALESCE(MAX(seq), 0) FROM proposals")?,
-        };
-        set_meta(&tx, "regroup_mark", &serde_json::to_string(&mark)?)?;
-        tx.commit()?;
+        let committed = (|| -> Result<()> {
+            let tx = db.unchecked_transaction()?;
+            save(&tx, proposal)?;
+            let event = announce(&tx, proposal)?;
+            self.commit_moves(&tx, shift, &moves, proposal.target)?;
+            for (agent, revision, view) in &views {
+                self.renew_for_view(&tx, *agent, view, *revision, event)?;
+            }
+            let mark = Mark {
+                event,
+                request: scalar(&tx, "SELECT COALESCE(MAX(id), 0) FROM requests")?,
+                wait: scalar(&tx, "SELECT COALESCE(MAX(id), 0) FROM waits")?,
+                proposal: scalar(&tx, "SELECT COALESCE(MAX(seq), 0) FROM proposals")?,
+            };
+            set_meta(&tx, "regroup_mark", &serde_json::to_string(&mark)?)?;
+            tx.commit()?;
+            Ok(())
+        })();
+        interrupted(db, shift, committed)?;
         drop(layout);
         self.adopt(moves, proposal.target)?;
         Ok(true)
@@ -1009,22 +1013,26 @@ impl Engine {
             let moves = vec![(*space, merged.clone())];
             let view = self.view_change(db, workspace, &merged, &differing(workspace, &merged))?;
             let shift = self.install_moves(db, &layout, &moves)?;
-            let tx = db.unchecked_transaction()?;
-            let event = emit(
-                &tx,
-                audience,
-                &Body::Incorporated {
-                    space: *space,
-                    publication: published.revision,
-                    revision: merged.revision,
-                },
-            )?;
             let placement = layout.placement;
-            self.commit_moves(&tx, shift, &moves, placement)?;
-            for agent in members {
-                self.renew_for_view(&tx, agent, &view, merged.revision, event)?;
-            }
-            tx.commit()?;
+            let committed = (|| -> Result<()> {
+                let tx = db.unchecked_transaction()?;
+                let event = emit(
+                    &tx,
+                    audience,
+                    &Body::Incorporated {
+                        space: *space,
+                        publication: published.revision,
+                        revision: merged.revision,
+                    },
+                )?;
+                self.commit_moves(&tx, shift, &moves, placement)?;
+                for agent in members {
+                    self.renew_for_view(&tx, agent, &view, merged.revision, event)?;
+                }
+                tx.commit()?;
+                Ok(())
+            })();
+            interrupted(db, shift, committed)?;
             drop(layout);
             self.adopt(moves, placement)?;
             changed = true;
@@ -1081,14 +1089,7 @@ impl Engine {
             }
             Ok(())
         })();
-        if let Err(error) = installed {
-            set_meta(
-                db,
-                "halted",
-                &format!("interrupted transition {id}: {error}"),
-            )?;
-            return Err(error);
-        }
+        interrupted(db, id, installed)?;
         Ok(id)
     }
     /// Inside the caller's transaction: new revisions, pointers, placement, installed shift.
@@ -1128,6 +1129,19 @@ impl Engine {
         layout.placement = placement;
         Ok(())
     }
+}
+
+/// A failure once `shift` is recorded as installing, before its commit, leaves files the
+/// engine wrote: halt durably until restart restores the before state.
+fn interrupted<T>(db: &Connection, shift: i64, result: Result<T>) -> Result<T> {
+    if let Err(error) = &result {
+        set_meta(
+            db,
+            "halted",
+            &format!("interrupted transition {shift}: {error}"),
+        )?;
+    }
+    result
 }
 
 /// The recency window: the latest settled review in each direction since the last
