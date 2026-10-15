@@ -589,6 +589,54 @@ fn split_commit_failure_with_no_operation_before_restart_is_an_interruption() {
     split_commit_failure_is_an_interruption(false);
 }
 
+/// Restart recovery checks every root before it restores any (#159): an interrupted split,
+/// and an unexplained file in a root the split does not touch.
+#[test]
+fn interrupted_transition_with_a_tampered_unaffected_root_refuses_without_change() {
+    let (dir, engine, alice, bob) = fixture();
+    independent(&engine, &alice, &bob);
+    let (live, second, third) = (
+        dir.path().join("live"),
+        dir.path().join("second"),
+        dir.path().join("third"),
+    );
+    engine.add_workspace(&second).unwrap();
+    fs::create_dir(&third).unwrap();
+    engine.add_workspace(&third).unwrap();
+    let proposal = engine.reconsider().unwrap();
+    agree(&engine, &alice, &proposal);
+    fail_commits(dir.path(), true);
+    engine
+        .respond(&bob, &proposal.id, &proposal.context, Response::Agree)
+        .unwrap();
+    fail_commits(dir.path(), false);
+    assert_eq!(
+        read(&second, "callee.go"),
+        CALLEE,
+        "the split reached second"
+    );
+    drop(engine);
+    fs::write(third.join("x.go"), "package probe\n").unwrap();
+    let roots = [snapshot(&live), snapshot(&second), snapshot(&third)];
+
+    fails_with(support::open(dir.path(), GO), "unexplained source write");
+    assert_eq!(
+        [snapshot(&live), snapshot(&second), snapshot(&third)],
+        roots
+    );
+    let installing: bool = support::ledger(dir.path())
+        .query_row(
+            "SELECT json_extract(body, '$.installing') FROM shifts ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(installing);
+    assert_eq!(incidents(dir.path()), 1);
+    let reason = halt(dir.path()).unwrap();
+    assert!(reason.contains("unexplained source write"), "{reason}");
+}
+
 /// A statement failing inside the commit transaction that incorporates a publication into a
 /// split workspace, after that root is installed, is an interruption (#158).
 fn incorporation_commit_failure_is_an_interruption(operation_between: bool) {

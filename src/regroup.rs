@@ -5,9 +5,9 @@ use crate::analysis::{self, Footprint};
 use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, Work, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
-    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, all, audit,
-    audit_interrupted, build_tree, connect, ensure_empty, fail, install, meta, meta_value,
-    next_revision, one, record, restore, retain, revision, set_meta,
+    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, all, audit, build_tree,
+    connect, ensure_empty, fail, install, meta, meta_value, next_revision, one, record, retain,
+    revision, set_meta,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -138,15 +138,15 @@ struct Mark {
     proposal: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct RootChange {
-    space: usize,
-    before: Option<Capture>,
-    after: Capture,
+pub(crate) struct RootChange {
+    pub(crate) space: usize,
+    pub(crate) before: Option<Capture>,
+    pub(crate) after: Capture,
 }
 /// A workspace installation recorded before any file changes, for restart recovery.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct Installation {
-    moves: Vec<RootChange>,
+pub(crate) struct Installation {
+    pub(crate) moves: Vec<RootChange>,
     installing: bool,
 }
 
@@ -278,35 +278,27 @@ fn differing(before: &Capture, after: &Capture) -> BTreeSet<String> {
 
 /// Restart: an uncommitted workspace installation is put back to its recorded before
 /// state, only after every affected root matches before or after exactly.
-pub(crate) fn recover(engine: &Engine, db: &Connection, layout: &Layout) -> Result<()> {
+/// Shifts still installing at restart, with their new revisions retained as evidence.
+/// Restart recovery checks and restores their roots (`Engine::recover`).
+pub(crate) fn installing(engine: &Engine, db: &Connection) -> Result<Vec<(i64, Installation)>> {
     let rows: Vec<(i64, Installation)> =
         all(db, "SELECT json_array(id, json(body)) FROM shifts", [])?;
-    for (id, mut shift) in rows {
-        if !shift.installing {
-            continue;
-        }
-        // Audit every affected root before restoring any.
-        let mut restores = Vec::new();
+    let mut installing = Vec::new();
+    for (id, shift) in rows.into_iter().filter(|(_, s)| s.installing) {
         for change in &shift.moves {
             retain(&engine.state, &change.after)?;
-            let root = &layout.roots[change.space];
-            match audit_interrupted(root, change.before.as_ref(), &change.after) {
-                Ok(changed) => restores.push((root, change.before.as_ref(), changed)),
-                Err(error) => {
-                    engine.save_incident(db, &layout.roots, &error.to_string())?;
-                    return Err(error);
-                }
-            }
         }
-        for (root, before, changed) in restores {
-            restore(root, before, &changed)?;
-        }
-        shift.installing = false;
-        db.execute(
-            "UPDATE shifts SET body=? WHERE id=?",
-            params![serde_json::to_string(&shift)?, id],
-        )?;
+        installing.push((id, shift));
     }
+    Ok(installing)
+}
+/// After restart restored a shift's roots: it is no longer installing.
+pub(crate) fn restored(db: &Connection, id: i64, mut shift: Installation) -> Result<()> {
+    shift.installing = false;
+    db.execute(
+        "UPDATE shifts SET body=? WHERE id=?",
+        params![serde_json::to_string(&shift)?, id],
+    )?;
     Ok(())
 }
 

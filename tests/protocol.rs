@@ -3,7 +3,7 @@ mod support;
 use falinks::*;
 use std::fs;
 use support::{
-    PAIR, edit, fail_commits, fails_with, fixture, halt, incidents, open, reopen, snapshot,
+    PAIR, edit, fail_commits, fails_with, fixture, halt, incidents, ledger, open, reopen, snapshot,
 };
 
 #[test]
@@ -659,15 +659,9 @@ fn open_worker() {
     println!("{error}");
 }
 
-#[test]
-#[ignore = "subprocess crash worker; invoked by crash_boundaries"]
-fn crash_worker() {
-    let root = std::path::PathBuf::from(std::env::var("FALINKS_CRASH_ROOT").unwrap());
-    let phase = std::env::var("FALINKS_CRASH_PHASE").unwrap();
-    let engine = open(&root, PAIR).unwrap();
-    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
-    let base = engine.capture().unwrap();
-    let mut request = edit("process-crash", &base, "a.rs", "new a");
+/// Replaces `a.rs` with `new a` and `b.rs` with `new b`, installing `a.rs` first.
+fn two_files(id: &str, base: &Capture) -> Request {
+    let mut request = edit(id, base, "a.rs", "new a");
     request.expected.insert("b.rs".into(), 0);
     request.output.insert(
         "b.rs".into(),
@@ -676,8 +670,29 @@ fn crash_worker() {
             executable: false,
         }),
     );
+    request
+}
+/// Runs `crash_worker` over a fixture root; the process exits at `phase`.
+fn crash(root: &std::path::Path, phase: &str) {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "crash_worker"])
+        .env("FALINKS_CRASH_ROOT", root)
+        .env("FALINKS_CRASH_PHASE", phase)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(73));
+}
+
+#[test]
+#[ignore = "subprocess crash worker; invoked by crash_boundaries"]
+fn crash_worker() {
+    let root = std::path::PathBuf::from(std::env::var("FALINKS_CRASH_ROOT").unwrap());
+    let phase = std::env::var("FALINKS_CRASH_PHASE").unwrap();
+    let engine = open(&root, PAIR).unwrap();
+    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
+    let base = engine.capture().unwrap();
     engine
-        .apply_observed(&alice, request, |observed| {
+        .apply_observed(&alice, two_files("process-crash", &base), |observed| {
             let selected = match phase.as_str() {
                 "before-retention" => observed == Phase::BeforeRetention,
                 "retained" => observed == Phase::Retained,
@@ -707,13 +722,7 @@ fn crash_boundaries_preserve_drafts_and_never_promote_incomplete_installations()
         let (dir, engine, _, _) = fixture(PAIR);
         let base = engine.capture().unwrap();
         drop(engine);
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--ignored", "--exact", "crash_worker"])
-            .env("FALINKS_CRASH_ROOT", dir.path())
-            .env("FALINKS_CRASH_PHASE", phase)
-            .status()
-            .unwrap();
-        assert_eq!(status.code(), Some(73));
+        crash(dir.path(), phase);
         let engine = open(dir.path(), PAIR).unwrap();
         let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
         let record = engine.request(&alice, "process-crash").unwrap().unwrap();
@@ -747,17 +756,8 @@ fn crash_boundaries_preserve_drafts_and_never_promote_incomplete_installations()
 fn ambiguous_restart_preserves_all_files_instead_of_partially_restoring() {
     let (dir, engine, alice, _) = fixture(PAIR);
     let base = engine.capture().unwrap();
-    let mut request = edit("ambiguous", &base, "a.rs", "partial a");
-    request.expected.insert("b.rs".into(), 0);
-    request.output.insert(
-        "b.rs".into(),
-        Some(File {
-            bytes: b"new b".to_vec(),
-            executable: false,
-        }),
-    );
     engine
-        .apply_observed(&alice, request, |phase| {
+        .apply_observed(&alice, two_files("ambiguous", &base), |phase| {
             if phase == Phase::Installed("a.rs".into()) {
                 return Err("interrupt".into());
             }
@@ -767,10 +767,7 @@ fn ambiguous_restart_preserves_all_files_instead_of_partially_restoring() {
     drop(engine);
     fs::write(dir.path().join("live/b.rs"), "external draft").unwrap();
     fails_with(open(dir.path(), PAIR), "ambiguous interrupted source");
-    assert_eq!(
-        fs::read(dir.path().join("live/a.rs")).unwrap(),
-        b"partial a"
-    );
+    assert_eq!(fs::read(dir.path().join("live/a.rs")).unwrap(), b"new a");
     assert_eq!(
         fs::read(dir.path().join("live/b.rs")).unwrap(),
         b"external draft"
@@ -1136,4 +1133,55 @@ fn edit_commit_failure_with_an_operation_before_restart_is_an_interruption() {
 #[test]
 fn edit_commit_failure_with_no_operation_before_restart_is_an_interruption() {
     commit_failure_after_installation_is_an_interruption(false);
+}
+
+/// Restart recovery checks every root before it restores any (#159): an edit interrupted
+/// after its first installed path, and an unenrolled file in another root.
+fn recovery_refuses_an_unexplained_root_without_change(process_exit: bool) {
+    let (dir, engine, alice, _) = fixture(PAIR);
+    let (live, second) = (dir.path().join("live"), dir.path().join("second"));
+    fs::create_dir(&second).unwrap();
+    engine.add_workspace(&second).unwrap();
+    if process_exit {
+        drop(engine);
+        crash(dir.path(), "halfway");
+    } else {
+        let base = engine.capture().unwrap();
+        engine
+            .apply_observed(&alice, two_files("process-crash", &base), |phase| {
+                if phase == Phase::Installed("a.rs".into()) {
+                    return Err("interrupt".into());
+                }
+                Ok(())
+            })
+            .unwrap();
+        drop(engine);
+    }
+    fs::write(second.join("x.rs"), "fn x() {}\n").unwrap();
+    let roots = [snapshot(&live), snapshot(&second)];
+
+    fails_with(open(dir.path(), PAIR), "unexplained source write");
+    assert_eq!([snapshot(&live), snapshot(&second)], roots);
+    let pending: bool = ledger(dir.path())
+        .query_row(
+            "SELECT json_extract(body, '$.installation_pending') FROM requests WHERE request_id='process-crash'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(pending);
+    assert_eq!(incidents(dir.path()), 1);
+    let reason = halt(dir.path()).unwrap();
+    assert!(reason.contains("unexplained source write"), "{reason}");
+
+    fs::remove_file(second.join("x.rs")).unwrap();
+    fails_with(open(dir.path(), PAIR), "engine halted for reconciliation");
+}
+#[test]
+fn recovery_after_an_in_process_interruption_checks_every_root_before_restoring() {
+    recovery_refuses_an_unexplained_root_without_change(false);
+}
+#[test]
+fn recovery_after_a_process_exit_checks_every_root_before_restoring() {
+    recovery_refuses_an_unexplained_root_without_change(true);
 }

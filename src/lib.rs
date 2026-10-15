@@ -1225,10 +1225,13 @@ impl Engine {
         save_record(db, record)?;
         Ok(outcome)
     }
+    /// Three phases: check every live root, then restore, then update the journals. A
+    /// failed check records an incident and changes no root and no journal.
     fn recover(&self) -> Result<()> {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         let layout = self.layout()?;
-        for mut record in records(&db)? {
+        let mut records = records(&db)?;
+        for record in &records {
             if let Some(proposed) = &record.proposed {
                 retain(&self.state, proposed)?;
             }
@@ -1238,27 +1241,66 @@ impl Engine {
                     retain(&self.state, proposed)?;
                 }
             }
-            if record.outcome.is_none() || record.installation_pending {
-                if let Some(proposed) = &record.proposed {
-                    let live = &layout.roots[record.before.space];
-                    let before = Some(&record.before);
-                    match audit_interrupted(live, before, proposed) {
-                        Ok(changed) => restore(live, before, &changed)?,
-                        Err(error) => {
-                            self.save_incident(&db, &layout.roots, &error.to_string())?;
-                            return Err(error);
-                        }
-                    }
-                }
-                record.installation_pending = false;
-                if record.outcome.is_none() {
-                    record.outcome = Some(Outcome::Interrupted {
-                        reason: "restart reconciled; explicit retry required".into(),
-                    });
-                }
-                save_record(&db, &record)?;
-            }
         }
+        records.retain(|r| r.outcome.is_none() || r.installation_pending);
+        let shifts = regroup::installing(self, &db)?;
+        // Pending installations by root: (space, before, after); `None` is an empty root.
+        let pending: Vec<(usize, Option<&Capture>, &Capture)> = records
+            .iter()
+            .filter_map(|r| Some((r.before.space, Some(&r.before), r.proposed.as_ref()?)))
+            .chain(shifts.iter().flat_map(|(_, shift)| {
+                shift
+                    .moves
+                    .iter()
+                    .map(|c| (c.space, c.before.as_ref(), &c.after))
+            }))
+            .collect();
+        // Phase 1: a pending root holds its before or after state path by path; every other
+        // root holds its completed state, or nothing.
+        let checked = (|| -> Result<Vec<_>> {
+            let mut restores = Vec::new();
+            for &(space, before, after) in &pending {
+                let changed = audit_interrupted(&layout.roots[space], before, after)?;
+                restores.push((space, before, changed));
+            }
+            for (space, (root, completed)) in layout.roots.iter().zip(&layout.completed).enumerate()
+            {
+                if pending.iter().any(|p| p.0 == space) {
+                    continue;
+                }
+                match completed {
+                    Some(completed) => audit(root, completed)?,
+                    None => ensure_empty(root)?,
+                }
+            }
+            Ok(restores)
+        })();
+        let restores = match checked {
+            Ok(restores) => restores,
+            Err(error) => {
+                self.save_incident(&db, &layout.roots, &error.to_string())?;
+                return Err(error);
+            }
+        };
+        // Phase 2: an uncommitted installation leaves its root's completed state at `before`.
+        for (space, before, changed) in restores {
+            restore(&layout.roots[space], before, &changed)?;
+        }
+        // Phase 3: the journals.
+        for mut record in records {
+            record.installation_pending = false;
+            if record.outcome.is_none() {
+                record.outcome = Some(Outcome::Interrupted {
+                    reason: "restart reconciled; explicit retry required".into(),
+                });
+            }
+            save_record(&db, &record)?;
+        }
+        for (id, shift) in shifts {
+            regroup::restored(&db, id, shift)?;
+        }
+        // Outside the phases: publication runs and captured jobs write no live root, and a
+        // restart interrupts them whatever the roots contain.
         publication::recover(&db)?;
         for mut job in all::<Job>(&db, "SELECT body FROM jobs", [])? {
             if !job.finished {
@@ -1268,11 +1310,6 @@ impl Engine {
                 );
                 save_job(&db, &job)?;
             }
-        }
-        regroup::recover(self, &db, &layout)?;
-        if let Err(error) = self.audit_all(&layout) {
-            self.save_incident(&db, &layout.roots, &error.to_string())?;
-            return Err(error);
         }
         // Only known interrupted installations are cleared. Unexplained edits stay halted.
         if meta(&db, "halted")?.is_some_and(|r| {
