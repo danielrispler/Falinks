@@ -5,12 +5,12 @@
   </picture>
 </p>
 
-<h3 align="center">Run Claude Code and Codex side by side on the same repo.<br>Spend fewer tokens and no time on merge conflicts.</h3>
+<h3 align="center">Run Claude Code agents side by side on the same repo.<br>Spend fewer tokens and no time on merge conflicts.</h3>
 
 <p align="center">
   <a href="https://github.com/danielrispler/Falinks/actions/workflows/checks.yml"><img src="https://github.com/danielrispler/Falinks/actions/workflows/checks.yml/badge.svg" alt="CI"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue" alt="License"></a>
-  <img src="https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex-f97316" alt="Works with Claude Code and Codex">
+  <img src="https://img.shields.io/badge/works%20with-Claude%20Code-f97316" alt="Works with Claude Code">
   <img src="https://img.shields.io/badge/languages-Rust%20%C2%B7%20Go-eab308" alt="Rust and Go projects">
   <a href="https://github.com/danielrispler/Falinks/stargazers"><img src="https://img.shields.io/github/stars/danielrispler/Falinks?style=flat" alt="GitHub stars"></a>
 </p>
@@ -108,7 +108,7 @@ Then, inside the repo you want to work on:
 
 ```sh
 falinks init                        # pick the files agents may edit and the checks that must pass
-falinks run --agents claude,codex   # start two agents on the same live code
+falinks run --agents claude,claude  # start two agents on the same live code
 falinks status                      # see who is editing what, and what is waiting to land
 ```
 
@@ -119,7 +119,7 @@ Point each agent at its task as usual. Falinks gives it the tools it needs to ed
 
 - macOS (Apple silicon or Intel) or Linux x86_64 with kernel 6.2 or newer
 - Git 2.32 or newer
-- Claude Code and/or Codex CLI, signed in
+- Claude Code, signed in
 - For Go projects: Go and `gopls` on `PATH`
 
 See [supported platforms](docs/platforms.md) for the exact matrix.
@@ -155,10 +155,9 @@ cargo build --release
 | | macOS (Apple silicon) | macOS (Intel) | Linux x86_64 |
 |---|:---:|:---:|:---:|
 | **Claude Code** | ✅ | soon | soon |
-| **Codex** | ✅ | soon | soon |
 | **Engine** | ✅ | ✅ | ✅ |
 
-**Languages:** Rust and Go. **Next:** OpenCode, Gemini CLI, Windows via WSL 2. Full matrix in [docs/platforms.md](docs/platforms.md).
+**Languages:** Rust and Go. **Next:** Codex, OpenCode, Gemini CLI, Windows via WSL 2. Full matrix in [docs/platforms.md](docs/platforms.md).
 
 ## Benchmarks
 
@@ -227,7 +226,7 @@ When you run one agent. When agents work on unrelated repos. When your project i
 ## Project status
 
 > [!IMPORTANT]
-> Falinks is pre-1.0. The engine, the Claude Code and Codex adapters, and the evaluation harness exist today and are tested on macOS. Commands and on-disk formats may still change.
+> Falinks is pre-1.0. The engine, the Claude Code adapter and the evaluation harness exist today and are tested on macOS. Commands and on-disk formats may still change.
 
 ## Contributing
 
