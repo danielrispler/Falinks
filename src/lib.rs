@@ -1264,10 +1264,6 @@ impl Engine {
     /// failed check records an incident and changes no root and no journal.
     fn recover(&self) -> Result<()> {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        // An incident is recorded once; restart neither checks nor records it again.
-        if let Some(halt @ Halt::Incident { .. }) = halted(&db)? {
-            return fail(format!("engine halted for reconciliation: {halt}"));
-        }
         // Copied out: no layout guard is held while the fault hook runs.
         let layout = self.layout()?.clone();
         let mut records = records(&db)?;
@@ -1326,7 +1322,10 @@ impl Engine {
         let restores = match checked {
             Ok(restores) => restores,
             Err(error) => {
-                self.save_incident(&db, &layout.roots, &error.to_string())?;
+                // An incident already halting the engine is recorded once, not per restart.
+                if !matches!(halted(&db)?, Some(Halt::Incident { .. })) {
+                    self.save_incident(&db, &layout.roots, &error.to_string())?;
+                }
                 return Err(error);
             }
         };

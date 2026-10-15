@@ -399,7 +399,10 @@ fn settled(dir: &Path, placement: [usize; 2], files: [Files; 2], case: &str) {
         .query_row("SELECT value FROM meta WHERE key='placement'", [], |r| {
             r.get(0)
         })
-        .unwrap_or_else(|_| "[0,0]".into());
+        .optional()
+        .unwrap()
+        // Never regrouped: everyone in the primary root.
+        .unwrap_or_else(|| "[0,0]".into());
     assert_eq!(
         serde_json::from_str::<[usize; 2]>(&stored).unwrap(),
         placement,
@@ -521,6 +524,7 @@ fn transition(fault: &Fault, model: Model) {
     if *fault == Fault::Committed {
         holds(&live, SPLIT[0], &case);
         holds(&second, &[("a.rs", A), ("b.rs", BOB)], &case);
+        settled(d, [0, 1], [SPLIT[0], &[("a.rs", A), ("b.rs", BOB)]], &case);
     } else {
         holds(&live, UNSPLIT[0], &case);
         holds(&second, UNSPLIT[1], &case);
@@ -717,6 +721,14 @@ fn edit_recovery(model: Model) {
     );
     drop(engine);
     holds(&live, &[("a.rs", "new a"), ("b.rs", "new b")], &case);
+    settled(
+        d,
+        [0, 0],
+        [&[("a.rs", "new a"), ("b.rs", "new b")], &[]],
+        &case,
+    );
+    // No scope is registered, so the retried edit raises no obligation.
+    assert_eq!(count(d, "SELECT count(*) FROM scopes"), 0, "{case}");
     published(d, &[("a.rs", A), ("b.rs", B)], &case);
     clear(d, &case);
     stable(d, &case);
@@ -761,6 +773,7 @@ fn shift_recovery(fault: &Fault, model: Model) {
         "{case}"
     );
     assert_eq!(renewals(d, APPLIED), 1, "{case}");
+    assert_eq!(pending(d), [1, 0], "{case}");
     published(d, &[("a.rs", A), ("b.rs", B)], &case);
     clear(d, &case);
     stable(d, &case);
@@ -801,8 +814,8 @@ fn tampering(name: &str, tamper: fn(&Path), refusal: &str, model: Model) {
     );
     assert_eq!(incidents(d), 1, "{case}");
     assert!(matches!(halt(d), Some(Halt::Incident { .. })), "{case}");
-    // The incident is recorded once; a second restart refuses on the halt alone.
-    fails_with(open(d), "engine halted for reconciliation");
+    // The evidence is still there: a second restart refuses again and records nothing new.
+    fails_with(open(d), refusal);
     assert_eq!(everything(d), after, "{case}: second refusal");
 }
 /// A name, the change, and the refusal it must cause.
