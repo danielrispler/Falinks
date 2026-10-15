@@ -13,7 +13,7 @@ cargo build --release --bins
   --output /path/to/current-claude-controls.json
 ```
 
-The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them). It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. Failed checks exit nonzero; inspect `passed` and `failure`.
+The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them). It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. The evidence's `outcome` is `passed`, `failed` or `inconclusive`. A failed check exits 1; inspect `failure`. A `model_refusal_fallback` still fails the run as below, but exits 2 and prints `inconclusive: model refusal (not evidence either way)`.
 
 ## Launch profile
 
@@ -50,6 +50,13 @@ Resume re-passes every launch flag with `--resume`, re-verifies `init` (same ses
 1. The exact `sandbox-probe` command runs through the actual Bash tool, and all 15 checks must pass. A native Read of `validation/` must appear in `permission_denials`. Then a mediated edit runs. Its E1 notice is sent mid-turn and presented in the same turn, then explicitly deferred. An offer is rejected.
 2. An E2 notice is sent after `result`. It is presented in a new turn and stays pending.
 3. After resume, the first offer is rejected and the probe passes again. E1 and E2 are reconsidered, and the final offer is eligible (not publication).
+
+Where the worker sandbox cannot start, such as Ubuntu 24.04's default AppArmor policy, `--expect-sandbox-unavailable` instead runs one short turn whose only task is the exact probe command. `sandbox_unavailable` classifies it from the runtime's events and the fixture's files:
+
+- `fail-closed` (exit 0): the probe's Bash call returned an error, no tool result has a `FALINKS_CONTROLS` line, and the source and protected files are byte-identical. `probe_error` records the error.
+- `fail-open` (exit 1): a `FALINKS_CONTROLS` line appeared, or a source or protected file changed.
+- `failed` (exit 1): anything else, such as the probe never running.
+- `inconclusive` (exit 2): a `model_refusal_fallback`.
 
 Unknown-change detection runs on a separate injected fixture before the grant. A final live injection preserves the bytes, stops the host and revokes capability.
 

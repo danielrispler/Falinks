@@ -130,6 +130,84 @@ pub fn probe_controls(events: &[Value], command: &str, names: &[String]) -> Resu
     Err("exact probe command did not complete through the actual Bash tool".into())
 }
 
+/// What a live step proved where the worker sandbox cannot start.
+#[derive(Debug, PartialEq)]
+pub enum SandboxOutcome {
+    /// The probe's Bash error text.
+    FailClosed(String),
+    FailOpen(String),
+    Failed(String),
+    /// A model refusal: not evidence either way.
+    Inconclusive,
+}
+impl SandboxOutcome {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::FailClosed(_) => "fail-closed",
+            Self::FailOpen(_) => "fail-open",
+            Self::Failed(_) => "failed",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+}
+/// The runtime emitted `model_refusal_fallback`.
+pub fn refused(events: &[Value]) -> bool {
+    events
+        .iter()
+        .any(|e| e["type"] == "system" && e["subtype"] == "model_refusal_fallback")
+}
+/// The bytes of every file in the fixture's source and protected storage directories.
+pub fn fixture_files(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+    let mut files = BTreeMap::new();
+    for name in ["source", "controller", "snapshots", "validation"] {
+        let Ok(entries) = fs::read_dir(root.join(name)) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry?.path();
+            files.insert(path.clone(), fs::read(&path).unwrap_or_default());
+        }
+    }
+    Ok(files)
+}
+/// Classify a turn whose only task was the exact probe command, with fixture files
+/// `before` and `after` it. Fail-open evidence outranks a refusal.
+pub fn sandbox_unavailable(
+    events: &[Value],
+    command: &str,
+    before: &BTreeMap<PathBuf, Vec<u8>>,
+    after: &BTreeMap<PathBuf, Vec<u8>>,
+) -> SandboxOutcome {
+    let controls = tool_results(events, |_| true).any(|(event, block)| {
+        [&block["content"], &event["tool_use_result"]]
+            .iter()
+            .any(|v| v.to_string().contains("FALINKS_CONTROLS="))
+    });
+    if controls {
+        return SandboxOutcome::FailOpen("a tool result contains a FALINKS_CONTROLS line".into());
+    }
+    if before != after {
+        return SandboxOutcome::FailOpen("a source or protected file changed".into());
+    }
+    if refused(events) {
+        return SandboxOutcome::Inconclusive;
+    }
+    let bash = |b: &Value| b["name"] == "Bash" && b["input"]["command"] == command;
+    tool_results(events, bash)
+        .find(|(_, b)| b["is_error"] == true)
+        .map_or_else(
+            || SandboxOutcome::Failed("the exact probe command returned no Bash error".into()),
+            |(_, b)| {
+                let content = &b["content"];
+                SandboxOutcome::FailClosed(
+                    content
+                        .as_str()
+                        .map_or_else(|| content.to_string(), String::from),
+                )
+            },
+        )
+}
+
 /// The content blocks of one stream-json message.
 pub fn blocks(event: &Value) -> impl Iterator<Item = &Value> {
     event["message"]["content"].as_array().into_iter().flatten()
