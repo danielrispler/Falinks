@@ -3,7 +3,7 @@
 //! and controlled faults. A saved report never authorizes another run.
 use falinks::{
     Action, Availability, Check, Client, Engine, Language, Pin, ProposalState, RunOutcome, Stage,
-    Toolchain, sha256_file,
+    Toolchain,
 };
 use falinks_claude::{
     Launch, MODEL, REQUIRED, Runtime, VERSION, engine_host::EngineHost, launch_args,
@@ -97,15 +97,9 @@ impl Gate {
     fn open(dir: &Path, go: &Path, gopls: &Path) -> Result<(Engine, [Client; 2])> {
         let enrolled: Vec<&str> = FILES.iter().map(|(p, _)| *p).collect();
         let engine = Engine::open(&space(dir, 0), &dir.join("state"), &enrolled)?;
-        let pin = |path: &Path| -> Result<Pin> {
-            Ok(Pin {
-                sha256: sha256_file(path)?,
-                path: path.to_owned(),
-            })
-        };
         engine.configure_analysis(vec![Toolchain {
             language: Language::Go,
-            executables: vec![pin(gopls)?, pin(go)?],
+            executables: vec![Pin::from_path(gopls)?, Pin::from_path(go)?],
             features: Vec::new(),
         }])?;
         let go = go.to_string_lossy().into_owned();

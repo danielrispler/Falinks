@@ -67,10 +67,7 @@ pub fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
 
 pub fn pin(path: PathBuf) -> Pin {
     assert!(path.is_file(), "missing pinned tool {}", path.display());
-    Pin {
-        sha256: sha256_file(&path).unwrap(),
-        path,
-    }
+    Pin::from_path(path).unwrap()
 }
 /// gopls (`FALINKS_GOPLS`, else `$GOPATH/bin/gopls`) and the `go` on PATH's `GOROOT`.
 pub fn go_toolchain() -> Toolchain {
