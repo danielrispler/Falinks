@@ -47,6 +47,8 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
 - It reuses the ticket's worktree, or checks out its existing local or `origin` `issue-<n>-*` branch, or creates branch `issue-<n>-<slug>` from `origin/main`. New worktrees go under `.claude/worktrees/`.
 - It prints the worktree path.
 
+Parallel tickets run in separate sessions that Daniel starts. Give one `--claim <n>` command and one prompt per terminal (do not attempt to spawn background general-purpose agents).
+
 GitHub stays authoritative.
 
 ## Pull requests as a triage surface
