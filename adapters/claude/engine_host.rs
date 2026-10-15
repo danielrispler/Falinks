@@ -2,7 +2,9 @@
 //! The boundary has already bound host identity; this maps each operation to the
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
-use falinks::{Client, Engine, File, JobSpec, Outcome, Pending, Request, Review};
+use falinks::{
+    Body, Capture, Client, Engine, Event, File, JobSpec, Outcome, Pending, Request, Review,
+};
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
@@ -62,23 +64,11 @@ impl EngineHost {
                     .flatten()
                     .filter_map(Value::as_str)
                     .collect();
-                let files: serde_json::Map<String, Value> = capture
-                    .files
-                    .iter()
-                    .map(|(path, versioned)| {
-                        let mut entry = json!({"version":versioned.version,
-                            "exists":versioned.file.is_some()});
-                        if let Some(file) = &versioned.file
-                            && wanted.contains(&path.as_str())
-                        {
-                            entry["content"] = json!(String::from_utf8_lossy(&file.bytes));
-                            entry["executable"] = json!(file.executable);
-                        }
-                        (path.clone(), entry)
-                    })
-                    .collect();
-                json!({"accepted":true,"revision":capture.revision,"tree":capture.tree,
-                    "space":capture.space,"files":files})
+                let mut reply = view(&capture, |path| wanted.contains(&path));
+                reply["accepted"] = json!(true);
+                reply["tree"] = json!(capture.tree);
+                reply["space"] = json!(capture.space);
+                reply
             }
             "edit" | "retry" | "incorporate" => {
                 let request = edit(request)?;
@@ -101,10 +91,6 @@ impl EngineHost {
                 json!({"accepted":true,"obligation":engine.review(client, parse(request)?)?})
             }
             "offer" => json!({"accepted":true,"checkpoint":engine.offer(client, parse(request)?)?}),
-            "events" => {
-                let after = request["after"].as_u64().unwrap_or(0);
-                json!({"accepted":true,"events":engine.events(client, after)?})
-            }
             "handle" => {
                 let deferred: Option<BTreeMap<u64, String>> = parse(&request["deferred"])?;
                 let processed: Option<Vec<u64>> = parse(&request["processed"])?;
@@ -115,11 +101,6 @@ impl EngineHost {
                     &processed.unwrap_or_default(),
                 )?;
                 json!({"accepted":true})
-            }
-            "pending" => {
-                let pending = engine.pending(client)?;
-                json!({"accepted":true,"handled":pending.handled,"unhandled":pending.unhandled,
-                    "deferred":deferred(&pending),"obligations":pending.obligations})
             }
             "post" => json!({"accepted":true,"event":engine.post(client, parse(request)?)?}),
             "withdraw" => {
@@ -188,7 +169,8 @@ impl EngineHost {
 }
 
 /// Agent-facing operations and their request shapes. Host-only calls (checks, validation,
-/// workspaces, reconsideration, disconnect, run retry, space-0 capture) are never tools.
+/// workspaces, reconsideration, disconnect, run retry, space-0 capture, `pending`, `events`)
+/// are never tools.
 pub const OPERATIONS: &[(&str, &str)] = &[
     (
         "capture",
@@ -196,7 +178,7 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "edit",
-        "{id, expected: {path: version}, output: {path: {content, executable?} | null}} -> applies all outputs or nothing. expected names every input and output. Stale returns current versions; reread and use a new id. Unreviewed means review first.",
+        "{id, expected: {path: version}, output: {path: {content, executable?} | null}, reviews?: [{scope, revision, decision: Keep|Revise|Drop, note}]} -> applies all outputs or nothing. expected names every input and output. Stale returns current versions; reread and use a new id. Unreviewed names the obligations that need a review. reviews are review requests sent inline: each is checked first, any invalid one refuses the whole call, and valid ones are recorded before the edit is gated, so they stand even if it comes back Stale.",
     ),
     (
         "retry",
@@ -220,15 +202,15 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "review",
-        "{scope, revision, decision: Keep|Revise|Drop, note} -> after rereading a captured revision. The only way to clear an obligation.",
+        "{scope, revision, decision: Keep|Revise|Drop, note} -> after rereading a revision that was captured for you: by your capture call, or the capture in a host notice. The only way to clear an obligation; edit and offer take the same reviews inline.",
     ),
     (
         "post",
-        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to: null | {event: seq, work}} -> advisory plan message to your peer.",
+        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to: null | {event: seq, work}} -> advisory plan message to your peer. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
     ),
     (
         "offer",
-        "{id, task, revision, scope: [scope id], text, supersedes?: offer id} -> offer an exact captured revision for publication. Refused while any obligation is pending.",
+        "{id, task, revision, scope: [scope id], text, supersedes?: offer id, reviews?: [{scope, revision, decision, note}]} -> offer an exact captured revision for publication. Refused while any obligation is pending. reviews are checked and recorded first, as in edit.",
     ),
     ("withdraw", "{offer} -> withdraw your offer."),
     (
@@ -244,14 +226,9 @@ pub const OPERATIONS: &[(&str, &str)] = &[
         "{id, revision} -> queue required checks on a captured revision early; never publishes.",
     ),
     ("run", "{id} -> a check run with its results and outcome."),
-    ("events", "{after: seq} -> ordered events after a position."),
     (
         "handle",
-        "{through?: seq, deferred?: {seq: note}, processed?: [seq]} -> handle every event up to through as processed unless deferred with a note; processed clears earlier deferrals. Never clears obligations.",
-    ),
-    (
-        "pending",
-        "{} -> unhandled events, deferred events and pending obligations.",
+        "{through?: seq, deferred?: {seq: note}, processed?: [seq]} -> one atomic call. through handles every event in your stream after your cursor, up to that seq, as processed unless deferred lists it, and moves your cursor there; at or below the cursor it does nothing. It may be your own post's seq. The engine does not track what you were shown, so through also covers events no notice gave you. deferred keeps a note for an event at or below the new cursor; processed clears earlier deferrals. Never clears obligations.",
     ),
     (
         "recommend",
@@ -279,6 +256,70 @@ pub fn tools(workspace: &std::path::Path) -> Value {
     json!(OPERATIONS.iter().map(|(operation, help)| tool(operation,
         format!("Falinks {operation}: {help} Call with {{\"workspace\": \"{}\", \"request\": {{...}}}}.", workspace.display())
     )).collect::<Vec<_>>())
+}
+
+/// A capture as agents see it: the revision, every file's version, and the text of the
+/// files `content` selects.
+fn view(capture: &Capture, content: impl Fn(&str) -> bool) -> Value {
+    let files: serde_json::Map<String, Value> = capture
+        .files
+        .iter()
+        .map(|(path, versioned)| {
+            let mut entry = json!({"version":versioned.version,"exists":versioned.file.is_some()});
+            if let Some(file) = &versioned.file
+                && content(path)
+            {
+                entry["content"] = json!(String::from_utf8_lossy(&file.bytes));
+                entry["executable"] = json!(file.executable);
+            }
+            (path.clone(), entry)
+        })
+        .collect();
+    json!({"revision":capture.revision,"files":files})
+}
+
+/// The opening protocol state from a capture given to the agent: the revision, file
+/// versions and pending state. No file contents, so both arms get the same task
+/// information (#5). Also returns the file versions given.
+pub fn opening(engine: &Engine, client: &Client) -> Result<(Value, BTreeMap<String, u64>)> {
+    let capture = engine.capture_for(client)?;
+    let pending = engine.pending(client)?;
+    let mut state = view(&capture, |_| false);
+    state["pending"] = json!({"handled":pending.handled,"unhandled":pending.unhandled,
+        "deferred":deferred(&pending),"obligations":pending.obligations});
+    Ok((state, versions(&capture)))
+}
+
+/// When `events` renewed the client's obligation, a capture given to it with the text of
+/// every file whose version differs from `given`, which it then updates. The capture is
+/// recorded at send, not at presentation (#116 decision 3).
+pub fn notice_capture(
+    engine: &Engine,
+    client: &Client,
+    events: &[Event],
+    given: &mut BTreeMap<String, u64>,
+) -> Result<Option<Value>> {
+    // Obligation events go only to the agent whose obligation they renew.
+    if !events
+        .iter()
+        .any(|e| matches!(e.body, Body::Obligation { .. }))
+    {
+        return Ok(None);
+    }
+    let capture = engine.capture_for(client)?;
+    let state = view(&capture, |path| {
+        given.get(path) != capture.files.get(path).map(|f| &f.version)
+    });
+    *given = versions(&capture);
+    Ok(Some(state))
+}
+
+fn versions(capture: &Capture) -> BTreeMap<String, u64> {
+    capture
+        .files
+        .iter()
+        .map(|(path, f)| (path.clone(), f.version))
+        .collect()
 }
 
 /// Deferred events as agents see them: `{event, note}`.

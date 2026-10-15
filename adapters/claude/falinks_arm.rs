@@ -5,13 +5,14 @@
 use falinks::{Action, Engine, ProposalState};
 use falinks_claude::{
     Launch, MODEL, Runtime, VERSION,
-    arm::{self, Arm, Tools, agent_name},
+    arm::{self, Arm, Tools, agent_name, prompt},
     engine_host, go_tools, verify_binary,
 };
 use falinks_host::{Boundary, EngineOutcome, Result, file_hash, require};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     env, fs,
     io::Write,
     os::unix::fs::DirBuilderExt,
@@ -27,7 +28,6 @@ use std::{
 
 /// An idle, unfinished agent with no new events is reminded after this long (both arms).
 const NUDGE: Duration = Duration::from_secs(120);
-const LETTERS: [&str; 2] = ["A", "B"];
 
 struct Worker {
     runtime: Option<Runtime>,
@@ -35,6 +35,8 @@ struct Worker {
     source: PathBuf,
     /// Highest engine event seq sent to this worker.
     delivered: u64,
+    /// File versions in the last capture the host gave this worker.
+    given: BTreeMap<String, u64>,
     /// Developments not yet sent to this worker.
     developments: Vec<Value>,
     last_result: Value,
@@ -168,7 +170,8 @@ impl Run {
             .send(text, event)
     }
 
-    /// Engine events and developments not yet sent, with pending obligations. A worker in a
+    /// Engine events and developments not yet sent, with pending obligations and, when the
+    /// events renewed an obligation, a capture given to the worker. A worker in a
     /// turn gets them at once (presented at its next tool-result boundary); an idle one gets
     /// them as a new turn. Neither clears anything in the engine.
     fn deliver(&mut self, agent: usize) -> Result<()> {
@@ -198,12 +201,18 @@ impl Run {
                     .map_or("", |d| d["id"].as_str().unwrap_or(""))
             )
         });
-        let text = format!(
+        let mut text = format!(
             "Host notice {id}. Engine events: {}. Task developments: {}. Your pending obligations: {}.",
             serde_json::to_string(&events)?,
             serde_json::to_string(&developments)?,
             serde_json::to_string(&pending.obligations)?
         );
+        let given = &mut self.workers[agent].given;
+        if let Some(capture) = engine_host::notice_capture(&self.engine, &client, &events, given)? {
+            text += &format!(
+                " A capture given to you, with the content of files changed since your last one: {capture}."
+            );
+        }
         if let Some(last) = events.last() {
             self.workers[agent].delivered = last.seq;
         }
@@ -256,41 +265,6 @@ impl Run {
         }
         Ok(None)
     }
-}
-
-fn prompt(
-    agent: usize,
-    root: &Path,
-    fixture: &Value,
-    workflow: &str,
-    optional: &[String],
-) -> String {
-    let task: serde_json::Map<String, Value> = fixture
-        .as_object()
-        .unwrap()
-        .iter()
-        .filter(|(k, _)| *k != "files" && *k != "milestones")
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let developments = fixture["milestones"].as_array().map_or(0, Vec::len);
-    format!(
-        "[Falinks host] You are {name} (agent {letter} in the task allocation), one of two agents implementing a small software task together. \
-         Your live workspace is {root}; read it with Read, Grep or Glob. It shows your peer's unfinished edits as they happen. \
-         You cannot write it directly: change source only with falinks tools, each called as {{\"workspace\": \"{root}\", \"request\": {{...}}}}. \
-         Your current directory is a private scratch directory where you may copy files and run builds or tests with Bash. \
-         Engine events, host notices and task developments arrive as messages starting with \"Host notice\". \
-         When you have nothing to do until the next event, end your turn; the next event starts a new turn. Do not run long sleeps or polling loops. \
-         There are {developments} task development(s): acknowledge each with falinks_ack before working on it. \
-         falinks_check gives pass/fail for the trusted checks on your workspace. When your part is finished and published, call falinks_ready. \
-         Besides the existing files you may create only: {optional}.\n\n\
-         Task: {task}\nYour allocation: {allocation}\n\nWorkflow:\n{workflow}",
-        name = agent_name(agent),
-        letter = LETTERS[agent],
-        root = root.display(),
-        optional = optional.join(", "),
-        task = Value::Object(task),
-        allocation = fixture["allocation"][LETTERS[agent]],
-    )
 }
 
 struct Options {
@@ -603,12 +577,15 @@ fn setup(
     );
     let workflow = fs::read_to_string(evaluation.join("instructions/falinks.md"))?;
     let root = engine.root(arm.client(0))?;
-    let prompt = [0, 1].map(|a| prompt(a, &root, &fixture, &workflow, &optional));
+    let [first, second] = [0, 1].map(|a| engine_host::opening(&engine, arm.client(a)));
+    let opening = [first?, second?];
+    let prompt = [0, 1].map(|a| prompt(a, &root, &fixture, &workflow, &optional, &opening[a].0));
     let worker = || Worker {
         runtime: None,
         session: None,
         source: PathBuf::new(),
         delivered: 0,
+        given: BTreeMap::new(),
         developments: vec![],
         last_result: Value::Null,
         last_activity: Instant::now(),
@@ -629,6 +606,9 @@ fn setup(
         timeline,
         evidence: evidence.clone(),
     };
+    let [(_, first), (_, second)] = opening;
+    run.workers[0].given = first;
+    run.workers[1].given = second;
     run.event("initial_recommendation", json!({"proposal": initial}))?;
     for agent in 0..2 {
         let text = run.prompt[agent].clone();

@@ -6,7 +6,7 @@
     "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
     "fixtures/go-relationships.json": "3f3cdd1d1b061b9dcee056ea77a9fec999326684309b1ece06785ffb346b764e",
     "fixtures/rust-errors.json": "c1ef8768913cd2e7278ae92bf64be61e6b25782814345d0e56d74bfe92002b0e",
-    "instructions/falinks.md": "4400df1243da027455c8ecf9dddef9b58bca6db9d3a4486ccc54ea016d661e0c",
+    "instructions/falinks.md": "c925b90b2114c1fbcc5e21e51708114c7acdbb2ffb34e7cde2157573d10aff36",
     "instructions/git.md": "5324fe674118b8e5fcd0d0464a4c1e9e1f599adf1a493ae7257d950a0c72ec0e",
     "protected/go-page.json": "30c91a06e9c56e6449e77a029eaf05c89c84bd4b620b1f7bc9a3671a3bb658d2",
     "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
@@ -25,5 +25,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 8
+  "version": 9
 }

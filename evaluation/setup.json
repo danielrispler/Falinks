@@ -1,6 +1,13 @@
 {
-  "limit_seconds": 28800,
+  "limit_seconds": 32400,
   "scope": "Shared evaluation setup, including fixtures, baseline, pilot/integration repairs; excludes engine implementation and inactive user pauses.",
+  "amendments": [
+    {
+      "source": "https://github.com/danielrispler/Falinks/issues/116#issuecomment-6169349150",
+      "added_seconds": 3600,
+      "reason": "#116 adds one hour to the eight-hour bound for the #126 re-freeze, the #122 unscored pilot pair on go-relationships and its gate. If the pilot needs more, it stops and asks."
+    }
+  ],
   "sessions": [
     {
       "date": "2026-10-08",
@@ -122,9 +129,19 @@
       "charged_seconds": 1138,
       "measurement": "Two timed segments, excluding the user pause between them: the pilot3 batch invocation 11:22:51-11:35:34Z (verify, gate, both runs, cleanup; 763 s); evidence review and recording 11:38:08-11:39:23Z (75 s). Plus an allowance for issue resolution and handoff.",
       "work": "#80: the unscored pilot pair reran in /private/tmp/ev/pilot3 on the #112 repair and passed both arms with a fresh gate. Every Falinks-arm go test passed on its first run; no agent changed GOCACHE. This entry takes the ledger past the eight-hour setup ceiling. Scoring is not setup, so the scored shards add nothing here."
+    },
+    {
+      "start_utc": "2026-10-15T12:41:43Z",
+      "stop_utc": "2026-10-15T12:50:27Z",
+      "measured_seconds": 524,
+      "startup_allowance_seconds": 900,
+      "handoff_allowance_seconds": 600,
+      "charged_seconds": 2024,
+      "measurement": "Session wall time from the first timestamp after claiming #126 through the ledger entry, plus allowances for claiming and reading before that timestamp and for final CI, commit and PR. Includes adapter and engine-text work, charged conservatively against #116's one-hour extension. No real runs.",
+      "work": "#126: the Claude adapter drops pending and events from the agent tools; handle, edit, offer, review and post describe the #120 shape, inline reviews and what a reply can answer; renewing notices carry a capture given to the recipient; the opening prompt carries the revision, file versions and empty pending state with no file contents; instructions/falinks.md describes the protocol and asks agents to register and post their plan in one message; versioned re-freeze v8 -> v9 (instructions/falinks.md changed; initial commits unchanged)."
     }
   ],
-  "charged_total_seconds": 29000,
-  "remaining_seconds": -200,
-  "status": "setup complete: pilot /private/tmp/ev/pilot3 passed (#80); manifest v8: the runtime pin moved from Claude Code 2.1.287 to 2.1.292 (config.json only), so runs before v8 are not comparable with later ones"
+  "charged_total_seconds": 31024,
+  "remaining_seconds": 1376,
+  "status": "manifest v9: agent instructions describe the #116 protocol changes (#126), so runs before v9 are not comparable with later ones; limit raised to 32 400 s by #116 for the #122 pilot"
 }
