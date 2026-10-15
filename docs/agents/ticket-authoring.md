@@ -24,19 +24,10 @@ Synthesize the complete draft independently from the settled conversation and re
 
 ## Live adapter checks
 
-The live Claude Code adapter check (`adapter-linux.yml`) runs real model turns on the user's Claude subscription. Only the user starts it.
+The live Claude Code adapter check (`adapter-linux.yml`) runs real model turns on the user's Claude subscription. Pull requests never run it. It runs daily at 01:00 UTC on `main` when `main` has commits from the last 24 hours, and when the user starts it by hand.
 
-- Never add the `live-claude` label, and never start `adapter-linux.yml` by hand (`gh workflow run`).
-- When a PR needs a live check before merge, add the `needs-live-check` label. Then tell the user in the session which PR it is, why it needs a live run, and that you are waiting for them. The user runs the check and removes the label.
-- A PR needs a live check before merge when it changes any of these:
-  - the pinned runtime: `VERSION`, `PINS` or `MODEL`;
-  - the worker launch: its arguments, settings or environment;
-  - `sandbox-probe` or the controls it reports;
-  - the falinks tool relay (`falinks-claude-tool`);
-  - `adapter-linux.yml`.
-
-  Other changes rely on the live run after merge. When unsure, ask the user.
-- Never merge a PR while it carries `needs-live-check`. If a merge will start the live run on `main`, say so before you merge.
+- A PR that passes `cargo run --bin ci-checks` needs no live run, label or pause before merge.
+- Never start `adapter-linux.yml` by hand (`gh workflow run`).
 
 ## Ticket context
 
