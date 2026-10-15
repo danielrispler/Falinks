@@ -9,8 +9,8 @@
   "model": "claude-opus-5-5",
   "model_version": "claude-opus-5-5 (the pinned runtime reports no finer version; init and modelUsage must name exactly this ID)",
   "reasoning": "default (no effort flag) in both arms",
-  "runtime_version": "2.1.287",
-  "runtime_sha256": "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea",
+  "runtime_version": "2.1.292",
+  "runtime_sha256": "97a01e5bc74a199e67189435d0331ea3a24eac2e07db4b76d9148c5b0386138f",
   "worker_command": [
     "{worker}"
   ],
@@ -20,7 +20,7 @@
     "shared": "Same pinned Claude Code binary, model, default reasoning, --max-turns 12 per message with host continuation, isolation flags, fresh sessions, allocation, requirements, dependency information, milestone triggers, peer-event delivery at presentation boundaries, two-minute idle reminders, pass/fail-only visible+oracle checks and 30-minute bound. No oracle/reference access."
   },
   "worker_script": "REQUIRED: absolute evaluation/target/release/claude-worker",
-  "runtime_binary": "REQUIRED: absolute dedicated copy of the pinned claude 2.1.287",
+  "runtime_binary": "REQUIRED: absolute dedicated copy of the pinned claude 2.1.292",
   "auth_file": null,
   "denied_roots": [
     "REQUIRED: checkout, other runs and any reference copies"

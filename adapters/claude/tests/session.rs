@@ -8,7 +8,7 @@ const TOKEN: &str = "host-token";
 
 /// Shapes recorded from the pinned binary in #32 (`2026-10-10-probe.json`).
 fn init(workspace: &Path) -> Value {
-    json!({"type":"system","subtype":"init","claude_code_version":"2.1.287","cwd":workspace.with_file_name("scratch"),
+    json!({"type":"system","subtype":"init","claude_code_version":"2.1.292","cwd":workspace.with_file_name("scratch"),
         "model":MODEL,"permissionMode":"dontAsk","session_id":SESSION,"tools":Launch::fixture(workspace.parent().unwrap()).allowed(),
         "mcp_servers":[{"name":"falinks","source":"dynamic","status":"connected"}],
         "plugins":[{"name":"cc-plugin-agents-md","path":"builtin","source":"cc-plugin-agents-md@builtin"},
@@ -345,7 +345,7 @@ fn delivery_is_presentation_only_and_records_its_turn() {
 fn only_the_pinned_claude_executable_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let impostor = dir.path().join("claude");
-    std::fs::write(&impostor, b"#!/bin/sh\necho '2.1.287 (Claude Code)'\n").unwrap();
+    std::fs::write(&impostor, b"#!/bin/sh\necho '2.1.292 (Claude Code)'\n").unwrap();
     let error = falinks_claude::verify_binary(&impostor)
         .unwrap_err()
         .to_string();
@@ -449,16 +449,16 @@ fn queued_messages_merged_into_one_presentation_each_count_as_presented() {
 fn only_declared_platforms_have_a_claude_pin() {
     assert_eq!(
         falinks_claude::pin("macos", "aarch64").unwrap(),
-        "6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea"
+        "97a01e5bc74a199e67189435d0331ea3a24eac2e07db4b76d9148c5b0386138f"
     );
-    // Verified on Ubuntu 24.04 runners in #57 (evidence/2026-10-14-linux/).
+    // The live adapter-linux.yml runs verify these on Ubuntu 24.04 (#57).
     assert_eq!(
         falinks_claude::pin("linux", "x86_64").unwrap(),
-        "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0"
+        "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3"
     );
     assert_eq!(
         falinks_claude::pin("linux", "aarch64").unwrap(),
-        "e4daf793d1e74fb0d9874dd09e98690bbfd7be515f78a87fd05b9e2b4bb33b03"
+        "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0"
     );
     for (os, arch) in [("macos", "x86_64"), ("windows", "x86_64")] {
         let error = falinks_claude::pin(os, arch).unwrap_err().to_string();

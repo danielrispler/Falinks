@@ -126,5 +126,5 @@
   ],
   "charged_total_seconds": 29000,
   "remaining_seconds": -200,
-  "status": "setup complete: pilot /private/tmp/ev/pilot3 passed (#80); manifest v7"
+  "status": "setup complete: pilot /private/tmp/ev/pilot3 passed (#80); manifest v8: the runtime pin moved from Claude Code 2.1.287 to 2.1.292 (config.json only), so runs before v8 are not comparable with later ones"
 }
