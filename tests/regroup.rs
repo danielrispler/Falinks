@@ -246,7 +246,7 @@ fn compiler_edge_alone_keeps_a_split_and_collaboration_evidence_joins_it() {
     assert!(keep.reasoning.contains("compiler relationship alone"));
     assert_eq!(engine.reconsider().unwrap().id, keep.id, "unchanged repeat");
 
-    // Observed waiting on the peer is collaboration evidence.
+    // Observed waiting on the peer is reported but decides nothing.
     let after = engine.events(&alice, 0).unwrap().last().unwrap().seq;
     let outcome = engine
         .wait(
@@ -257,9 +257,14 @@ fn compiler_edge_alone_keeps_a_split_and_collaboration_evidence_joins_it() {
         )
         .unwrap();
     assert_eq!(outcome, WaitOutcome::TimedOut);
+    let waited = engine.reconsider().unwrap();
+    assert_eq!(waited.id, keep.id, "{}", waited.reasoning);
+
+    // Bob's work now names Right too: overlap joins.
+    register(&engine, &bob, "both", "callee task", &["siblings.go#Right"]);
     let join = engine.reconsider().unwrap();
     assert_eq!(join.action, Action::Join, "{}", join.reasoning);
-    assert_eq!(join.signals.waits, 1);
+    assert_eq!(join.signals.overlap, vec!["0:right 1:both".to_string()]);
     assert_eq!(join.target, [0, 0]);
     agree(&engine, &bob, &join);
     let applied = agree(&engine, &alice, &join);
@@ -679,4 +684,261 @@ fn obligations_a_transition_raised_are_not_evidence_to_reverse_it() {
     let join = engine.reconsider().unwrap();
     assert_eq!(join.action, Action::Join, "{}", join.reasoning);
     assert_eq!(join.signals.declared, vec!["0:right 1:callee".to_string()]);
+}
+
+/// A producer/consumer Go module: `Consume` uses `Produce`.
+const PAIRED: &[(&str, &str)] = &[
+    ("go.mod", "module example.com/probe\n\ngo 1.22\n"),
+    (
+        "producer.go",
+        "package probe\n\nfunc Produce() []string {\n\treturn []string{\"a\"}\n}\n",
+    ),
+    (
+        "consumer.go",
+        "package probe\n\nfunc Consume() int {\n\treturn len(Produce())\n}\n",
+    ),
+];
+const RECORD: &str = "package probe\n\ntype Record struct {\n\tName string\n}\n\nfunc Produce() []Record {\n\treturn []Record{{Name: \"a\"}}\n}\n";
+const CONSUME_RECORD: &str = "package probe\n\nfunc Consume() int {\n\tn := 0\n\tfor _, r := range Produce() {\n\t\tn += len(r.Name)\n\t}\n\treturn n\n}\n";
+
+/// Whole-file registration with mutual declarations, as in every #27 run.
+fn paired() -> (TempDir, Engine, Client, Client) {
+    let (dir, engine, alice, bob) = support::fixture(PAIRED);
+    fs::create_dir_all(dir.path().join("second")).unwrap();
+    configure(&engine);
+    declare(
+        &engine,
+        &alice,
+        "producer",
+        "produce",
+        &["producer.go"],
+        &["consumer.go"],
+    );
+    declare(
+        &engine,
+        &bob,
+        "consumer",
+        "consume",
+        &["consumer.go"],
+        &["producer.go"],
+    );
+    (dir, engine, alice, bob)
+}
+/// Settles the client's pending obligation on its only scope.
+fn settle(engine: &Engine, client: &Client, scope: &str, decision: Decision) {
+    let pending = engine.obligations(client).unwrap();
+    assert!(pending.iter().any(|o| o.pending()), "{pending:?}");
+    engine
+        .review(
+            client,
+            Review {
+                scope: scope.into(),
+                revision: engine.capture_for(client).unwrap().revision,
+                decision,
+                note: format!("{decision:?}"),
+            },
+        )
+        .unwrap();
+}
+/// Appends `bytes` to the client's current copy of `path`.
+fn append(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) {
+    let current = engine.capture_for(client).unwrap();
+    let file = current.files[path].file.as_ref().unwrap();
+    let text = String::from_utf8(file.bytes.clone()).unwrap() + bytes;
+    applied(engine, client, id, path, &text);
+}
+
+#[test]
+fn independent_follow_ups_after_a_contract_change_propose_a_split() {
+    let (_dir, engine, alice, bob) = paired();
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert!(!keep.signals.compiler.is_empty(), "Consume uses Produce");
+
+    // The contract change: Bob revises, Alice keeps.
+    applied(&engine, &alice, "record", "producer.go", RECORD);
+    settle(&engine, &bob, "consumer", Decision::Revise);
+    applied(&engine, &bob, "consume", "consumer.go", CONSUME_RECORD);
+    settle(&engine, &alice, "producer", Decision::Keep);
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert!(!keep.signals.revised.is_empty(), "{:?}", keep.signals);
+
+    // Follow-ups in new functions, each reviewed Keep.
+    append(
+        &engine,
+        &bob,
+        "summary",
+        "consumer.go",
+        "\nfunc Summary() string {\n\treturn \"ok\"\n}\n",
+    );
+    let pending = engine.reconsider().unwrap();
+    assert_eq!(pending.action, Action::Keep, "{}", pending.reasoning);
+    assert!(
+        !pending.signals.uncertain.is_empty(),
+        "unreviewed obligation"
+    );
+    settle(&engine, &alice, "producer", Decision::Keep);
+    let one_way = engine.reconsider().unwrap();
+    assert_eq!(
+        one_way.action,
+        Action::Keep,
+        "Bob's latest review is Revise"
+    );
+    append(
+        &engine,
+        &alice,
+        "stats",
+        "producer.go",
+        "\nfunc Stats() int {\n\treturn 3\n}\n",
+    );
+    settle(&engine, &bob, "consumer", Decision::Keep);
+
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    assert!(split.signals.compiler.is_empty(), "{:?}", split.signals);
+    assert!(split.signals.overlap.is_empty() && split.signals.revised.is_empty());
+    assert!(
+        !split.signals.declared.is_empty(),
+        "declarations no longer veto"
+    );
+}
+
+#[test]
+fn consumer_edits_calling_the_producer_keep_the_pair() {
+    let (_dir, engine, alice, bob) = paired();
+    let produce =
+        "package probe\n\nfunc Produce() []string {\n\treturn []string{\"a\", \"b\"}\n}\n";
+    applied(&engine, &alice, "produce", "producer.go", produce);
+    settle(&engine, &bob, "consumer", Decision::Keep);
+    let consume = "package probe\n\nfunc Consume() int {\n\treturn len(Produce()) + 1\n}\n";
+    applied(&engine, &bob, "consume", "consumer.go", consume);
+    settle(&engine, &alice, "producer", Decision::Keep);
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert_eq!(keep.signals.compiler, vec!["0:edits 1:edits".to_string()]);
+    assert!(keep.signals.revised.is_empty() && keep.signals.overlap.is_empty());
+}
+
+#[test]
+fn both_agents_editing_the_same_symbol_keep_the_pair() {
+    let (_dir, engine, alice, bob) = paired();
+    let first = "package probe\n\nfunc Produce() []string {\n\treturn []string{\"a\", \"b\"}\n}\n";
+    applied(&engine, &alice, "first", "producer.go", first);
+    settle(&engine, &bob, "consumer", Decision::Keep);
+    let second = "package probe\n\nfunc Produce() []string {\n\treturn []string{\"c\"}\n}\n";
+    applied(&engine, &bob, "second", "producer.go", second);
+    settle(&engine, &alice, "producer", Decision::Keep);
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert_eq!(keep.signals.overlap, vec!["0:edits 1:edits".to_string()]);
+}
+
+#[test]
+fn an_unreviewed_obligation_keeps_the_pair_as_uncertain() {
+    let (_dir, engine, alice, bob) = paired();
+    append(
+        &engine,
+        &alice,
+        "stats",
+        "producer.go",
+        "\nfunc Stats() int {\n\treturn 3\n}\n",
+    );
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert!(
+        keep.signals
+            .uncertain
+            .iter()
+            .any(|u| u.starts_with("agent 1 has not reviewed consumer")),
+        "{:?}",
+        keep.signals
+    );
+    // Once reviewed Keep, nothing current ties Stats to Bob's registered scope.
+    settle(&engine, &bob, "consumer", Decision::Keep);
+    assert_eq!(engine.reconsider().unwrap().action, Action::Split);
+}
+
+#[test]
+fn after_a_split_only_a_new_declaration_joins() {
+    let (dir, engine, alice, bob) = fixture();
+    independent(&engine, &alice, &bob);
+    // A declaration on Bob's work does not veto the split.
+    declare(
+        &engine,
+        &alice,
+        "left",
+        "left task",
+        &["siblings.go#Left"],
+        &["callee.go#Callee"],
+    );
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    assert_eq!(split.signals.declared, vec!["0:left 1:callee".to_string()]);
+    agree(&engine, &alice, &split);
+    agree(&engine, &bob, &split);
+    assert_eq!(engine.placement().unwrap(), [0, 1]);
+
+    declare(
+        &engine,
+        &alice,
+        "left",
+        "left task",
+        &["siblings.go#Left"],
+        &["callee.go#Callee"],
+    );
+    let unchanged = engine.reconsider().unwrap();
+    assert_eq!(unchanged.action, Action::Keep, "{}", unchanged.reasoning);
+    assert!(unchanged.signals.redeclared.is_empty());
+
+    declare(
+        &engine,
+        &alice,
+        "left",
+        "left task",
+        &["siblings.go#Left"],
+        &["callee.go#Callee", "siblings.go#Right"],
+    );
+    let join = engine.reconsider().unwrap();
+    assert_eq!(join.action, Action::Join, "{}", join.reasoning);
+    assert_eq!(join.signals.redeclared, vec!["0:left".to_string()]);
+}
+
+#[test]
+fn engine_keeps_are_silent_but_recommend_returns_them() {
+    let (_dir, engine, alice, bob) = paired();
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep);
+    assert_eq!(engine.recommend(&bob).unwrap().id, keep.id);
+    for client in [&alice, &bob] {
+        assert!(
+            !engine
+                .events(client, 0)
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e.body, Body::Regrouping(_))),
+            "no Regrouping event for an engine-made Keep"
+        );
+    }
+    // An agent's own proposal still reaches both agents.
+    let own = engine
+        .propose(
+            &alice,
+            Propose {
+                action: Action::Keep,
+                text: "stay".into(),
+                failing: false,
+            },
+        )
+        .unwrap();
+    for client in [&alice, &bob] {
+        assert!(
+            engine
+                .events(client, 0)
+                .unwrap()
+                .iter()
+                .any(|e| matches!(&e.body, Body::Regrouping(p) if p.id == own.id))
+        );
+    }
 }
