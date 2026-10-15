@@ -2,15 +2,19 @@
 //! phases on a dedicated Go gate fixture, real tool calls, deterministic host barriers
 //! and controlled faults. A saved report never authorizes another run.
 use falinks::{
-    Action, Availability, Check, Client, Engine, Language, Pin, ProposalState, RunOutcome, Stage,
-    Toolchain,
+    Action, Availability, Check, Client, Engine, Language, Pin, ProposalState, Run, RunOutcome,
+    Stage, Toolchain,
 };
 use falinks_claude::{
     Launch, MODEL, REQUIRED, Runtime, VERSION, bash_probe_controls,
     engine_host::{self, EngineHost},
     go_tools, tool_results, verify_binary,
 };
-use falinks_host::{Boundary, EngineOutcome, Result, file_hash, require};
+use falinks_host::{
+    Boundary, EngineOutcome, Result,
+    check_binary::{self, Options},
+    file_hash, require,
+};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,7 +27,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 const PRICE: &str = "package gate\n\nfunc Net(gross int) int {\n\treturn gross - Discount(gross)\n}\n\nfunc Discount(gross int) int {\n\treturn 0\n}\n";
@@ -455,6 +459,52 @@ impl Gate {
             self.engine().root(self.client(agent))?.join(path),
         )?)
     }
+    /// The engine's current version of `path`.
+    fn version(&self, path: &str) -> Result<String> {
+        Ok(self.engine().capture()?.files[path].version.to_string())
+    }
+    fn idle(&self, agent: usize) -> bool {
+        self.workers[agent]
+            .runtime
+            .as_ref()
+            .is_some_and(|r| r.session.idle())
+    }
+    /// Host barrier: step only `agent` until its live `path` holds `content` and its turn
+    /// has ended, while the peer stays inside its own turn; then run both to idle.
+    fn settle(&mut self, agent: usize, path: &str, content: &str) -> Result<()> {
+        self.pump(&[agent], false, |gate| {
+            Ok(gate.read_live(agent, path)? == content && gate.idle(agent))
+        })?;
+        let held = 1 - agent;
+        require(
+            self.runtime(held)?.session.in_turn(),
+            &format!("agent {held}'s turn ended before the peer edit"),
+        )?;
+        self.drive(|_| Ok(true))
+    }
+    /// Run both workers until run `id` has an outcome.
+    fn finish_run(&mut self, id: &str, missing: &str) -> Result<Run> {
+        self.drive(|gate| {
+            Ok(gate
+                .engine()
+                .run(id)
+                .ok()
+                .flatten()
+                .is_some_and(|r| r.outcome.is_some()))
+        })?;
+        Ok(self.engine().run(id)?.ok_or(missing)?)
+    }
+    /// The first notice sent to `agent` that carried engine event `seq` or a later one.
+    fn delivery(&mut self, agent: usize, seq: u64, missing: &str) -> Result<Value> {
+        Ok(self
+            .runtime(agent)?
+            .session
+            .deliveries
+            .iter()
+            .find(|d| event_seq(d) >= Some(seq))
+            .cloned()
+            .ok_or(missing)?)
+    }
 }
 
 /// A notice names the last engine event of its batch.
@@ -462,6 +512,17 @@ fn event_seq(delivery: &Value) -> Option<u64> {
     delivery["event"]
         .as_str()
         .and_then(|id| id.rsplit(':').next()?.parse().ok())
+}
+/// Steering: the notice was sent during the turn and presented in the same span.
+fn presented_in_turn(delivery: &Value) -> bool {
+    delivery["sent_in_turn"] == true && delivery["presented_span"] == delivery["sent_span"]
+}
+/// Review-before-write: an edit was refused as Unreviewed before the `applied` one.
+fn reviewed_before_write(edits: &[Value], applied: impl Fn(&Value) -> bool) -> bool {
+    let refused = edits
+        .iter()
+        .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
+    refused.is_some() && edits.iter().position(applied) > refused
 }
 /// Review every pending obligation against a fresh capture.
 const REVIEW: &str = "1. falinks_obligations with request {}.\n2. falinks_capture with request {}.\n3. For each obligation whose required revision is above its reviewed revision, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If there is none, do nothing.";
@@ -478,8 +539,29 @@ fn edit_step(id: &str, path: &str, content: &str, version: &str) -> String {
     )
 }
 
+/// The host-scripted phases, in order. Each later phase builds on the engine and worker
+/// state the earlier ones left.
+const PHASES: &[fn(&mut Gate) -> Result<()>] = &[
+    controls,
+    drafts,
+    split,
+    checks_while_drafting,
+    join,
+    steering,
+    stale,
+    steering_agent0,
+    team_checks_while_drafting,
+    accepted_recovery,
+    deferral_and_jobs,
+    completion_race,
+    unknown_change,
+];
 fn scenario(gate: &mut Gate) -> Result<()> {
-    // Phase 1: both workers at once: sandbox and storage controls, scope registration.
+    PHASES.iter().try_for_each(|phase| phase(gate))
+}
+
+/// Phase 1: both workers at once: sandbox and storage controls, scope registration.
+fn controls(gate: &mut Gate) -> Result<()> {
     let scopes = [
         json!({"id":"discount","task":"discount","nodes":["price.go#Discount"]}),
         json!({"id":"label","task":"label","nodes":["label.go#Label"]}),
@@ -518,11 +600,11 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         gate.control(agent, "disabled_capabilities")?;
     }
     gate.phase("controls", json!({"sandbox":controls}));
+    Ok(())
+}
 
-    // Phase 2: unfinished but compiling drafts in different files of the shared workspace.
-    let version = |gate: &Gate, path: &str| -> Result<String> {
-        Ok(gate.engine().capture()?.files[path].version.to_string())
-    };
+/// Phase 2: unfinished but compiling drafts in different files of the shared workspace.
+fn drafts(gate: &mut Gate) -> Result<()> {
     let steps = format!(
         "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned instead of VERSION.",
         edit_step("discount-draft", "price.go", DISCOUNT_DRAFT, "VERSION")
@@ -555,8 +637,11 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "drafts",
         json!({"early_offer":early,"missing":candidate.missing}),
     );
+    Ok(())
+}
 
-    // Phase 3: engine-recommended split, agreed by both real agents; agent 1 resumes elsewhere.
+/// Phase 3: engine-recommended split, agreed by both real agents; agent 1 resumes elsewhere.
+fn split(gate: &mut Gate) -> Result<()> {
     gate.engine().add_workspace(&space(&gate.dir, 1))?;
     let proposal = gate.engine().reconsider()?;
     require(
@@ -594,9 +679,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "split",
         json!({"proposal":applied,"space1_candidate_missing":after.missing}),
     );
+    Ok(())
+}
 
-    // Phase 4: agent 1 offers its finished label; checks run on that exact candidate
-    // while agent 0 keeps drafting in its own workspace.
+/// Phase 4: agent 1 offers its finished label; checks run on that exact candidate
+/// while agent 0 keeps drafting in its own workspace.
+fn checks_while_drafting(gate: &mut Gate) -> Result<()> {
     gate.pause.store(true, Ordering::SeqCst);
     let probe = gate.probe(1)?;
     let steps = format!(
@@ -613,16 +701,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     );
     gate.run(&[(0, steps)])?;
     gate.pause.store(false, Ordering::SeqCst);
-    let id = held[0].id.clone();
-    gate.drive(|gate| {
-        Ok(gate
-            .engine()
-            .run(&id)
-            .ok()
-            .flatten()
-            .is_some_and(|r| r.outcome.is_some()))
-    })?;
-    let run = gate.engine().run(&id)?.ok_or("run missing")?;
+    let run = gate.finish_run(&held[0].id, "run missing")?;
     let published = gate.engine().published()?;
     require(
         matches!(run.outcome, Some(RunOutcome::Published { .. }))
@@ -639,9 +718,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         ),
     )?;
     gate.phase("checks_while_drafting", json!({"run":run}));
+    Ok(())
+}
 
-    // Phase 5: agent 1's next task uses agent 0's work: it registers, proposes a join,
-    // and both agree. Agent 1 resumes in the shared workspace.
+/// Phase 5: agent 1's next task uses agent 0's work: it registers, proposes a join,
+/// and both agree. Agent 1 resumes in the shared workspace.
+fn join(gate: &mut Gate) -> Result<()> {
     let steps = "1. falinks_register with request {\"id\": \"summary\", \"task\": \"summary\", \"nodes\": [\"summary.go\"], \"depends\": [\"price.go#Net\", \"label.go#Label\"]}.\n2. falinks_propose with request {\"action\": \"Join\", \"text\": \"Summary uses Net from agent-0's discount work\", \"failing\": false}.";
     gate.run(&[(1, steps.into())])?;
     let proposal = gate
@@ -665,12 +747,15 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "join",
         json!({"proposal":gate.engine().proposal(proposal["id"].as_str().unwrap_or(""))?}),
     );
+    Ok(())
+}
 
-    // Phase 6: steering. While agent 1's turn is active, agent 0 installs an incomplete
-    // draft that agent 1's registered work depends on.
+/// Phase 6: steering. While agent 1's turn is active, agent 0 installs an incomplete
+/// draft that agent 1's registered work depends on.
+fn steering(gate: &mut Gate) -> Result<()> {
     // The join's transition raised obligations; agent 1 reviews them before drafting.
     gate.run(&[(0, REVIEW.into()), (1, REVIEW.into())])?;
-    let summary_version = version(gate, "summary.go")?;
+    let summary_version = gate.version("summary.go")?;
     let steps = format!(
         "1. {}\n2. falinks_capture with request {{\"paths\": [\"price.go\"]}} and quote the body of Discount from its price.go content.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with request {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned. Attempt this edit before any falinks_review.{}",
         edit_step(
@@ -697,18 +782,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         unreviewed("discount-broken-2")
     );
     gate.prompt(0, &broken)?;
-    gate.pump(&[0], false, |gate| {
-        Ok(gate.read_live(0, "price.go")? == DISCOUNT_BROKEN
-            && gate.workers[0]
-                .runtime
-                .as_ref()
-                .is_some_and(|r| r.session.idle()))
-    })?;
-    require(
-        gate.runtime(1)?.session.in_turn(),
-        "agent 1's turn ended before the peer edit",
-    )?;
-    gate.drive(|_| Ok(true))?;
+    gate.settle(0, "price.go", DISCOUNT_BROKEN)?;
     let obligation = gate
         .engine()
         .events(gate.client(1), 0)?
@@ -716,32 +790,19 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .rev()
         .find(|e| matches!(&e.body, falinks::Body::Obligation { agent: 1, .. }))
         .ok_or("no obligation reached agent 1")?;
-    let runtime = gate.runtime(1)?;
-    let delivery = runtime
-        .session
-        .deliveries
-        .iter()
-        .find(|d| event_seq(d) >= Some(obligation.seq))
-        .cloned()
-        .ok_or("obligation notice not sent mid-turn")?;
+    let delivery = gate.delivery(1, obligation.seq, "obligation notice not sent mid-turn")?;
     // A native Read (not a capture) returned the peer's incomplete draft.
-    let saw_draft = tool_results(&runtime.session.events, |b| b["name"] == "Read")
+    let saw_draft = tool_results(&gate.runtime(1)?.session.events, |b| b["name"] == "Read")
         .any(|(e, b)| e["isReplay"] != true && b.to_string().contains("return gross /\\n"));
     let reviews = gate.accepted(1, "review");
     let edits = gate.calls(1, "edit").split_off(phase_edits);
-    let refused = edits
-        .iter()
-        .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
-    let applied = edits.iter().position(|c| {
-        c["result"]["accepted"] == true
-            && c["host_call"]["request"]["output"]["summary.go"]["content"] == SUMMARY_FINAL
-    });
     require(
-        delivery["sent_in_turn"] == true
-            && delivery["presented_span"] == delivery["sent_span"]
+        presented_in_turn(&delivery)
             && saw_draft
-            && refused.is_some()
-            && applied > refused,
+            && reviewed_before_write(&edits, |c| {
+                c["result"]["accepted"] == true
+                    && c["host_call"]["request"]["output"]["summary.go"]["content"] == SUMMARY_FINAL
+            }),
         "steering, live incomplete draft or review-before-write failed",
     )?;
     gate.control(1, "steering")?;
@@ -749,8 +810,11 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "steering",
         json!({"delivery":delivery,"edits":edits,"reviews":reviews,"saw_incomplete_peer_draft":saw_draft}),
     );
+    Ok(())
+}
 
-    // Whole-operation stale rejection: two outputs bound to a superseded price.go version.
+/// Whole-operation stale rejection: two outputs bound to a superseded price.go version.
+fn stale(gate: &mut Gate) -> Result<()> {
     let first = gate.workers[1].transcripts[0]["events"]
         .as_array()
         .and_then(|events| {
@@ -781,11 +845,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "stale request applied output or lost its proposal",
     )?;
     gate.phase("stale", json!({"record":record}));
+    Ok(())
+}
 
-    // Phase 7: finish, review, offer the exact team candidate; acceptance commits but the
-    // host faults before acknowledging it, then restarts the engine and both workers.
-    // Steering for agent 0 too: it declares a dependency on Summary, the host holds it
-    // at its edit call, and agent 1's Summary change reaches it inside that turn.
+/// Phase 7a: steering for agent 0 too: it declares a dependency on Summary, the host
+/// holds it at its edit call, and agent 1's Summary change reaches it inside that turn.
+fn steering_agent0(gate: &mut Gate) -> Result<()> {
     let steps = format!(
         "1. falinks_register with request {{\"id\": \"summary-check\", \"task\": \"discount\", \"nodes\": [\"price.go#Net\"], \"depends\": [\"summary.go#Summary\"]}}.\n2. falinks_obligations with request {{}}.\n3. falinks_capture with request {{}}.\n4. For each obligation whose required revision is above its reviewed revision, falinks_review with request {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using step 3's revision. If there is none, do nothing.\n5. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n6. {} — use the price.go version step 5 returned.{}",
         edit_step("discount-done", "price.go", DISCOUNT_FINAL, "VERSION"),
@@ -808,30 +873,14 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .events(gate.client(0), 0)?
         .last()
         .map_or(0, |e| e.seq);
-    let summary = gate.engine().capture()?.files["summary.go"].version;
+    let summary = gate.version("summary.go")?;
     let steps = format!(
         "1. {}{}",
-        edit_step(
-            "summary-net",
-            "summary.go",
-            SUMMARY_NET,
-            &summary.to_string()
-        ),
+        edit_step("summary-net", "summary.go", SUMMARY_NET, &summary),
         unreviewed("summary-net-2")
     );
     gate.prompt(1, &steps)?;
-    gate.pump(&[1], false, |gate| {
-        Ok(gate.read_live(1, "summary.go")? == SUMMARY_NET
-            && gate.workers[1]
-                .runtime
-                .as_ref()
-                .is_some_and(|r| r.session.idle()))
-    })?;
-    require(
-        gate.runtime(0)?.session.in_turn(),
-        "agent 0's turn ended before the peer edit",
-    )?;
-    gate.drive(|_| Ok(true))?;
+    gate.settle(1, "summary.go", SUMMARY_NET)?;
     require(
         gate.read_live(0, "price.go")? == DISCOUNT_FINAL,
         "final discount not applied",
@@ -842,35 +891,25 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .into_iter()
         .find(|e| matches!(&e.body, falinks::Body::Obligation { agent: 0, .. }))
         .ok_or("no obligation reached agent 0")?;
-    let delivery = gate
-        .runtime(0)?
-        .session
-        .deliveries
-        .iter()
-        .find(|d| event_seq(d) >= Some(obligation.seq))
-        .cloned()
-        .ok_or("obligation notice not sent to agent 0")?;
+    let delivery = gate.delivery(0, obligation.seq, "obligation notice not sent to agent 0")?;
     let edits = gate.calls(0, "edit").split_off(edits_before);
-    let refused = edits
-        .iter()
-        .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
-    let applied = edits.iter().position(|c| {
-        c["host_call"]["request"]["output"]["price.go"]["content"] == DISCOUNT_FINAL
-            && c["result"]["accepted"] == true
-    });
     require(
-        delivery["sent_in_turn"] == true
-            && delivery["presented_span"] == delivery["sent_span"]
-            && refused.is_some()
-            && applied > refused
+        presented_in_turn(&delivery)
+            && reviewed_before_write(&edits, |c| {
+                c["host_call"]["request"]["output"]["price.go"]["content"] == DISCOUNT_FINAL
+                    && c["result"]["accepted"] == true
+            })
             && gate.accepted(0, "review").len() > reviews_before,
         "agent 0 steering or review-before-write failed",
     )?;
     gate.control(0, "steering")?;
     gate.evidence["phases"]["steering"]["agent0"] = json!({"delivery":delivery,"edits":edits});
+    Ok(())
+}
 
-    // Exact two-member checks while drafting continues: agent 0 asks for feedback on the
-    // team revision; agent 1 drafts past it before the held run is processed.
+/// Phase 7b: exact two-member checks while drafting continues: agent 0 asks for feedback
+/// on the team revision; agent 1 drafts past it before the held run is processed.
+fn team_checks_while_drafting(gate: &mut Gate) -> Result<()> {
     gate.pause.store(true, Ordering::SeqCst);
     let team = gate.engine().capture()?;
     gate.run(&[(
@@ -886,32 +925,18 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .into_iter()
         .find(|r| r.binding.revision == team.revision && r.outcome.is_none())
         .ok_or("feedback run not queued")?;
-    let summary = gate.engine().capture()?.files["summary.go"].version;
+    let summary = gate.version("summary.go")?;
     gate.run(&[(
         1,
         format!(
             "1. {}{}",
-            edit_step(
-                "summary-more",
-                "summary.go",
-                SUMMARY_FINAL,
-                &summary.to_string()
-            ),
+            edit_step("summary-more", "summary.go", SUMMARY_FINAL, &summary),
             unreviewed("summary-more-2")
         ),
     )])?;
     let drafted = gate.engine().capture()?.revision;
     gate.pause.store(false, Ordering::SeqCst);
-    let id = early.id.clone();
-    gate.drive(|gate| {
-        Ok(gate
-            .engine()
-            .run(&id)
-            .ok()
-            .flatten()
-            .is_some_and(|r| r.outcome.is_some()))
-    })?;
-    let checked = gate.engine().run(&id)?.ok_or("feedback run missing")?;
+    let checked = gate.finish_run(&early.id, "feedback run missing")?;
     require(
         checked.outcome == Some(RunOutcome::Passed)
             && checked.binding.members == BTreeSet::from([0, 1])
@@ -926,6 +951,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "team_checks_while_drafting",
         json!({"run":checked,"drafted_revision":drafted}),
     );
+    Ok(())
+}
+
+/// Phase 7c: review, offer the exact team candidate; acceptance commits but the host
+/// faults before acknowledging it, then restarts the engine and both workers.
+fn accepted_recovery(gate: &mut Gate) -> Result<()> {
     gate.run(&[(0, REVIEW.into()), (1, REVIEW.into())])?;
     for agent in 0..2 {
         require(
@@ -1024,16 +1055,19 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         json!({"run":gate.engine().run(&run)?,"published_revision":published.revision,
             "mirror_after_crash":stale_mirror,"mirror_after_restart":published.tree}),
     );
+    Ok(())
+}
 
-    // Phase 8: durable deferral and restored gates. Agent 0 changes Label; agent 1 defers
-    // its first unhandled event; its worker restarts; the resumed worker gets the deferral
-    // and obligation replayed, and its related write stays refused until review.
-    let label = gate.engine().capture()?.files["label.go"].version;
+/// Phase 8: durable deferral and restored gates. Agent 0 changes Label; agent 1 defers
+/// its first unhandled event; its worker restarts; the resumed worker gets the deferral
+/// and obligation replayed, and its related write stays refused until review.
+fn deferral_and_jobs(gate: &mut Gate) -> Result<()> {
+    let label = gate.version("label.go")?;
     gate.run(&[(
         0,
         format!(
             "1. {}{}",
-            edit_step("label-loud", "label.go", LABEL_LOUD, &label.to_string()),
+            edit_step("label-loud", "label.go", LABEL_LOUD, &label),
             unreviewed("label-loud-2")
         ),
     )])?;
@@ -1060,23 +1094,20 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     )?;
     gate.stop_worker(1)?;
     gate.start(1)?;
-    let summary = gate.engine().capture()?.files["summary.go"].version;
+    let summary = gate.version("summary.go")?;
     let phase_edits = gate.calls(1, "edit").len();
     gate.run(&[(
         1,
         format!(
             "The host restarted your worker; your deferred events and obligations are above.\n1. {} Attempt this edit before any falinks_review.{}",
-            edit_step("summary-messy", "summary.go", SUMMARY_MESSY, &summary.to_string()),
+            edit_step("summary-messy", "summary.go", SUMMARY_MESSY, &summary),
             unreviewed("summary-messy-2")
         ),
     )])?;
     let edits = gate.calls(1, "edit").split_off(phase_edits);
-    let refused = edits
-        .iter()
-        .position(|c| c["result"]["outcome"]["Unreviewed"].is_object());
-    let applied = edits.iter().position(|c| c["result"]["accepted"] == true);
     require(
-        refused.is_some() && applied > refused && gate.read_live(1, "summary.go")? == SUMMARY_MESSY,
+        reviewed_before_write(&edits, |c| c["result"]["accepted"] == true)
+            && gate.read_live(1, "summary.go")? == SUMMARY_MESSY,
         "restored review gate did not hold the resumed worker's write",
     )?;
     // The resumed worker formats its draft with the host-enrolled job.
@@ -1101,9 +1132,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "deferral_and_jobs",
         json!({"deferred_seq":first,"edits":edits,"job":job}),
     );
+    Ok(())
+}
 
-    // Phase 9: completion race. A message sent after `result` starts a new turn and
-    // leaves the engine event unhandled.
+/// Phase 9: completion race. A message sent after `result` starts a new turn and
+/// leaves the engine event unhandled.
+fn completion_race(gate: &mut Gate) -> Result<()> {
     let post = |text: &str| {
         format!(
             "1. falinks_post with request {{\"task\": \"gate\", \"scope\": [], \"work\": \"None\", \"text\": \"{text}\", \"reply_to\": null}}."
@@ -1145,9 +1179,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         deliveries.push(delivery);
     }
     gate.phase("completion_race", json!({"deliveries":deliveries}));
+    Ok(())
+}
 
-    // Phase 10: unknown-source host injection. The engine halts, evidence stays, and the
-    // worker's capability is revoked, which blocks publication and scoring.
+/// Phase 10: unknown-source host injection. The engine halts, evidence stays, and the
+/// worker's capability is revoked, which blocks publication and scoring.
+fn unknown_change(gate: &mut Gate) -> Result<()> {
     for agent in 0..2 {
         require(
             !gate.runtime(agent)?.session.gate.failed,
@@ -1156,17 +1193,12 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     }
     let injected = "package gate\n\n// UNEXPECTED_HOST_WRITE\n";
     fs::write(space(&gate.dir, 0).join("label.go"), injected)?;
-    let current = gate.engine().capture()?.files["label.go"].version;
+    let current = gate.version("label.go")?;
     gate.run(&[(
         0,
         format!(
             "1. {}",
-            edit_step(
-                "after-injection",
-                "label.go",
-                LABEL_FINAL,
-                &current.to_string()
-            )
+            edit_step("after-injection", "label.go", LABEL_FINAL, &current)
         ),
     )])?;
     let incident = gate.engine().incident()?.ok_or("injection not detected")?;
@@ -1222,52 +1254,17 @@ fn main() {
         eprintln!("crash barrier missed: {:?}", crashed.err());
         process::exit(1);
     }
-    let arguments = (|| -> Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
-        if args == ["--help"] {
-            println!(
-                "Usage: check-integration --binary PINNED_CLAUDE --output REPORT.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL]"
-            );
-            process::exit(0);
-        }
-        require(args.len() % 2 == 0, "expected option/value pairs")?;
-        let (mut binary, mut output, mut probe, mut tool) = (None, None, None, None);
-        for pair in args.as_chunks::<2>().0 {
-            let value = Some(PathBuf::from(&pair[1]));
-            match pair[0].as_str() {
-                "--binary" => binary = value,
-                "--output" => output = value,
-                "--probe" => probe = value,
-                "--tool" => tool = value,
-                _ => return Err("unknown option".into()),
-            }
-        }
-        let sibling = |name| env::current_exe().map(|exe| exe.with_file_name(name));
-        let probe = probe.map_or_else(|| sibling("sandbox-probe"), Ok)?;
-        let tool = tool.map_or_else(|| sibling("falinks-claude-tool"), Ok)?;
-        // Name a missing worker tool before any runtime launch, not a bare os error later.
-        for path in [&probe, &tool] {
-            require(path.is_file(), &format!("missing {}", path.display()))?;
-        }
-        Ok((
-            binary.ok_or("--binary required")?,
-            output.ok_or("--output required")?,
-            probe,
-            tool,
-        ))
-    })();
-    let (binary, output, probe, tool) = match arguments {
-        Ok(args) => args,
-        Err(error) => {
-            eprintln!("{error}");
-            process::exit(1);
-        }
-    };
-    let started = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let mut report = json!({"implementation":"rust","runtime":"claude-code","started_at_unix_seconds":started,
-        "publication_scoring_supported":false});
+    let Options {
+        binary,
+        output,
+        probe,
+        tool,
+    } = Options::parse(
+        &args,
+        "falinks-claude-tool",
+        "Usage: check-integration --binary PINNED_CLAUDE --output REPORT.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL]",
+    );
+    let mut report = check_binary::report("claude-code");
     let mut gate = match Gate::new(&binary, &probe, &tool) {
         Ok(gate) => Some(gate),
         Err(error) => {
@@ -1331,23 +1328,10 @@ fn main() {
     report["scope"] = json!(
         "Finite host-scripted gate on one machine and binary. The final deliberate unknown-change injection leaves the disposable engine halted. A saved report never authorizes another run; scoring needs a fresh passing gate."
     );
-    let written = output
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .map_or(Ok(()), fs::create_dir_all)
-        .and_then(|()| {
-            fs::write(
-                &output,
-                serde_json::to_string_pretty(&report).unwrap() + "\n",
-            )
-        });
-    if let Err(error) = written {
-        eprintln!("{error}");
-        process::exit(1);
-    }
-    println!(
-        "{}",
-        json!({"passed":passed,"publication_scoring_supported":false,"failure":report["failure"]})
+    check_binary::finish(
+        &output,
+        &report,
+        json!({"passed":passed,"publication_scoring_supported":false,"failure":report["failure"]}),
     );
     if !passed {
         process::exit(1);

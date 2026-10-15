@@ -13,7 +13,7 @@ cargo build --release --bins
   --output /path/to/current-claude-controls.json
 ```
 
-The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them). It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. The evidence's `outcome` is `passed`, `failed` or `inconclusive` (`--expect-sandbox-unavailable` below adds `fail-closed` and `fail-open`). A failed check exits 1; inspect `failure`. A `model_refusal_fallback` still fails the run as below, but exits 2 and prints `inconclusive: model refusal (not evidence either way)`.
+The verifier expects sibling `sandbox-probe` and `falinks-claude-tool` executables (`--probe` and `--tool` override them); a missing one fails before any runtime launch. It needs the existing subscription login, network access for three short model turns, and permission to launch the Claude Code sandbox. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. The evidence's `outcome` is `passed`, `failed` or `inconclusive` (`--expect-sandbox-unavailable` below adds `fail-closed` and `fail-open`). A failed check exits 1; inspect `failure`. A `model_refusal_fallback` still fails the run as below, but exits 2 and prints `inconclusive: model refusal (not evidence either way)`.
 
 ## Launch profile
 
