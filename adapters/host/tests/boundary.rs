@@ -51,7 +51,7 @@ fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()>
         &root.join("context.sqlite"),
         &root,
         "session-a".into(),
-        OPERATIONS.map(String::from).into(),
+        OPERATIONS,
     )?;
     boundary.bind("thread-a", "agent-a", false)?;
     boundary.begin("turn-a")?;
@@ -95,7 +95,7 @@ fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<(
         &root.join("context.sqlite"),
         &root,
         "session-a".into(),
-        OPERATIONS.map(String::from).into(),
+        OPERATIONS,
     )?;
     boundary.bind("thread-a", "agent-a", false)?;
     boundary.enqueue("E1", &json!({"revision":"R1","text":"reread source"}))?;
@@ -111,7 +111,7 @@ fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<(
         &root.join("context.sqlite"),
         &root,
         "session-b".into(),
-        OPERATIONS.map(String::from).into(),
+        OPERATIONS,
     )?;
     assert!(resumed.bind("thread-a", "agent-b", true).is_err());
     resumed.bind("thread-a", "agent-a", true)?;
@@ -147,7 +147,7 @@ fn unknown_change_preserves_work_and_stops_even_when_old_bytes_return() -> falin
         &root.join("context.sqlite"),
         &root.join("source"),
         "session".into(),
-        OPERATIONS.map(String::from).into(),
+        OPERATIONS,
     )?;
     boundary.bind("thread", "agent", false)?;
     boundary.begin("turn")?;
@@ -198,19 +198,8 @@ fn relocation_rebinds_only_an_existing_thread_for_resume() -> falinks_host::Resu
     std::fs::create_dir(&first)?;
     std::fs::create_dir(&second)?;
     let db = dir.path().join("context.sqlite");
-    Boundary::new(
-        &db,
-        &first,
-        "c1".into(),
-        OPERATIONS.map(String::from).into(),
-    )?
-    .bind("thread", "agent", false)?;
-    let mut moved = Boundary::new(
-        &db,
-        &second,
-        "c2".into(),
-        OPERATIONS.map(String::from).into(),
-    )?;
+    Boundary::new(&db, &first, "c1".into(), OPERATIONS)?.bind("thread", "agent", false)?;
+    let mut moved = Boundary::new(&db, &second, "c2".into(), OPERATIONS)?;
     assert!(moved.bind("thread", "agent", true).is_err());
     assert!(moved.relocate("thread", "other-agent").is_err());
     moved.relocate("thread", "agent")?;

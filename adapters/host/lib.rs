@@ -263,7 +263,7 @@ pub fn tool(operation: &str, description: String) -> Value {
 }
 /// The fixture host's historical edit/review/offer operations.
 pub const OPERATIONS: [&str; 3] = ["edit", "review", "offer"];
-/// The historical edit/review/offer tools of the fixture host.
+/// MCP tools for `OPERATIONS`.
 pub fn tools(workspace: &str) -> Value {
     json!(OPERATIONS.map(|operation| tool(
         operation,
@@ -297,14 +297,14 @@ impl Boundary {
         database: &Path,
         workspace: &Path,
         session: String,
-        operations: Vec<String>,
+        operations: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<Self> {
         let db = Connection::open(database)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS binding(thread TEXT PRIMARY KEY,agent TEXT,workspace TEXT); CREATE TABLE IF NOT EXISTS context(thread TEXT,event TEXT,payload TEXT,status TEXT,PRIMARY KEY(thread,event));")?;
         let workspace = workspace.canonicalize()?.to_string_lossy().into_owned();
         Ok(Self {
             db,
-            operations,
+            operations: operations.into_iter().map(Into::into).collect(),
             workspace,
             session,
             thread: None,

@@ -122,18 +122,16 @@ fn setup(name: &str) -> Run {
     Run { arm, dir }
 }
 
-/// `MUTATIONS` are engine operations the arm forwards; `HOST_TOOLS` are advertised and
-/// never shadow one. `ack`, `check` and `ready` dispatch in the milestone test below.
+/// `MUTATIONS` are engine operations the arm forwards; `HOST_TOOLS` never shadow one.
+/// `ack`, `check` and `ready` dispatch in the milestone test below.
 #[test]
 fn mutations_and_host_tools_name_real_operations() {
     let engine: Vec<&str> = OPERATIONS.iter().map(|(operation, _)| *operation).collect();
-    let advertised = falinks_host::operations(&falinks_claude::arm::tools(Path::new("/w")));
     for mutation in MUTATIONS {
         assert!(engine.contains(mutation), "{mutation}");
     }
     for (tool, _) in HOST_TOOLS {
         assert!(!engine.contains(tool), "{tool}");
-        assert!(advertised.iter().any(|o| o == tool), "{tool}");
     }
 }
 

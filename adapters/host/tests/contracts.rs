@@ -14,7 +14,7 @@ fn mediation_refuses_after_a_failure_and_latches_engine_errors() -> falinks_host
         &root.join("context.sqlite"),
         &root,
         "session-a".into(),
-        OPERATIONS.map(String::from).into(),
+        OPERATIONS,
     )?;
     boundary.bind("thread-a", "agent-a", false)?;
     boundary.enqueue("E1", &json!({"revision":"R1"}))?;
