@@ -138,6 +138,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "falinks-codex"
+version = "0.1.0"
+dependencies = [
+ "falinks-host",
+ "libc",
+ "serde_json",
+ "shlex",
+ "tempfile",
+]
+
+[[package]]
 name = "falinks-host"
 version = "0.1.0"
 dependencies = [
@@ -145,7 +156,6 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "sha2",
- "shlex",
  "tempfile",
 ]
 

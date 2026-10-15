@@ -1,6 +1,6 @@
-//! Trusted Codex host boundary. The engine envelope is independent of the runtime.
+//! Shared trusted-host library for the worker-runtime adapters. The engine envelope is
+//! independent of the runtime.
 pub mod controlled_host;
-pub mod runtime;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -8,19 +8,18 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, error::Error, path::Path};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
-pub const REQUIRED: &[&str] = &[
-    "schema",
-    "profile",
-    "disabled_capabilities",
-    "mediated_calls",
-    "source_write_denial",
-    "storage_protection",
-    "scratch_access",
-    "unknown_change",
-    "steering",
-    "completion_race",
-    "resume_replay",
-];
+pub struct Notice {
+    pub event: String,
+    pub context: Value,
+}
+pub struct EngineOutcome {
+    pub result: Value,
+    pub notice: Option<Notice>,
+}
+pub type Engine = Box<dyn FnMut(&Value) -> Result<EngineOutcome>>;
+pub fn tools(workspace: &str) -> Value {
+    json!(["edit","review","offer"].map(|operation|json!({"name":format!("falinks_{operation}"),"description":format!("Submit an engine {operation}. Workspace: {workspace}"),"inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},"required":["workspace","request"],"additionalProperties":false}})))
+}
 /// Verified pins keyed by `std::env::consts::{OS, ARCH}`. A platform is declared only after
 /// its adapter controls were re-run there (review-enforced); every other platform fails closed.
 pub type PinMap<T> = &'static [((&'static str, &'static str), T)];
@@ -96,11 +95,6 @@ pub struct ControlGate {
     pub controls: BTreeMap<String, bool>,
     pub failed: bool,
     required: &'static [&'static str],
-}
-impl Default for ControlGate {
-    fn default() -> Self {
-        Self::new(REQUIRED)
-    }
 }
 impl ControlGate {
     /// A runtime adapter names its own required control set.

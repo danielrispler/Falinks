@@ -1,8 +1,7 @@
 //! Pinned Claude Code worker adapter: the #23 boundary ported to stream-json.
 //! Runtime-independent pieces (`Boundary`, `ControlGate`, `ControlledHost`) come from `falinks-host`.
 use falinks_host::{
-    Boundary, ControlGate, PinMap, Result, file_hash, platform_pin, require,
-    runtime::{Engine, Notice},
+    Boundary, ControlGate, Engine, Notice, PinMap, Result, file_hash, platform_pin, require,
 };
 use serde_json::{Value, json};
 use std::{
@@ -195,7 +194,7 @@ impl Launch {
     pub fn fixture(root: &Path) -> Self {
         let source = root.join("source");
         Self {
-            tools: falinks_host::runtime::tools(&source.to_string_lossy()),
+            tools: falinks_host::tools(&source.to_string_lossy()),
             source,
             scratch: root.join("scratch"),
             controller: root.join("controller"),
