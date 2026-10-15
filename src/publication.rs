@@ -199,6 +199,7 @@ fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
     let tree = revision(db, revision_id)?.tree;
     let (members, contributions) = coverage(db, revision_id, base)?;
     // Readiness never transfers: only an offer bound to this exact candidate counts.
+    // Members and contributions compare as compact serde JSON, ordered as stored.
     let checkpoints: BTreeMap<usize, String> = all::<(usize, String)>(
         db,
         "SELECT json_array(json_extract(body, '$.agent'), json_extract(body, '$.id'))
@@ -261,13 +262,15 @@ pub(crate) fn queue(db: &Connection, revision: u64) -> Result<()> {
 }
 /// Restart: an uncommitted running attempt is never resumed; it awaits explicit retry.
 pub(crate) fn recover(db: &Connection) -> Result<()> {
-    for mut run in runs(db)? {
-        if run.running {
-            run.finish(RunOutcome::Interrupted {
-                reason: "restart during validation; explicit retry required".into(),
-            });
-            save_run(db, &run)?;
-        }
+    for mut run in all::<Run>(
+        db,
+        "SELECT body FROM runs WHERE json_extract(body, '$.running') ORDER BY seq",
+        [],
+    )? {
+        run.finish(RunOutcome::Interrupted {
+            reason: "restart during validation; explicit retry required".into(),
+        });
+        save_run(db, &run)?;
     }
     Ok(())
 }
