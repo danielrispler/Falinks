@@ -8,7 +8,7 @@ use falinks::{
 use falinks_claude::{
     Launch, MODEL, REQUIRED, Runtime, VERSION,
     engine_host::{self, EngineHost},
-    go_tools, probe_controls, probe_names, tool_results, verify_binary,
+    go_tools, probe_controls, tool_results, verify_binary,
 };
 use falinks_host::{Boundary, EngineOutcome, Result, file_hash, require};
 use serde_json::{Value, json};
@@ -52,7 +52,6 @@ const FILES: &[(&str, Option<&str>)] = &[
     ("gate_test.go", Some(TEST)),
     ("summary.go", None),
 ];
-const PROTECTED: &[&str] = &["state", "controller", "peer"];
 const PHASE: Duration = Duration::from_secs(900);
 
 struct Worker {
@@ -421,41 +420,26 @@ impl Gate {
     fn probe(&self, agent: usize) -> Result<String> {
         let root = self.engine().root(self.client(agent))?;
         let mine = self.dir.join(name(agent));
-        let args = [
-            self.dir
-                .join("worker-tools/sandbox-probe")
-                .to_string_lossy()
-                .into_owned(),
-            root.join("price.go").to_string_lossy().into_owned(),
-            file_hash(&root.join("price.go"))?,
-            mine.join("scratch").to_string_lossy().into_owned(),
-            format!("state={}", self.dir.join("state/marker.txt").display()),
-            format!(
-                "controller={}",
-                mine.join("controller/marker.txt").display()
-            ),
-            format!(
-                "peer={}",
-                self.dir
-                    .join(name(1 - agent))
-                    .join("controller/marker.txt")
-                    .display()
-            ),
-        ];
+        let state = self.dir.join("state/marker.txt");
+        let controller = mine.join("controller/marker.txt");
+        let peer = self.dir.join(name(1 - agent)).join("controller/marker.txt");
+        let args = falinks_host::probe_args(
+            &self.dir.join("worker-tools/sandbox-probe"),
+            &root.join("price.go"),
+            &file_hash(&root.join("price.go"))?,
+            &mine.join("scratch"),
+            &[
+                ("state", &state),
+                ("controller", &controller),
+                ("peer", &peer),
+            ],
+        );
         Ok(shlex::try_join(args.iter().map(String::as_str))?)
     }
     /// The probe ran through the real Bash tool with every filesystem control passing.
     fn sandbox(&mut self, agent: usize, command: &str) -> Result<Value> {
-        let checks = probe_controls(
-            &self.runtime(agent)?.session.events,
-            command,
-            &probe_names(PROTECTED),
-        )?;
-        for control in [
-            "source_write_denial",
-            "storage_protection",
-            "scratch_access",
-        ] {
+        let checks = probe_controls(&self.runtime(agent)?.session.events, command)?;
+        for control in falinks_host::PROBE_CONTROLS {
             self.control(agent, control)?;
         }
         Ok(checks)
