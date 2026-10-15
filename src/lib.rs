@@ -5,7 +5,7 @@ mod contain;
 mod coordination;
 mod publication;
 mod regroup;
-pub use analysis::{Evidence, Footprint, Language, Owner, Pin, Tool, Toolchain, Unit, sha256_file};
+pub use analysis::{Evidence, Language, Owner, Pin, Tool, Toolchain, Unit, sha256_file};
 #[doc(hidden)]
 pub use contain::helper_main;
 pub use coordination::{
@@ -25,7 +25,7 @@ use std::{
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Mutex, OnceLock, RwLock},
+    sync::{Mutex, OnceLock, RwLock, RwLockReadGuard},
 };
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -42,6 +42,16 @@ fn nonce() -> Result<String> {
 pub struct File {
     pub bytes: Vec<u8>,
     pub executable: bool,
+}
+impl File {
+    /// Filesystem permission bits, the only two modes a source file may have.
+    fn mode(&self) -> u32 {
+        if self.executable { 0o755 } else { 0o644 }
+    }
+    /// Git tree entry mode.
+    fn git_mode(&self) -> &'static str {
+        if self.executable { "100755" } else { "100644" }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VersionedFile {
@@ -133,7 +143,7 @@ struct Identity {
 }
 
 /// Physical live workspaces and the agents placed in them. Changes only under the writer.
-#[derive(Clone)]
+/// Readers borrow it through `Engine::layout`; it is never copied.
 pub(crate) struct Layout {
     pub(crate) roots: Vec<PathBuf>,
     /// None until a provisioned root first receives a workspace.
@@ -149,12 +159,11 @@ impl Layout {
     pub(crate) fn group(&self, space: usize) -> BTreeSet<usize> {
         (0..2).filter(|a| self.placement[*a] == space).collect()
     }
-    pub(crate) fn current(&self, space: usize) -> Result<Capture> {
+    pub(crate) fn current(&self, space: usize) -> Result<&Capture> {
         Ok(self
             .completed
             .get(space)
-            .cloned()
-            .flatten()
+            .and_then(Option::as_ref)
             .ok_or("workspace has no completed revision")?)
     }
 }
@@ -177,10 +186,17 @@ pub struct Engine {
     leases: Mutex<Vec<WriterLease>>,
 }
 
+/// A ledger connection. The schema was set up when the engine opened, and write-ahead
+/// logging persists in the database file; synchronous mode is per connection.
 fn connect(state: &Path) -> Result<Connection> {
     let db = Connection::open(state.join("ledger.sqlite"))?;
     db.busy_timeout(std::time::Duration::from_secs(5))?;
-    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    db.execute_batch("PRAGMA synchronous=FULL;")?;
+    Ok(db)
+}
+/// Once, when the engine opens: journal mode and every table, so older ledgers gain new tables.
+fn schema(db: &Connection) -> Result<()> {
+    db.execute_batch("PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS revisions (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, agent INTEGER NOT NULL, request_id TEXT NOT NULL, body TEXT NOT NULL, UNIQUE(agent, request_id));
@@ -188,10 +204,9 @@ fn connect(state: &Path) -> Result<Connection> {
         CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS jobs (agent INTEGER NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(agent,id));
         CREATE TABLE IF NOT EXISTS spaces (id INTEGER PRIMARY KEY, root TEXT NOT NULL UNIQUE, completed INTEGER);")?;
-    coordination::tables(&db)?;
-    publication::tables(&db)?;
-    regroup::tables(&db)?;
-    Ok(db)
+    coordination::tables(db)?;
+    publication::tables(db)?;
+    regroup::tables(db)
 }
 fn meta(db: &Connection, key: &str) -> Result<Option<String>> {
     Ok(db
@@ -216,6 +231,17 @@ fn record(db: &Connection, operation: u64) -> Result<Record> {
         [operation as i64],
         |r| r.get::<_, String>(0),
     )?)?)
+}
+/// The record of a client's request ID, if it was ever submitted.
+fn request_record(db: &Connection, agent: usize, id: &str) -> Result<Option<Record>> {
+    db.query_row(
+        "SELECT body FROM requests WHERE agent=? AND request_id=?",
+        params![agent as i64, id],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()?
+    .map(|b| Ok(serde_json::from_str(&b)?))
+    .transpose()
 }
 pub(crate) fn revision(db: &Connection, revision: u64) -> Result<Capture> {
     let body = db
@@ -256,11 +282,7 @@ fn git_program() -> Result<&'static Path> {
             .find(|git| fs::metadata(git).is_ok_and(|m| m.is_file() && m.mode() & 0o111 != 0))
             .ok_or("Git not found on PATH")?;
         let git = fs::canonicalize(git)?;
-        let output = Command::new(&git)
-            .arg("--version")
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .output()?;
+        let output = isolated_git(&git).arg("--version").output()?;
         let text = String::from_utf8_lossy(&output.stdout);
         if !git_version_supported(&text) {
             return fail(format!(
@@ -285,16 +307,23 @@ fn git_version_supported(text: &str) -> bool {
         .map(|n| n.parse::<u32>().ok());
     matches!((numbers.next(), numbers.next()), (Some(Some(major)), Some(Some(minor))) if (major, minor) >= (2, 32))
 }
+/// Git with a cleared environment and no system or user configuration.
+fn isolated_git(git: &Path) -> Command {
+    let mut command = Command::new(git);
+    command
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null");
+    command
+}
+/// Every storage Git call, including creating the bare store.
 fn git(state: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
-    let mut command = Command::new(git_program()?);
+    let mut command = isolated_git(git_program()?);
     command
         .arg("--git-dir")
         .arg(state.join("objects.git"))
         .args(args)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -356,42 +385,54 @@ fn read_file(live: &Path, path: &str) -> Result<Option<File>> {
                 return fail(format!("unsupported file or hardlink: {path}"));
             }
             let mode = metadata.mode() & 0o7777;
-            if mode != 0o644 && mode != 0o755 {
+            // Supported only when the mode is exactly the one the file would derive.
+            let file = File {
+                bytes: Vec::new(),
+                executable: mode & 0o111 != 0,
+            };
+            if file.mode() != mode {
                 return fail(format!("unsupported source mode: {path}"));
             }
             return Ok(Some(File {
                 bytes: fs::read(cursor)?,
-                executable: mode == 0o755,
+                ..file
             }));
         }
     }
     unreachable!()
 }
-fn paths(root: &Path, relative: &Path, output: &mut Vec<String>, ignore_git: bool) -> Result<()> {
-    for entry in fs::read_dir(root.join(relative))? {
-        let entry = entry?;
-        let name = entry.file_name();
-        if ignore_git
-            && relative.as_os_str().is_empty()
-            && (name == ".git" || name == ".falinks-writer.lock")
-        {
-            continue;
+/// A live root's Git storage and writer lease: present at its top level, never source.
+const GIT_STORAGE: &str = ".git";
+const WRITER_LEASE: &str = ".falinks-writer.lock";
+fn reserved(relative: &Path, name: &std::ffi::OsStr) -> bool {
+    relative.as_os_str().is_empty() && (name == GIT_STORAGE || name == WRITER_LEASE)
+}
+/// Every source path under `root`; a live root skips its reserved names.
+fn source_paths(root: &Path, live: bool) -> Result<Vec<String>> {
+    fn walk(root: &Path, relative: &Path, live: bool, output: &mut Vec<String>) -> Result<()> {
+        for entry in fs::read_dir(root.join(relative))? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if live && reserved(relative, &name) {
+                continue;
+            }
+            let path = relative.join(name);
+            let text = path.to_str().ok_or("non-UTF8 source path")?.to_string();
+            valid_path(&text)?;
+            if entry.file_type()?.is_dir() {
+                walk(root, &path, live, output)?;
+            } else {
+                output.push(text);
+            }
         }
-        let path = relative.join(name);
-        let text = path.to_str().ok_or("non-UTF8 source path")?.to_string();
-        valid_path(&text)?;
-        if entry.file_type()?.is_dir() {
-            paths(root, &path, output, ignore_git)?;
-        } else {
-            output.push(text);
-        }
+        Ok(())
     }
-    Ok(())
+    let mut output = Vec::new();
+    walk(root, Path::new(""), live, &mut output)?;
+    Ok(output)
 }
 fn audit(live: &Path, capture: &Capture) -> Result<()> {
-    let mut observed = Vec::new();
-    paths(live, Path::new(""), &mut observed, true)?;
-    for path in observed {
+    for path in source_paths(live, true)? {
         if !capture.files.contains_key(&path) {
             return fail(format!("unenrolled source: {path}"));
         }
@@ -414,9 +455,7 @@ fn installed(before: &Capture, proposed: &Capture, request: &Request) -> BTreeSe
 }
 /// A provisioned root that has not yet received a workspace holds no source.
 pub(crate) fn ensure_empty(root: &Path) -> Result<()> {
-    let mut observed = Vec::new();
-    paths(root, Path::new(""), &mut observed, true)?;
-    match observed.first() {
+    match source_paths(root, true)?.first() {
         Some(path) => fail(format!("unexplained source write: {path}")),
         None => Ok(()),
     }
@@ -446,15 +485,10 @@ fn build_tree(
                 );
             }
         } else {
-            let mode = if file.file.as_ref().unwrap().executable {
-                "100755"
-            } else {
-                "100644"
-            };
             entries.insert(
                 tail.into(),
                 (
-                    mode.into(),
+                    file.file.as_ref().unwrap().git_mode().into(),
                     "blob".into(),
                     file.blob.clone().ok_or("missing blob")?,
                 ),
@@ -476,18 +510,7 @@ fn retain(state: &Path, capture: &Capture) -> Result<()> {
             if git(state, &["cat-file", "blob", blob], &[])? != source.bytes {
                 return fail("corrupt snapshot blob");
             }
-            expected.insert(
-                path.clone(),
-                (
-                    if source.executable {
-                        "100755"
-                    } else {
-                        "100644"
-                    }
-                    .to_string(),
-                    blob.clone(),
-                ),
-            );
+            expected.insert(path.clone(), (source.git_mode().to_string(), blob.clone()));
         }
     }
     let listing = git(state, &["ls-tree", "-rz", &capture.tree], &[])?;
@@ -528,14 +551,10 @@ fn install(live: &Path, path: &str, file: &Option<File>) -> Result<()> {
             let mut out = OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .mode(if file.executable { 0o755 } else { 0o644 })
+                .mode(file.mode())
                 .open(&staging)?;
             out.write_all(&file.bytes)?;
-            out.set_permissions(fs::Permissions::from_mode(if file.executable {
-                0o755
-            } else {
-                0o644
-            }))?;
+            out.set_permissions(fs::Permissions::from_mode(file.mode()))?;
             out.sync_all()?;
             fs::rename(&staging, &target)?;
             Ok(())
@@ -595,11 +614,11 @@ impl Engine {
             return fail("controller storage must be separate from source");
         }
         fs::set_permissions(&state, fs::Permissions::from_mode(0o700))?;
-        let source_lease = writer_lease(&live.join(".falinks-writer.lock"))?;
+        let source_lease = writer_lease(&live.join(WRITER_LEASE))?;
         let state_lease = writer_lease(&state.join("writer.lock"))?;
         let db = connect(&state)?;
+        schema(&db)?;
         let identity: Identity;
-        let completed: Capture;
         let mut leases = vec![source_lease, state_lease];
         let mut layout = Layout {
             roots: vec![live.clone()],
@@ -623,14 +642,14 @@ impl Engine {
                     return fail("workspace identity mismatch");
                 }
                 if i > 0 {
-                    leases.push(writer_lease(&root.join(".falinks-writer.lock"))?);
+                    leases.push(writer_lease(&root.join(WRITER_LEASE))?);
                     layout.roots.push(root);
                 }
                 layout
                     .completed
                     .push(current.map(|c| revision(&db, c as u64)).transpose()?);
             }
-            completed = layout.current(0)?;
+            let completed = layout.current(0)?;
             let expected: Vec<_> = enrolled.iter().map(|p| p.to_string()).collect();
             if expected.len() != completed.files.len()
                 || expected.iter().any(|p| !completed.files.contains_key(p))
@@ -647,17 +666,8 @@ impl Engine {
             if state.join("objects.git").exists() {
                 return fail("unrecorded controller storage; preserve for reconciliation");
             }
-            let output = Command::new(git_program()?)
-                .env_clear()
-                .env("PATH", "/usr/bin:/bin")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .args(["init", "--bare"])
-                .arg(state.join("objects.git"))
-                .output()?;
-            if !output.status.success() {
-                return fail("cannot initialize Git storage");
-            }
+            git(&state, &["init", "--bare"], &[])
+                .map_err(|e| format!("cannot initialize Git storage: {e}"))?;
             identity = Identity {
                 workspace: nonce()?,
                 credentials: [nonce()?, nonce()?],
@@ -686,7 +696,7 @@ impl Engine {
                     },
                 );
             }
-            completed = Capture {
+            let completed = Capture {
                 workspace: identity.workspace.clone(),
                 revision: 0,
                 tree: build_tree(&state, &files, "")?,
@@ -759,12 +769,10 @@ impl Engine {
         }
         Ok(())
     }
-    pub(crate) fn layout(&self) -> Result<Layout> {
-        Ok(self
-            .layout
-            .read()
-            .map_err(|_| "layout lock poisoned")?
-            .clone())
+    /// Borrows the layout. Writers change it only under the writer lock, so a reader
+    /// holding that lock must release this guard before `self.layout.write()`.
+    pub(crate) fn layout(&self) -> Result<RwLockReadGuard<'_, Layout>> {
+        Ok(self.layout.read().map_err(|_| "layout lock poisoned")?)
     }
     /// Host read of the primary workspace (space 0), where both agents start joined.
     /// Agents read only their own workspace, through `capture_for`.
@@ -774,10 +782,11 @@ impl Engine {
     /// Captures the live workspace the client is currently placed in.
     pub fn capture_for(&self, client: &Client) -> Result<Capture> {
         self.authorize(client)?;
-        self.capture_space(self.layout()?.of(client.agent))
+        let space = self.layout()?.of(client.agent);
+        self.capture_space(space)
     }
     fn capture_space(&self, space: usize) -> Result<Capture> {
-        let capture = self.layout()?.current(space)?;
+        let capture = self.layout()?.current(space)?.clone();
         retain(&self.state, &capture)?;
         let db = connect(&self.state)?;
         db.execute(
@@ -788,27 +797,14 @@ impl Engine {
     }
     pub fn published(&self) -> Result<Capture> {
         let db = connect(&self.state)?;
-        let revision = meta(&db, "published")?.ok_or("missing published pointer")?;
-        Ok(serde_json::from_str(&db.query_row(
-            "SELECT body FROM revisions WHERE id=?",
-            [revision],
-            |r| r.get::<_, String>(0),
-        )?)?)
+        revision(&db, publication::published(&db)?)
     }
     pub fn history(&self) -> Result<Vec<Record>> {
         records(&connect(&self.state)?)
     }
     pub fn request(&self, client: &Client, id: &str) -> Result<Option<Record>> {
         self.authorize(client)?;
-        let db = connect(&self.state)?;
-        let body = db
-            .query_row(
-                "SELECT body FROM requests WHERE agent=? AND request_id=?",
-                params![client.agent as i64, id],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?;
-        body.map(|b| Ok(serde_json::from_str(&b)?)).transpose()
+        request_record(&connect(&self.state)?, client.agent, id)
     }
     pub fn apply(&self, client: &Client, request: Request) -> Result<Outcome> {
         self.apply_inner(client, request, Mode::Apply, &mut |_| Ok(()))
@@ -844,20 +840,21 @@ impl Engine {
             return fail("request ID required");
         }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let layout = self.layout()?;
-        let space = layout.of(client.agent);
-        let live = layout.roots[space].clone();
-        let before = layout.current(space)?;
-        let existing = db
-            .query_row(
-                "SELECT body FROM requests WHERE agent=? AND request_id=?",
-                params![client.agent as i64, request.id],
-                |r| r.get::<_, String>(0),
+        // Copied out: no layout guard is held while host observers run.
+        let (space, live, before, group) = {
+            let layout = self.layout()?;
+            let space = layout.of(client.agent);
+            let before = layout.current(space)?.clone();
+            (
+                space,
+                layout.roots[space].clone(),
+                before,
+                layout.group(space),
             )
-            .optional()?;
+        };
         let mut record: Record;
-        if let Some(body) = existing {
-            record = serde_json::from_str(&body)?;
+        if let Some(existing) = request_record(&db, client.agent, &request.id)? {
+            record = existing;
             if record.request != request {
                 return fail("request ID reused with changed contents");
             }
@@ -911,7 +908,7 @@ impl Engine {
         }
         if let Err(error) = audit(&live, &before) {
             let reason = error.to_string();
-            self.save_incident(&db, &reason)?;
+            self.save_incident(&db, &self.layout()?.roots, &reason)?;
             return self.finish(&db, &mut record, Outcome::Rejected { reason });
         }
         let invalid = request.output.is_empty()
@@ -1000,7 +997,7 @@ impl Engine {
             let mut proposed = base.clone();
             proposed.revision = next_revision(&db)?;
             proposed.included.insert(record.operation);
-            proposed.group = layout.group(space);
+            proposed.group = group;
             for (path, file) in &request.output {
                 let blob = file
                     .as_ref()
@@ -1072,11 +1069,6 @@ impl Engine {
             .into_iter()
             .filter(|p| !request.output.contains_key(p))
             .collect();
-        let view = if synced.is_empty() {
-            None
-        } else {
-            Some(self.view_change(&before, &proposed, &synced)?)
-        };
         let mut layout_guard = self.layout.write().map_err(|_| "layout lock poisoned")?;
         let tx = db.unchecked_transaction()?;
         tx.execute(
@@ -1088,9 +1080,11 @@ impl Engine {
             params![proposed.revision as i64, space as i64],
         )?;
         save_record(&tx, &record)?;
-        let cause = self.record_change(&tx, client, &request, &proposed, &change, &layout)?;
-        if let Some(view) = &view {
-            self.renew_for_view(&tx, client.agent, view, proposed.revision, cause)?;
+        let cause = self.record_change(&tx, client, &request, &proposed, &change, &layout_guard)?;
+        if !synced.is_empty() {
+            // Judged on the evidence the gate gathered for the same two captures.
+            let view = change.for_paths(&before, &proposed, &synced);
+            self.renew_for_view(&tx, client.agent, &view, proposed.revision, cause)?;
         }
         tx.commit()?;
         layout_guard.completed[space] = Some(proposed);
@@ -1129,15 +1123,15 @@ impl Engine {
             }
             if record.outcome.is_none() || record.installation_pending {
                 if let Some(proposed) = &record.proposed {
-                    retain(&self.state, proposed)?;
                     let live = &layout.roots[record.before.space];
                     let completed = layout.current(record.before.space)?;
                     let changed = installed(&record.before, proposed, &record.request);
                     let reliable = (|| -> Result<()> {
                         // Check the full source universe before restoring any; never guess attribution.
-                        let mut observed = Vec::new();
-                        paths(live, Path::new(""), &mut observed, true)?;
-                        if observed.iter().any(|p| !completed.files.contains_key(p)) {
+                        if source_paths(live, true)?
+                            .iter()
+                            .any(|p| !completed.files.contains_key(p))
+                        {
                             return fail("unenrolled source during recovery; evidence retained");
                         }
                         for (path, file) in &completed.files {
@@ -1160,7 +1154,7 @@ impl Engine {
                         Ok(())
                     })();
                     if let Err(error) = reliable {
-                        self.save_incident(&db, &error.to_string())?;
+                        self.save_incident(&db, &layout.roots, &error.to_string())?;
                         return Err(error);
                     }
                     for path in &changed {
@@ -1191,7 +1185,7 @@ impl Engine {
         }
         regroup::recover(self, &db, &layout)?;
         if let Err(error) = self.audit_all(&layout) {
-            self.save_incident(&db, &error.to_string())?;
+            self.save_incident(&db, &layout.roots, &error.to_string())?;
             return Err(error);
         }
         // Only known interrupted installations are cleared. Unexplained edits stay halted.
@@ -1296,11 +1290,7 @@ impl Engine {
             return fail("job needs an ID, declared input/output and host executable");
         }
         let db = connect(&self.state)?;
-        let capture: Capture = serde_json::from_str(&db.query_row(
-            "SELECT body FROM revisions WHERE id=?",
-            [spec.revision as i64],
-            |r| r.get::<_, String>(0),
-        )?)?;
+        let capture = revision(&db, spec.revision)?;
         if capture.space != self.layout()?.of(client.agent) {
             return fail("job must capture a revision of the client's workspace");
         }
@@ -1339,9 +1329,10 @@ impl Engine {
                 install(&directory.join("output"), path, &capture.files[path].file)?;
             }
             self.execute_job(&job)?;
-            let mut actual = Vec::new();
-            paths(&directory.join("output"), Path::new(""), &mut actual, false)?;
-            if actual.iter().any(|p| !spec.outputs.contains(p)) {
+            if source_paths(&directory.join("output"), false)?
+                .iter()
+                .any(|p| !spec.outputs.contains(p))
+            {
                 return fail("job wrote undeclared output");
             }
             for path in &spec.outputs {
@@ -1366,13 +1357,14 @@ impl Engine {
         Ok(job)
     }
     fn execute_job(&self, job: &Job) -> Result<()> {
+        let layout = self.layout()?;
         for system in contain::SYSTEM_READS {
-            if self.layout()?.roots.iter().any(|r| r.starts_with(system))
-                || self.state.starts_with(system)
+            if layout.roots.iter().any(|r| r.starts_with(system)) || self.state.starts_with(system)
             {
                 return fail("source/controller overlaps captured-job system read boundary");
             }
         }
+        drop(layout);
         let input = fs::canonicalize(job.directory.join("input"))?;
         let output = fs::canonicalize(job.directory.join("output"))?;
         let status = contain::run(
@@ -1445,9 +1437,7 @@ pub struct Incident {
 fn observe(root: &Path, relative: &Path, files: &mut BTreeMap<String, ObservedFile>) -> Result<()> {
     for entry in fs::read_dir(root.join(relative))? {
         let entry = entry?;
-        if relative.as_os_str().is_empty()
-            && (entry.file_name() == ".git" || entry.file_name() == ".falinks-writer.lock")
-        {
+        if reserved(relative, &entry.file_name()) {
             continue;
         }
         let path = relative.join(entry.file_name());
@@ -1484,14 +1474,15 @@ fn observe(root: &Path, relative: &Path, files: &mut BTreeMap<String, ObservedFi
     Ok(())
 }
 impl Engine {
-    fn save_incident(&self, db: &Connection, reason: &str) -> Result<()> {
+    /// `roots` are the layout's live roots; the caller may hold the layout guard.
+    fn save_incident(&self, db: &Connection, roots: &[PathBuf], reason: &str) -> Result<()> {
         // Halt first even when retaining diagnostic evidence encounters another storage error.
         set_meta(db, "halted", reason)?;
         let mut incident = Incident {
             reason: reason.into(),
             files: BTreeMap::new(),
         };
-        for (space, root) in self.layout()?.roots.iter().enumerate() {
+        for (space, root) in roots.iter().enumerate() {
             let mut files = BTreeMap::new();
             observe(root, Path::new(""), &mut files)?;
             // Paths outside the primary root are prefixed with their workspace.
