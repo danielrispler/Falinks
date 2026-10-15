@@ -2,6 +2,7 @@
 //! checkpoint offers, the durable event stream and voluntary waits.
 use crate::analysis::{self, Evidence, Footprint};
 use crate::publication::{self, RunOutcome};
+use crate::regroup::scalar;
 use crate::{Capture, Client, Engine, Layout, Result, connect, fail, retain};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -197,11 +198,6 @@ pub struct Event {
     pub id: String,
     pub body: Body,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Disposition {
-    Processed,
-    Deferred { note: String },
-}
 /// Everything a reconnecting client must restore before related writes/offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
@@ -362,6 +358,14 @@ fn events_after(db: &Connection, workspace: &str, agent: usize, after: u64) -> R
         })
     })
     .collect()
+}
+/// Whether event `seq` was sent to `agent`.
+fn in_stream(db: &Connection, agent: usize, seq: u64) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE seq=? AND audience & ? != 0)",
+        params![seq as i64, mine(agent)],
+        |r| r.get(0),
+    )?)
 }
 /// The first event after `after` that `agent` can see; given `sender`, the first message
 /// from that sender instead. SQL filters the rows, so no later event is parsed.
@@ -728,14 +732,7 @@ impl Engine {
         self.check_work(&db, &plan.work)?;
         if let Some(reply) = &plan.reply_to {
             // Only a message this client was sent (or sent itself) can be answered.
-            let visible = db
-                .query_row(
-                    "SELECT 1 FROM events WHERE seq=? AND audience & ? != 0",
-                    params![reply.event as i64, mine(client.agent)],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
+            let visible = in_stream(&db, client.agent, reply.event)?;
             match event(&db, &self.identity.workspace, reply.event)? {
                 Some(Event {
                     body: Body::Message(original),
@@ -900,36 +897,53 @@ impl Engine {
             after,
         )
     }
-    /// Advance the durable handled position in order. Deferral is stored in the
-    /// same transaction. Neither processing nor deferral touches obligations.
-    pub fn handle(&self, client: &Client, seq: u64, disposition: Disposition) -> Result<()> {
+    /// One atomic handling step. `through` handles every event in the client's stream
+    /// after the cursor up to it, as processed unless `deferred`, and moves the cursor
+    /// there; at or below the cursor it does nothing. `deferred` stores a note for a
+    /// handled event, keeping the first; `processed` clears earlier deferrals.
+    /// Neither processing nor deferral touches obligations.
+    pub fn handle(
+        &self,
+        client: &Client,
+        through: Option<u64>,
+        deferred: &BTreeMap<u64, String>,
+        processed: &[u64],
+    ) -> Result<()> {
         self.authorize(client)?;
+        if let Some(seq) = processed.iter().find(|seq| deferred.contains_key(seq)) {
+            return fail(format!("event {seq} cannot be both deferred and processed"));
+        }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let handled = cursor(&db, client.agent)?;
+        let newest = scalar(&db, "SELECT COALESCE(MAX(seq), 0) FROM events")?;
+        let through = through.unwrap_or(0);
+        if through > newest {
+            return fail(format!(
+                "through {through} is beyond the newest event {newest}"
+            ));
+        }
+        let new_cursor = cursor(&db, client.agent)?.max(through);
         let tx = db.unchecked_transaction()?;
-        if seq <= handled {
-            if disposition == Disposition::Processed {
-                tx.execute(
-                    "DELETE FROM deferred WHERE agent=? AND seq=?",
-                    params![client.agent as i64, seq as i64],
-                )?;
-            }
-        } else {
-            let next = next_event(&tx, client.agent, handled, None)?;
-            if next != Some(seq) {
-                return fail(format!("handle events in order; next is {next:?}"));
-            }
-            if let Disposition::Deferred { note } = disposition {
-                tx.execute(
-                    "INSERT OR IGNORE INTO deferred VALUES(?,?,?)",
-                    params![client.agent as i64, seq as i64, note],
-                )?;
+        for (seq, note) in deferred {
+            if *seq > new_cursor || !in_stream(&tx, client.agent, *seq)? {
+                return fail(format!(
+                    "event {seq} is not in your stream at or below {new_cursor}"
+                ));
             }
             tx.execute(
-                "INSERT INTO cursors VALUES(?,?) ON CONFLICT(agent) DO UPDATE SET seq=excluded.seq",
-                params![client.agent as i64, seq as i64],
+                "INSERT OR IGNORE INTO deferred VALUES(?,?,?)",
+                params![client.agent as i64, *seq as i64, note],
             )?;
         }
+        for seq in processed {
+            tx.execute(
+                "DELETE FROM deferred WHERE agent=? AND seq=?",
+                params![client.agent as i64, *seq as i64],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO cursors VALUES(?,?) ON CONFLICT(agent) DO UPDATE SET seq=excluded.seq",
+            params![client.agent as i64, new_cursor as i64],
+        )?;
         tx.commit()?;
         Ok(())
     }

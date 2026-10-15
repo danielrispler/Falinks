@@ -156,8 +156,12 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
     // Agent 1 is told through replayable events; its obligation is pending.
     let pending = f.call(1, "pending", json!({}));
     assert_eq!(pending["obligations"][0]["scope"]["id"], "net", "{pending}");
-    let seq = pending["unhandled"][0]["seq"].clone();
-    let deferred = f.call(1, "handle", json!({"seq":seq,"deferred":"after my edit"}));
+    let seq = pending["unhandled"][0]["seq"].as_u64().unwrap();
+    let deferred = f.call(
+        1,
+        "handle",
+        json!({"through":seq,"deferred":{seq.to_string():"after my edit"}}),
+    );
     assert_eq!(deferred["accepted"], true, "{deferred}");
     let pending = f.call(1, "pending", json!({}));
     assert_eq!(pending["deferred"][0]["note"], "after my edit", "{pending}");
@@ -182,6 +186,9 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
         json!({"scope":"net","revision":revision,"decision":"Keep","note":"reread Discount"}),
     );
     assert_eq!(reviewed["accepted"], true, "{reviewed}");
+    let processed = f.call(1, "handle", json!({"processed":[seq]}));
+    assert_eq!(processed["accepted"], true, "{processed}");
+    assert_eq!(f.call(1, "pending", json!({}))["deferred"], json!([]));
     let applied = f.call(
         1,
         "edit",

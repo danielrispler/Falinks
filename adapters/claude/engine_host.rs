@@ -2,7 +2,7 @@
 //! The boundary has already bound host identity; this maps each operation to the
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
-use falinks::{Client, Disposition, Engine, File, JobSpec, Outcome, Request};
+use falinks::{Client, Engine, File, JobSpec, Outcome, Request};
 use falinks_host::{Result, require};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
@@ -97,12 +97,14 @@ impl EngineHost {
                 json!({"accepted":true,"events":engine.events(client, after)?})
             }
             "handle" => {
-                let seq = number(request, "seq")?;
-                let disposition = match request["deferred"].as_str() {
-                    Some(note) => Disposition::Deferred { note: note.into() },
-                    None => Disposition::Processed,
-                };
-                engine.handle(client, seq, disposition)?;
+                let deferred: Option<BTreeMap<u64, String>> = parse(&request["deferred"])?;
+                let processed: Option<Vec<u64>> = parse(&request["processed"])?;
+                engine.handle(
+                    client,
+                    parse(&request["through"])?,
+                    &deferred.unwrap_or_default(),
+                    &processed.unwrap_or_default(),
+                )?;
                 json!({"accepted":true})
             }
             "pending" => {
@@ -241,7 +243,7 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ("events", "{after: seq} -> ordered events after a position."),
     (
         "handle",
-        "{seq, deferred?: note} -> mark the next unhandled event processed, or deferred with a note. Never clears obligations.",
+        "{through?: seq, deferred?: {seq: note}, processed?: [seq]} -> handle every event up to through as processed unless deferred with a note; processed clears earlier deferrals. Never clears obligations.",
     ),
     (
         "pending",

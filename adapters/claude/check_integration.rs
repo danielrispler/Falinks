@@ -1122,7 +1122,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .seq;
     gate.run(&[(
         1,
-        format!("1. falinks_handle with request {{\"seq\": {first}, \"deferred\": \"revisit after restart\"}}."),
+        format!("1. falinks_handle with request {{\"through\": {first}, \"deferred\": {{\"{first}\": \"revisit after restart\"}}}}."),
     )])?;
     let before_restart = gate.engine().pending(gate.client(1))?;
     require(
