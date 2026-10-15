@@ -216,7 +216,7 @@ fn meta(db: &Connection, key: &str) -> Result<Option<String>> {
         .query_row("SELECT value FROM meta WHERE key=?", [key], |r| r.get(0))
         .optional()?)
 }
-/// The stored body of the row `sql` selects, if any. `sql` selects one JSON column.
+/// The single JSON column of the row `sql` selects, if any.
 pub(crate) fn one<T: DeserializeOwned>(
     db: &Connection,
     sql: &str,

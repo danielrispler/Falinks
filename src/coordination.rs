@@ -479,7 +479,7 @@ impl Engine {
             .map_err(|_| "analysis lock poisoned")?
             .clone();
         let db = connect(&self.state)?;
-        let mut all = Vec::new();
+        let mut found = Vec::new();
         for toolchain in &toolchains {
             let key = analysis::toolchain_key(toolchain)?;
             let cached: Option<Evidence> = one(
@@ -510,9 +510,9 @@ impl Engine {
                     evidence
                 }
             };
-            all.push(evidence);
+            found.push(evidence);
         }
-        Ok(all)
+        Ok(found)
     }
 
     /// Writes and offers related to a pending obligation are blocked until review.
