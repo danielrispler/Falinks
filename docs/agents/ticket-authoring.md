@@ -35,6 +35,14 @@ Resolve meaningful tickets when their agreed work and verification are complete.
 
 Every new Wayfinder ticket must include `## Reading` before linking it to the map. List relevant current decision resolutions and research artifacts by name, with one short reason per link. Use comment permalinks for specific resolutions. When no prior material applies, write `None — no prior decisions or research required.` Reading links are a starting set, not a limit on investigation; preserve the ticket's question, scope and stop condition.
 
+Every new ticket must also include `## Touches`, so parallel planning can spot conflicts without reading the code. List three things, one line each:
+
+- **Files:** the main files or modules it edits. This is a best-effort planning hint, not a scope limit.
+- **Freeze:** whether it re-freezes or bumps `evaluation/manifest.json` (see **Evaluation freeze** above), or `none`.
+- **Session:** `outside auto mode` when it launches nested agents (see **Nested agents** above), else `auto mode`.
+
+Add or refresh `## Touches` alongside `## Reading` before starting an existing ticket.
+
 Before starting an existing ticket, add or refresh its reading section. When resolving, reopening or changing a decision, refresh reading links on affected open tickets and on tickets entering the frontier; replace superseded pointers without copying the decision detail. Ticket creation and resolution are complete only after these context updates. Backfill the currently eligible tickets first; other existing tickets are updated as their prerequisites settle or before work begins.
 
 ## Wayfinder tracker operations
