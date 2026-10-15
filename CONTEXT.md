@@ -61,6 +61,9 @@ The nearest enclosing function or method containing an edit, or the top-level de
 **Overlap**:
 Two agents' current work includes the same owning symbol. Current work is the owning symbols of an agent's recent live edits or, before it has edited, its registered scope.
 
+**Recency window**:
+The latest settled review in each direction between two agents. An agent's current work is its live edits since the review before its peer's latest one.
+
 **Collaboration evidence**:
 Observations that two joined agents are working together now: a latest settled review that decided revise, or a stale write refusal since those reviews. Keep reviews and unreviewed refusals are not collaboration evidence.
 _Avoid_: Friction

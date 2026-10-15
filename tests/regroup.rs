@@ -448,6 +448,10 @@ fn overlapping_publication_waits_for_explicit_incorporation() {
             publication: engine.published().unwrap().revision,
             overlaps: vec!["siblings.go".into()],
         }));
+    // An overlapping publication is evidence to join.
+    let join = engine.reconsider().unwrap();
+    assert_eq!(join.action, Action::Join, "{}", join.reasoning);
+    assert_eq!(join.signals.behind, vec!["siblings.go".to_string()]);
     // Offers from the stale workspace cannot publish over the newer state.
     offer(&engine, &bob, "stale");
     assert!(engine.validate().unwrap().is_none());
@@ -670,6 +674,10 @@ fn obligations_a_transition_raised_are_not_evidence_to_reverse_it() {
     let keep = engine.reconsider().unwrap();
     assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
     assert_eq!(keep.signals.reconsiderations, 0);
+    assert!(
+        !keep.signals.uncertain.is_empty(),
+        "uncertainty alone keeps a split"
+    );
     assert_eq!(keep.signals.compiler, vec!["0:right 1:callee".to_string()]);
 
     // A declared dependency on Bob's work is new collaboration evidence.
