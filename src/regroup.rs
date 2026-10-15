@@ -276,8 +276,6 @@ fn differing(before: &Capture, after: &Capture) -> BTreeSet<String> {
         .collect()
 }
 
-/// Restart: an uncommitted workspace installation is put back to its recorded before
-/// state, only after every affected root matches before or after exactly.
 /// Shifts still installing at restart, with their new revisions retained as evidence.
 /// Restart recovery checks and restores their roots (`Engine::recover`).
 pub(crate) fn installing(engine: &Engine, db: &Connection) -> Result<Vec<(i64, Installation)>> {

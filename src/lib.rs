@@ -1260,6 +1260,14 @@ impl Engine {
         let checked = (|| -> Result<Vec<_>> {
             let mut restores = Vec::new();
             for &(space, before, after) in &pending {
+                // Restoring `before` must yield the completed state, once per root.
+                if before != layout.completed[space].as_ref()
+                    || pending.iter().filter(|p| p.0 == space).count() > 1
+                {
+                    return fail(format!(
+                        "unexplained pending installation in workspace {space}"
+                    ));
+                }
                 let changed = audit_interrupted(&layout.roots[space], before, after)?;
                 restores.push((space, before, changed));
             }
@@ -1282,7 +1290,7 @@ impl Engine {
                 return Err(error);
             }
         };
-        // Phase 2: an uncommitted installation leaves its root's completed state at `before`.
+        // Phase 2.
         for (space, before, changed) in restores {
             restore(&layout.roots[space], before, &changed)?;
         }
