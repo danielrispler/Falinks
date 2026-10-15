@@ -9,7 +9,7 @@ use std::{
     path::Path,
     time::Duration,
 };
-use support::{GO, edit, go_toolchain};
+use support::{GO, edit, fails_with, go_toolchain};
 use tempfile::TempDir;
 
 const LEFT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n";
@@ -315,10 +315,9 @@ fn disagreement_keeps_the_arrangement_and_unchanged_repeats_are_suppressed() {
     ));
     assert_eq!(engine.placement().unwrap(), [0, 0]);
     assert_eq!(engine.reconsider().unwrap().id, proposal.id);
-    assert!(
-        engine
-            .respond(&alice, &proposal.id, &proposal.context, Response::Agree)
-            .is_err()
+    fails_with(
+        engine.respond(&alice, &proposal.id, &proposal.context, Response::Agree),
+        "proposal is not open",
     );
     assert_eq!(engine.proposals().unwrap().len(), 1);
 }
@@ -336,10 +335,9 @@ fn changed_task_context_invalidates_agreement() {
         matches!(stale.state, ProposalState::Stale { .. }),
         "{stale:?}"
     );
-    assert!(
-        engine
-            .respond(&bob, &proposal.id, &proposal.context, Response::Agree)
-            .is_err()
+    fails_with(
+        engine.respond(&bob, &proposal.id, &proposal.context, Response::Agree),
+        "proposal is not open",
     );
     assert_eq!(engine.placement().unwrap(), [0, 0]);
     let fresh = engine.reconsider().unwrap();

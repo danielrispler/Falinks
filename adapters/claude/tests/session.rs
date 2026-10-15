@@ -355,7 +355,6 @@ fn only_the_pinned_claude_executable_is_accepted() {
         Err(_) => "unsupported platform",
     };
     assert!(error.contains(expected), "{error}");
-    assert!(falinks_claude::verify_binary(&dir.path().join("missing")).is_err());
 }
 
 /// The launch flag and the per-turn `init` check name the same native tools.

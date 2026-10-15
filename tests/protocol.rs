@@ -2,7 +2,7 @@ mod support;
 
 use falinks::*;
 use std::fs;
-use support::{PAIR, edit, fixture, open, reopen};
+use support::{PAIR, edit, fails_with, fixture, open, reopen};
 
 #[test]
 fn two_clients_preserve_independent_drafts_and_reject_stale_output_in_full() {
@@ -100,10 +100,9 @@ fn restored_bytes_are_a_new_occurrence_and_duplicate_requests_do_not_apply_twice
     let request = edit("change", &base, "a.rs", "different");
     let outcome = engine.apply(&alice, request.clone()).unwrap();
     assert_eq!(engine.apply(&alice, request.clone()).unwrap(), outcome);
-    assert!(
-        engine
-            .apply(&alice, edit("change", &base, "a.rs", "changed ID contents"))
-            .is_err()
+    fails_with(
+        engine.apply(&alice, edit("change", &base, "a.rs", "changed ID contents")),
+        "request ID reused with changed contents",
     );
     let changed = engine.capture().unwrap();
     engine
@@ -322,15 +321,18 @@ fn unmediated_writes_halt_mutations_without_overwriting_evidence() {
     );
     assert!(engine.request(&alice, "blocked").unwrap().is_some());
     drop(engine);
-    assert!(open(dir.path(), PAIR).is_err());
+    fails_with(open(dir.path(), PAIR), "unexplained source write");
 }
 
 #[test]
 fn ownership_authentication_path_aliases_and_modes_fail_closed() {
     use std::os::unix::fs::{PermissionsExt, symlink};
     let (dir, engine, alice, _) = fixture(PAIR);
-    assert!(engine.authenticate(1, &engine.credentials()[0]).is_err());
-    assert!(open(dir.path(), PAIR).is_err());
+    fails_with(
+        engine.authenticate(1, &engine.credentials()[0]),
+        "authentication failed",
+    );
+    fails_with(open(dir.path(), PAIR), "engine writer already owned");
     let base = engine.capture().unwrap();
     let mut bad = edit("traversal", &base, "a.rs", "bad");
     bad.expected.insert("../outside".into(), 0);
@@ -359,7 +361,10 @@ fn ownership_authentication_path_aliases_and_modes_fail_closed() {
         fs::Permissions::from_mode(0o666),
     )
     .unwrap();
-    assert!(Engine::open(&d.path().join("live"), &d.path().join("state"), &["a.rs"]).is_err());
+    fails_with(
+        Engine::open(&d.path().join("live"), &d.path().join("state"), &["a.rs"]),
+        "unsupported source mode",
+    );
 }
 
 #[test]
@@ -406,9 +411,9 @@ fn missing_objects_fail_capture_and_restart_without_resetting_drafts() {
             .join(&blob[2..]),
     )
     .unwrap();
-    assert!(engine.capture().is_err());
+    fails_with(engine.capture(), "missing snapshot blob");
     drop(engine);
-    assert!(open(dir.path(), PAIR).is_err());
+    fails_with(open(dir.path(), PAIR), "missing snapshot blob");
     assert_eq!(
         fs::read(dir.path().join("live/a.rs")).unwrap(),
         b"unfinished draft"
@@ -450,7 +455,7 @@ fn job_boundary_denies_source_and_controller_writes_and_detects_surviving_descen
             .unwrap();
         assert!(job.error.is_some(), "unsupported job {id} acknowledged");
         assert!(job.directory.exists());
-        assert!(engine.apply_job(&alice, id).is_err());
+        fails_with(engine.apply_job(&alice, id), "job unavailable");
     }
     assert_eq!(engine.capture().unwrap(), base);
     assert_eq!(
@@ -490,7 +495,7 @@ fn job_network_attempt_is_denied() {
     );
     assert!(job.error.is_some(), "network job acknowledged");
     assert!(listener.accept().is_err(), "job reached the host network");
-    assert!(engine.apply_job(&alice, "network").is_err());
+    fails_with(engine.apply_job(&alice, "network"), "job unavailable");
 }
 
 #[test]
@@ -523,7 +528,7 @@ fn job_timeout_kills_the_command_and_retains_evidence() {
     let job = shell_job(&engine, &alice, "timeout", "/bin/sh", "sleep 60");
     assert!(job.error.as_deref().unwrap().contains("timed out"));
     assert!(job.directory.join("stdout").exists());
-    assert!(engine.apply_job(&alice, "timeout").is_err());
+    fails_with(engine.apply_job(&alice, "timeout"), "timed out");
 }
 
 #[cfg(target_os = "linux")]
@@ -546,7 +551,7 @@ fn linux_missing_containment_helper_fails_closed() {
             .unwrap()
             .contains("containment unavailable")
     );
-    assert!(engine.apply_job(&alice, "no-helper").is_err());
+    fails_with(engine.apply_job(&alice, "no-helper"), "job unavailable");
 }
 
 #[cfg(target_os = "linux")]
@@ -759,7 +764,7 @@ fn ambiguous_restart_preserves_all_files_instead_of_partially_restoring() {
         .unwrap();
     drop(engine);
     fs::write(dir.path().join("live/b.rs"), "external draft").unwrap();
-    assert!(open(dir.path(), PAIR).is_err());
+    fails_with(open(dir.path(), PAIR), "ambiguous interrupted source");
     assert_eq!(
         fs::read(dir.path().join("live/a.rs")).unwrap(),
         b"partial a"
@@ -849,13 +854,13 @@ fn lost_committed_response_recovers_the_same_outcome() {
 #[test]
 fn repository_writer_ownership_cannot_be_bypassed_with_a_second_state_directory() {
     let (dir, _engine, _, _) = fixture(PAIR);
-    assert!(
+    fails_with(
         Engine::open(
             &dir.path().join("live"),
             &dir.path().join("other-state"),
-            &["a.rs", "b.rs"]
-        )
-        .is_err()
+            &["a.rs", "b.rs"],
+        ),
+        "engine writer already owned",
     );
 }
 
@@ -864,7 +869,7 @@ fn startup_incidents_remain_halted_after_external_bytes_are_put_back() {
     let (dir, engine, _, _) = fixture(PAIR);
     drop(engine);
     fs::write(dir.path().join("live/a.rs"), "startup external evidence").unwrap();
-    assert!(open(dir.path(), PAIR).is_err());
+    fails_with(open(dir.path(), PAIR), "unexplained source write");
     let incident = Engine::incident_at(&dir.path().join("state"))
         .unwrap()
         .unwrap();
@@ -873,7 +878,7 @@ fn startup_incidents_remain_halted_after_external_bytes_are_put_back() {
         Some(b"startup external evidence".as_slice())
     );
     fs::write(dir.path().join("live/a.rs"), "fn a() {}\n").unwrap();
-    assert!(open(dir.path(), PAIR).is_err());
+    fails_with(open(dir.path(), PAIR), "engine halted for reconciliation");
 }
 
 #[test]
@@ -889,7 +894,10 @@ fn explicit_retry_after_independent_progress_creates_a_later_completed_occurrenc
             Ok(())
         })
         .unwrap();
-    assert!(engine.retry(&alice, request.clone()).is_err());
+    fails_with(
+        engine.retry(&alice, request.clone()),
+        "restart reconciliation required",
+    );
     drop(engine);
     let (engine, alice, bob) = reopen(dir.path(), PAIR);
     assert_eq!(engine.apply(&alice, request.clone()).unwrap(), interrupted);

@@ -521,7 +521,11 @@ pub fn command_output(
     let mut stdout = vec![];
     let mut stderr = vec![];
     for _ in 0..2 {
-        let (is_stdout, bytes) = match receive.recv_timeout(Duration::from_secs(5)) {
+        // Descendants may hold the pipes after the child exits: wait at most the caller's
+        // remaining deadline, capped at 5s, before killing the group.
+        let left = deadline.saturating_duration_since(Instant::now());
+        let wait = left.clamp(Duration::from_millis(100), Duration::from_secs(5));
+        let (is_stdout, bytes) = match receive.recv_timeout(wait) {
             Ok(result) => result,
             Err(error) => {
                 // SAFETY: kill only descendants in this command's dedicated process group.

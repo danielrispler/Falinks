@@ -313,8 +313,22 @@ fn the_host_check_denies_agent_tests_the_rest_of_the_run() {
         json!({"id": "probe", "expected": expected, "output": output}),
     );
     assert_eq!(edit["accepted"], true, "{edit}");
+    // Checks return pass/fail only and are retained as host evidence.
     let check = run.call(0, "check", json!({}));
     assert_eq!(check["passed"], true, "{check}");
+    assert!(check.get("oracle").is_none());
+    // The check's capture stays host-internal: it never stands in for the agent's own read.
+    let scope = json!({"id": "consumer", "task": "relationships", "nodes": ["consumer.go"]});
+    assert_eq!(run.call(0, "register", scope)["accepted"], true);
+    let review = run.call(
+        0,
+        "review",
+        json!({"scope": "consumer", "revision": check["revision"], "decision": "Keep", "note": "unread"}),
+    );
+    assert!(
+        review["reason"].as_str().unwrap().contains("captured"),
+        "{review}"
+    );
 }
 
 /// The engine runs the Git arm's visible Rust commands with the pinned toolchain in its sandbox.
@@ -410,22 +424,6 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     }
     run.edit(0, "a3", "producer.go", &text("producer.go"));
 
-    // Checks return pass/fail only and are retained as host evidence.
-    let check = run.call(1, "check", json!({}));
-    assert_eq!(check["passed"], true, "{check}");
-    assert!(check.get("oracle").is_none());
-    // The check's capture stays host-internal: it never stands in for the agent's own read.
-    let scope = json!({"id": "consumer", "task": "relationships", "nodes": ["consumer.go"]});
-    assert_eq!(run.call(1, "register", scope)["accepted"], true);
-    let review = run.call(
-        1,
-        "review",
-        json!({"scope": "consumer", "revision": check["revision"], "decision": "Keep", "note": "unread"}),
-    );
-    assert!(
-        review["reason"].as_str().unwrap().contains("captured"),
-        "{review}"
-    );
     assert_eq!(
         run.call(0, "ready", json!({}))["accepted"],
         false,
@@ -457,7 +455,7 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     let outcome = run.arm.outcome.clone().unwrap();
     assert_eq!(outcome["outcome"], "success", "{outcome}");
     assert_eq!(outcome["oracle"]["passed"], true);
-    assert_eq!(run.arm.validation_attempts.len(), 2);
+    assert_eq!(run.arm.validation_attempts.len(), 1);
 }
 
 /// The opening prompt carries the initial protocol state from a capture given to the agent,

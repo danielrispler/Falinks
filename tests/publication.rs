@@ -8,7 +8,7 @@ use std::{
     fs,
     path::Path,
 };
-use support::{GO, analysis_caches, edit, files_under, go_toolchain, open};
+use support::{GO, analysis_caches, edit, fails_with, files_under, go_toolchain, open};
 use tempfile::TempDir;
 
 const FILES: &[(&str, &str)] = &[
@@ -27,7 +27,7 @@ fn fixture() -> (TempDir, Engine, Client, Client) {
 }
 fn reopen(root: &Path) -> (Engine, Client, Client) {
     let (engine, alice, bob) = support::reopen(root, FILES);
-    engine.configure_checks(checks()).unwrap();
+    engine.configure_checks(passing()).unwrap();
     (engine, alice, bob)
 }
 /// Trusted compilation plus the fixed tests, built into the isolated output directory.
@@ -51,6 +51,16 @@ fn checks() -> Vec<Check> {
             ),
         ),
     ]
+}
+/// The same check names without compiling, for tests about publication rather than verdicts.
+fn passing() -> Vec<Check> {
+    ["compile", "tests"]
+        .map(|name| Check {
+            name: name.into(),
+            program: "/usr/bin/true".into(),
+            args: Vec::new(),
+        })
+        .into()
 }
 fn applied(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
     let current = engine.capture().unwrap();
@@ -244,9 +254,9 @@ fn feedback_and_failed_checks_preserve_drafts_candidates_and_published_state() {
     let early = engine
         .feedback(&alice, "early", unfinished.revision)
         .unwrap();
-    assert!(
-        engine.feedback(&alice, "early", 0).is_err(),
-        "changed contents under an ID"
+    fails_with(
+        engine.feedback(&alice, "early", 0),
+        "feedback request ID reused with changed contents",
     );
     assert_eq!(
         engine
@@ -319,6 +329,7 @@ fn superseding(id: &str, revision: u64, old: &str) -> Offer {
 #[test]
 fn withdrawal_during_passing_checks_blocks_and_supersession_transfers_nothing() {
     let (_dir, engine, alice, bob) = fixture();
+    engine.configure_checks(passing()).unwrap();
     let candidate = team_candidate(&engine, &alice, &bob);
     engine
         .offer(&alice, offer("alice", candidate.revision))
@@ -375,6 +386,7 @@ fn withdrawal_during_passing_checks_blocks_and_supersession_transfers_nothing() 
 #[test]
 fn base_advances_return_candidates_and_newer_publications_are_never_overwritten() {
     let (_dir, engine, alice, bob) = fixture();
+    engine.configure_checks(passing()).unwrap();
     let first = applied(
         &engine,
         &alice,
@@ -422,6 +434,7 @@ fn base_advances_return_candidates_and_newer_publications_are_never_overwritten(
 
     // A run for older work queued behind a newer publication can never move the pointer back.
     let (_dir, engine, alice, bob) = fixture();
+    engine.configure_checks(passing()).unwrap();
     let first = applied(
         &engine,
         &alice,
@@ -611,16 +624,15 @@ fn publication_crash_boundaries_accept_all_or_none_and_recover_committed_outcome
             assert_eq!(engine.retry_run(&alice, &id).unwrap(), run);
             let duplicate = engine.offer(&alice, alices.clone()).unwrap();
             assert_eq!(duplicate.state, Availability::Accepted { event });
-            assert!(
-                engine
-                    .offer(
-                        &alice,
-                        Offer {
-                            text: "changed".into(),
-                            ..alices
-                        }
-                    )
-                    .is_err()
+            fails_with(
+                engine.offer(
+                    &alice,
+                    Offer {
+                        text: "changed".into(),
+                        ..alices
+                    },
+                ),
+                "offer ID reused with changed contents",
             );
             assert!(engine.validate().unwrap().is_none());
             continue;
@@ -674,7 +686,7 @@ fn unconfigured_checks_are_retryable_and_committed_acceptance_survives_observer_
         matches!(run.outcome, Some(RunOutcome::Interrupted { .. })),
         "{run:?}"
     );
-    engine.configure_checks(checks()).unwrap();
+    engine.configure_checks(passing()).unwrap();
     engine.retry_run(&alice, &run.id).unwrap();
     let run = engine
         .validate_observed(|stage| match stage {
@@ -695,6 +707,7 @@ fn unconfigured_checks_are_retryable_and_committed_acceptance_survives_observer_
 #[test]
 fn unexplained_source_writes_stop_publication_and_keep_evidence() {
     let (dir, engine, alice, bob) = fixture();
+    engine.configure_checks(passing()).unwrap();
     let candidate = team_candidate(&engine, &alice, &bob);
     engine
         .offer(&alice, offer("alice", candidate.revision))
@@ -726,6 +739,7 @@ fn unexplained_source_writes_stop_publication_and_keep_evidence() {
 #[test]
 fn missing_published_evidence_stops_restart_without_replacing_drafts() {
     let (dir, engine, alice, bob) = fixture();
+    engine.configure_checks(passing()).unwrap();
     let candidate = team_candidate(&engine, &alice, &bob);
     engine
         .offer(&alice, offer("alice", candidate.revision))
@@ -744,7 +758,7 @@ fn missing_published_evidence_stops_restart_without_replacing_drafts() {
             .join(&blob[2..]),
     )
     .unwrap();
-    assert!(open(dir.path(), FILES).is_err());
+    fails_with(open(dir.path(), FILES), "missing snapshot blob");
     assert_eq!(fs::read(dir.path().join("live/b.rs")).unwrap(), b"draft");
 }
 
@@ -831,18 +845,19 @@ fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
         "readable without host roots: {results:?}"
     );
 
-    assert!(
-        engine
-            .configure_denied_roots(vec!["relative".into()])
-            .is_err()
+    fails_with(
+        engine.configure_denied_roots(vec!["relative".into()]),
+        "denied roots must be absolute",
     );
-    assert!(
-        engine
-            .configure_denied_roots(vec![outside.path().join("missing")])
-            .is_err()
+    fails_with(
+        engine.configure_denied_roots(vec![outside.path().join("missing")]),
+        "No such file or directory",
     );
     // Seatbelt would deny everything and the Linux complement nothing.
-    assert!(engine.configure_denied_roots(vec!["/".into()]).is_err());
+    fails_with(
+        engine.configure_denied_roots(vec!["/".into()]),
+        "the filesystem root cannot be a denied root",
+    );
     // The alias for the secrets, and the whole tree holding the state, slot and output.
     engine
         .configure_denied_roots(vec![alias, dir.path().to_owned()])

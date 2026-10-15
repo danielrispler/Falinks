@@ -1,6 +1,18 @@
 use falinks_host::Boundary;
 use serde_json::json;
 
+/// Asserts `result` failed for `reason`, so an unrelated failure cannot pass.
+#[track_caller]
+fn fails_with<T>(result: falinks_host::Result<T>, reason: &str) {
+    match result {
+        Ok(_) => panic!("accepted, expected a refusal for {reason:?}"),
+        Err(e) => assert!(
+            e.to_string().contains(reason),
+            "expected {reason:?}, got: {e}"
+        ),
+    }
+}
+
 #[test]
 #[ignore = "subprocess fixture invoked by cleanup regression"]
 fn output_holding_child() -> falinks_host::Result<()> {
@@ -29,7 +41,13 @@ fn exited_command_cannot_leave_descendants_holding_output() -> falinks_host::Res
     command
         .args(["--ignored", "--exact", "output_holding_child"])
         .env("FALINKS_CHILD_PID_FILE", &pid_file);
+    let start = std::time::Instant::now();
+    // Either the child or the drain deadline may fire first on a loaded machine.
     assert!(falinks_host::command_output(command, Duration::from_secs(2)).is_err());
+    assert!(
+        start.elapsed() < Duration::from_secs(4),
+        "drain waited past the deadline"
+    );
     let pid: i32 = std::fs::read_to_string(pid_file)?.trim().parse()?;
     // A killed orphan can remain a zombie until reaped; it must no longer run.
     let output = Command::new("ps")
@@ -57,14 +75,14 @@ fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()>
         envelope["identity"],
         json!({"agent":"agent-a","session":"session-a","thread":"thread-a","turn":"turn-a","workspace":root})
     );
-    for (key, value) in [
-        ("threadId", "forged"),
-        ("turnId", "old-turn"),
-        ("tool", "shell"),
+    for (key, value, reason) in [
+        ("threadId", "forged", "inactive runtime identity"),
+        ("turnId", "old-turn", "inactive runtime identity"),
+        ("tool", "shell", "unregistered tool"),
     ] {
         let mut forged = call.clone();
         forged[key] = json!(value);
-        assert!(boundary.authenticate(&forged).is_err());
+        fails_with(boundary.authenticate(&forged), reason);
     }
     for request in [
         json!({"author":"agent-b"}),
@@ -72,13 +90,13 @@ fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()>
     ] {
         let mut forged = call.clone();
         forged["arguments"]["request"] = request;
-        assert!(boundary.authenticate(&forged).is_err());
+        fails_with(boundary.authenticate(&forged), "caller-supplied identity");
     }
     let mut forged = call.clone();
     forged["arguments"]["workspace"] = json!("/unauthorized");
-    assert!(boundary.authenticate(&forged).is_err());
+    fails_with(boundary.authenticate(&forged), "unauthorized workspace");
     boundary.end("turn-a");
-    assert!(boundary.authenticate(&call).is_err());
+    fails_with(boundary.authenticate(&call), "inactive runtime identity");
     Ok(())
 }
 
@@ -98,7 +116,10 @@ fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<(
     boundary.record_result(&boundary.authenticate(&call)?, &json!({"accepted":true}))?;
     drop(boundary);
     let mut resumed = Boundary::new(&root.join("context.sqlite"), &root, "session-b".into())?;
-    assert!(resumed.bind("thread-a", "agent-b", true).is_err());
+    fails_with(
+        resumed.bind("thread-a", "agent-b", true),
+        "resume identity/workspace mismatch",
+    );
     resumed.bind("thread-a", "agent-a", true)?;
     assert_eq!(
         resumed.pending()?,
@@ -113,7 +134,10 @@ fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<(
     resumed.enqueue("E1", &json!({"revision":"R1","text":"reread source"}))?;
     assert_eq!(resumed.pending()?.as_array().unwrap().len(), 1);
     assert_eq!(resumed.pending()?[0]["event"], "E2");
-    assert!(resumed.enqueue("E2", &json!({"revision":"R3"})).is_err());
+    fails_with(
+        resumed.enqueue("E2", &json!({"revision":"R3"})),
+        "event identity reused with different context",
+    );
     Ok(())
 }
 
@@ -137,10 +161,16 @@ fn unknown_change_preserves_work_and_stops_even_when_old_bytes_return() -> falin
     boundary.begin("turn")?;
     std::fs::write(&target, b"external work\n")?;
     let call = json!({"threadId":"thread","turnId":"turn","callId":"call","tool":"falinks_offer","arguments":{"workspace":root.join("source"),"request":{"expected_hash":"anything"}}});
-    assert!(host.execute(&boundary.authenticate(&call)?).is_err());
+    fails_with(
+        host.execute(&boundary.authenticate(&call)?),
+        "unknown source change",
+    );
     assert_eq!(std::fs::read_to_string(&target)?, "external work\n");
     std::fs::write(target, b"original\n")?;
-    assert!(host.execute(&boundary.authenticate(&call)?).is_err());
+    fails_with(
+        host.execute(&boundary.authenticate(&call)?),
+        "unknown source change",
+    );
     Ok(())
 }
 
@@ -170,7 +200,7 @@ fn unknown_directories_modes_and_root_aliases_stop_the_host() -> falinks_host::R
                 symlink(root.join("original-source"), &source)?;
             }
         }
-        assert!(host.integrity().is_err(), "{change}");
+        fails_with(host.integrity(), "unknown source change");
     }
     Ok(())
 }
@@ -184,8 +214,14 @@ fn relocation_rebinds_only_an_existing_thread_for_resume() -> falinks_host::Resu
     let db = dir.path().join("context.sqlite");
     Boundary::new(&db, &first, "c1".into())?.bind("thread", "agent", false)?;
     let mut moved = Boundary::new(&db, &second, "c2".into())?;
-    assert!(moved.bind("thread", "agent", true).is_err());
-    assert!(moved.relocate("thread", "other-agent").is_err());
+    fails_with(
+        moved.bind("thread", "agent", true),
+        "resume identity/workspace mismatch",
+    );
+    fails_with(
+        moved.relocate("thread", "other-agent"),
+        "no binding to relocate",
+    );
     moved.relocate("thread", "agent")?;
     moved.bind("thread", "agent", true)?;
     Ok(())

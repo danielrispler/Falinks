@@ -5,7 +5,8 @@ mod support;
 use falinks::*;
 use std::{collections::BTreeMap, path::Path, time::Duration};
 use support::{
-    GO, PAIR, analysis_caches, edit, files_under, fixture, go_toolchain, open, pin, reopen,
+    GO, PAIR, analysis_caches, edit, fails_with, files_under, fixture, go_toolchain, open, pin,
+    reopen,
 };
 
 const RUST: &[(&str, &str)] = &[
@@ -319,7 +320,10 @@ fn changed_pins_and_unknown_input_universes_fail_closed() {
     let (_dir, engine, alice, bob) = fixture(RUST);
     let mut wrong = rust_toolchain();
     wrong.executables[0].sha256 = "0".repeat(64);
-    assert!(engine.configure_analysis(vec![wrong]).is_err());
+    fails_with(
+        engine.configure_analysis(vec![wrong]),
+        "pinned executable changed",
+    );
     // Without verified evidence every change is related.
     engine
         .register(&alice, scope("right", &["src/lib.rs#right"]))
@@ -713,12 +717,12 @@ fn refused_handling_changes_nothing() {
         .unwrap();
     let own = engine.post(&alice, plan("mine")).unwrap().seq;
     let before = engine.pending(&alice).unwrap();
-    for (through, deferred, processed, why) in [
+    for (through, deferred, processed, reason) in [
         (
             Some(posted[1]),
             note(posted[1], "later"),
             vec![posted[1]],
-            "contradictory",
+            "cannot be both deferred and processed",
         ),
         (
             Some(own + 1),
@@ -730,22 +734,22 @@ fn refused_handling_changes_nothing() {
             None,
             note(posted[1], "later"),
             vec![],
-            "deferral beyond the new cursor",
+            // A deferral beyond the new cursor.
+            "not in your stream",
         ),
         (
             Some(own),
             note(own, "later"),
             vec![],
-            "deferral outside the stream",
+            // A deferral of an event outside the stream.
+            "not in your stream",
         ),
     ] {
-        assert!(
-            engine
-                .handle(&alice, through, &deferred, &processed)
-                .is_err(),
-            "{why}"
+        fails_with(
+            engine.handle(&alice, through, &deferred, &processed),
+            reason,
         );
-        assert_eq!(engine.pending(&alice).unwrap(), before, "{why}");
+        assert_eq!(engine.pending(&alice).unwrap(), before, "{reason}");
     }
 }
 
@@ -754,10 +758,9 @@ fn waits_catch_up_on_missed_wakeups_and_report_explicit_outcomes() {
     let (_dir, engine, alice, bob) = fixture(PAIR);
     // Committed before the wait began: catch-up, not a lost wakeup.
     let early = engine.post(&bob, plan("early")).unwrap();
-    assert!(
-        engine
-            .wait(&bob, Condition::Message { from: 1, after: 0 }, None, None)
-            .is_err()
+    fails_with(
+        engine.wait(&bob, Condition::Message { from: 1, after: 0 }, None, None),
+        "cannot wait for its own message",
     );
     let from_bob = |after| Condition::Message { from: 1, after };
     assert_eq!(
@@ -876,16 +879,13 @@ fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding(
         .apply(&alice, edit("peer", &current, "a.rs", "fn a() { 2 }\n"))
         .unwrap();
     let current = engine.capture().unwrap();
-    assert!(
-        engine
-            .offer(&bob, offer("c2", current.revision, Some("c1")))
-            .is_err()
+    fails_with(
+        engine.offer(&bob, offer("c2", current.revision, Some("c1"))),
+        "unreviewed obligations",
     );
-    assert!(
-        engine
-            .offer(&bob, offer("older", base.revision, None))
-            .is_err(),
-        "pending review blocks even an older offer"
+    fails_with(
+        engine.offer(&bob, offer("older", base.revision, None)),
+        "unreviewed obligations",
     );
     reread(&engine, &bob, "b");
     let wait = Condition::Checkpoint { id: c1.id.clone() };
