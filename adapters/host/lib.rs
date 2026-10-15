@@ -1,6 +1,6 @@
 //! Shared trusted-host library for the worker-runtime adapters. The engine envelope is
 //! independent of the runtime.
-pub mod check;
+pub mod check_binary;
 pub mod controlled_host;
 
 use rusqlite::{Connection, OptionalExtension, params};

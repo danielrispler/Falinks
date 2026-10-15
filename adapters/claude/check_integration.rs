@@ -12,7 +12,7 @@ use falinks_claude::{
 };
 use falinks_host::{
     Boundary, EngineOutcome, Result,
-    check::{self, Options},
+    check_binary::{self, Options},
     file_hash, require,
 };
 use serde_json::{Value, json};
@@ -481,7 +481,7 @@ impl Gate {
         self.drive(|_| Ok(true))
     }
     /// Run both workers until run `id` has an outcome.
-    fn finish_run(&mut self, id: &str) -> Result<Run> {
+    fn finish_run(&mut self, id: &str, missing: &str) -> Result<Run> {
         self.drive(|gate| {
             Ok(gate
                 .engine()
@@ -490,10 +490,10 @@ impl Gate {
                 .flatten()
                 .is_some_and(|r| r.outcome.is_some()))
         })?;
-        Ok(self.engine().run(id)?.ok_or("run missing")?)
+        Ok(self.engine().run(id)?.ok_or(missing)?)
     }
     /// The first notice sent to `agent` that carried engine event `seq` or a later one.
-    fn delivery(&mut self, agent: usize, seq: u64) -> Result<Value> {
+    fn delivery(&mut self, agent: usize, seq: u64, missing: &str) -> Result<Value> {
         Ok(self
             .runtime(agent)?
             .session
@@ -501,7 +501,7 @@ impl Gate {
             .iter()
             .find(|d| event_seq(d) >= Some(seq))
             .cloned()
-            .ok_or_else(|| format!("obligation notice not sent to agent {agent}"))?)
+            .ok_or(missing)?)
     }
 }
 
@@ -699,7 +699,7 @@ fn checks_while_drafting(gate: &mut Gate) -> Result<()> {
     );
     gate.run(&[(0, steps)])?;
     gate.pause.store(false, Ordering::SeqCst);
-    let run = gate.finish_run(&held[0].id)?;
+    let run = gate.finish_run(&held[0].id, "run missing")?;
     let published = gate.engine().published()?;
     require(
         matches!(run.outcome, Some(RunOutcome::Published { .. }))
@@ -788,7 +788,7 @@ fn steering(gate: &mut Gate) -> Result<()> {
         .rev()
         .find(|e| matches!(&e.body, falinks::Body::Obligation { agent: 1, .. }))
         .ok_or("no obligation reached agent 1")?;
-    let delivery = gate.delivery(1, obligation.seq)?;
+    let delivery = gate.delivery(1, obligation.seq, "obligation notice not sent mid-turn")?;
     // A native Read (not a capture) returned the peer's incomplete draft.
     let saw_draft = tool_results(&gate.runtime(1)?.session.events, |b| b["name"] == "Read")
         .any(|(e, b)| e["isReplay"] != true && b.to_string().contains("return gross /\\n"));
@@ -889,7 +889,7 @@ fn steering_agent0(gate: &mut Gate) -> Result<()> {
         .into_iter()
         .find(|e| matches!(&e.body, falinks::Body::Obligation { agent: 0, .. }))
         .ok_or("no obligation reached agent 0")?;
-    let delivery = gate.delivery(0, obligation.seq)?;
+    let delivery = gate.delivery(0, obligation.seq, "obligation notice not sent to agent 0")?;
     let edits = gate.calls(0, "edit").split_off(edits_before);
     require(
         presented_in_turn(&delivery)
@@ -934,7 +934,7 @@ fn team_checks_while_drafting(gate: &mut Gate) -> Result<()> {
     )])?;
     let drafted = gate.engine().capture()?.revision;
     gate.pause.store(false, Ordering::SeqCst);
-    let checked = gate.finish_run(&early.id)?;
+    let checked = gate.finish_run(&early.id, "feedback run missing")?;
     require(
         checked.outcome == Some(RunOutcome::Passed)
             && checked.binding.members == BTreeSet::from([0, 1])
@@ -1262,7 +1262,7 @@ fn main() {
         "falinks-claude-tool",
         "Usage: check-integration --binary PINNED_CLAUDE --output REPORT.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL]",
     );
-    let mut report = check::report("claude-code");
+    let mut report = check_binary::report("claude-code");
     let mut gate = match Gate::new(&binary, &probe, &tool) {
         Ok(gate) => Some(gate),
         Err(error) => {
@@ -1326,7 +1326,7 @@ fn main() {
     report["scope"] = json!(
         "Finite host-scripted gate on one machine and binary. The final deliberate unknown-change injection leaves the disposable engine halted. A saved report never authorizes another run; scoring needs a fresh passing gate."
     );
-    check::finish(
+    check_binary::finish(
         &output,
         &report,
         json!({"passed":passed,"publication_scoring_supported":false,"failure":report["failure"]}),

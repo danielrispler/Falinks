@@ -6,7 +6,7 @@ use falinks_claude::{
 };
 use falinks_host::{
     Engine, Result,
-    check::{self, Options},
+    check_binary::{self, Options},
     controlled_host::ControlledHost,
     file_hash, hash, require,
 };
@@ -339,7 +339,7 @@ fn main() {
         "falinks-claude-tool",
         "Usage: check-claude-adapter --binary PINNED_CLAUDE --output EVIDENCE.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL] [--expect-sandbox-unavailable]",
     );
-    let mut evidence = check::report("claude-code");
+    let mut evidence = check_binary::report("claude-code");
     let outcome = if unavailable {
         evidence["mode"] = json!("expect-sandbox-unavailable");
         match run_unavailable(&binary, &probe, &tool, &mut evidence) {
@@ -385,7 +385,7 @@ fn main() {
     } else {
         "Finite trusted-host controls only. Final deliberate unknown-change injection leaves the disposable host stopped. Historical evidence cannot authorize another runtime."
     });
-    check::finish(
+    check_binary::finish(
         &output,
         &evidence,
         json!({"outcome":outcome,"publication_scoring_supported":false,"failure":evidence["failure"]}),

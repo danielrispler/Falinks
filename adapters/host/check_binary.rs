@@ -17,14 +17,14 @@ pub struct Options {
 }
 impl Options {
     /// Parses `--binary`, `--output`, `--probe` and `--tool` pairs. `--probe` and `--tool`
-    /// default to the `sandbox-probe` and `tool` executables beside this one. `--help`
+    /// default to the `sandbox-probe` and `tool_name` executables beside this one. `--help`
     /// prints `usage` and exits 0; any other error is printed and exits 1.
-    pub fn parse(args: &[String], tool: &str, usage: &str) -> Self {
+    pub fn parse(args: &[String], tool_name: &str, usage: &str) -> Self {
         if args == ["--help"] {
             println!("{usage}");
             process::exit(0);
         }
-        Self::try_parse(args, tool).unwrap_or_else(|error| {
+        Self::try_parse(args, tool_name).unwrap_or_else(|error| {
             eprintln!("{error}");
             process::exit(1);
         })
