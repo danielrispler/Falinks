@@ -462,23 +462,23 @@ fn queued_messages_merged_into_one_presentation_each_count_as_presented() {
 
 #[test]
 fn only_declared_platforms_have_a_claude_pin() {
-    assert_eq!(
-        falinks_claude::pin("macos", "aarch64").unwrap(),
-        "97a01e5bc74a199e67189435d0331ea3a24eac2e07db4b76d9148c5b0386138f"
-    );
-    // The live adapter-linux.yml runs verify these on Ubuntu 24.04 (#57).
-    assert_eq!(
-        falinks_claude::pin("linux", "x86_64").unwrap(),
-        "a967e7b1d8b4e47ee421d5433027880347952b0c0857abf880e2c942a4ec93b3"
-    );
-    assert_eq!(
-        falinks_claude::pin("linux", "aarch64").unwrap(),
-        "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0"
-    );
-    for (os, arch) in [("macos", "x86_64"), ("windows", "x86_64")] {
+    // Derived from PINS so promoting a platform never edits this test; the docs row
+    // (`platforms_doc_lists_the_claude_pins`) is the second key.
+    let unsupported = |os, arch| {
         let error = falinks_claude::pin(os, arch).unwrap_err().to_string();
         assert!(error.contains("unsupported platform"), "{error}");
+    };
+    for &(os, arch) in falinks_host::PLATFORMS {
+        match falinks_claude::PINS
+            .iter()
+            .find(|(platform, _)| *platform == (os, arch))
+        {
+            Some((_, hash)) => assert_eq!(falinks_claude::pin(os, arch).unwrap(), *hash),
+            None => unsupported(os, arch),
+        }
     }
+    // Windows has no docs column, so `platforms_row` forbids pinning it: a fixed sentinel.
+    unsupported("windows", "x86_64");
 }
 
 #[test]
