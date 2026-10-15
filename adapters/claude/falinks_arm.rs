@@ -40,6 +40,8 @@ struct Worker {
     /// Developments not yet sent to this worker.
     developments: Vec<Value>,
     last_result: Value,
+    /// `Arm::calls` when this worker's root was last checked.
+    calls_seen: u64,
     last_activity: Instant,
     scanned: usize,
     rate_limit: Value,
@@ -246,12 +248,12 @@ impl Run {
             }
         }
         worker.scanned = events.len();
-        let result = runtime.session.last_result.clone();
         let idle = runtime.session.idle();
-        if result != worker.last_result {
-            worker.last_result = result.clone();
+        if runtime.session.last_result != worker.last_result {
+            worker.last_result = runtime.session.last_result.clone();
             worker.last_activity = Instant::now();
-            match result["subtype"].as_str() {
+            let subtype = worker.last_result["subtype"].as_str().map(str::to_owned);
+            match subtype.as_deref() {
                 Some("success") => {}
                 Some("error_max_turns") if !ready => self.send(
                     agent,
@@ -590,6 +592,7 @@ fn setup(
         given: BTreeMap::new(),
         developments: vec![],
         last_result: Value::Null,
+        calls_seen: 0,
         last_activity: Instant::now(),
         scanned: 0,
         rate_limit: Value::Null,
@@ -641,22 +644,28 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
                 worker.developments.push(development.clone());
             }
         }
+        let mut progressed = false;
         for agent in 0..2 {
             let moved = run.arm.borrow_mut().relocated.remove(&agent);
-            let client = run.arm.borrow().client(agent).clone();
-            let root = run.engine.root(&client)?.canonicalize()?;
-            if moved || root != run.workers[agent].source {
-                run.stop(agent);
-                run.event("relocated", json!({"agent": agent, "root": root}))?;
-                let text = format!(
-                    "Host: the agreed regrouping moved your live workspace to {}. Use that path as \"workspace\" in every falinks call from now on and continue your task.",
-                    root.display()
-                );
-                run.start(agent, text)?;
+            let calls = run.arm.borrow().calls;
+            // Only a mediated call (by either agent) can apply a regrouping and move this root.
+            if moved || calls != run.workers[agent].calls_seen {
+                run.workers[agent].calls_seen = calls;
+                let client = run.arm.borrow().client(agent).clone();
+                let root = run.engine.root(&client)?.canonicalize()?;
+                if moved || root != run.workers[agent].source {
+                    run.stop(agent);
+                    run.event("relocated", json!({"agent": agent, "root": root}))?;
+                    let text = format!(
+                        "Host: the agreed regrouping moved your live workspace to {}. Use that path as \"workspace\" in every falinks call from now on and continue your task.",
+                        root.display()
+                    );
+                    run.start(agent, text)?;
+                }
             }
             run.deliver(agent)?;
             if let Some(runtime) = run.workers[agent].runtime.as_mut() {
-                runtime.step(Duration::from_millis(20))?;
+                progressed |= runtime.step(Duration::from_millis(20))?;
                 require(
                     !runtime.session.gate.failed,
                     "runtime safety control failed; run invalid",
@@ -667,7 +676,7 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
                 return Ok(limit);
             }
         }
-        if let Some(incident) = run.engine.incident()? {
+        if progressed && let Some(incident) = run.engine.incident()? {
             return Err(format!("engine incident: {}", incident.reason).into());
         }
     }
