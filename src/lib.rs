@@ -856,7 +856,10 @@ impl Engine {
         }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         // Inline reviews stand even if the edit is then refused, as separate reviews would.
-        self.record_reviews(&db, client, &request.reviews)?;
+        // A known ID already recorded them on its first call.
+        if request_record(&db, client.agent, &request.id)?.is_none() {
+            self.record_reviews(&db, client, &request.reviews)?;
+        }
         // Copied out: no layout guard is held while host observers run.
         let (space, live, before, group) = {
             let layout = self.layout()?;

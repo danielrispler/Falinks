@@ -822,7 +822,10 @@ impl Engine {
         let id = format!("{}/{}", client.agent, offer.id);
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         // Inline reviews stand even if the offer is then refused, as separate reviews would.
-        self.record_reviews(&db, client, &offer.reviews)?;
+        // A known ID already recorded them on its first call.
+        if checkpoint(&db, &id)?.is_none() {
+            self.record_reviews(&db, client, &offer.reviews)?;
+        }
         if let Some(existing) = checkpoint(&db, &id)? {
             if existing.offer != offer {
                 return fail("offer ID reused with changed contents");

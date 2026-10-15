@@ -454,18 +454,22 @@ fn an_inline_keep_lets_an_edit_apply_that_would_be_unreviewed() {
     let mut request = edit("inline", &current, "b.rs", "fn b() { 2 }\n");
     request.reviews = vec![keep("b", current.revision)];
     assert!(matches!(
-        engine.apply(&bob, request).unwrap(),
+        engine.apply(&bob, request.clone()).unwrap(),
         Outcome::Applied { .. }
     ));
     assert!(pending(&engine, &bob).is_empty());
-    // Alice sees the review as a separate review call would show it.
+    // A replay returns the recorded outcome without reviewing again.
+    assert!(matches!(
+        engine.apply(&bob, request).unwrap(),
+        Outcome::Applied { .. }
+    ));
+    // Alice sees the review once, as a separate review call would show it.
     let reviewed = engine.events(&alice, 0).unwrap();
-    assert!(
-        reviewed
-            .iter()
-            .any(|e| matches!(&e.body, Body::Reviewed { agent: 1, review } if review.scope == "b")),
-        "{reviewed:?}"
-    );
+    let reviews = reviewed
+        .iter()
+        .filter(|e| matches!(&e.body, Body::Reviewed { agent: 1, review } if review.scope == "b"))
+        .count();
+    assert_eq!(reviews, 1, "{reviewed:?}");
 }
 
 #[test]
@@ -525,6 +529,10 @@ fn an_offer_with_an_inline_review_clears_the_obligation_and_offers() {
         .unwrap();
     assert_eq!(offered.state, Availability::Available);
     assert!(pending(&engine, &bob).is_empty());
+    // A replayed offer reviews nothing again.
+    let before = engine.events(&alice, 0).unwrap().len();
+    assert_eq!(engine.offer(&bob, offered.offer.clone()).unwrap(), offered);
+    assert_eq!(engine.events(&alice, 0).unwrap().len(), before);
 }
 
 #[test]
