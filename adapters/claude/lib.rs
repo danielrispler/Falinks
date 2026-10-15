@@ -1,8 +1,7 @@
 //! Pinned Claude Code worker adapter: the #23 boundary ported to stream-json.
 //! Runtime-independent pieces (`Boundary`, `ControlGate`, `ControlledHost`) come from `falinks-host`.
 use falinks_host::{
-    Boundary, ControlGate, Engine, Notice, PinMap, Result, file_hash, platform_pin, random_hex,
-    require,
+    Boundary, ControlGate, Engine, Notice, PinMap, Result, platform_pin, random_hex, require,
 };
 use serde_json::{Value, json};
 use std::{
@@ -77,55 +76,16 @@ const SYSTEM: &[&str] = &[
 pub mod arm;
 pub mod engine_host;
 
-/// Every `sandbox-probe` check name for the given protected storage labels.
-pub fn probe_names(protected: &[&str]) -> Vec<String> {
-    let mut names: Vec<String> = [
-        "read",
-        "scratch",
-        "source_write",
-        "source_delete",
-        "source_rename",
-        "source_create",
-        "source_replace",
-        "alias_write",
-        "child_write",
-    ]
-    .map(String::from)
-    .to_vec();
-    for label in protected {
-        names.extend([format!("{label}_read"), format!("{label}_write")]);
-    }
-    names
-}
-/// The exact probe command must have completed through the real Bash tool, reporting
-/// exactly `names`, all passing.
-pub fn probe_controls(events: &[Value], command: &str, names: &[String]) -> Result<Value> {
+/// The exact probe command must have completed through the real Bash tool, with every
+/// check passing (`falinks_host::probe_controls`).
+pub fn bash_probe_controls(events: &[Value], command: &str) -> Result<Value> {
+    let args = shlex::split(command).ok_or("unparsable probe command")?;
     let bash = |b: &Value| b["name"] == "Bash" && b["input"]["command"] == command;
     for (event, _) in tool_results(events, bash).filter(|(_, b)| b["is_error"] != true) {
-        let Some(text) = event["tool_use_result"]["stdout"].as_str().and_then(|out| {
-            out.lines()
-                .find_map(|l| l.strip_prefix("FALINKS_CONTROLS="))
-        }) else {
-            continue;
-        };
-        let mut checks: Value = serde_json::from_str(text)?;
-        // On Linux the sandbox hides protected storage behind an empty tmpfs, so a probe
-        // write there succeeds into the mask. The host decides: a protected write passes
-        // only if the real file still exists and never received the probe's bytes.
-        let args = shlex::split(command).ok_or("unparsable probe command")?;
-        for (label, secret) in args.iter().skip(4).filter_map(|a| a.split_once('=')) {
-            let unchanged = fs::read(secret)? != b"BYPASS";
-            if let Some(write) = checks.get_mut(format!("{label}_write")) {
-                *write = json!(unchanged);
-            }
+        let stdout = event["tool_use_result"]["stdout"].as_str().unwrap_or("");
+        if let Some(checks) = falinks_host::probe_controls(stdout, &args)? {
+            return Ok(checks);
         }
-        require(
-            checks.as_object().is_some_and(|c| {
-                c.len() == names.len() && names.iter().all(|n| c.get(n) == Some(&json!(true)))
-            }),
-            &format!("filesystem controls failed: {checks}"),
-        )?;
-        return Ok(checks);
     }
     Err("exact probe command did not complete through the actual Bash tool".into())
 }
@@ -258,22 +218,12 @@ pub fn pin(os: &str, arch: &str) -> Result<&'static str> {
 
 /// The canonical binary and the SHA-256 it was verified against.
 pub fn verify_binary(binary: &Path) -> Result<(PathBuf, &'static str)> {
-    let pin = pin(std::env::consts::OS, std::env::consts::ARCH)?;
-    let binary = binary.canonicalize()?;
-    // Hash first: an unpinned executable is never run, and no other installed CLI is tried.
-    require(
-        file_hash(&binary)? == pin,
-        "unpinned claude SHA-256; publication/scoring disabled",
-    )?;
-    let mut command = Command::new(&binary);
-    command.arg("--version").env("DISABLE_AUTOUPDATER", "1");
-    let version = falinks_host::command_output(command, Duration::from_secs(20))?;
-    require(
-        version.status.success()
-            && String::from_utf8(version.stdout)?.trim() == format!("{VERSION} (Claude Code)"),
-        "unsupported claude version",
-    )?;
-    Ok((binary, pin))
+    falinks_host::verify_pinned(
+        binary,
+        PINS,
+        &format!("{VERSION} (Claude Code)"),
+        &[("DISABLE_AUTOUPDATER", "1")],
+    )
 }
 
 /// What one worker launch may see and call. Controls come only from here, never from a saved session.
@@ -585,10 +535,8 @@ impl Session {
             request["token"].as_str() == Some(&self.token),
             "unauthenticated host channel",
         )?;
-        require(
-            !self.gate.failed,
-            "runtime safety failure; engine calls blocked",
-        )?;
+        // Hook stamps are refused after a failure too, not only engine calls.
+        self.gate.open()?;
         require(
             self.in_turn && request["session"].as_str() == Some(&self.session),
             "call outside the bound runtime session or turn",
@@ -622,16 +570,13 @@ impl Session {
             require(!self.ended.contains(prompt), "stale runtime turn")?;
             self.boundary.begin(prompt)?;
         }
-        let envelope = self.boundary.authenticate(&json!({"threadId":self.session,
-            "turnId":prompt,"callId":id,"tool":tool,"arguments":request["arguments"]}))?;
-        let outcome = match (self.engine)(&envelope) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                self.gate.failed = true;
-                return Err(error);
-            }
-        };
-        self.boundary.record_result(&envelope, &outcome.result)?;
+        let (envelope, outcome) = falinks_host::mediate(
+            &mut self.gate,
+            &self.boundary,
+            &mut self.engine,
+            &json!({"threadId":self.session,"turnId":prompt,"callId":id,"tool":tool,
+                "arguments":request["arguments"]}),
+        )?;
         self.events
             .push(json!({"host_call":envelope,"result":outcome.result}));
         Ok((outcome.result, outcome.notice))

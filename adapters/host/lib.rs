@@ -5,7 +5,11 @@ pub mod controlled_host;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, error::Error, path::Path};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    path::{Path, PathBuf},
+};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 pub struct Notice {
@@ -28,6 +32,31 @@ pub fn platform_pin<T: Copy>(pins: PinMap<T>, os: &str, arch: &str) -> Result<T>
         .ok_or_else(|| {
             format!("unsupported platform {os}/{arch}; publication/scoring disabled").into()
         })
+}
+/// Verifies a pinned runtime on this platform: pin, canonicalize, hash, then `--version`
+/// (with `env`) under a timeout must print exactly `version`. Returns the canonical binary
+/// and the digest it verified.
+pub fn verify_pinned(
+    binary: &Path,
+    pins: PinMap<&'static str>,
+    version: &str,
+    env: &[(&str, &str)],
+) -> Result<(PathBuf, &'static str)> {
+    let pin = platform_pin(pins, std::env::consts::OS, std::env::consts::ARCH)?;
+    let binary = binary.canonicalize()?;
+    // Hash first: an unpinned executable is never run, and no other installed CLI is tried.
+    require(
+        file_hash(&binary)? == pin,
+        "unpinned runtime SHA-256; publication/scoring disabled",
+    )?;
+    let mut command = std::process::Command::new(&binary);
+    command.arg("--version").envs(env.iter().copied());
+    let output = command_output(command, std::time::Duration::from_secs(20))?;
+    require(
+        output.status.success() && String::from_utf8(output.stdout)?.trim() == version,
+        "unsupported runtime version",
+    )?;
+    Ok((binary, pin))
 }
 /// The `docs/platforms.md` columns, as `std::env::consts::{OS, ARCH}`.
 pub const PLATFORMS: &[(&str, &str)] = &[
@@ -91,19 +120,103 @@ pub fn random_hex(bytes: usize) -> Result<String> {
     Ok(hex(&random))
 }
 
+/// `sandbox-probe` arguments: the source file the worker may only read, its expected hash,
+/// the writable scratch directory and each `label=file` storage the worker may not touch.
+pub fn probe_args(
+    probe: &Path,
+    source: &Path,
+    expected_hash: &str,
+    scratch: &Path,
+    protected: &[(&str, &Path)],
+) -> Vec<String> {
+    let mut args = [probe, source]
+        .map(|p| p.to_string_lossy().into_owned())
+        .to_vec();
+    args.push(expected_hash.into());
+    args.push(scratch.to_string_lossy().into_owned());
+    args.extend(
+        protected
+            .iter()
+            .map(|(label, file)| format!("{label}={}", file.display())),
+    );
+    args
+}
 /// `sandbox-probe` arguments for the historical fixture layout (`ROOT/{source,scratch,...}`).
 pub fn fixture_probe_args(root: &Path, expected: &str) -> Vec<String> {
-    let path = |name: &str| root.join(name).to_string_lossy().into_owned();
-    let mut args = vec![
-        path("worker-tools/sandbox-probe"),
-        path("source/source.txt"),
-        hash(expected.as_bytes()),
-        path("scratch"),
-    ];
-    for name in ["controller", "snapshots", "validation"] {
-        args.push(format!("{name}={}", path(&format!("{name}/secret.txt"))));
+    let secrets =
+        ["controller", "snapshots", "validation"].map(|n| (n, root.join(n).join("secret.txt")));
+    let protected: Vec<(&str, &Path)> = secrets.iter().map(|(n, p)| (*n, p.as_path())).collect();
+    probe_args(
+        &root.join("worker-tools/sandbox-probe"),
+        &root.join("source/source.txt"),
+        &hash(expected.as_bytes()),
+        &root.join("scratch"),
+        &protected,
+    )
+}
+/// Every check `sandbox-probe` reports for the given protected storage labels.
+pub fn probe_names(protected: &[&str]) -> Vec<String> {
+    let mut names: Vec<String> = [
+        "read",
+        "scratch",
+        "source_write",
+        "source_delete",
+        "source_rename",
+        "source_create",
+        "source_replace",
+        "alias_write",
+        "child_write",
+    ]
+    .map(String::from)
+    .to_vec();
+    for label in protected {
+        names.extend([format!("{label}_read"), format!("{label}_write")]);
     }
-    args
+    names
+}
+/// The gate controls a passing probe proves.
+pub const PROBE_CONTROLS: &[&str] = &[
+    "source_write_denial",
+    "storage_protection",
+    "scratch_access",
+];
+/// The controls in a probe's `stdout` for the exact `args` it ran with, or `None` without a
+/// `FALINKS_CONTROLS` line. Every check for the protected labels in `args` must pass.
+pub fn probe_controls(stdout: &str, args: &[String]) -> Result<Option<Value>> {
+    let Some(text) = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("FALINKS_CONTROLS="))
+    else {
+        return Ok(None);
+    };
+    let mut checks: Value = serde_json::from_str(text)?;
+    let protected: Vec<(&str, &str)> = args
+        .iter()
+        .skip(4)
+        .filter_map(|a| a.split_once('='))
+        .collect();
+    // On Linux the sandbox hides protected storage behind an empty tmpfs, so a probe
+    // write there succeeds into the mask. The host decides: a protected write passes
+    // only if the real file still exists and never received the probe's bytes.
+    for (label, secret) in &protected {
+        let unchanged = std::fs::read(secret)? != b"BYPASS";
+        if let Some(write) = checks.get_mut(format!("{label}_write")) {
+            *write = json!(unchanged);
+        }
+    }
+    let names = probe_names(
+        &protected
+            .iter()
+            .map(|(label, _)| *label)
+            .collect::<Vec<_>>(),
+    );
+    require(
+        checks.as_object().is_some_and(|c| {
+            c.len() == names.len() && names.iter().all(|n| c.get(n) == Some(&json!(true)))
+        }),
+        &format!("filesystem controls failed: {checks}"),
+    )?;
+    Ok(Some(checks))
 }
 
 pub struct ControlGate {
@@ -125,6 +238,10 @@ impl ControlGate {
         self.controls.insert(name.into(), passed);
         self.failed |= !passed;
         Ok(())
+    }
+    /// Refuses once any control has failed: the failure is latched.
+    pub fn open(&self) -> Result<()> {
+        require(!self.failed, "runtime safety failure; engine calls blocked")
     }
     pub fn require_supported(&self) -> Result<()> {
         require(
@@ -335,6 +452,22 @@ impl Boundary {
         }
         Ok(())
     }
+}
+
+/// The one mediation sequence, a security invariant every runtime shares: refuse once the
+/// gate has failed, authenticate, call the engine, latch the gate on an engine error,
+/// record the result. Runtimes run only their transport checks before it.
+pub fn mediate(
+    gate: &mut ControlGate,
+    boundary: &Boundary,
+    engine: &mut Engine,
+    call: &Value,
+) -> Result<(Value, EngineOutcome)> {
+    gate.open()?;
+    let envelope = boundary.authenticate(call)?;
+    let outcome = engine(&envelope).inspect_err(|_| gate.failed = true)?;
+    boundary.record_result(&envelope, &outcome.result)?;
+    Ok((envelope, outcome))
 }
 
 pub fn command_output(

@@ -1,7 +1,7 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
 use falinks_claude::{
-    Launch, Runtime, WorkerSandboxOutcome, fixture_files, probe_controls, probe_names, refused,
+    Launch, Runtime, WorkerSandboxOutcome, bash_probe_controls, fixture_files, refused,
     verify_binary, worker_sandbox_unavailable,
 };
 use falinks_host::{Engine, Result, controlled_host::ControlledHost, file_hash, hash, require};
@@ -53,17 +53,8 @@ fn probe_command(root: &Path, expected: &str) -> Result<String> {
 }
 /// The exact probe command must have run through the real Bash tool with every control passing.
 fn bash_controls(runtime: &mut Runtime, root: &Path, expected: &str) -> Result<Value> {
-    let names = probe_names(&["controller", "snapshots", "validation"]);
-    let checks = probe_controls(
-        &runtime.session.events,
-        &probe_command(root, expected)?,
-        &names,
-    )?;
-    for name in [
-        "source_write_denial",
-        "storage_protection",
-        "scratch_access",
-    ] {
+    let checks = bash_probe_controls(&runtime.session.events, &probe_command(root, expected)?)?;
+    for name in falinks_host::PROBE_CONTROLS {
         runtime.session.gate.record(name, true)?;
     }
     Ok(checks)
