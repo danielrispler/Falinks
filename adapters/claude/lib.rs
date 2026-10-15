@@ -78,7 +78,7 @@ pub mod engine_host;
 
 /// The exact probe command must have completed through the real Bash tool, with every
 /// check passing (`falinks_host::probe_controls`).
-pub fn probe_controls(events: &[Value], command: &str) -> Result<Value> {
+pub fn bash_probe_controls(events: &[Value], command: &str) -> Result<Value> {
     let args = shlex::split(command).ok_or("unparsable probe command")?;
     let bash = |b: &Value| b["name"] == "Bash" && b["input"]["command"] == command;
     for (event, _) in tool_results(events, bash).filter(|(_, b)| b["is_error"] != true) {

@@ -515,8 +515,8 @@ fn probe_controls_come_only_from_the_exact_bash_command() {
                 "tool_use_result":{"stdout":format!("FALINKS_CONTROLS={}\n", Value::Object(controls.clone()))}}),
         ]
     };
-    assert!(falinks_claude::probe_controls(&events(&command, false), &command).is_ok());
-    assert!(falinks_claude::probe_controls(&events(&command, true), &command).is_err());
+    assert!(falinks_claude::bash_probe_controls(&events(&command, false), &command).is_ok());
+    assert!(falinks_claude::bash_probe_controls(&events(&command, true), &command).is_err());
     let other = format!("{command} extra");
-    assert!(falinks_claude::probe_controls(&events(&other, false), &command).is_err());
+    assert!(falinks_claude::bash_probe_controls(&events(&other, false), &command).is_err());
 }

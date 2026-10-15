@@ -6,9 +6,9 @@ use falinks::{
     Toolchain,
 };
 use falinks_claude::{
-    Launch, MODEL, REQUIRED, Runtime, VERSION,
+    Launch, MODEL, REQUIRED, Runtime, VERSION, bash_probe_controls,
     engine_host::{self, EngineHost},
-    go_tools, probe_controls, tool_results, verify_binary,
+    go_tools, tool_results, verify_binary,
 };
 use falinks_host::{Boundary, EngineOutcome, Result, file_hash, require};
 use serde_json::{Value, json};
@@ -438,7 +438,7 @@ impl Gate {
     }
     /// The probe ran through the real Bash tool with every filesystem control passing.
     fn sandbox(&mut self, agent: usize, command: &str) -> Result<Value> {
-        let checks = probe_controls(&self.runtime(agent)?.session.events, command)?;
+        let checks = bash_probe_controls(&self.runtime(agent)?.session.events, command)?;
         for control in falinks_host::PROBE_CONTROLS {
             self.control(agent, control)?;
         }

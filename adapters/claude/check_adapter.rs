@@ -1,6 +1,6 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
-use falinks_claude::{Launch, Runtime, probe_controls, verify_binary};
+use falinks_claude::{Launch, Runtime, bash_probe_controls, verify_binary};
 use falinks_host::{Engine, Result, controlled_host::ControlledHost, file_hash, hash, require};
 use serde_json::{Value, json};
 use std::{
@@ -50,7 +50,7 @@ fn probe_command(root: &Path, expected: &str) -> Result<String> {
 }
 /// The exact probe command must have run through the real Bash tool with every control passing.
 fn bash_controls(runtime: &mut Runtime, root: &Path, expected: &str) -> Result<Value> {
-    let checks = probe_controls(&runtime.session.events, &probe_command(root, expected)?)?;
+    let checks = bash_probe_controls(&runtime.session.events, &probe_command(root, expected)?)?;
     for name in falinks_host::PROBE_CONTROLS {
         runtime.session.gate.record(name, true)?;
     }
