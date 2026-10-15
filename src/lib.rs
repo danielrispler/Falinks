@@ -1388,7 +1388,9 @@ pub enum Fault {
         path: String,
     },
     /// A root holds its new state.
-    Audited(usize),
+    Audited {
+        space: usize,
+    },
     /// Inside the commit transaction, before it commits.
     Commit,
     Committed,

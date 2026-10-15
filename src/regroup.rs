@@ -733,7 +733,13 @@ impl Engine {
                     changed = true;
                 } else if proposal.agreed == proposal.agents {
                     changed |= match self.attempt(&db, &mut proposal) {
-                        Ok(changed) => changed,
+                        // Outside the blocker mapping: the transition is already committed.
+                        Ok(changed) => {
+                            if matches!(proposal.state, ProposalState::Applied { .. }) {
+                                self.fault(Fault::Committed)?;
+                            }
+                            changed
+                        }
                         Err(error) => {
                             proposal.state = ProposalState::Blocked {
                                 blocker: format!("transition failed: {error}"),
@@ -957,7 +963,6 @@ impl Engine {
         })();
         interrupted(db, shift, committed)?;
         self.adopt(moves, proposal.target)?;
-        self.fault(Fault::Committed)?;
         Ok(true)
     }
 
@@ -1090,7 +1095,9 @@ impl Engine {
                     }
                 }
                 audit(root, &change.after)?;
-                self.fault(Fault::Audited(change.space))?;
+                self.fault(Fault::Audited {
+                    space: change.space,
+                })?;
             }
             Ok(())
         })();

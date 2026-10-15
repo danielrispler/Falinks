@@ -1240,9 +1240,9 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         Fault::Journaled,
         installed(1, "a.rs"),
         installed(1, "b.rs"),
-        Fault::Audited(1),
+        Fault::Audited { space: 1 },
         installed(0, "b.rs"),
-        Fault::Audited(0),
+        Fault::Audited { space: 0 },
         Fault::Commit,
     ];
     assert_eq!(take(), transition);
@@ -1256,7 +1256,8 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
     assert_eq!(incidents(dir.path()), 0);
     drop(engine);
 
-    let engine = open(None);
+    // An error after each commit leaves the committed result.
+    let engine = open(Some(Fault::Committed));
     assert_eq!(
         take(),
         [
@@ -1276,6 +1277,7 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         engine.proposal(&proposal.id).unwrap().unwrap().state,
         ProposalState::Applied { .. }
     ));
+    assert_eq!(halt(dir.path()), None);
 
     // Publishing Alice's edit brings it into Bob's workspace.
     engine
@@ -1306,7 +1308,7 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         [
             Fault::Journaled,
             installed(1, "a.rs"),
-            Fault::Audited(1),
+            Fault::Audited { space: 1 },
             Fault::Commit,
             Fault::Committed,
         ]
@@ -1315,4 +1317,5 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         fs::read_to_string(second.join("a.rs")).unwrap(),
         "fn a() { 1; }\n"
     );
+    assert_eq!(halt(dir.path()), None);
 }
