@@ -11,6 +11,18 @@ use std::{
 };
 use tempfile::TempDir;
 
+/// Asserts `result` failed for `reason`, so an unrelated failure cannot pass.
+#[track_caller]
+pub fn fails_with<T>(result: Result<T>, reason: &str) {
+    match result {
+        Ok(_) => panic!("accepted, expected a refusal for {reason:?}"),
+        Err(e) => assert!(
+            e.to_string().contains(reason),
+            "expected {reason:?}, got: {e}"
+        ),
+    }
+}
+
 /// Two independent Rust files.
 pub const PAIR: &[(&str, &str)] = &[("a.rs", "fn a() {}\n"), ("b.rs", "fn b() {}\n")];
 /// A Go module where `Right` calls `Callee` and `Left` stands alone.
@@ -93,7 +105,12 @@ pub fn pin(path: PathBuf) -> Pin {
     Pin::from_path(path).unwrap()
 }
 /// gopls (`FALINKS_GOPLS`, else `$GOPATH/bin/gopls`) and the `go` on PATH's `GOROOT`.
+/// Resolved and hashed once per test process.
 pub fn go_toolchain() -> Toolchain {
+    static GO_TOOLCHAIN: std::sync::OnceLock<Toolchain> = std::sync::OnceLock::new();
+    GO_TOOLCHAIN.get_or_init(resolve_go_toolchain).clone()
+}
+fn resolve_go_toolchain() -> Toolchain {
     let env = |key: &str| {
         let out = Command::new("go").args(["env", key]).output().unwrap();
         PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())

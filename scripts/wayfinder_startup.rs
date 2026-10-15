@@ -938,18 +938,16 @@ mod done_tests {
         );
         assert_eq!(plan.unwrap().worktree, None);
     }
+    /// Commits after the merged head, or no merged PR at all, keep the branch.
     #[test]
-    fn commits_after_the_merged_head_are_kept() {
-        let error = plan(WORKTREES, BRANCH, &merged_at("old"), "/repo").unwrap_err();
-        assert!(
-            error.to_string().contains("no merged PR ends at aaa"),
-            "{error}"
-        );
-    }
-    #[test]
-    fn unmerged_branch_is_kept() {
-        let error = plan(WORKTREES, BRANCH, &json!([]), "/repo").unwrap_err();
-        assert!(error.to_string().contains("no merged PR"), "{error}");
+    fn unmerged_or_newer_branch_is_kept() {
+        for merged in [merged_at("old"), json!([])] {
+            let error = plan(WORKTREES, BRANCH, &merged, "/repo").unwrap_err();
+            assert!(
+                error.to_string().contains("no merged PR ends at aaa"),
+                "{error}"
+            );
+        }
     }
     #[test]
     fn running_inside_the_worktree_is_refused() {
