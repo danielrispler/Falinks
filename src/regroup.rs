@@ -1075,6 +1075,7 @@ impl Engine {
             }
             retain(&self.state, &change.after)?;
         }
+        self.fault(Fault::Journaling)?;
         db.execute(
             "INSERT INTO shifts(body) VALUES(?)",
             [serde_json::to_string(&shift)?],

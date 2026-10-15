@@ -1264,6 +1264,10 @@ impl Engine {
     /// failed check records an incident and changes no root and no journal.
     fn recover(&self) -> Result<()> {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
+        // An incident is recorded once; restart neither checks nor records it again.
+        if let Some(halt @ Halt::Incident { .. }) = halted(&db)? {
+            return fail(format!("engine halted for reconciliation: {halt}"));
+        }
         // Copied out: no layout guard is held while the fault hook runs.
         let layout = self.layout()?.clone();
         let mut records = records(&db)?;
@@ -1358,6 +1362,7 @@ impl Engine {
                 save_job(&db, &job)?;
             }
         }
+        self.fault(Fault::Recovered)?;
         // Only known interrupted installations are cleared. Unexplained edits stay halted.
         match halted(&db)? {
             Some(Halt::Interruption { .. }) => {
@@ -1392,6 +1397,8 @@ pub enum Phase {
 /// fault hook; never exposed to untrusted clients. `space` names a live root.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Fault {
+    /// Every root is checked and every new revision retained; nothing is journaled yet.
+    Journaling,
     /// The installation is recorded; no root is written yet.
     Journaled,
     Installed {
@@ -1410,6 +1417,8 @@ pub enum Fault {
         space: usize,
         path: String,
     },
+    /// Restart recovery updated every journal; the halt is not cleared yet.
+    Recovered,
 }
 /// Receives the engine so it may read it, as a host on the same thread could.
 pub type FaultHook = Box<dyn Fn(&Engine, Fault) -> Result<()> + Send + Sync>;
