@@ -58,6 +58,16 @@ The source symbols relevant to an edit through compiler-derived semantic depende
 **Owning symbol**:
 The nearest enclosing function or method containing an edit, or the top-level declaration for an edit outside functions and methods. Separate methods have separate owners even when they belong to the same class.
 
+**Overlap**:
+Two agents' current work includes the same owning symbol. Current work is the owning symbols of an agent's recent live edits or, before it has edited, its registered scope.
+
+**Recency window**:
+The latest settled review in each direction between two agents. An agent's current work is its live edits since the review before its peer's latest one.
+
+**Collaboration evidence**:
+Observations that two joined agents are working together now: a latest settled review that decided revise, or a stale write refusal since those reviews. Keep reviews and unreviewed refusals are not collaboration evidence.
+_Avoid_: Friction
+
 **Contract**:
 An explicit agreement about behavior or an interface on which a proposal may depend. Its representation and versioning rules remain to be specified.
 

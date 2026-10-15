@@ -2,7 +2,7 @@
 //! and work-preserving workspace transitions. Signals inform usefulness only; every
 //! transition still passes the engine's own safety checks.
 use crate::analysis::{self, Footprint};
-use crate::coordination::{Body, Scope, emit, obligations};
+use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, Work, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
     Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, all, audit,
@@ -22,31 +22,56 @@ pub enum Action {
     Split,
     Keep,
 }
-/// Evidence behind a recommendation. Counts are observations since the last applied
-/// transition, never a score.
+/// Evidence behind a recommendation, read from current collaboration, never a score.
+/// Each agent's current work is the owning symbols of its live edits in the recency
+/// window or, before it has edited since the last applied transition, its registered
+/// scopes. The window is the latest settled review in each direction.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signals {
-    /// Compiler-derived relationships between the agents' registered scopes.
+    /// Compiler-derived relationships between the agents' current work.
     pub compiler: Vec<String>,
-    /// Scopes both agents registered, or one declared a dependency on the other's.
+    /// Registered scopes both agents name, or one declared a dependency on the other's.
+    /// Reported; a declaration decides only when added or changed after a split.
     pub declared: Vec<String>,
+    /// Reported only; task labels decide nothing.
     pub shared_tasks: Vec<String>,
-    /// Stale or unreviewed write attempts.
+    /// Stale write refusals in the recency window: collaboration evidence.
     pub retries: u64,
-    /// Reconsideration obligations raised by agents' live edits; obligations a
-    /// transition or incorporation raised are its consequence, not new evidence.
+    /// Reconsideration obligations raised by agents' live edits since the last applied
+    /// transition. Reported only.
     pub reconsiderations: u64,
+    /// Reported only.
     pub waits: u64,
     /// Agent explanations attached to their proposals.
     pub reports: Vec<String>,
     /// An agent reported that the current arrangement is not working.
     pub failing: bool,
-    /// Missing or degraded evidence: prefer fewer groups.
+    /// Missing or degraded evidence, including unreviewed obligations: keep the arrangement.
     pub uncertain: Vec<String>,
+    /// Current work of both agents includes the same symbol.
+    #[serde(default)]
+    pub overlap: Vec<String>,
+    /// Latest settled reviews that decided `Revise`: collaboration evidence.
+    #[serde(default)]
+    pub revised: Vec<String>,
+    /// Scopes whose declared dependencies were added or changed since the split.
+    #[serde(default)]
+    pub redeclared: Vec<String>,
+    /// Files a publication overlapped in a split workspace since the split.
+    #[serde(default)]
+    pub behind: Vec<String>,
 }
 impl Signals {
-    fn friction(&self) -> bool {
-        self.retries + self.reconsiderations + self.waits > 0
+    /// Current collaboration that keeps joined agents together.
+    fn collaborating(&self) -> bool {
+        !self.overlap.is_empty()
+            || !self.compiler.is_empty()
+            || !self.revised.is_empty()
+            || self.retries > 0
+    }
+    /// Evidence that joins split agents.
+    fn joining(&self) -> bool {
+        !self.overlap.is_empty() || !self.redeclared.is_empty() || !self.behind.is_empty()
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,9 +465,9 @@ impl Engine {
             }
         }
         let sides = [evidence.as_slice()];
-        let nodes = |s: &Scope| Footprint {
+        let nodes = |s: &BTreeSet<String>| Footprint {
             all: false,
-            nodes: s.nodes.clone(),
+            nodes: s.clone(),
         };
         for (agent, own) in scopes.iter().enumerate() {
             if own.is_empty() {
@@ -450,31 +475,48 @@ impl Engine {
                     .uncertain
                     .push(format!("agent {agent} registered no scope"));
             }
+            for o in obligations(db, agent)?.iter().filter(|o| o.pending()) {
+                signals.uncertain.push(format!(
+                    "agent {agent} has not reviewed {} at revision {}",
+                    o.scope.id, o.required
+                ));
+            }
         }
         for a in &scopes[0] {
             for b in &scopes[1] {
-                let pair = format!("0:{} 1:{}", a.id, b.id);
-                let relevant = |s: &Scope| Footprint {
-                    all: false,
-                    nodes: s.relevant(),
-                };
-                if analysis::related(&relevant(a), &nodes(b))
-                    || analysis::related(&relevant(b), &nodes(a))
+                if analysis::related(&nodes(&a.relevant()), &nodes(&b.nodes))
+                    || analysis::related(&nodes(&b.relevant()), &nodes(&a.nodes))
                 {
-                    signals.declared.push(pair);
-                    continue;
+                    signals.declared.push(format!("0:{} 1:{}", a.id, b.id));
                 }
+            }
+        }
+        let window = window(db, mark)?;
+        signals.revised = window.revised;
+        let work = [0, 1].map(|agent| match &window.edits[agent] {
+            Some(edits) => vec![("edits".to_string(), edits.clone())],
+            None => scopes[agent]
+                .iter()
+                .map(|s| (s.id.clone(), nodes(&s.nodes)))
+                .collect(),
+        });
+        for (la, a) in &work[0] {
+            for (lb, b) in &work[1] {
+                let pair = format!("0:{la} 1:{lb}");
                 let (left, right) = (
                     analysis::closure(&a.nodes, &sides),
                     analysis::closure(&b.nodes, &sides),
                 );
-                if left.all || right.all {
+                if a.all || b.all || left.all || right.all {
                     signals
                         .uncertain
                         .push(format!("unbounded relevance for {pair}"));
-                } else if analysis::related(&left, &nodes(b))
-                    || analysis::related(&right, &nodes(a))
-                {
+                    continue;
+                }
+                if analysis::related(a, b) {
+                    signals.overlap.push(pair.clone());
+                }
+                if analysis::related(&left, b) || analysis::related(&right, a) {
                     signals.compiler.push(pair);
                 }
             }
@@ -485,8 +527,9 @@ impl Engine {
             .cloned()
             .collect();
         signals.retries = db.query_row(
-            "SELECT COUNT(*) FROM requests WHERE id>? AND (json_extract(body, '$.outcome.Stale') IS NOT NULL OR json_extract(body, '$.outcome.Unreviewed') IS NOT NULL)",
-            [mark.request as i64],
+            "SELECT COUNT(*) FROM requests WHERE id>? AND json_extract(body, '$.outcome.Stale') IS NOT NULL
+             AND json_extract(body, '$.before.revision')>=?",
+            params![mark.request as i64, window.since as i64],
             |r| r.get::<_, i64>(0),
         )? as u64;
         signals.reconsiderations = db.query_row(
@@ -500,6 +543,33 @@ impl Engine {
             [mark.wait as i64],
             |r| r.get::<_, i64>(0),
         )? as u64;
+        let split = layout.placement[0] != layout.placement[1];
+        let last = history
+            .iter()
+            .rev()
+            .find(|(_, p)| matches!(p.state, ProposalState::Applied { .. }));
+        if split && let Some((_, last)) = last {
+            for (agent, own) in scopes.iter().enumerate() {
+                for scope in own {
+                    let before = last.scopes[agent].iter().find(|s| s.id == scope.id);
+                    if before.map_or(!scope.depends.is_empty(), |b| b.depends != scope.depends) {
+                        signals.redeclared.push(format!("{agent}:{}", scope.id));
+                    }
+                }
+            }
+            let behind: Vec<(u64, Body)> = all(
+                db,
+                "SELECT json_array(seq, json(body)) FROM events WHERE seq>? AND json_extract(body, '$.Behind') IS NOT NULL",
+                [mark.event as i64],
+            )?;
+            for (_, body) in behind {
+                if let Body::Behind { overlaps, .. } = body {
+                    signals.behind.extend(overlaps);
+                }
+            }
+            signals.behind.sort();
+            signals.behind.dedup();
+        }
         for (seq, earlier) in history {
             if *seq > mark.proposal
                 && let Some(agent) = earlier.proposer
@@ -552,8 +622,7 @@ impl Engine {
                     || last.scopes != scopes
                     || last.signals.compiler != signals.compiler
                     || last.signals.declared != signals.declared
-                    || last.signals.shared_tasks != signals.shared_tasks
-                    || (action == Action::Join && signals.friction());
+                    || (action == Action::Join && signals.joining());
                 if !new {
                     reasoning = format!(
                         "suppressed {action:?}: it would reverse or repeat {} without materially new evidence or a failure report",
@@ -639,7 +708,10 @@ impl Engine {
                 "INSERT INTO proposals VALUES(?,?,?)",
                 params![seq as i64, proposal.id, serde_json::to_string(&proposal)?],
             )?;
-            announce(&tx, &proposal)?;
+            // Engine-made keeps are recorded and returned, not announced.
+            if action != Action::Keep || proposer.is_some() {
+                announce(&tx, &proposal)?;
+            }
             tx.commit()?;
             proposal
         };
@@ -1058,31 +1130,123 @@ impl Engine {
     }
 }
 
+/// The recency window: the latest settled review in each direction since the last
+/// applied transition.
+struct Window {
+    /// Per agent, the owning symbols of its live edits since the review before its peer's
+    /// latest one; `None` before it has edited.
+    edits: [Option<Footprint>; 2],
+    /// Latest settled reviews that decided `Revise`.
+    revised: Vec<String>,
+    /// The older of the two latest reviewed revisions; stale refusals since it count.
+    since: u64,
+}
+fn window(db: &Connection, mark: &Mark) -> Result<Window> {
+    let rows: Vec<(u64, Body)> = all(
+        db,
+        "SELECT json_array(seq, json(body)) FROM events WHERE seq>? AND
+         (json_extract(body, '$.Reviewed') IS NOT NULL OR json_extract(body, '$.Message.kind')='LiveEdit')
+         ORDER BY seq",
+        [mark.event as i64],
+    )?;
+    let mut reviews: [BTreeMap<u64, Vec<Review>>; 2] = Default::default();
+    let mut edits: [Vec<(u64, Vec<String>)>; 2] = Default::default();
+    for (_, body) in rows {
+        match body {
+            Body::Reviewed { agent, review } => reviews[agent]
+                .entry(review.revision)
+                .or_default()
+                .push(review),
+            Body::Message(Message {
+                kind: Kind::LiveEdit,
+                sender,
+                work: Work::Revision(revision),
+                scope,
+                ..
+            }) => edits[sender].push((revision, scope)),
+            _ => {}
+        }
+    }
+    let mut window = Window {
+        edits: [None, None],
+        revised: Vec::new(),
+        since: u64::MAX,
+    };
+    for (reviewer, reviewed) in reviews.iter().enumerate() {
+        let mut latest = reviewed.iter().rev();
+        let current = latest.next();
+        let previous = latest.next().map_or(0, |(r, _)| *r);
+        window.since = window.since.min(current.map_or(0, |(r, _)| *r));
+        for review in current.into_iter().flat_map(|(_, r)| r) {
+            if review.decision == Decision::Revise {
+                window.revised.push(format!(
+                    "agent {reviewer} revised {} at revision {}",
+                    review.scope, review.revision
+                ));
+            }
+        }
+        let editor = 1 - reviewer;
+        if !edits[editor].is_empty() {
+            let mut footprint = Footprint::default();
+            for (_, scope) in edits[editor].iter().filter(|(r, _)| *r > previous) {
+                owners(scope, &mut footprint);
+            }
+            window.edits[editor] = Some(footprint);
+        }
+    }
+    Ok(window)
+}
+/// The owning symbols a live edit names. An insertion between declarations also names
+/// its file for relevance; its owner is the new declaration.
+fn owners(scope: &[String], footprint: &mut Footprint) {
+    for node in scope {
+        if node == "*" {
+            footprint.all = true;
+        } else if !scope.iter().any(|n| {
+            n.strip_prefix(node.as_str())
+                .is_some_and(|rest| rest.starts_with('#'))
+        }) {
+            footprint.nodes.insert(node.clone());
+        }
+    }
+}
+
 /// Evidence that changes a recommendation's meaning; counts only matter as presence.
-fn material(signals: &Signals) -> (Vec<String>, Vec<String>, Vec<String>, bool, bool, bool) {
+type Material = (
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    bool,
+    bool,
+    bool,
+);
+fn material(signals: &Signals) -> Material {
     (
         signals.compiler.clone(),
-        signals.declared.clone(),
-        signals.shared_tasks.clone(),
-        signals.friction(),
+        signals.overlap.clone(),
+        signals.revised.clone(),
+        signals.redeclared.clone(),
+        signals.behind.clone(),
+        signals.retries > 0,
         signals.failing,
         signals.uncertain.is_empty(),
     )
 }
 
-/// Join for useful unfinished collaboration, split for useful independent progress, and
-/// prefer fewer groups when uncertain. A compiler edge alone never forces a join.
+/// Keep joined agents together while they collaborate now, split them when their current
+/// work is independent, and keep the arrangement when uncertain. Split agents join only on
+/// overlap, a new declaration, an overlapping publication or a failure report.
 fn decide(joined: bool, signals: &Signals) -> (Action, String) {
-    let collaboration =
-        !signals.declared.is_empty() || !signals.shared_tasks.is_empty() || signals.friction();
     let summary = format!(
-        "compiler {:?}, declared {:?}, shared tasks {:?}, retries {}, reconsiderations {}, waits {}",
+        "overlap {:?}, compiler {:?}, revised {:?}, stale refusals {}, redeclared {:?}, behind {:?}",
+        signals.overlap,
         signals.compiler,
-        signals.declared,
-        signals.shared_tasks,
+        signals.revised,
         signals.retries,
-        signals.reconsiderations,
-        signals.waits
+        signals.redeclared,
+        signals.behind
     );
     if signals.failing {
         let action = if joined { Action::Split } else { Action::Join };
@@ -1101,27 +1265,18 @@ fn decide(joined: bool, signals: &Signals) -> (Action, String) {
                 ),
             );
         }
-        if collaboration || !signals.compiler.is_empty() {
-            return (Action::Keep, format!("ongoing collaboration; {summary}"));
+        if signals.collaborating() {
+            return (Action::Keep, format!("current collaboration; {summary}"));
         }
         return (
             Action::Split,
-            format!("registered scopes look independent; separate progress is useful; {summary}"),
+            format!("current work looks independent; separate progress is useful; {summary}"),
         );
     }
-    if collaboration {
+    if signals.joining() {
         return (
             Action::Join,
             format!("collaboration on unfinished work looks useful; {summary}"),
-        );
-    }
-    if !signals.uncertain.is_empty() {
-        return (
-            Action::Join,
-            format!(
-                "uncertain evidence {:?}; prefer fewer groups",
-                signals.uncertain
-            ),
         );
     }
     if !signals.compiler.is_empty() {

@@ -154,18 +154,24 @@ Revision numbers are global, so every occurrence stays unique across spaces. Eac
 
 ## Recommendations
 
-`reconsider()` (host, initially), `recommend(client)` (agent request) and `propose(client, Propose)` (an agent's own join/split/keep, with an explanation and an optional failure report) produce a `Proposal`. Its `Signals` are observations, not a score:
+`reconsider()` (host, initially), `recommend(client)` (agent request) and `propose(client, Propose)` (an agent's own join/split/keep, with an explanation and an optional failure report) produce a `Proposal`. Its `Signals` read current collaboration, not a score.
 
-- compiler relationships between the agents' registered scopes (a scope's closure touches the other's nodes);
-- declarations: scopes registering the same nodes, or a `Scope::depends` declared dependency on the other's nodes. Declared dependencies also widen obligation relevance;
-- shared tasks;
-- stale or unreviewed write attempts, obligations raised by agents' live edits, and waits, since the last applied transition. Obligations a transition or incorporation raised are its consequence, not evidence;
+**Current work** is each agent's owning symbols of its live edits in the recency window, taken from its live-edit messages. An insertion between declarations also names its file for relevance; current work keeps only the new declaration. Before an agent has edited since the last applied transition, its current work is its registered scopes. The **recency window** is the latest settled review in each direction: an agent's edits since the review before its peer's latest one. There is no numeric window or cooldown.
+
+- `overlap`: both agents' current work includes the same symbol;
+- `compiler`: a compiler relationship between the agents' current work (one side's closure touches the other's nodes);
+- `revised`: a latest settled review in either direction decided `Revise`;
+- `retries`: `Stale` write refusals since the older of the two latest reviewed revisions;
+- `redeclared`: after a split, a `Scope::depends` declaration added or changed since the split;
+- `behind`: after a split, files a `Behind` event named since the split;
 - agent reports and failure reports;
-- uncertainty: no analysis, degraded evidence, unbounded relevance or an agent without scopes.
+- uncertainty: no analysis, degraded evidence, unbounded relevance, an agent without scopes, or an obligation not yet reviewed.
 
-Joined agents split only when evidence is certain and shows no relationship, declaration, shared task or friction. Split agents join on a declaration, shared task, friction or uncertainty (prefer fewer groups); a compiler edge alone keeps the split. A failure report asks for the opposite arrangement. A pending proposal for the same change stands, whoever proposed it. An unchanged repeat from the same proposer since the last transition returns the earlier proposal, including a declined one. A join or split that would reverse or repeat the last applied transition becomes a keep unless scopes or relationships changed, friction appeared (for a join), or an agent reports failure; uncertainty alone does not reverse a split. There is no cooldown. After the first `reconsider()`, the engine also reconsiders at every boundary below, so materially new evidence produces a proposal without a request.
+Reported only, deciding nothing: `declared` (scopes registering the same nodes, or a declared dependency on the other's nodes, computed together with the compiler check), `shared_tasks`, `reconsiderations` (obligations raised by agents' live edits since the last applied transition) and `waits`. **Collaboration evidence** is `Revise` reviews and `Stale` refusals only; `Keep` reviews and `Unreviewed` refusals are overhead a split would remove.
 
-A proposal names the affected agents, their scopes, the current and target placement, the target roots, the signals, the reasoning and a `context` fingerprint of placement plus every registered scope. Every `Regrouping` state change is an event to both agents.
+Joined agents keep the arrangement while uncertain, including while an obligation waits for its review. Otherwise only overlap, a compiler edge or collaboration evidence keeps them joined; without any, the engine recommends a split. Split agents join on overlap, a new or changed declaration, a `Behind` event with overlapping files, or a failure report. A compiler edge alone, task labels and uncertainty alone keep the split. A failure report asks for the opposite arrangement. A pending proposal for the same change stands, whoever proposed it. An unchanged repeat from the same proposer since the last transition returns the earlier proposal, including a declined one. A join or split that would reverse or repeat the last applied transition becomes a keep unless scopes, compiler relationships or declarations changed, join evidence appeared (for a join), or an agent reports failure. After the first `reconsider()`, the engine also reconsiders at every boundary below, so materially new evidence produces a proposal without a request.
+
+A proposal names the affected agents, their scopes, the current and target placement, the target roots, the signals, the reasoning and a `context` fingerprint of placement plus every registered scope. Every join and split proposal, every agent's own proposal and every state change of them is a `Regrouping` event to both agents. Keep proposals the engine makes are recorded and returned by `reconsider` and `recommend`, but emit no event.
 
 ## Agreement
 
@@ -186,7 +192,7 @@ After each validation run, every occupied space that lacks the published state t
 
 ## Limits
 
-Two agents and therefore at most two occupied spaces; agent 1 is the one that leaves on a split. Engine-driven reconsideration starts with the host's first `reconsider()` and runs at operation boundaries, not on a timer. Signal analysis runs under the writer lock, like the edit gate. Draft movement is per file: two authors' drafts in one file block a split until published, and overlapping drafts block a join. There is no automatic merge of overlapping publications. Restart does not resume an interrupted transition by itself.
+Two agents and therefore at most two occupied spaces; agent 1 is the one that leaves on a split. Engine-driven reconsideration starts with the host's first `reconsider()` and runs at operation boundaries, not on a timer. Signal analysis, including the closures over current work, runs under the writer lock, like the edit gate. Draft movement is per file: two authors' drafts in one file block a split until published, and overlapping drafts block a join. There is no automatic merge of overlapping publications. Restart does not resume an interrupted transition by itself.
 
 # Real-agent integration (#26)
 
