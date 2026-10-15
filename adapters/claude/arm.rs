@@ -300,6 +300,8 @@ pub struct Arm {
     pub outcome: Option<Value>,
     /// Agents whose live root moved after an applied regrouping.
     pub relocated: BTreeSet<usize>,
+    /// Mediated calls so far: only a call can apply a regrouping and move a root.
+    pub calls: u64,
 }
 
 impl Arm {
@@ -346,6 +348,7 @@ impl Arm {
             retries: 0,
             outcome: None,
             relocated: BTreeSet::new(),
+            calls: 0,
         }
     }
 
@@ -360,6 +363,7 @@ impl Arm {
     /// One authenticated tool envelope from `agent`. Agent mistakes are refusals; an
     /// engine error or incident is an error that latches the worker's gate.
     pub fn call(&mut self, agent: usize, envelope: &Value) -> Result<Value> {
+        self.calls += 1;
         let operation = envelope["operation"].as_str().unwrap_or_default();
         let request = &envelope["request"];
         let root = self.engine.root(&self.clients[agent])?;
