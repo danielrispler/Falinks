@@ -413,7 +413,7 @@ fn agents_get_no_pending_or_events_tool() {
 /// the agent reviews inline on its next edit without a capture call.
 #[test]
 fn a_renewing_notice_capture_authorizes_an_inline_review() {
-    use falinks_claude::engine_host::{opening, renewal};
+    use falinks_claude::engine_host::{notice_capture, opening};
     let f = fixture();
     for (agent, id, node) in [
         (0, "discount", "price.go#Discount"),
@@ -422,8 +422,7 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
         let registered = f.call(agent, "register", json!({"id":id,"task":id,"nodes":[node]}));
         assert_eq!(registered["accepted"], true, "{registered}");
     }
-    let mut seen = Default::default();
-    let start = opening(&f.engine, &f.clients[1], &mut seen).unwrap();
+    let (start, mut given) = opening(&f.engine, &f.clients[1]).unwrap();
     let version = start["files"]["price.go"]["version"].clone();
     assert!(
         start["files"]["price.go"].get("content").is_none(),
@@ -432,7 +431,7 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
     // Events that renew nothing carry no capture.
     let quiet = f.engine.events(&f.clients[1], 0).unwrap();
     assert_eq!(
-        renewal(&f.engine, &f.clients[1], &quiet, &mut seen).unwrap(),
+        notice_capture(&f.engine, &f.clients[1], &quiet, &mut given).unwrap(),
         None
     );
 
@@ -443,7 +442,7 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
     );
     assert_eq!(applied["accepted"], true, "{applied}");
     let events = f.engine.events(&f.clients[1], 0).unwrap();
-    let notice = renewal(&f.engine, &f.clients[1], &events, &mut seen)
+    let notice = notice_capture(&f.engine, &f.clients[1], &events, &mut given)
         .unwrap()
         .expect("renewing events carry a capture");
     // Only the changed file's content travels with the notice.

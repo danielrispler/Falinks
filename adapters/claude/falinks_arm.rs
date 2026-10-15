@@ -35,8 +35,8 @@ struct Worker {
     source: PathBuf,
     /// Highest engine event seq sent to this worker.
     delivered: u64,
-    /// File versions in the last capture given to this worker.
-    seen: BTreeMap<String, u64>,
+    /// File versions in the last capture the host gave this worker.
+    given: BTreeMap<String, u64>,
     /// Developments not yet sent to this worker.
     developments: Vec<Value>,
     last_result: Value,
@@ -207,8 +207,8 @@ impl Run {
             serde_json::to_string(&developments)?,
             serde_json::to_string(&pending.obligations)?
         );
-        let seen = &mut self.workers[agent].seen;
-        if let Some(capture) = engine_host::renewal(&self.engine, &client, &events, seen)? {
+        let given = &mut self.workers[agent].given;
+        if let Some(capture) = engine_host::notice_capture(&self.engine, &client, &events, given)? {
             text += &format!(
                 " A capture given to you, with the content of files changed since your last one: {capture}."
             );
@@ -577,17 +577,15 @@ fn setup(
     );
     let workflow = fs::read_to_string(evaluation.join("instructions/falinks.md"))?;
     let root = engine.root(arm.client(0))?;
-    let mut seen = [BTreeMap::new(), BTreeMap::new()];
-    let [first, second] =
-        [0, 1].map(|a| engine_host::opening(&engine, arm.client(a), &mut seen[a]));
+    let [first, second] = [0, 1].map(|a| engine_host::opening(&engine, arm.client(a)));
     let opening = [first?, second?];
-    let prompt = [0, 1].map(|a| prompt(a, &root, &fixture, &workflow, &optional, &opening[a]));
+    let prompt = [0, 1].map(|a| prompt(a, &root, &fixture, &workflow, &optional, &opening[a].0));
     let worker = || Worker {
         runtime: None,
         session: None,
         source: PathBuf::new(),
         delivered: 0,
-        seen: BTreeMap::new(),
+        given: BTreeMap::new(),
         developments: vec![],
         last_result: Value::Null,
         last_activity: Instant::now(),
@@ -608,9 +606,9 @@ fn setup(
         timeline,
         evidence: evidence.clone(),
     };
-    let [first, second] = seen;
-    run.workers[0].seen = first;
-    run.workers[1].seen = second;
+    let [(_, first), (_, second)] = opening;
+    run.workers[0].given = first;
+    run.workers[1].given = second;
     run.event("initial_recommendation", json!({"proposal": initial}))?;
     for agent in 0..2 {
         let text = run.prompt[agent].clone();

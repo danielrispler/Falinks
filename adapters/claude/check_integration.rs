@@ -461,6 +461,8 @@ fn event_seq(delivery: &Value) -> Option<u64> {
         .as_str()
         .and_then(|id| id.rsplit(':').next()?.parse().ok())
 }
+/// Review every pending obligation against a fresh capture.
+const REVIEW: &str = "1. falinks_obligations with request {}.\n2. falinks_capture with request {}.\n3. For each obligation whose required revision is above its reviewed revision, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If there is none, do nothing.";
 /// What to do when an edit is refused for a pending obligation.
 fn unreviewed(retry: &str) -> String {
     format!(
@@ -560,7 +562,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         &format!("expected a split: {}", proposal.reasoning),
     )?;
     let respond = format!(
-        "1. falinks_respond with request {{\"id\": \"{}\", \"context\": \"{}\", \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your events.",
+        "1. falinks_respond with request {{\"id\": \"{}\", \"context\": \"{}\", \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your host notice.",
         proposal.id, proposal.context
     );
     gate.run(&[(0, respond.clone()), (1, respond)])?;
@@ -650,7 +652,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         &format!("expected a join: {proposal}"),
     )?;
     let respond = format!(
-        "1. falinks_respond with request {{\"id\": {}, \"context\": {}, \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your events.",
+        "1. falinks_respond with request {{\"id\": {}, \"context\": {}, \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your host notice.",
         proposal["id"], proposal["context"]
     );
     gate.run(&[(0, respond.clone()), (1, respond)])?;
@@ -665,8 +667,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     // Phase 6: steering. While agent 1's turn is active, agent 0 installs an incomplete
     // draft that agent 1's registered work depends on.
     // The join's transition raised obligations; agent 1 reviews them before drafting.
-    let review = "1. falinks_obligations with request {}.\n2. falinks_capture with request {}.\n3. For each obligation whose required revision is above its reviewed revision, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If there is none, do nothing.";
-    gate.run(&[(0, review.into()), (1, review.into())])?;
+    gate.run(&[(0, REVIEW.into()), (1, REVIEW.into())])?;
     let summary_version = version(gate, "summary.go")?;
     let steps = format!(
         "1. {}\n2. falinks_capture with request {{\"paths\": [\"price.go\"]}} and quote the body of Discount from its price.go content.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with request {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned. Attempt this edit before any falinks_review.{}",
@@ -923,8 +924,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         "team_checks_while_drafting",
         json!({"run":checked,"drafted_revision":drafted}),
     );
-    let review = "1. falinks_obligations with request {}.\n2. falinks_capture with request {}.\n3. For each obligation whose required revision is above its reviewed revision, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If there is none, do nothing.";
-    gate.run(&[(0, review.into()), (1, review.into())])?;
+    gate.run(&[(0, REVIEW.into()), (1, REVIEW.into())])?;
     for agent in 0..2 {
         require(
             gate.engine()

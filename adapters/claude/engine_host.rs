@@ -280,29 +280,24 @@ fn view(capture: &Capture, content: impl Fn(&str) -> bool) -> Value {
 
 /// The opening protocol state from a capture given to the agent: the revision, file
 /// versions and pending state. No file contents, so both arms get the same task
-/// information (#5). Records the versions in `seen`.
-pub fn opening(
-    engine: &Engine,
-    client: &Client,
-    seen: &mut BTreeMap<String, u64>,
-) -> Result<Value> {
+/// information (#5). Also returns the file versions given.
+pub fn opening(engine: &Engine, client: &Client) -> Result<(Value, BTreeMap<String, u64>)> {
     let capture = engine.capture_for(client)?;
     let pending = engine.pending(client)?;
     let mut state = view(&capture, |_| false);
     state["pending"] = json!({"handled":pending.handled,"unhandled":pending.unhandled,
         "deferred":deferred(&pending),"obligations":pending.obligations});
-    *seen = versions(&capture);
-    Ok(state)
+    Ok((state, versions(&capture)))
 }
 
 /// When `events` renewed the client's obligation, a capture given to it with the text of
-/// every file whose version differs from `seen`, which it then updates. The capture is
+/// every file whose version differs from `given`, which it then updates. The capture is
 /// recorded at send, not at presentation (#116 decision 3).
-pub fn renewal(
+pub fn notice_capture(
     engine: &Engine,
     client: &Client,
     events: &[Event],
-    seen: &mut BTreeMap<String, u64>,
+    given: &mut BTreeMap<String, u64>,
 ) -> Result<Option<Value>> {
     // Obligation events go only to the agent whose obligation they renew.
     if !events
@@ -313,9 +308,9 @@ pub fn renewal(
     }
     let capture = engine.capture_for(client)?;
     let state = view(&capture, |path| {
-        seen.get(path) != capture.files.get(path).map(|f| &f.version)
+        given.get(path) != capture.files.get(path).map(|f| &f.version)
     });
-    *seen = versions(&capture);
+    *given = versions(&capture);
     Ok(Some(state))
 }
 

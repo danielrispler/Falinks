@@ -463,12 +463,15 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
 /// The opening prompt carries the initial protocol state from a capture given to the agent,
 /// and no file contents: the Git arm's prompt has none either (#5).
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
 fn the_opening_prompt_carries_revision_and_versions_but_no_file_contents() {
     let run = setup("go-relationships");
     let fixture = read(repo().join("evaluation/fixtures/go-relationships.json"));
     let client = run.arm.client(0);
-    let mut seen = Default::default();
-    let opening = falinks_claude::engine_host::opening(&run.arm.engine, client, &mut seen).unwrap();
+    let (opening, _) = falinks_claude::engine_host::opening(&run.arm.engine, client).unwrap();
     let root = run.arm.engine.root(client).unwrap();
     let text = prompt(0, &root, &fixture, "WORKFLOW", &[], &opening);
     let capture = run.arm.engine.host_capture(client).unwrap();
