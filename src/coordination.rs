@@ -473,17 +473,20 @@ impl Engine {
     }
     /// Evidence for an exact capture under every configured toolchain, analyzing on demand.
     pub fn evidence(&self, capture: &Capture) -> Result<Vec<Evidence>> {
+        self.evidence_in(&connect(&self.state)?, capture)
+    }
+    /// `evidence` on the caller's connection, for callers holding the writer lock.
+    pub(crate) fn evidence_in(&self, db: &Connection, capture: &Capture) -> Result<Vec<Evidence>> {
         let toolchains = self
             .analysis
             .read()
             .map_err(|_| "analysis lock poisoned")?
             .clone();
-        let db = connect(&self.state)?;
         let mut found = Vec::new();
         for toolchain in &toolchains {
             let key = analysis::toolchain_key(toolchain)?;
             let cached: Option<Evidence> = one(
-                &db,
+                db,
                 "SELECT body FROM evidence WHERE tree=? AND toolchain=?",
                 params![capture.tree, key],
             )?;
@@ -531,7 +534,7 @@ impl Engine {
             .is_empty();
         // ponytail: analysis runs inside the short writer operation; pre-analyze
         // proposals outside the lock if real edit throughput suffers.
-        let change = self.view_change(before, proposed, paths)?;
+        let change = self.view_change(db, before, proposed, paths)?;
         let unknown: Vec<_> = change
             .evidence
             .iter()
@@ -612,14 +615,15 @@ impl Engine {
     }
     /// The change an agent's live view sees from `before` to `after`: its own edit at
     /// the gate, or a transition or incorporation. Analyzes before any transaction
-    /// opens, since analysis writes its cache on another connection.
+    /// opens, so cache writes commit even when the transaction rolls back.
     pub(crate) fn view_change(
         &self,
+        db: &Connection,
         before: &Capture,
         after: &Capture,
         paths: &BTreeSet<String>,
     ) -> Result<Change> {
-        let evidence = [self.evidence(before)?, self.evidence(after)?];
+        let evidence = [self.evidence_in(db, before)?, self.evidence_in(db, after)?];
         Ok(Change {
             footprint: Footprint::default(),
             evidence,
