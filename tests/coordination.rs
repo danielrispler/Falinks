@@ -266,7 +266,7 @@ fn broken_go_evidence_and_configuration_changes_widen_symmetrically() {
 /// Go analysis runs no candidate code, so an engine's Go analyses share one build and gopls
 /// cache per toolchain, outside their disposable copies (#82).
 #[test]
-fn go_analyses_reuse_one_build_and_gopls_cache_per_toolchain() {
+fn go_analyses_reuse_one_build_and_gopls_cache() {
     let (dir, engine, _, bob) = fixture(GO);
     engine.configure_analysis(vec![go_toolchain()]).unwrap();
     let caches = analysis_caches(dir.path());
@@ -283,10 +283,10 @@ fn go_analyses_reuse_one_build_and_gopls_cache_per_toolchain() {
     let evidence = engine.evidence(&engine.capture().unwrap()).unwrap();
     assert!(evidence[0].errors.is_empty(), "{:?}", evidence[0].errors);
     assert_eq!(analysis_caches(dir.path()), caches);
-    assert!(files_under(&build).is_superset(&before.0));
+    // The second analysis adds to the first one's entries rather than starting over.
+    let after = files_under(&build);
+    assert!(after.is_superset(&before.0) && after.len() > before.0.len());
     assert!(files_under(&gopls).is_superset(&before.1));
-    // Everything else stays in the disposable copy.
-    assert!(files_under(&dir.path().join("state/analysis")).is_empty());
 }
 
 #[test]

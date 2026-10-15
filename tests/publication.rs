@@ -858,7 +858,8 @@ fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
 }
 
 /// Go analyses share a build cache, but checks run candidate code: each still starts from an
-/// empty `GOCACHE` and none can plant an entry in the analysis cache (#82).
+/// empty `GOCACHE` in its own output, and none can read the analysis cache or plant an entry in
+/// it (#82).
 #[test]
 fn checks_start_from_an_empty_go_cache_and_cannot_write_the_analysis_cache() {
     let (dir, engine, alice, _) = support::fixture(GO);
@@ -879,12 +880,15 @@ fn checks_start_from_an_empty_go_cache_and_cannot_write_the_analysis_cache() {
         .configure_checks(vec![
             sh(
                 "fresh",
-                "test ! -e \"$GOCACHE\" || test -z \"$(ls -A \"$GOCACHE\")\"".into(),
+                "case \"$GOCACHE\" in \"$TMPDIR\"/?*) ;; *) exit 1 ;; esac && \
+                 { test ! -e \"$GOCACHE\" || test -z \"$(ls -A \"$GOCACHE\")\"; }"
+                    .into(),
             ),
             sh(
                 "plant",
                 format!("echo planted > '{}/go-build/planted'", cache.display()),
             ),
+            sh("read", format!("ls '{}/go-build'", cache.display())),
             sh(
                 "replace",
                 format!("mkdir '{}/gopls/planted'", cache.display()),
@@ -897,7 +901,7 @@ fn checks_start_from_an_empty_go_cache_and_cannot_write_the_analysis_cache() {
         .results
         .clone();
     assert!(results[0].passed, "{results:?}");
-    assert!(!results[1].passed && !results[2].passed, "{results:?}");
+    assert!(results[1..].iter().all(|r| !r.passed), "{results:?}");
     assert_eq!(files_under(&cache), before);
     assert!(!cache.join("gopls/planted").exists());
 }

@@ -15,7 +15,7 @@ Each engine keeps one Go build cache and one gopls cache per toolchain identity,
 
 Sharing across analyses is safe because Go analysis runs no candidate code. Cgo is off and `GOPROXY=off`. `go list`, `go vet` and gopls only compile and type-check. Go keys cache entries by content hashes of their inputs, and both caches are safe for concurrent use. Go and gopls trim their own caches, so the directory needs no engine cleanup.
 
-The split keeps one risk closed. During a check, a candidate's `_test.go` runs arbitrary code. If that code could write to a cache that an oracle later reads, it could plant an entry that turns a failing oracle into a false pass. The analysis cache lies under the state root, which containment denies to every check for reads and writes, under Seatbelt and Landlock alike.
+The split keeps one risk closed. During a check, a candidate's `_test.go` runs arbitrary code. If that code could write to a cache that an oracle later reads, it could plant an entry that turns a failing oracle into a false pass. The analysis cache lies under the controller directory, which containment denies to every check for reads and writes, under Seatbelt and Landlock alike.
 
 ## Rejected options
 
