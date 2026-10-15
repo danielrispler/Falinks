@@ -1185,3 +1185,134 @@ fn recovery_after_an_in_process_interruption_checks_every_root_before_restoring(
 fn recovery_after_a_process_exit_checks_every_root_before_restoring() {
     recovery_refuses_an_unexplained_root_without_change(true);
 }
+
+/// The host fault hook reaches every durable step of a transition, a restart and a
+/// synchronization, in order, and an error there is the failure it stands for (#160).
+#[test]
+fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronization() {
+    let (dir, engine, alice, bob) = fixture(PAIR);
+    let (live, second) = (dir.path().join("live"), dir.path().join("second"));
+    fs::create_dir(&second).unwrap();
+    engine.add_workspace(&second).unwrap();
+    let base = engine.capture().unwrap();
+    engine
+        .apply(&bob, edit("b", &base, "b.rs", "fn b() { 2; }\n"))
+        .unwrap();
+    drop(engine);
+    let faults = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let open = |fail: Option<Fault>| {
+        let faults = faults.clone();
+        let hook: FaultHook = Box::new(move |_, fault| {
+            faults.lock().unwrap().push(fault.clone());
+            if Some(fault) == fail {
+                return Err("fault".into());
+            }
+            Ok(())
+        });
+        Engine::open_with_faults(&live, &dir.path().join("state"), &["a.rs", "b.rs"], hook).unwrap()
+    };
+    let take = || std::mem::take(&mut *faults.lock().unwrap());
+    let installed = |space: usize, path: &str| Fault::Installed {
+        space,
+        path: path.into(),
+    };
+    let restored = |space: usize, path: &str| Fault::Restored {
+        space,
+        path: path.into(),
+    };
+
+    // Bob's draft moves to `second`; `live` takes back the published `b.rs`.
+    let engine = open(Some(Fault::Commit));
+    let split = Propose {
+        action: Action::Split,
+        text: "split".into(),
+        failing: false,
+    };
+    let proposal = engine.propose(&bob, split).unwrap();
+    engine
+        .respond(&alice, &proposal.id, &proposal.context, Response::Agree)
+        .unwrap();
+    let roots = [snapshot(&live), snapshot(&second)];
+    let failed = engine
+        .respond(&bob, &proposal.id, &proposal.context, Response::Agree)
+        .unwrap();
+    let transition = vec![
+        Fault::Journaled,
+        installed(1, "a.rs"),
+        installed(1, "b.rs"),
+        Fault::Audited(1),
+        installed(0, "b.rs"),
+        Fault::Audited(0),
+        Fault::Commit,
+    ];
+    assert_eq!(take(), transition);
+    // As a failing commit statement would (#158).
+    assert!(
+        matches!(&failed.state, ProposalState::Blocked { blocker } if blocker.starts_with("transition failed")),
+        "{failed:?}"
+    );
+    let reason = halt(dir.path()).unwrap();
+    assert!(reason.starts_with("interrupted transition "), "{reason}");
+    assert_eq!(incidents(dir.path()), 0);
+    drop(engine);
+
+    let engine = open(None);
+    assert_eq!(
+        take(),
+        [
+            restored(1, "a.rs"),
+            restored(1, "b.rs"),
+            restored(0, "b.rs")
+        ]
+    );
+    assert_eq!([snapshot(&live), snapshot(&second)], roots);
+    // An edit's boundary retries the agreed split.
+    let current = engine.capture_for(&alice).unwrap();
+    engine
+        .apply(&alice, edit("a", &current, "a.rs", "fn a() { 1; }\n"))
+        .unwrap();
+    assert_eq!(take(), [transition, vec![Fault::Committed]].concat());
+    assert!(matches!(
+        engine.proposal(&proposal.id).unwrap().unwrap().state,
+        ProposalState::Applied { .. }
+    ));
+
+    // Publishing Alice's edit brings it into Bob's workspace.
+    engine
+        .configure_checks(vec![Check {
+            name: "true".into(),
+            program: "/usr/bin/true".into(),
+            args: Vec::new(),
+        }])
+        .unwrap();
+    let revision = engine.capture_for(&alice).unwrap().revision;
+    engine
+        .offer(
+            &alice,
+            Offer {
+                id: "a".into(),
+                task: "a".into(),
+                revision,
+                scope: Vec::new(),
+                text: "a".into(),
+                supersedes: None,
+                reviews: Vec::new(),
+            },
+        )
+        .unwrap();
+    engine.validate().unwrap();
+    assert_eq!(
+        take(),
+        [
+            Fault::Journaled,
+            installed(1, "a.rs"),
+            Fault::Audited(1),
+            Fault::Commit,
+            Fault::Committed,
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(second.join("a.rs")).unwrap(),
+        "fn a() { 1; }\n"
+    );
+}
