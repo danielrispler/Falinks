@@ -3,7 +3,7 @@
 use crate::analysis::{self, Evidence, Footprint};
 use crate::publication::{self, RunOutcome};
 use crate::regroup::scalar;
-use crate::{Capture, Client, Engine, Layout, Result, connect, fail, retain};
+use crate::{Capture, Client, Engine, Layout, Result, all, connect, fail, one, retain};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -287,9 +287,11 @@ pub(crate) fn mine(agent: usize) -> i64 {
     1 << agent
 }
 pub(crate) fn obligations(db: &Connection, agent: usize) -> Result<Vec<Obligation>> {
-    let mut stmt = db.prepare("SELECT body FROM scopes WHERE agent=? ORDER BY id")?;
-    let rows = stmt.query_map([agent as i64], |r| r.get::<_, String>(0))?;
-    rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    all(
+        db,
+        "SELECT body FROM scopes WHERE agent=? ORDER BY id",
+        [agent as i64],
+    )
 }
 /// Renews every scope of `agent` related to `footprint` to require review of `revision`.
 pub(crate) fn renew(
@@ -333,34 +335,28 @@ fn save_obligation(db: &Connection, obligation: &Obligation) -> Result<()> {
     Ok(())
 }
 pub(crate) fn event(db: &Connection, workspace: &str, seq: u64) -> Result<Option<Event>> {
-    db.query_row("SELECT body FROM events WHERE seq=?", [seq as i64], |r| {
-        r.get::<_, String>(0)
-    })
-    .optional()?
-    .map(|body| {
-        Ok(Event {
+    Ok(
+        one(db, "SELECT body FROM events WHERE seq=?", [seq as i64])?.map(|body| Event {
             seq,
             id: format!("{workspace}:{seq}"),
-            body: serde_json::from_str(&body)?,
-        })
-    })
-    .transpose()
+            body,
+        }),
+    )
 }
 fn events_after(db: &Connection, workspace: &str, agent: usize, after: u64) -> Result<Vec<Event>> {
-    let mut stmt =
-        db.prepare("SELECT seq, body FROM events WHERE seq>? AND audience & ? != 0 ORDER BY seq")?;
-    let rows = stmt.query_map(params![after as i64, mine(agent)], |r| {
-        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-    })?;
-    rows.map(|row| {
-        let (seq, body) = row?;
-        Ok(Event {
-            seq: seq as u64,
+    let rows: Vec<(u64, Body)> = all(
+        db,
+        "SELECT json_array(seq, json(body)) FROM events WHERE seq>? AND audience & ? != 0 ORDER BY seq",
+        params![after as i64, mine(agent)],
+    )?;
+    Ok(rows
+        .into_iter()
+        .map(|(seq, body)| Event {
+            seq,
             id: format!("{workspace}:{seq}"),
-            body: serde_json::from_str(&body)?,
+            body,
         })
-    })
-    .collect()
+        .collect())
 }
 /// Whether event `seq` was sent to `agent`.
 fn in_stream(db: &Connection, agent: usize, seq: u64) -> Result<bool> {
@@ -406,12 +402,7 @@ fn cursor(db: &Connection, agent: usize) -> Result<u64> {
         .unwrap_or(0) as u64)
 }
 pub(crate) fn checkpoint(db: &Connection, id: &str) -> Result<Option<Checkpoint>> {
-    db.query_row("SELECT body FROM checkpoints WHERE id=?", [id], |r| {
-        r.get::<_, String>(0)
-    })
-    .optional()?
-    .map(|b| Ok(serde_json::from_str(&b)?))
-    .transpose()
+    one(db, "SELECT body FROM checkpoints WHERE id=?", [id])
 }
 pub(crate) fn save_checkpoint(db: &Connection, checkpoint: &Checkpoint) -> Result<()> {
     db.execute(
@@ -491,16 +482,13 @@ impl Engine {
         let mut all = Vec::new();
         for toolchain in &toolchains {
             let key = analysis::toolchain_key(toolchain)?;
-            let cached = db
-                .query_row(
-                    "SELECT body FROM evidence WHERE tree=? AND toolchain=?",
-                    params![capture.tree, key],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()?;
+            let cached: Option<Evidence> = one(
+                &db,
+                "SELECT body FROM evidence WHERE tree=? AND toolchain=?",
+                params![capture.tree, key],
+            )?;
             let evidence: Evidence = match cached {
-                Some(body) => {
-                    let mut evidence: Evidence = serde_json::from_str(&body)?;
+                Some(mut evidence) => {
                     // Cached results stay bound to the pins: a replaced binary degrades them.
                     if let Err(error) = analysis::verify(toolchain) {
                         evidence.errors.push(error.to_string());
