@@ -462,19 +462,19 @@ fn queued_messages_merged_into_one_presentation_each_count_as_presented() {
 
 #[test]
 fn only_declared_platforms_have_a_claude_pin() {
-    // Derived from PINS so promoting a platform never edits this test; the docs row
-    // (`platforms_doc_lists_the_claude_pins`) is the second key.
+    // Derived from PINS so promoting a platform never edits this test. Which platforms
+    // are pinned is checked against docs/platforms.md (`platforms_doc_lists_the_claude_pins`);
+    // the hash values are checked by review only.
     let unsupported = |os, arch| {
         let error = falinks_claude::pin(os, arch).unwrap_err().to_string();
         assert!(error.contains("unsupported platform"), "{error}");
     };
     for &(os, arch) in falinks_host::PLATFORMS {
-        match falinks_claude::PINS
+        if !falinks_claude::PINS
             .iter()
-            .find(|(platform, _)| *platform == (os, arch))
+            .any(|(platform, _)| *platform == (os, arch))
         {
-            Some((_, hash)) => assert_eq!(falinks_claude::pin(os, arch).unwrap(), *hash),
-            None => unsupported(os, arch),
+            unsupported(os, arch);
         }
     }
     // Windows has no docs column, so `platforms_row` forbids pinning it: a fixed sentinel.

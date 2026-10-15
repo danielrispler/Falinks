@@ -23,7 +23,7 @@ pub struct EngineOutcome {
 pub type Engine = Box<dyn FnMut(&Value) -> Result<EngineOutcome>>;
 /// Verified pins keyed by `std::env::consts::{OS, ARCH}`. A platform is declared only after
 /// its adapter controls were re-run there (review-enforced); every other platform fails closed.
-/// Promotion edits only the pin map and its `docs/platforms.md` row; the tests derive from both.
+/// Promotion never edits a test: the pin tests derive from the map and check its docs row.
 pub type PinMap<T> = &'static [((&'static str, &'static str), T)];
 
 pub fn platform_pin<T: Copy>(pins: PinMap<T>, os: &str, arch: &str) -> Result<T> {
