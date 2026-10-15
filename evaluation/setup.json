@@ -139,9 +139,19 @@
       "charged_seconds": 2024,
       "measurement": "Session wall time from the first timestamp after claiming #126 through the ledger entry, plus allowances for claiming and reading before that timestamp and for final CI, commit and PR. Includes adapter and engine-text work, charged conservatively against #116's one-hour extension. No real runs.",
       "work": "#126: the Claude adapter drops pending and events from the agent tools; handle, edit, offer, review and post describe the #120 shape, inline reviews and what a reply can answer; renewing notices carry a capture given to the recipient; the opening prompt carries the revision, file versions and empty pending state with no file contents; instructions/falinks.md describes the protocol and asks agents to register and post their plan in one message; versioned re-freeze v8 -> v9 (instructions/falinks.md changed; initial commits unchanged)."
+    },
+    {
+      "start_utc": "2026-10-15T13:45:45Z",
+      "stop_utc": "2026-10-15T13:48:58Z",
+      "measured_seconds": 193,
+      "startup_allowance_seconds": 600,
+      "handoff_allowance_seconds": 600,
+      "charged_seconds": 1393,
+      "measurement": "Session wall time from the first timestamp after claiming #83 through the ledger entry, plus allowances for claiming and reading before that timestamp and for final CI, commit and PR. No real runs.",
+      "work": "#83: batch runs verify() only after the gate passes, right before the first slot that will run, and records it on the invocation entry; an invocation that runs no slot or stops at a failing gate skips the 12 sandboxed builds. Evaluation shards rebalanced for the faster gate test. Versioned re-freeze v9 -> v10 (src/batch.rs changed; initial commits unchanged)."
     }
   ],
-  "charged_total_seconds": 31024,
-  "remaining_seconds": 1376,
-  "status": "manifest v9: agent instructions describe the #116 protocol changes (#126), so runs before v9 are not comparable with later ones; limit raised to 32 400 s by #116 for the #122 pilot"
+  "charged_total_seconds": 32417,
+  "remaining_seconds": -17,
+  "status": "manifest v10: batch verifies frozen fixtures only when an invocation runs a slot (#83); run behaviour is unchanged, so v9 runs stay comparable; ledger past the setup limit"
 }

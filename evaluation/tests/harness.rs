@@ -373,6 +373,7 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
     assert_eq!(ledger["runs"][0]["outcome"], "success");
     assert_eq!(ledger["runs"][1]["outcome"], "infrastructure_failure");
     assert_eq!(ledger["pauses"].as_array().unwrap().len(), 1);
+    assert_eq!(ledger["invocations"][0]["verification"]["passed"], true);
     let early = Command::new(CLI)
         .args(["batch", "--config"])
         .arg(&config_path)
@@ -402,6 +403,15 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
     );
     let summary = read(runs.join("report.json"));
     assert_eq!(summary["replaced_runs"], json!(["pilot-falinks"]));
+    assert_eq!(ledger["invocations"][1]["verification"]["passed"], true);
+
+    // A finished batch runs no slot: neither a gate nor a verification.
+    let idle = batch("success");
+    assert!(idle.status.success(), "{}", text(&idle));
+    let ledger = read(runs.join("batch.json"));
+    assert_eq!(ledger["invocations"].as_array().unwrap().len(), 3);
+    assert!(ledger["invocations"][2].get("verification").is_none());
+    assert_eq!(ledger["gates"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -423,6 +433,9 @@ fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
         assert_eq!(output.status.code(), Some(3), "{}", text(&output));
         let ledger = read(runs.join("batch.json"));
         assert!(ledger["runs"].as_array().unwrap().is_empty());
+        assert_eq!(ledger["pauses"].as_array().unwrap().len(), 1);
+        // A failed gate stops the invocation before the fixture builds.
+        assert!(ledger["invocations"][0].get("verification").is_none());
         (text(&output), ledger["gates"][0].clone())
     };
     let missing = tmp.path().join("check-integration");
