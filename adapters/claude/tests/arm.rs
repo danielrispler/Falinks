@@ -3,7 +3,8 @@
 use falinks::Language;
 use falinks::{Check, Engine};
 use falinks_claude::arm::{
-    Arm, Tools, agent_name, denied_roots, deny_check_reads, enrollment, language, worker_protected,
+    Arm, Tools, agent_name, denied_roots, deny_check_reads, enrollment, language, prompt,
+    worker_protected,
 };
 use serde_json::{Value, json};
 use std::{
@@ -457,4 +458,38 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     assert_eq!(outcome["outcome"], "success", "{outcome}");
     assert_eq!(outcome["oracle"]["passed"], true);
     assert_eq!(run.arm.validation_attempts.len(), 2);
+}
+
+/// The opening prompt carries the initial protocol state from a capture given to the agent,
+/// and no file contents: the Git arm's prompt has none either (#5).
+#[test]
+fn the_opening_prompt_carries_revision_and_versions_but_no_file_contents() {
+    let run = setup("go-relationships");
+    let fixture = read(repo().join("evaluation/fixtures/go-relationships.json"));
+    let client = run.arm.client(0);
+    let mut seen = Default::default();
+    let opening = falinks_claude::engine_host::opening(&run.arm.engine, client, &mut seen).unwrap();
+    let root = run.arm.engine.root(client).unwrap();
+    let text = prompt(0, &root, &fixture, "WORKFLOW", &[], &opening);
+    let capture = run.arm.engine.host_capture(client).unwrap();
+    assert!(
+        text.contains(&format!("\"revision\":{}", capture.revision)),
+        "{text}"
+    );
+    for (path, versioned) in &capture.files {
+        let entry = json!({"exists": versioned.file.is_some(), "version": versioned.version});
+        assert!(
+            text.contains(&format!("\"{path}\":{entry}")),
+            "{path}: {text}"
+        );
+    }
+    assert!(!text.contains("\"content\""), "{text}");
+    for (path, body) in fixture["files"].as_object().unwrap() {
+        assert!(
+            !text.contains(body.as_str().unwrap()),
+            "{path} content leaked"
+        );
+    }
+    // The empty pending state: nothing is owed before work starts.
+    assert!(text.contains("\"obligations\":[]"), "{text}");
 }

@@ -1,6 +1,6 @@
 //! The production engine behind authenticated tool envelopes (#26): scripted calls
 //! against a real temporary engine, Git and SQLite, with the pinned gopls/Go analysis.
-use falinks::{Check, Engine, Language, Pin, Toolchain};
+use falinks::{Check, Client, Engine, Language, Pin, Toolchain};
 use falinks_claude::engine_host::EngineHost;
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, sync::Arc};
@@ -21,6 +21,7 @@ struct Fixture {
     _dir: tempfile::TempDir,
     live: PathBuf,
     engine: Arc<Engine>,
+    clients: [Client; 2],
     hosts: [EngineHost; 2],
 }
 fn fixture() -> Fixture {
@@ -48,19 +49,18 @@ fn fixture() -> Fixture {
             args: Vec::new(),
         }])
         .unwrap();
+    let clients = [0, 1].map(|a| engine.authenticate(a, &engine.credentials()[a]).unwrap());
     let host = |agent: usize| {
-        let client = engine
-            .authenticate(agent, &engine.credentials()[agent])
-            .unwrap();
         EngineHost::new(
             Arc::clone(&engine),
-            client,
+            clients[agent].clone(),
             &format!("agent-{agent}"),
             go.with_file_name("gofmt"),
         )
     };
     Fixture {
         hosts: [host(0), host(1)],
+        clients,
         engine: Arc::clone(&engine),
         _dir: dir,
         live,
@@ -144,18 +144,18 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
     assert_eq!(applied["accepted"], true, "{applied}");
 
     // Agent 1 is told through replayable events; its obligation is pending.
-    let pending = f.call(1, "pending", json!({}));
-    assert_eq!(pending["obligations"][0]["scope"]["id"], "net", "{pending}");
-    let seq = pending["unhandled"][0]["seq"].as_u64().unwrap();
+    let pending = f.engine.pending(&f.clients[1]).unwrap();
+    assert_eq!(pending.obligations[0].scope.id, "net", "{pending:?}");
+    let seq = pending.unhandled[0].seq;
     let deferred = f.call(
         1,
         "handle",
         json!({"through":seq,"deferred":{seq.to_string():"after my edit"}}),
     );
     assert_eq!(deferred["accepted"], true, "{deferred}");
-    let pending = f.call(1, "pending", json!({}));
-    assert_eq!(pending["deferred"][0]["note"], "after my edit", "{pending}");
-    assert_eq!(pending["obligations"].as_array().unwrap().len(), 1);
+    let pending = f.engine.pending(&f.clients[1]).unwrap();
+    assert_eq!(pending.deferred[0].1, "after my edit", "{pending:?}");
+    assert_eq!(pending.obligations.len(), 1);
 
     // Handling or deferring is not a review: related writes and offers stay closed.
     let current = f.call(1, "capture", json!({}));
@@ -178,7 +178,7 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
     assert_eq!(reviewed["accepted"], true, "{reviewed}");
     let processed = f.call(1, "handle", json!({"processed":[seq]}));
     assert_eq!(processed["accepted"], true, "{processed}");
-    assert_eq!(f.call(1, "pending", json!({}))["deferred"], json!([]));
+    assert!(f.engine.pending(&f.clients[1]).unwrap().deferred.is_empty());
     let applied = f.call(
         1,
         "edit",
@@ -386,4 +386,80 @@ fn every_advertised_tool_maps_to_an_engine_operation() {
             "{operation}: {reply}"
         );
     }
+}
+
+/// Notices and the opening prompt carry what agents need; hosts keep `pending` and `events`.
+#[test]
+fn agents_get_no_pending_or_events_tool() {
+    let f = fixture();
+    let tools = falinks_claude::engine_host::tools(&f.live);
+    let names: Vec<&str> = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"falinks_handle"), "{names:?}");
+    for hidden in ["falinks_pending", "falinks_events"] {
+        assert!(!names.contains(&hidden), "{names:?}");
+    }
+    for operation in ["pending", "events"] {
+        let reply = f.call(0, operation, json!({}));
+        assert_eq!(reply["accepted"], false, "{reply}");
+    }
+}
+
+/// A notice whose events renew the recipient's obligation carries a capture given to it, so
+/// the agent reviews inline on its next edit without a capture call.
+#[test]
+fn a_renewing_notice_capture_authorizes_an_inline_review() {
+    use falinks_claude::engine_host::{opening, renewal};
+    let f = fixture();
+    for (agent, id, node) in [
+        (0, "discount", "price.go#Discount"),
+        (1, "net", "price.go#Net"),
+    ] {
+        let registered = f.call(agent, "register", json!({"id":id,"task":id,"nodes":[node]}));
+        assert_eq!(registered["accepted"], true, "{registered}");
+    }
+    let mut seen = Default::default();
+    let start = opening(&f.engine, &f.clients[1], &mut seen).unwrap();
+    let version = start["files"]["price.go"]["version"].clone();
+    assert!(
+        start["files"]["price.go"].get("content").is_none(),
+        "{start}"
+    );
+    // Events that renew nothing carry no capture.
+    let quiet = f.engine.events(&f.clients[1], 0).unwrap();
+    assert_eq!(
+        renewal(&f.engine, &f.clients[1], &quiet, &mut seen).unwrap(),
+        None
+    );
+
+    let applied = f.call(
+        0,
+        "edit",
+        json!({"id":"d1","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
+    );
+    assert_eq!(applied["accepted"], true, "{applied}");
+    let events = f.engine.events(&f.clients[1], 0).unwrap();
+    let notice = renewal(&f.engine, &f.clients[1], &events, &mut seen)
+        .unwrap()
+        .expect("renewing events carry a capture");
+    // Only the changed file's content travels with the notice.
+    assert_eq!(notice["files"]["price.go"]["content"], DISCOUNT, "{notice}");
+    assert!(
+        notice["files"]["label.go"].get("content").is_none(),
+        "{notice}"
+    );
+
+    let inline = f.call(
+        1,
+        "edit",
+        json!({"id":"n1","expected":{"price.go":notice["files"]["price.go"]["version"]},
+            "output":{"price.go":{"content":NET}},
+            "reviews":[{"scope":"net","revision":notice["revision"],
+                "decision":"Keep","note":"reread Discount in the notice"}]}),
+    );
+    assert_eq!(inline["accepted"], true, "{inline}");
 }

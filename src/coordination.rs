@@ -766,7 +766,11 @@ impl Engine {
                     ..
                 }) if original.work == reply.work
                     && (visible || original.sender == client.agent) => {}
-                _ => return fail("reply must bind an existing message and its exact work"),
+                _ => {
+                    return fail(
+                        "reply_to.event must be a message you were sent or posted: a plan, live edit or checkpoint offer, never a Reviewed, Obligation or other event; reply_to.work must be the original message's work",
+                    );
+                }
             }
         }
         let body = Body::Message(Message {

@@ -854,7 +854,19 @@ fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding(
             work,
         }),
     };
-    assert!(engine.post(&alice, reply(Work::Revision(1))).is_err());
+    // The refusal names what can be replied to and which work a reply binds (#116).
+    let refused = engine
+        .post(&alice, reply(Work::Revision(1)))
+        .unwrap_err()
+        .to_string();
+    for part in [
+        "plan",
+        "live edit",
+        "checkpoint offer",
+        "original message's work",
+    ] {
+        assert!(refused.contains(part), "{refused}");
+    }
     engine
         .post(&alice, reply(Work::Checkpoint(c1.id.clone())))
         .unwrap();
