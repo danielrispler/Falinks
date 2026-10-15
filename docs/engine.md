@@ -13,6 +13,19 @@ cargo fmt --check
 
 Captured jobs and required checks are contained commands (`src/contain.rs`). On macOS they install their own Seatbelt profile with `/usr/bin/sandbox-exec`. An outer sandbox that forbids installing another profile must run these checks outside that outer sandbox. On Linux they run through the `falinks-contain` helper executable (ADR 2), which installs Landlock (pinned to ABI 3) and a seccomp filter that denies the `socket` and `io_uring_setup` system calls (`socketpair` stays allowed). It acts as the command's subreaper. The host may set its path with `configure_containment`; the default is `falinks-contain` beside the host executable. A denied sandbox installation, a missing Landlock or helper, or a helper protocol mismatch is a visible job failure, never a fallback to unrestricted execution. Other platforms can use edits and storage, but contained commands fail visibly as unsupported. Requirements are in [docs/platforms.md](platforms.md).
 
+## Module map
+
+Each engine source file is 25–65 KB. Find the entry point here, then read that range.
+
+- `src/lib.rs`: `Engine::open` (leases, `connect`, `schema`, `recover`), `capture`, `apply_locked` (gate, retention, installation, commit), `audit_all`, `run_job`/`execute_job`, Git storage (`git`, `retain`, `build_tree`) and `source_paths`.
+- `src/coordination.rs`: `configure_analysis`, `evidence`, `gate` and `view_change`, `register`, `review`, `post`, `offer`, `events`/`handle`/`pending`, `wait`.
+- `src/publication.rs`: `configure_checks`, `validate_observed`, `execute` (slot preparation and checks), `accept` (the acceptance transaction), `recover`.
+- `src/regroup.rs`: `reconsider`, `signals`, `propose`/`respond`, `attempt`, `adopt`, `recover`.
+- `src/analysis.rs`: Rust and Go evidence, `Footprint`, `Pin`.
+- `src/contain.rs`: contained commands, `run`, and the `falinks-contain` helper.
+
+Lock order is the writer `Mutex`, then the layout `RwLock`. `Engine::layout` returns a read guard. Release it before `layout.write()` and before calling host observers.
+
 ## Host and client boundary
 
 `Engine::open(live, state, enrolled)` acquires nonblocking OS writer leases on the source root and controller directory and verifies stored history/source before returning. Controller storage must be outside the live tree. The trusted host provisions exactly two credentials, authenticates them once, and routes each runtime session to its opaque `Client`; mutation requests contain no author field. Do not expose credential provisioning, arbitrary job executable/arguments, or fault observers as agent tools. This library does not implement the downstream runtime permission profile.

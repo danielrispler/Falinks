@@ -979,3 +979,80 @@ fn different_functions_in_one_file_both_survive_an_explicit_reread_and_rebuild()
         two.as_bytes()
     );
 }
+
+// The ledger schema is additive: every table is `CREATE TABLE IF NOT EXISTS`, run when the
+// engine opens, with no `ALTER TABLE` and no `user_version`. So an older ledger is today's
+// minus some tables, and dropping the ones this run left empty reproduces it without
+// copying old setup code. Not covered: a change to how stored rows serialize. If the ledger
+// format becomes a contract, add `PRAGMA user_version` and a committed fixture per version.
+#[test]
+fn a_ledger_missing_later_tables_reopens_unchanged_and_regains_them() {
+    let (dir, engine, alice, bob) = fixture(PAIR);
+    let base = engine.capture().unwrap();
+    engine
+        .apply(&alice, edit("a", &base, "a.rs", "fn a() { 1; }\n"))
+        .unwrap();
+    let capture = engine.capture().unwrap();
+    let events = engine.events(&bob, 0).unwrap();
+    let pending = engine.pending(&bob).unwrap();
+    let record = format!("{:?}", engine.request(&alice, "a").unwrap());
+    assert!(!events.is_empty());
+    drop(engine);
+
+    let ledger = dir.path().join("state/ledger.sqlite");
+    let db = rusqlite::Connection::open(&ledger).unwrap();
+    let tables: Vec<String> = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    let mut dropped = Vec::new();
+    for table in tables {
+        let rows: i64 = db
+            .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        if rows == 0 {
+            db.execute_batch(&format!("DROP TABLE \"{table}\""))
+                .unwrap();
+            dropped.push(table);
+        }
+    }
+    assert!(dropped.contains(&"waits".to_string()), "{dropped:?}");
+    db.execute_batch("PRAGMA journal_mode=DELETE;").unwrap();
+    drop(db);
+
+    let (engine, alice, bob) = reopen(dir.path(), PAIR);
+    assert_eq!(engine.capture().unwrap(), capture);
+    assert_eq!(engine.events(&bob, 0).unwrap(), events);
+    assert_eq!(engine.pending(&bob).unwrap(), pending);
+    assert_eq!(
+        format!("{:?}", engine.request(&alice, "a").unwrap()),
+        record
+    );
+
+    let db = rusqlite::Connection::open(&ledger).unwrap();
+    for table in &dropped {
+        let present: i64 = db
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(present, 1, "{table} not recreated");
+    }
+    let mode: String = db
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+    drop(db);
+
+    let outcome = engine
+        .apply(&bob, edit("b", &capture, "b.rs", "fn b() { 2; }\n"))
+        .unwrap();
+    assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
+}

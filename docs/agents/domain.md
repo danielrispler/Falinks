@@ -7,6 +7,7 @@ This repo uses a single-context layout: `CONTEXT.md` at the repo root and archit
 ## Before exploring
 
 Read `CONTEXT.md` and ADRs relevant to the area you are exploring.
+For engine code, find the file and entry point in the module map in `docs/engine.md`, then read that range.
 If they do not exist, proceed silently. The domain-modeling skill creates them when terms or decisions are resolved.
 
 ## Vocabulary
