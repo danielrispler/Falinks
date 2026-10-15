@@ -4,7 +4,12 @@ use falinks_claude::{
     Launch, Runtime, WorkerSandboxOutcome, bash_probe_controls, fixture_files, refused,
     verify_binary, worker_sandbox_unavailable,
 };
-use falinks_host::{Engine, Result, controlled_host::ControlledHost, file_hash, hash, require};
+use falinks_host::{
+    Engine, Result,
+    check::{self, Options},
+    controlled_host::ControlledHost,
+    file_hash, hash, require,
+};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
@@ -13,7 +18,6 @@ use std::{
     path::{Path, PathBuf},
     process,
     rc::Rc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 const AGENT: &str = "fixture-agent";
@@ -325,42 +329,17 @@ fn main() {
     let mut args = env::args().skip(1).collect::<Vec<_>>();
     let unavailable = args.iter().any(|a| a == "--expect-sandbox-unavailable");
     args.retain(|a| a != "--expect-sandbox-unavailable");
-    let arguments = (|| -> Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
-        if args == ["--help"] {
-            println!(
-                "Usage: check-claude-adapter --binary PINNED_CLAUDE --output EVIDENCE.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL] [--expect-sandbox-unavailable]"
-            );
-            process::exit(0);
-        }
-        require(args.len() % 2 == 0, "expected option/value pairs")?;
-        let (mut binary, mut output, mut probe, mut tool) = (None, None, None, None);
-        for pair in args.as_chunks::<2>().0 {
-            let value = Some(PathBuf::from(&pair[1]));
-            match pair[0].as_str() {
-                "--binary" => binary = value,
-                "--output" => output = value,
-                "--probe" => probe = value,
-                "--tool" => tool = value,
-                _ => return Err("unknown option".into()),
-            }
-        }
-        let sibling = |name| env::current_exe().map(|exe| exe.with_file_name(name));
-        Ok((
-            binary.ok_or("--binary required")?,
-            output.ok_or("--output required")?,
-            probe.map_or_else(|| sibling("sandbox-probe"), Ok)?,
-            tool.map_or_else(|| sibling("falinks-claude-tool"), Ok)?,
-        ))
-    })();
-    let (binary, output, probe, tool) = match arguments {
-        Ok(args) => args,
-        Err(error) => {
-            eprintln!("{error}");
-            process::exit(1);
-        }
-    };
-    let mut evidence = json!({"implementation":"rust","runtime":"claude-code","publication_scoring_supported":false,
-        "started_at_unix_seconds":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()});
+    let Options {
+        binary,
+        output,
+        probe,
+        tool,
+    } = Options::parse(
+        &args,
+        "falinks-claude-tool",
+        "Usage: check-claude-adapter --binary PINNED_CLAUDE --output EVIDENCE.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL] [--expect-sandbox-unavailable]",
+    );
+    let mut evidence = check::report("claude-code");
     let outcome = if unavailable {
         evidence["mode"] = json!("expect-sandbox-unavailable");
         match run_unavailable(&binary, &probe, &tool, &mut evidence) {
@@ -406,23 +385,10 @@ fn main() {
     } else {
         "Finite trusted-host controls only. Final deliberate unknown-change injection leaves the disposable host stopped. Historical evidence cannot authorize another runtime."
     });
-    let written = output
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .map_or(Ok(()), fs::create_dir_all)
-        .and_then(|()| {
-            fs::write(
-                &output,
-                serde_json::to_string_pretty(&evidence).unwrap() + "\n",
-            )
-        });
-    if let Err(error) = written {
-        eprintln!("{error}");
-        process::exit(1);
-    }
-    println!(
-        "{}",
-        json!({"outcome":outcome,"publication_scoring_supported":false,"failure":evidence["failure"]})
+    check::finish(
+        &output,
+        &evidence,
+        json!({"outcome":outcome,"publication_scoring_supported":false,"failure":evidence["failure"]}),
     );
     match outcome {
         "passed" | "fail-closed" => {}
