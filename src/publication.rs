@@ -367,7 +367,8 @@ impl Engine {
             }
             return Ok(existing);
         }
-        let capture = captured(&db, revision)?.ok_or("feedback must name a captured revision")?;
+        let capture =
+            captured(&db, revision, None)?.ok_or("feedback must name a captured revision")?;
         if capture.space != self.layout()?.of(client.agent) {
             return fail("feedback must name a revision of the client's workspace");
         }

@@ -167,7 +167,7 @@ fn coverage_counts_overwritten_authors_and_required_members_but_not_notified_pee
         members(&[0])
     );
     // Bob's later edit is overwritten by Alice, yet Bob remains a required offerer.
-    let current = engine.capture().unwrap();
+    let current = engine.capture_for(&bob).unwrap();
     engine
         .review(
             &bob,

@@ -201,7 +201,7 @@ fn schema(db: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS revisions (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS requests (id INTEGER PRIMARY KEY AUTOINCREMENT, agent INTEGER NOT NULL, request_id TEXT NOT NULL, body TEXT NOT NULL, UNIQUE(agent, request_id));
         CREATE TABLE IF NOT EXISTS incidents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, body TEXT NOT NULL, recipient INTEGER);
         CREATE TABLE IF NOT EXISTS jobs (agent INTEGER NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(agent,id));
         CREATE TABLE IF NOT EXISTS spaces (id INTEGER PRIMARY KEY, root TEXT NOT NULL UNIQUE, completed INTEGER);")?;
     coordination::tables(db)?;
@@ -777,21 +777,33 @@ impl Engine {
     /// Host read of the primary workspace (space 0), where both agents start joined.
     /// Agents read only their own workspace, through `capture_for`.
     pub fn capture(&self) -> Result<Capture> {
-        self.capture_space(0)
+        self.capture_space(0, None)
     }
-    /// Captures the live workspace the client is currently placed in.
+    /// Captures the live workspace the client is currently placed in, given to that client.
     pub fn capture_for(&self, client: &Client) -> Result<Capture> {
         self.authorize(client)?;
         let space = self.layout()?.of(client.agent);
-        self.capture_space(space)
+        self.capture_space(space, Some(client.agent))
     }
-    fn capture_space(&self, space: usize) -> Result<Capture> {
+    /// Host-internal capture of the client's workspace, not given to the client: its
+    /// revision can be offered but never authorizes the client's review.
+    pub fn host_capture(&self, client: &Client) -> Result<Capture> {
+        self.authorize(client)?;
+        let space = self.layout()?.of(client.agent);
+        self.capture_space(space, None)
+    }
+    /// Records each capture separately with its recipient; None is a host-internal capture.
+    fn capture_space(&self, space: usize, recipient: Option<usize>) -> Result<Capture> {
         let capture = self.layout()?.current(space)?.clone();
         retain(&self.state, &capture)?;
         let db = connect(&self.state)?;
         db.execute(
-            "INSERT INTO captures VALUES(?,?)",
-            params![nonce()?, serde_json::to_string(&capture)?],
+            "INSERT INTO captures VALUES(?,?,?)",
+            params![
+                nonce()?,
+                serde_json::to_string(&capture)?,
+                recipient.map(|a| a as i64)
+            ],
         )?;
         Ok(capture)
     }

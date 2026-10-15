@@ -403,7 +403,7 @@ impl Arm {
             ));
         }
         let published = self.engine.published()?;
-        let mine = self.engine.capture_for(&self.clients[agent])?;
+        let mine = self.engine.host_capture(&self.clients[agent])?;
         if Self::files(&published) != Self::files(&mine) {
             return Ok(refuse(
                 "your workspace has unpublished work: offer it and wait for publication",
@@ -425,7 +425,7 @@ impl Arm {
     }
 
     fn check(&mut self, agent: usize) -> Result<Value> {
-        let capture = self.engine.capture_for(&self.clients[agent])?;
+        let capture = self.engine.host_capture(&self.clients[agent])?;
         let checks = self.oracle(&capture, &agent_name(agent))?;
         self.log.push(json!({"kind": "validation", "agent": agent, "revision": capture.revision, "passed": checks["passed"]}));
         Ok(json!({"accepted": true, "revision": capture.revision, "passed": checks["passed"]}))

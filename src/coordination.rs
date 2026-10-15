@@ -413,12 +413,18 @@ pub(crate) fn save_checkpoint(db: &Connection, checkpoint: &Checkpoint) -> Resul
     )?;
     Ok(())
 }
-pub(crate) fn captured(db: &Connection, revision: u64) -> Result<Option<Capture>> {
-    // Only a coherent capture an agent was actually given can be reviewed or offered.
+/// A recorded capture of `revision`. With `recipient`, only a capture given to that agent
+/// counts; without, any does, host-internal ones included.
+pub(crate) fn captured(
+    db: &Connection,
+    revision: u64,
+    recipient: Option<usize>,
+) -> Result<Option<Capture>> {
     let seen = db
         .query_row(
-            "SELECT 1 FROM captures WHERE json_extract(body, '$.revision')=? LIMIT 1",
-            [revision as i64],
+            "SELECT 1 FROM captures WHERE json_extract(body, '$.revision')=?1
+             AND (?2 IS NULL OR recipient=?2) LIMIT 1",
+            params![revision as i64, recipient.map(|a| a as i64)],
             |_| Ok(()),
         )
         .optional()?;
@@ -694,10 +700,9 @@ impl Engine {
             .find(|o| o.scope.id == review.scope)
             .ok_or("unknown scope")?;
         let space = self.layout()?.of(client.agent);
-        if captured(&db, review.revision)?.is_none_or(|c| c.space != space) {
-            return fail(
-                "review must name a revision of the client's workspace captured for rereading",
-            );
+        // Only a coherent read the reviewer was given shows what it reassessed.
+        if captured(&db, review.revision, Some(client.agent))?.is_none_or(|c| c.space != space) {
+            return fail("review must name a revision of the client's workspace captured for it");
         }
         obligation.reviewed = obligation.reviewed.max(review.revision);
         let tx = db.unchecked_transaction()?;
@@ -782,7 +787,7 @@ impl Engine {
             return Ok(existing);
         }
         let capture =
-            captured(&db, offer.revision)?.ok_or("offer must name a captured revision")?;
+            captured(&db, offer.revision, None)?.ok_or("offer must name a captured revision")?;
         // Its own workspace, or a retained candidate whose group it belonged to.
         if capture.space != self.layout()?.of(client.agent)
             && !capture.group.contains(&client.agent)
