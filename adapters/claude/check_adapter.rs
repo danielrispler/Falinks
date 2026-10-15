@@ -1,6 +1,9 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
-use falinks_claude::{Launch, Runtime, bash_probe_controls, verify_binary};
+use falinks_claude::{
+    Launch, Runtime, WorkerSandboxOutcome, bash_probe_controls, fixture_files, refused,
+    verify_binary, worker_sandbox_unavailable,
+};
 use falinks_host::{Engine, Result, controlled_host::ControlledHost, file_hash, hash, require};
 use serde_json::{Value, json};
 use std::{
@@ -265,6 +268,48 @@ fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result
     remove_project(project.or(resumed.session.project.clone()), evidence);
     result
 }
+/// Where the worker sandbox cannot start: one short turn whose only task is the exact probe
+/// command, classified from the runtime's events and the fixture's files.
+fn run_unavailable(
+    binary: &Path,
+    probe: &Path,
+    tool: &Path,
+    evidence: &mut Value,
+) -> Result<WorkerSandboxOutcome> {
+    let (binary, binary_sha256) = verify_binary(binary)?;
+    let (probe, tool) = (probe.canonicalize()?, tool.canonicalize()?);
+    let root = fixture(&probe, &tool)?;
+    evidence["binary"] = json!(binary);
+    evidence["binary_sha256"] = json!(binary_sha256);
+    evidence["probe_sha256"] = json!(file_hash(&probe)?);
+    evidence["tool_sha256"] = json!(file_hash(&tool)?);
+    evidence["root"] = json!(root);
+    let launch = Launch::fixture(&root);
+    let host = Rc::new(RefCell::new(ControlledHost::new(&root)?));
+    let mut runtime = Runtime::new(&binary, &launch, AGENT, None, engine(&host), true)?;
+    evidence["settings"] = runtime.settings.clone();
+    evidence["launch"] = json!(runtime.args);
+    let command = probe_command(&root, "original\n")?;
+    let before = fixture_files(&root)?;
+    let completion = runtime
+        .start(&format!(
+            "This is a Falinks fixture check on sacrificial files. Make exactly one tool call: Bash: run exactly `{command}` (do not change it). Then stop and reply with one line giving its output."
+        ))
+        .and_then(|()| runtime.wait());
+    evidence["probe"] = snapshot(&runtime, &host);
+    if let Err(error) = completion {
+        evidence["turn_error"] = json!(error.to_string());
+    }
+    runtime.close();
+    let outcome = worker_sandbox_unavailable(
+        &runtime.session.events,
+        &command,
+        &before,
+        &fixture_files(&root)?,
+    );
+    remove_project(runtime.session.project.clone(), evidence);
+    Ok(outcome)
+}
 /// The CLI stores this sacrificial session under ~/.claude/projects; remove only that folder.
 fn remove_project(project: Option<PathBuf>, evidence: &mut Value) {
     if let Some(project) = project
@@ -277,11 +322,13 @@ fn remove_project(project: Option<PathBuf>, evidence: &mut Value) {
 }
 
 fn main() {
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let mut args = env::args().skip(1).collect::<Vec<_>>();
+    let unavailable = args.iter().any(|a| a == "--expect-sandbox-unavailable");
+    args.retain(|a| a != "--expect-sandbox-unavailable");
     let arguments = (|| -> Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
         if args == ["--help"] {
             println!(
-                "Usage: check-claude-adapter --binary PINNED_CLAUDE --output EVIDENCE.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL]"
+                "Usage: check-claude-adapter --binary PINNED_CLAUDE --output EVIDENCE.json [--probe SANDBOX_PROBE] [--tool FALINKS_CLAUDE_TOOL] [--expect-sandbox-unavailable]"
             );
             process::exit(0);
         }
@@ -314,17 +361,51 @@ fn main() {
     };
     let mut evidence = json!({"implementation":"rust","runtime":"claude-code","publication_scoring_supported":false,
         "started_at_unix_seconds":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()});
-    let passed = match run(&binary, &probe, &tool, &mut evidence) {
-        Ok(()) => true,
-        Err(error) => {
-            evidence["failure"] = json!(error.to_string());
-            false
+    let outcome = if unavailable {
+        evidence["mode"] = json!("expect-sandbox-unavailable");
+        match run_unavailable(&binary, &probe, &tool, &mut evidence) {
+            Ok(outcome) => {
+                match &outcome {
+                    WorkerSandboxOutcome::FailClosed(error) => {
+                        evidence["probe_error"] = json!(error)
+                    }
+                    WorkerSandboxOutcome::FailOpen(failure)
+                    | WorkerSandboxOutcome::Failed(failure) => {
+                        evidence["failure"] = json!(failure);
+                    }
+                    WorkerSandboxOutcome::Inconclusive => {}
+                }
+                outcome.name()
+            }
+            Err(error) => {
+                evidence["failure"] = json!(error.to_string());
+                "failed"
+            }
+        }
+    } else {
+        match run(&binary, &probe, &tool, &mut evidence) {
+            Ok(()) => "passed",
+            Err(error) => {
+                evidence["failure"] = json!(error.to_string());
+                // The runtime's own handling already failed the run; this only labels it.
+                if ["first", "race", "resume"].into_iter().any(|key| {
+                    evidence[key]["events"]
+                        .as_array()
+                        .is_some_and(|e| refused(e))
+                }) {
+                    "inconclusive"
+                } else {
+                    "failed"
+                }
+            }
         }
     };
-    evidence["passed"] = json!(passed);
-    evidence["scope"] = json!(
+    evidence["outcome"] = json!(outcome);
+    evidence["scope"] = json!(if unavailable {
+        "Worker sandbox unavailable: one probe turn proves it fails closed. Historical evidence cannot authorize another runtime."
+    } else {
         "Finite trusted-host controls only. Final deliberate unknown-change injection leaves the disposable host stopped. Historical evidence cannot authorize another runtime."
-    );
+    });
     let written = output
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -341,9 +422,14 @@ fn main() {
     }
     println!(
         "{}",
-        json!({"passed":passed,"publication_scoring_supported":false,"failure":evidence["failure"]})
+        json!({"outcome":outcome,"publication_scoring_supported":false,"failure":evidence["failure"]})
     );
-    if !passed {
-        process::exit(1);
+    match outcome {
+        "passed" | "fail-closed" => {}
+        "inconclusive" => {
+            println!("inconclusive: model refusal (not evidence either way)");
+            process::exit(2);
+        }
+        _ => process::exit(1),
     }
 }
