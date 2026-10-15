@@ -287,6 +287,23 @@ fn go_indep_2_is_a_subset_of_go_indep_4() {
     }
 }
 
+/// Fixture 3's follow-ups are independent in code (#134): B's new file uses neither
+/// `Consume` nor `Record`, and A's file uses nothing from B's files.
+#[test]
+fn relationships_follow_ups_share_no_code() {
+    let reference = reference("go-relationships");
+    let source = |file: &str| reference[file].as_str().unwrap().to_string();
+    for name in ["Consume", "Record", "Produce", "Stats", "Duplicates"] {
+        assert!(!source("parse.go").contains(name), "parse.go uses {name}");
+    }
+    for name in ["Consume", "Parse", "IDs"] {
+        assert!(
+            !source("producer.go").contains(name),
+            "producer.go uses {name}"
+        );
+    }
+}
+
 #[test]
 fn oracles_reject_compiling_behavioral_regressions() {
     let tmp = tmp("falinks-oracle-test-");
@@ -312,9 +329,16 @@ fn oracles_reject_compiling_behavioral_regressions() {
                 ("for i, line := range lines", "for _, line := range lines"),
             ],
         ),
+        // One per follow-up: A's Duplicates and B's Parse.
+        (
+            "go-relationships",
+            "producer.go",
+            vec![("counts[record.Text] > 1", "counts[record.Text] > 0")],
+        ),
+        ("go-relationships", "parse.go", vec![("id <= 0 || ", "")]),
     ];
-    for (name, file, edits) in mutants {
-        let base = tmp.path().join(name);
+    for (index, (name, file, edits)) in mutants.into_iter().enumerate() {
+        let base = tmp.path().join(format!("{index}-{name}"));
         fs::create_dir(&base).unwrap();
         let repo = base.join("repo");
         prepare(name, &repo);
