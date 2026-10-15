@@ -176,6 +176,7 @@ pub struct Engine {
     identity: Identity,
     // ponytail: one writer mutex; split only if short-operation throughput warrants it.
     writer: Mutex<Connection>,
+    // Every `RwLock` field is probed by `tests::rwlocks_free`; add new ones there.
     layout: RwLock<Layout>,
     jobs: Mutex<()>,
     analysis: RwLock<Vec<Toolchain>>,
@@ -1640,5 +1641,86 @@ mod tests {
         let mut missing = capture.clone();
         missing.files.get_mut("a.rs").unwrap().blob = Some("0".repeat(40));
         assert!(retain(state, &missing).is_err());
+    }
+
+    impl Engine {
+        /// No guard on any `RwLock` is held. `try_write` never blocks, so a held guard fails
+        /// an assertion instead of hanging. The operation's own mutexes may be held.
+        fn rwlocks_free(&self) -> bool {
+            self.layout.try_write().is_ok()
+                && self.analysis.try_write().is_ok()
+                && self.checks.try_write().is_ok()
+                && self.denied_roots.try_write().is_ok()
+                && self.helper.try_write().is_ok()
+                && self.job_timeout.try_write().is_ok()
+        }
+    }
+
+    // A host observer may read the engine on the same thread, where re-locking a std
+    // `RwLock` may panic or deadlock. A plain re-entrant read usually succeeds and would not
+    // catch the regression, so the probe checks that every guard was released.
+    #[test]
+    fn host_observers_run_with_every_rwlock_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join("a.rs"), "fn a() {}\n").unwrap();
+        let engine = Engine::open(&live, &dir.path().join("state"), &["a.rs"]).unwrap();
+        let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
+
+        let base = engine.capture().unwrap();
+        let request = Request {
+            id: "a".into(),
+            expected: BTreeMap::from([("a.rs".into(), base.files["a.rs"].version)]),
+            output: BTreeMap::from([(
+                "a.rs".into(),
+                Some(File {
+                    bytes: b"fn a() { 1; }\n".to_vec(),
+                    executable: false,
+                }),
+            )]),
+            reviews: Vec::new(),
+        };
+        let mut phases = Vec::new();
+        let outcome = engine
+            .apply_observed(&alice, request, |phase| {
+                assert!(engine.rwlocks_free(), "guard held at {phase:?}");
+                phases.push(phase);
+                Ok(())
+            })
+            .unwrap();
+        assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
+        assert!(phases.contains(&Phase::Committed), "{phases:?}");
+
+        let offer = Offer {
+            id: "a".into(),
+            task: "a".into(),
+            revision: engine.capture().unwrap().revision,
+            scope: vec!["a.rs".into()],
+            text: "a".into(),
+            supersedes: None,
+            reviews: Vec::new(),
+        };
+        engine.offer(&alice, offer).unwrap();
+        let check = Check {
+            name: "true".into(),
+            program: "/usr/bin/true".into(),
+            args: Vec::new(),
+        };
+        engine.configure_checks(vec![check]).unwrap();
+        let mut stages = Vec::new();
+        let run = engine
+            .validate_observed(|stage| {
+                assert!(engine.rwlocks_free(), "guard held at {stage:?}");
+                stages.push(stage);
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(run.outcome, Some(RunOutcome::Published { .. })),
+            "{run:?}"
+        );
+        assert!(stages.contains(&Stage::Accepted), "{stages:?}");
     }
 }

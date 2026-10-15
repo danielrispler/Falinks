@@ -20,6 +20,11 @@ Add a rule when a review finding is a judgement call that will come up again. Ke
 - Name code, tests and issues with the terms in `CONTEXT.md`. Prefer a domain name over a generic one such as `data`, `item` or `manager`.
 - If a needed term is missing, note the gap for domain modelling instead of inventing a local synonym.
 
+## Locks
+
+- Hold no `RwLock` guard while calling host code (observers, callbacks); only the operation's own mutexes, such as the writer, stay held. A host may read the engine on the same thread, and re-locking a std `RwLock` there may panic or deadlock. `host_observers_run_with_every_rwlock_released` checks the existing observers; new callbacks need the same care.
+- Take the writer `Mutex` before the layout `RwLock`. Drop a layout read guard before `layout.write()`.
+
 ## Frozen and pinned material
 
 - Do not edit hash-frozen evaluation material as a side effect of another change. Plan a versioned re-freeze, as described in `evaluation/README.md`.
