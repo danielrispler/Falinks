@@ -116,6 +116,8 @@ impl Run {
                 &launch.controller.join("context.sqlite"),
                 &launch.source,
                 "host".into(),
+                // Relocation only: this boundary accepts no tools.
+                Vec::<String>::new(),
             )?
             .relocate(session, &agent_name(agent))?;
         }

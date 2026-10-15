@@ -1177,23 +1177,33 @@ impl Engine {
             .filter(|p| !request.output.contains_key(p))
             .collect();
         let mut layout_guard = self.layout.write().map_err(|_| "layout lock poisoned")?;
-        let tx = db.unchecked_transaction()?;
-        tx.execute(
-            "INSERT INTO revisions VALUES(?,?)",
-            params![proposed.revision as i64, serde_json::to_string(&proposed)?],
-        )?;
-        tx.execute(
-            "UPDATE spaces SET completed=? WHERE id=?",
-            params![proposed.revision as i64, space as i64],
-        )?;
-        save_record(&tx, &record)?;
-        let cause = self.record_change(&tx, client, &request, &proposed, &change, &layout_guard)?;
-        if !synced.is_empty() {
-            // Judged on the evidence the gate gathered for the same two captures.
-            let view = change.for_paths(&before, &proposed, &synced);
-            self.renew_for_view(&tx, client.agent, &view, proposed.revision, cause)?;
+        let committed = (|| -> Result<()> {
+            let tx = db.unchecked_transaction()?;
+            tx.execute(
+                "INSERT INTO revisions VALUES(?,?)",
+                params![proposed.revision as i64, serde_json::to_string(&proposed)?],
+            )?;
+            tx.execute(
+                "UPDATE spaces SET completed=? WHERE id=?",
+                params![proposed.revision as i64, space as i64],
+            )?;
+            save_record(&tx, &record)?;
+            let cause =
+                self.record_change(&tx, client, &request, &proposed, &change, &layout_guard)?;
+            if !synced.is_empty() {
+                // Judged on the evidence the gate gathered for the same two captures.
+                let view = change.for_paths(&before, &proposed, &synced);
+                self.renew_for_view(&tx, client.agent, &view, proposed.revision, cause)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(error) = committed {
+            // The files are in place but uncommitted: restart restores the before state.
+            drop(layout_guard);
+            record.installation_pending = true;
+            return interrupted(&db, &mut record, error);
         }
-        tx.commit()?;
         layout_guard.completed[space] = Some(proposed);
         drop(layout_guard);
         self.signal.notify();

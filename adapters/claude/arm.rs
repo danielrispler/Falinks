@@ -31,7 +31,7 @@ pub const HOST_TOOLS: &[(&str, &str)] = &[
     ),
 ];
 /// Operations that change a live workspace; refused after an agent declares ready.
-const MUTATIONS: &[&str] = &["edit", "retry", "incorporate", "apply_job"];
+pub const MUTATIONS: &[&str] = &["edit", "retry", "incorporate", "apply_job"];
 const LETTERS: [&str; 2] = ["A", "B"];
 
 pub fn agent_name(agent: usize) -> String {

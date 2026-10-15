@@ -2,7 +2,9 @@ mod support;
 
 use falinks::*;
 use std::fs;
-use support::{PAIR, edit, fails_with, fixture, open, reopen};
+use support::{
+    PAIR, edit, fail_commits, fails_with, fixture, halt, incidents, open, reopen, snapshot,
+};
 
 #[test]
 fn two_clients_preserve_independent_drafts_and_reject_stale_output_in_full() {
@@ -1089,4 +1091,49 @@ fn a_ledger_missing_later_tables_reopens_unchanged_and_regains_them() {
         .apply(&bob, edit("b", &capture, "b.rs", "fn b() { 2; }\n"))
         .unwrap();
     assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
+}
+
+/// A statement failing inside the commit transaction after installation (#158).
+fn commit_failure_after_installation_is_an_interruption(operation_between: bool) {
+    let (dir, engine, alice, bob) = fixture(PAIR);
+    let base = engine.capture().unwrap();
+    let live = snapshot(&dir.path().join("live"));
+    let request = edit("a", &base, "a.rs", "fn a() { 1; }\n");
+    fail_commits(dir.path(), true);
+    let outcome = engine.apply(&alice, request.clone());
+    fail_commits(dir.path(), false);
+    assert!(
+        matches!(outcome, Ok(Outcome::Interrupted { .. })),
+        "{outcome:?}"
+    );
+    let reason = halt(dir.path()).unwrap();
+    assert!(reason.starts_with("interrupted operation "), "{reason}");
+    if operation_between {
+        let later = engine
+            .apply(&bob, edit("b", &base, "b.rs", "fn b() { 2; }\n"))
+            .unwrap();
+        assert_eq!(later, Outcome::Rejected { reason });
+    }
+    assert_eq!(incidents(dir.path()), 0);
+    drop(engine);
+
+    let (engine, alice, _) = reopen(dir.path(), PAIR);
+    assert_eq!(snapshot(&dir.path().join("live")), live);
+    assert_eq!(incidents(dir.path()), 0);
+    assert!(matches!(
+        engine.apply(&alice, request.clone()).unwrap(),
+        Outcome::Interrupted { .. }
+    ));
+    assert!(matches!(
+        engine.retry(&alice, request).unwrap(),
+        Outcome::Applied { .. }
+    ));
+}
+#[test]
+fn edit_commit_failure_with_an_operation_before_restart_is_an_interruption() {
+    commit_failure_after_installation_is_an_interruption(true);
+}
+#[test]
+fn edit_commit_failure_with_no_operation_before_restart_is_an_interruption() {
+    commit_failure_after_installation_is_an_interruption(false);
 }

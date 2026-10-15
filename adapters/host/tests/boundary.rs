@@ -1,4 +1,4 @@
-use falinks_host::Boundary;
+use falinks_host::{Boundary, OPERATIONS};
 use serde_json::json;
 
 /// Asserts `result` failed for `reason`, so an unrelated failure cannot pass.
@@ -65,7 +65,12 @@ fn exited_command_cannot_leave_descendants_holding_output() -> falinks_host::Res
 fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().canonicalize()?;
-    let mut boundary = Boundary::new(&root.join("context.sqlite"), &root, "session-a".into())?;
+    let mut boundary = Boundary::new(
+        &root.join("context.sqlite"),
+        &root,
+        "session-a".into(),
+        OPERATIONS,
+    )?;
     boundary.bind("thread-a", "agent-a", false)?;
     boundary.begin("turn-a")?;
     let call = json!({"threadId":"thread-a","turnId":"turn-a","callId":"call-a","tool":"falinks_edit",
@@ -104,7 +109,12 @@ fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()>
 fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<()> {
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
-    let mut boundary = Boundary::new(&root.join("context.sqlite"), &root, "session-a".into())?;
+    let mut boundary = Boundary::new(
+        &root.join("context.sqlite"),
+        &root,
+        "session-a".into(),
+        OPERATIONS,
+    )?;
     boundary.bind("thread-a", "agent-a", false)?;
     boundary.enqueue("E1", &json!({"revision":"R1","text":"reread source"}))?;
     boundary.enqueue("E1", &json!({"revision":"R1","text":"reread source"}))?;
@@ -115,7 +125,12 @@ fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<(
     call["arguments"]["request"]["action"] = json!("defer");
     boundary.record_result(&boundary.authenticate(&call)?, &json!({"accepted":true}))?;
     drop(boundary);
-    let mut resumed = Boundary::new(&root.join("context.sqlite"), &root, "session-b".into())?;
+    let mut resumed = Boundary::new(
+        &root.join("context.sqlite"),
+        &root,
+        "session-b".into(),
+        OPERATIONS,
+    )?;
     fails_with(
         resumed.bind("thread-a", "agent-b", true),
         "resume identity/workspace mismatch",
@@ -156,6 +171,7 @@ fn unknown_change_preserves_work_and_stops_even_when_old_bytes_return() -> falin
         &root.join("context.sqlite"),
         &root.join("source"),
         "session".into(),
+        OPERATIONS,
     )?;
     boundary.bind("thread", "agent", false)?;
     boundary.begin("turn")?;
@@ -212,8 +228,8 @@ fn relocation_rebinds_only_an_existing_thread_for_resume() -> falinks_host::Resu
     std::fs::create_dir(&first)?;
     std::fs::create_dir(&second)?;
     let db = dir.path().join("context.sqlite");
-    Boundary::new(&db, &first, "c1".into())?.bind("thread", "agent", false)?;
-    let mut moved = Boundary::new(&db, &second, "c2".into())?;
+    Boundary::new(&db, &first, "c1".into(), OPERATIONS)?.bind("thread", "agent", false)?;
+    let mut moved = Boundary::new(&db, &second, "c2".into(), OPERATIONS)?;
     fails_with(
         moved.bind("thread", "agent", true),
         "resume identity/workspace mismatch",

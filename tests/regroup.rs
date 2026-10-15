@@ -9,7 +9,7 @@ use std::{
     path::Path,
     time::Duration,
 };
-use support::{GO, edit, fails_with, go_toolchain};
+use support::{GO, edit, fail_commits, fails_with, go_toolchain, halt, incidents, snapshot};
 use tempfile::TempDir;
 
 const LEFT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n";
@@ -534,6 +534,106 @@ fn interrupted_transition_restores_both_roots_and_retries_after_restart() {
     ));
     assert_eq!(read(&engine.root(&bob).unwrap(), "callee.go"), CALLEE);
     assert_eq!(read(&live, "callee.go"), GO[2].1);
+}
+
+/// A statement failing inside an agreed split's commit transaction, after both roots are
+/// installed, is an interruption (#158).
+fn split_commit_failure_is_an_interruption(operation_between: bool) {
+    let (dir, engine, alice, bob) = fixture();
+    independent(&engine, &alice, &bob);
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let proposal = engine.reconsider().unwrap();
+    agree(&engine, &alice, &proposal);
+    let (live, second) = (dir.path().join("live"), dir.path().join("second"));
+    let roots = [snapshot(&live), snapshot(&second)];
+    fail_commits(dir.path(), true);
+    let failed = engine
+        .respond(&bob, &proposal.id, &proposal.context, Response::Agree)
+        .unwrap();
+    fail_commits(dir.path(), false);
+    assert!(
+        matches!(&failed.state, ProposalState::Blocked { blocker } if blocker.starts_with("transition failed")),
+        "{failed:?}"
+    );
+    let reason = halt(dir.path()).unwrap();
+    assert!(reason.starts_with("interrupted transition "), "{reason}");
+    if operation_between {
+        let current = engine.capture_for(&alice).unwrap();
+        let later = engine
+            .apply(&alice, edit("later", &current, "siblings.go", GO[1].1))
+            .unwrap();
+        assert_eq!(later, Outcome::Rejected { reason });
+    }
+    assert_eq!(incidents(dir.path()), 0);
+    drop(engine);
+
+    let (engine, alice, bob) = reopen(dir.path());
+    assert_eq!([snapshot(&live), snapshot(&second)], roots);
+    assert_eq!(incidents(dir.path()), 0);
+    assert_eq!(engine.placement().unwrap(), [0, 0]);
+    // Agreement and context are unchanged, so the next boundary applies it.
+    register(&engine, &alice, "left", "left task", &["siblings.go#Left"]);
+    assert!(matches!(
+        engine.proposal(&proposal.id).unwrap().unwrap().state,
+        ProposalState::Applied { .. }
+    ));
+    assert_eq!(read(&engine.root(&bob).unwrap(), "callee.go"), CALLEE);
+    assert_eq!(read(&live, "callee.go"), GO[2].1);
+}
+#[test]
+fn split_commit_failure_with_an_operation_before_restart_is_an_interruption() {
+    split_commit_failure_is_an_interruption(true);
+}
+#[test]
+fn split_commit_failure_with_no_operation_before_restart_is_an_interruption() {
+    split_commit_failure_is_an_interruption(false);
+}
+
+/// A statement failing inside the commit transaction that incorporates a publication into a
+/// split workspace, after that root is installed, is an interruption (#158).
+fn incorporation_commit_failure_is_an_interruption(operation_between: bool) {
+    let (dir, engine, alice, bob) = fixture();
+    split(&dir, &engine, &alice, &bob);
+    offer(&engine, &alice, "alone");
+    let second = dir.path().join("second");
+    let before = snapshot(&second);
+    fail_commits(dir.path(), true);
+    engine.validate().unwrap();
+    fail_commits(dir.path(), false);
+    let reason = halt(dir.path()).unwrap();
+    assert!(reason.starts_with("interrupted transition "), "{reason}");
+    if operation_between {
+        let current = engine.capture_for(&bob).unwrap();
+        let later = engine
+            .apply(&bob, edit("later", &current, "callee.go", GO[2].1))
+            .unwrap();
+        assert_eq!(later, Outcome::Rejected { reason });
+    }
+    assert_eq!(incidents(dir.path()), 0);
+    drop(engine);
+
+    let (engine, _, bob) = reopen(dir.path());
+    assert_eq!(snapshot(&second), before);
+    assert_eq!(incidents(dir.path()), 0);
+    assert_eq!(read(&second, "siblings.go"), GO[1].1);
+    // The next boundary brings the publication in.
+    register(
+        &engine,
+        &bob,
+        "callee",
+        "callee task",
+        &["callee.go#Callee"],
+    );
+    assert_eq!(read(&second, "siblings.go"), LEFT);
+    assert_eq!(read(&second, "callee.go"), CALLEE, "Bob's draft untouched");
+}
+#[test]
+fn incorporation_commit_failure_with_an_operation_before_restart_is_an_interruption() {
+    incorporation_commit_failure_is_an_interruption(true);
+}
+#[test]
+fn incorporation_commit_failure_with_no_operation_before_restart_is_an_interruption() {
+    incorporation_commit_failure_is_an_interruption(false);
 }
 
 #[test]

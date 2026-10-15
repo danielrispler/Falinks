@@ -429,6 +429,12 @@ fn the_launch_tool_profile_sets_init_and_registered_operations() {
             .0,
         json!({"accepted":true})
     );
+    f.session
+        .host(&hook("P1", "toolu_3", "falinks_edit", &input));
+    assert_eq!(
+        f.session.host(&call("toolu_3", "falinks_edit", &input)).0,
+        json!({"accepted":true})
+    );
     // An operation outside the launch is refused even with a valid stamp.
     f.session
         .host(&hook("P1", "toolu_2", "falinks_offer", &input));

@@ -1,6 +1,6 @@
 //! The shared adapter contracts: mediation, sandbox probe and pinned-binary verification.
 use falinks_host::{
-    Boundary, ControlGate, Engine, EngineOutcome, mediate, probe_args, probe_controls,
+    Boundary, ControlGate, Engine, EngineOutcome, OPERATIONS, mediate, probe_args, probe_controls,
     verify_pinned,
 };
 use serde_json::{Value, json};
@@ -10,7 +10,12 @@ use std::{cell::RefCell, path::Path, rc::Rc};
 fn mediation_refuses_after_a_failure_and_latches_engine_errors() -> falinks_host::Result<()> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().canonicalize()?;
-    let mut boundary = Boundary::new(&root.join("context.sqlite"), &root, "session-a".into())?;
+    let mut boundary = Boundary::new(
+        &root.join("context.sqlite"),
+        &root,
+        "session-a".into(),
+        OPERATIONS,
+    )?;
     boundary.bind("thread-a", "agent-a", false)?;
     boundary.enqueue("E1", &json!({"revision":"R1"}))?;
     boundary.begin("turn-a")?;
