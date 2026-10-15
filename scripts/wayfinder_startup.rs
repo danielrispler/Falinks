@@ -1,4 +1,4 @@
-//! Read the live map and ordered ticket metadata. Only `--claim` writes: it assigns a ticket and sets up its worktree.
+//! Read the live map and ordered ticket metadata, or every open issue with `--all`. Only `--claim` writes: it assigns a ticket and sets up its worktree.
 use falinks_host::{Result, command_output, require};
 use serde_json::{Value, json};
 use std::{
@@ -36,6 +36,43 @@ pub fn open_tickets(pages: &Value) -> Result<Vec<Value>> {
             rows.push(json!({"number":ticket["number"],"title":title,"url":ticket["html_url"],"assignees":assignees,"blocked_by":blockers,"frontier":blockers==0 && assignees.is_empty()}));
         }
     }
+    Ok(rows)
+}
+/// Rows for every open issue, by number, from paginated GraphQL `issues` pages.
+/// Truncated assignee or blocker lists are errors, so a row never hides a blocker.
+pub fn repo_tickets(pages: &Value) -> Result<Vec<Value>> {
+    let mut rows = vec![];
+    for page in pages.as_array().ok_or("expected paginated issues")? {
+        let issues = page["data"]["repository"]["issues"]["nodes"]
+            .as_array()
+            .ok_or("expected an issue page")?;
+        for issue in issues {
+            let number = issue["number"].as_u64().ok_or("missing issue number")?;
+            let list = |field: &str, key: &str| -> Result<Vec<Value>> {
+                let nodes = issue[field]["nodes"]
+                    .as_array()
+                    .ok_or_else(|| format!("#{number}: missing {field}"))?;
+                require(
+                    issue[field]["totalCount"].as_u64() == Some(nodes.len() as u64),
+                    &format!("#{number}: {field} list truncated or missing totalCount"),
+                )?;
+                nodes
+                    .iter()
+                    .filter(|node| field != "blockedBy" || node["state"] == "OPEN")
+                    .map(|node| {
+                        (!node[key].is_null())
+                            .then(|| node[key].clone())
+                            .ok_or_else(|| format!("#{number}: {field} entry without {key}").into())
+                    })
+                    .collect()
+            };
+            let assignees = list("assignees", "login")?;
+            let blockers = list("blockedBy", "number")?;
+            let frontier = blockers.is_empty() && assignees.is_empty();
+            rows.push(json!({"number":number,"title":issue["title"],"url":issue["url"],"parent":issue["parent"]["number"],"assignees":assignees,"blocked_by":blockers,"frontier":frontier}));
+        }
+    }
+    rows.sort_by_key(|row| row["number"].as_u64());
     Ok(rows)
 }
 fn list_maps(maps: &[&Value]) -> String {
@@ -326,12 +363,13 @@ fn claim(number: u64) -> Result<()> {
     println!("{}", plan.path);
     Ok(())
 }
-const USAGE: &str = "usage: wayfinder-startup [map-number] [--body] | --claim <issue>";
+const USAGE: &str = "usage: wayfinder-startup [map-number] [--body] | --all | --claim <issue>";
+const OPEN_ISSUES: &str = "query($endCursor: String) { repository(owner: \"danielrispler\", name: \"Falinks\") { issues(states: OPEN, first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } nodes { number title url parent { number } assignees(first: 20) { totalCount nodes { login } } blockedBy(first: 50) { totalCount nodes { number state } } } } } }";
 fn run() -> Result<()> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args == ["--help"] {
         println!(
-            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub; it prints the map title, URL and ticket rows, and --body appends the map body.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path."
+            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub; it prints the map title, URL and ticket rows, and --body appends the map body.\n--all lists every open issue repo-wide, by number, with its parent, assignees, open blockers and frontier, from one paginated GraphQL query.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path."
         );
         return Ok(());
     }
@@ -340,6 +378,20 @@ fn run() -> Result<()> {
             return Err(USAGE.into());
         };
         return claim(number.parse().map_err(|_| USAGE)?);
+    }
+    if args == ["--all"] {
+        let pages = gh(&[
+            "api",
+            "graphql",
+            "--paginate",
+            "--slurp",
+            "-f",
+            &format!("query={OPEN_ISSUES}"),
+        ])?;
+        for row in repo_tickets(&pages)? {
+            println!("{row}");
+        }
+        return Ok(());
     }
     let body = args.iter().any(|arg| arg == "--body");
     let args = args
@@ -484,6 +536,59 @@ mod tests {
             assert!(open_tickets(&json!([[ticket]])).is_err());
         }
         Ok(())
+    }
+}
+#[cfg(test)]
+mod repo_tests {
+    use super::*;
+    fn issue(number: u64, blockers: Value, logins: Value) -> Value {
+        let blockers = blockers.as_array().unwrap().clone();
+        let logins = logins.as_array().unwrap().clone();
+        json!({"number":number,"title":"T","url":"u","parent":{"number":19},
+            "assignees":{"totalCount":logins.len(),"nodes":logins},
+            "blockedBy":{"totalCount":blockers.len(),"nodes":blockers}})
+    }
+    fn page(issues: Vec<Value>) -> Value {
+        json!({"data":{"repository":{"issues":{"nodes":issues}}}})
+    }
+    #[test]
+    fn rows_sort_by_number_and_keep_open_blockers_only() {
+        let blocked = issue(
+            9,
+            json!([{"number":3,"state":"CLOSED"},{"number":4,"state":"OPEN"}]),
+            json!([]),
+        );
+        let free = issue(2, json!([{"number":3,"state":"CLOSED"}]), json!([]));
+        let claimed = issue(5, json!([]), json!([{"login":"dev"}]));
+        let rows = repo_tickets(&json!([page(vec![blocked, claimed]), page(vec![free])])).unwrap();
+        let summary = rows
+            .iter()
+            .map(|r| {
+                (
+                    r["number"].clone(),
+                    r["blocked_by"].clone(),
+                    r["frontier"].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                (json!(2), json!([]), json!(true)),
+                (json!(5), json!([]), json!(false)),
+                (json!(9), json!([4]), json!(false))
+            ]
+        );
+        assert_eq!(rows[0]["parent"], 19);
+    }
+    #[test]
+    fn truncated_blockers_are_an_error() {
+        let mut truncated = issue(7, json!([{"number":3,"state":"OPEN"}]), json!([]));
+        truncated["blockedBy"]["totalCount"] = json!(60);
+        let error = repo_tickets(&json!([page(vec![truncated])]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("#7: blockedBy list truncated"), "{error}");
     }
 }
 #[cfg(test)]

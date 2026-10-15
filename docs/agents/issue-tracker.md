@@ -36,7 +36,7 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
 
 ## Frontier
 
-`cargo run --bin wayfinder-startup -- <map-number>` lists the frontier. A row has `frontier: true` when the ticket is open, unassigned and has no open blockers. The first such row in map order wins. The listing run only reads GitHub. Where native relationships are not available, apply the task-list and `Blocked by` conventions in `docs/agents/ticket-authoring.md` by hand.
+`cargo run --bin wayfinder-startup -- <map-number>` lists the frontier. A row has `frontier: true` when the ticket is open, unassigned and has no open blockers. The first such row in map order wins. The listing run only reads GitHub. For repo-wide planning (what can run now or in parallel, across every spec), run `cargo run --bin wayfinder-startup -- --all`. It makes one GraphQL query and lists every open issue by number, with its `parent`, `assignees`, open `blocked_by` and `frontier`. A row that is another row's `parent` is a spec, not a ticket. Where native relationships are not available, apply the task-list and `Blocked by` conventions in `docs/agents/ticket-authoring.md` by hand.
 
 ## Claim
 
