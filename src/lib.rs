@@ -365,7 +365,9 @@ fn valid_path(path: &str) -> Result<()> {
     }
     Ok(())
 }
-fn read_file(live: &Path, path: &str) -> Result<Option<File>> {
+/// Validates a source path's ancestors and metadata without reading its bytes.
+/// Returns the file's location and executable bit, or `None` when it is absent.
+fn check_path(live: &Path, path: &str) -> Result<Option<(PathBuf, bool)>> {
     valid_path(path)?;
     let mut cursor = live.to_path_buf();
     let parts: Vec<_> = path.split('/').collect();
@@ -396,13 +398,20 @@ fn read_file(live: &Path, path: &str) -> Result<Option<File>> {
             if file.mode() != mode {
                 return fail(format!("unsupported source mode: {path}"));
             }
-            return Ok(Some(File {
-                bytes: fs::read(cursor)?,
-                ..file
-            }));
+            return Ok(Some((cursor, file.executable)));
         }
     }
     unreachable!()
+}
+fn read_file(live: &Path, path: &str) -> Result<Option<File>> {
+    check_path(live, path)?
+        .map(|(location, executable)| {
+            Ok(File {
+                bytes: fs::read(location)?,
+                executable,
+            })
+        })
+        .transpose()
 }
 /// A live root's Git storage and writer lease: present at its top level, never source.
 const GIT_STORAGE: &str = ".git";
@@ -443,6 +452,46 @@ fn audit(live: &Path, capture: &Capture) -> Result<()> {
     for (path, expected) in &capture.files {
         if read_file(live, path)? != expected.file {
             return fail(format!("unexplained source write: {path}"));
+        }
+    }
+    Ok(())
+}
+/// Recovery of an interrupted installation, before any restore: every source path must
+/// match `before` or `after` exactly, so attribution is never guessed. `None` is an empty
+/// root. Returns the paths that reached `after` and must be put back.
+fn audit_interrupted(
+    root: &Path,
+    before: Option<&Capture>,
+    after: &Capture,
+) -> Result<Vec<String>> {
+    if let Some(path) = source_paths(root, true)?
+        .into_iter()
+        .find(|p| !after.files.contains_key(p))
+    {
+        return fail(format!(
+            "unenrolled source during recovery: {path}; evidence retained"
+        ));
+    }
+    let mut changed = Vec::new();
+    for (path, file) in &after.files {
+        let current = read_file(root, path)?;
+        if current.as_ref() != before.and_then(|b| b.files[path].file.as_ref()) {
+            if current != file.file {
+                return fail(format!(
+                    "ambiguous interrupted source: {path}; evidence retained"
+                ));
+            }
+            changed.push(path.clone());
+        }
+    }
+    Ok(changed)
+}
+/// Puts audited paths back to `before`; `None` removes them.
+fn restore(root: &Path, before: Option<&Capture>, paths: &[String]) -> Result<()> {
+    for path in paths {
+        match before {
+            Some(before) => install(root, path, &before.files[path].file)?,
+            None => install(root, path, &None)?,
         }
     }
     Ok(())
@@ -507,14 +556,35 @@ fn build_tree(
 fn retain(state: &Path, capture: &Capture) -> Result<()> {
     // Verify exact trees, bytes and modes before retaining a reference or acknowledging capture.
     let mut expected = BTreeMap::new();
+    let mut blobs = Vec::new();
+    let mut input = String::new();
     for (path, file) in &capture.files {
         if let Some(source) = &file.file {
             let blob = file.blob.as_ref().ok_or("snapshot missing blob")?;
-            if git(state, &["cat-file", "blob", blob], &[])? != source.bytes {
-                return fail("corrupt snapshot blob");
-            }
+            input.push_str(blob);
+            input.push('\n');
+            blobs.push((blob, &source.bytes));
             expected.insert(path.clone(), (source.git_mode().to_string(), blob.clone()));
         }
+    }
+    // One batch process answers every blob, in input order: `<oid> blob <size>\n<bytes>\n`.
+    let output = git(state, &["cat-file", "--batch"], input.as_bytes())?;
+    let mut rest = output.as_slice();
+    for (blob, bytes) in blobs {
+        let end = rest
+            .iter()
+            .position(|b| *b == b'\n')
+            .ok_or("truncated blob batch")?;
+        let header = std::str::from_utf8(&rest[..end])?;
+        rest = &rest[end + 1..];
+        let size = match header.split(' ').collect::<Vec<_>>()[..] {
+            [oid, "blob", size] if oid == blob => size.parse::<usize>()?,
+            _ => return fail(format!("missing snapshot blob: {header}")),
+        };
+        if rest.get(..size) != Some(bytes.as_slice()) || rest.get(size) != Some(&b'\n') {
+            return fail("corrupt snapshot blob");
+        }
+        rest = &rest[size + 1..];
     }
     let listing = git(state, &["ls-tree", "-rz", &capture.tree], &[])?;
     let mut actual = BTreeMap::new();
@@ -542,7 +612,7 @@ fn retain(state: &Path, capture: &Capture) -> Result<()> {
 }
 fn install(live: &Path, path: &str, file: &Option<File>) -> Result<()> {
     // Revalidate ancestors; the supported boundary excludes concurrent unmediated writers.
-    read_file(live, path)?;
+    check_path(live, path)?;
     let target = live.join(path);
     if let Some(file) = file {
         fs::create_dir_all(target.parent().ok_or("missing parent")?)?;
@@ -1144,41 +1214,13 @@ impl Engine {
             if record.outcome.is_none() || record.installation_pending {
                 if let Some(proposed) = &record.proposed {
                     let live = &layout.roots[record.before.space];
-                    let completed = layout.current(record.before.space)?;
-                    let changed = installed(&record.before, proposed, &record.request);
-                    let reliable = (|| -> Result<()> {
-                        // Check the full source universe before restoring any; never guess attribution.
-                        if source_paths(live, true)?
-                            .iter()
-                            .any(|p| !completed.files.contains_key(p))
-                        {
-                            return fail("unenrolled source during recovery; evidence retained");
+                    let before = Some(&record.before);
+                    match audit_interrupted(live, before, proposed) {
+                        Ok(changed) => restore(live, before, &changed)?,
+                        Err(error) => {
+                            self.save_incident(&db, &layout.roots, &error.to_string())?;
+                            return Err(error);
                         }
-                        for (path, file) in &completed.files {
-                            if !changed.contains(path) && read_file(live, path)? != file.file {
-                                return fail(
-                                    "unexplained unrelated source during recovery; evidence retained",
-                                );
-                            }
-                        }
-                        for path in &changed {
-                            let current = read_file(live, path)?;
-                            if current != record.before.files[path].file
-                                && current != proposed.files[path].file
-                            {
-                                return fail(format!(
-                                    "ambiguous interrupted source: {path}; evidence retained"
-                                ));
-                            }
-                        }
-                        Ok(())
-                    })();
-                    if let Err(error) = reliable {
-                        self.save_incident(&db, &layout.roots, &error.to_string())?;
-                        return Err(error);
-                    }
-                    for path in &changed {
-                        install(live, path, &record.before.files[path].file)?;
                     }
                 }
                 record.installation_pending = false;
@@ -1534,5 +1576,61 @@ impl Engine {
         )?
         .map(|s| Ok(serde_json::from_str(&s)?))
         .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(state: &Path, sources: &[(&str, &[u8])]) -> Capture {
+        let mut files = BTreeMap::new();
+        for (path, bytes) in sources {
+            let file = File {
+                bytes: bytes.to_vec(),
+                executable: false,
+            };
+            let blob = object(state, &["hash-object", "-w", "--stdin"], bytes).unwrap();
+            files.insert(
+                path.to_string(),
+                VersionedFile {
+                    version: 0,
+                    file: Some(file),
+                    blob: Some(blob),
+                },
+            );
+        }
+        Capture {
+            workspace: "test".into(),
+            revision: 0,
+            tree: build_tree(state, &files, "").unwrap(),
+            files,
+            space: 0,
+            included: BTreeSet::new(),
+            group: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn retention_checks_every_blob_of_a_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path();
+        git(state, &["init", "--bare"], &[]).unwrap();
+        let capture = snapshot(
+            state,
+            &[("a.rs", b"a"), ("dir/b.rs", b""), ("c.rs", b"c\n")],
+        );
+        retain(state, &capture).unwrap();
+
+        let mut corrupt = capture.clone();
+        corrupt.files.get_mut("c.rs").unwrap().file = Some(File {
+            bytes: b"x\n".to_vec(),
+            executable: false,
+        });
+        assert!(retain(state, &corrupt).is_err());
+
+        let mut missing = capture.clone();
+        missing.files.get_mut("a.rs").unwrap().blob = Some("0".repeat(40));
+        assert!(retain(state, &missing).is_err());
     }
 }

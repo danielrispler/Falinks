@@ -5,9 +5,9 @@ use crate::analysis::{self, Footprint};
 use crate::coordination::{Body, Scope, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
-    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, audit, build_tree,
-    connect, ensure_empty, fail, install, meta, next_revision, read_file, record, retain, revision,
-    set_meta, source_paths,
+    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, audit, audit_interrupted,
+    build_tree, connect, ensure_empty, fail, install, meta, next_revision, record, restore, retain,
+    revision, set_meta,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -259,46 +259,21 @@ pub(crate) fn recover(engine: &Engine, db: &Connection, layout: &Layout) -> Resu
         if !shift.installing {
             continue;
         }
+        // Audit every affected root before restoring any.
+        let mut restores = Vec::new();
         for change in &shift.moves {
             retain(&engine.state, &change.after)?;
             let root = &layout.roots[change.space];
-            let reliable = (|| -> Result<()> {
-                if source_paths(root, true)?
-                    .iter()
-                    .any(|p| !change.after.files.contains_key(p))
-                {
-                    return fail("unenrolled source during transition recovery; evidence retained");
+            match audit_interrupted(root, change.before.as_ref(), &change.after) {
+                Ok(changed) => restores.push((root, change.before.as_ref(), changed)),
+                Err(error) => {
+                    engine.save_incident(db, &layout.roots, &error.to_string())?;
+                    return Err(error);
                 }
-                for (path, after) in &change.after.files {
-                    let current = read_file(root, path)?;
-                    let before = change
-                        .before
-                        .as_ref()
-                        .and_then(|b| b.files[path].file.clone());
-                    if current != before && current != after.file {
-                        return fail(format!(
-                            "ambiguous interrupted transition source: {path}; evidence retained"
-                        ));
-                    }
-                }
-                Ok(())
-            })();
-            if let Err(error) = reliable {
-                engine.save_incident(db, &layout.roots, &error.to_string())?;
-                return Err(error);
             }
         }
-        for change in &shift.moves {
-            let root = &layout.roots[change.space];
-            for path in change.after.files.keys() {
-                let before = change
-                    .before
-                    .as_ref()
-                    .and_then(|b| b.files[path].file.clone());
-                if read_file(root, path)? != before {
-                    install(root, path, &before)?;
-                }
-            }
+        for (root, before, changed) in restores {
+            restore(root, before, &changed)?;
         }
         shift.installing = false;
         db.execute(
