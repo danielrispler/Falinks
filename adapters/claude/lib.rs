@@ -931,10 +931,9 @@ impl Runtime {
     }
 }
 
-/// Close input and wait `eof_grace` for exit, then `SIGTERM` the process group so the worker
-/// can flush its session, wait `term_grace`, then `SIGKILL` the group.
+/// After input is closed, wait `eof_grace` for exit, then `SIGTERM` the process group so the
+/// worker can flush its session, wait `term_grace`, then `SIGKILL` the group.
 fn shut_down(child: &mut Child, eof_grace: Duration, term_grace: Duration) {
-    child.stdin.take();
     let exited = |child: &mut Child, grace: Duration| {
         let deadline = Instant::now() + grace;
         while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
@@ -950,9 +949,8 @@ fn shut_down(child: &mut Child, eof_grace: Duration, term_grace: Duration) {
         return;
     }
     signal(child, libc::SIGTERM);
-    if exited(child, term_grace) {
-        return;
-    }
+    exited(child, term_grace);
+    // Even when the leader exited on `SIGTERM`, members that ignored it are still in the group.
     signal(child, libc::SIGKILL);
     let _ = child.wait();
 }
@@ -1001,15 +999,15 @@ mod tests {
         assert!(!dir.path().join("host.sock").exists());
     }
 
-    /// A shell child in its own process group that ignores input EOF; `on_term` is its TERM trap.
-    fn worker(dir: &Path, on_term: &str) -> Child {
+    /// A shell group leader that ignores input EOF and loops after running `prelude`.
+    fn looping_group(dir: &Path, prelude: &str) -> Child {
         let child = Command::new("/bin/sh")
             .arg("-c")
             .arg(format!(
-                "trap '{on_term}' TERM; touch started; while :; do sleep 0.05; done"
+                "{prelude} touch started; while :; do sleep 0.05; done"
             ))
             .current_dir(dir)
-            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
             .process_group(0)
             .spawn()
             .unwrap();
@@ -1023,7 +1021,7 @@ mod tests {
     #[test]
     fn shutdown_sends_term_to_the_group_before_kill() {
         let dir = tempfile::tempdir().unwrap();
-        let mut child = worker(dir.path(), "touch flushed; exit 0");
+        let mut child = looping_group(dir.path(), "trap 'touch flushed; exit 0' TERM;");
         shut_down(
             &mut child,
             Duration::from_millis(100),
@@ -1036,7 +1034,7 @@ mod tests {
     #[test]
     fn shutdown_kills_a_group_that_ignores_term() {
         let dir = tempfile::tempdir().unwrap();
-        let mut child = worker(dir.path(), "");
+        let mut child = looping_group(dir.path(), "trap '' TERM;");
         shut_down(
             &mut child,
             Duration::from_millis(100),
@@ -1044,5 +1042,32 @@ mod tests {
         );
         let status = child.try_wait().unwrap().unwrap();
         assert_eq!(status.signal(), Some(libc::SIGKILL));
+    }
+
+    #[test]
+    fn shutdown_kills_group_members_that_outlive_a_terminated_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = looping_group(
+            dir.path(),
+            "sh -c 'trap \"\" TERM; while :; do sleep 0.05; done' >/dev/null 2>&1 & echo $! > member; trap 'exit 0' TERM;",
+        );
+        let member: i32 = fs::read_to_string(dir.path().join("member"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        shut_down(
+            &mut child,
+            Duration::from_millis(100),
+            Duration::from_secs(5),
+        );
+        // The orphaned member is reaped by init, so wait for it to disappear.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only checks that the pid exists.
+        let alive = || unsafe { libc::kill(member, 0) } == 0;
+        while alive() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!alive(), "group member survived");
     }
 }

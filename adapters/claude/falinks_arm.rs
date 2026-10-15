@@ -252,6 +252,7 @@ impl Run {
         if runtime.session.last_result != worker.last_result {
             worker.last_result = runtime.session.last_result.clone();
             worker.last_activity = Instant::now();
+            // Owned, so `self.send` below can borrow `self` again.
             let subtype = worker.last_result["subtype"].as_str().map(str::to_owned);
             match subtype.as_deref() {
                 Some("success") => {}
@@ -624,6 +625,7 @@ fn setup(
 
 /// Pump both workers until both are ready (final oracle decided), a limit or a failure.
 fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
+    let mut incident_checked = Instant::now();
     loop {
         if let Some(outcome) = run.arm.borrow().outcome.clone() {
             run.evidence["timing"]["elapsed_seconds"] = run.started.elapsed().as_secs_f64().into();
@@ -676,8 +678,12 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
                 return Ok(limit);
             }
         }
-        if progressed && let Some(incident) = run.engine.incident()? {
-            return Err(format!("engine incident: {}", incident.reason).into());
+        // The validator thread can also raise an incident without any step, so poll once a second.
+        if progressed || incident_checked.elapsed() >= Duration::from_secs(1) {
+            incident_checked = Instant::now();
+            if let Some(incident) = run.engine.incident()? {
+                return Err(format!("engine incident: {}", incident.reason).into());
+            }
         }
     }
 }
