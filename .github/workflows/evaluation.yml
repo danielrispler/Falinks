@@ -33,10 +33,10 @@ jobs:
     strategy:
       matrix:
         tests:
-          - batch_gates_pauses batch_tells_a_gate
-          - fixture_shard_runs codex_bridge
-          - frozen_oracles oracle_blocks baseline_exchanges
-          - --skip batch_gates_pauses --skip batch_tells_a_gate --skip fixture_shard_runs --skip codex_bridge --skip frozen_oracles --skip oracle_blocks --skip baseline_exchanges
+          - batch_gates_pauses batch_tells_a_gate oracles_reject_compiling
+          - fixture_shard_runs baseline_exchanges
+          - frozen_oracles claude_bridge codex_bridge
+          - --skip batch_gates_pauses --skip batch_tells_a_gate --skip oracles_reject_compiling --skip fixture_shard_runs --skip baseline_exchanges --skip frozen_oracles --skip claude_bridge --skip codex_bridge
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
