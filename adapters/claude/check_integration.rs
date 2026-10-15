@@ -6,10 +6,11 @@ use falinks::{
     Toolchain,
 };
 use falinks_claude::{
-    Launch, MODEL, REQUIRED, Runtime, VERSION, engine_host::EngineHost, launch_args,
-    probe_controls, probe_names, verify_binary,
+    Launch, MODEL, REQUIRED, Runtime, VERSION,
+    engine_host::{self, EngineHost},
+    go_tools, probe_controls, probe_names, tool_results, verify_binary,
 };
-use falinks_host::{Boundary, EngineOutcome, Result, file_hash, hash, require};
+use falinks_host::{Boundary, EngineOutcome, Result, file_hash, require};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,7 +22,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread::{self, JoinHandle},
+    thread::JoinHandle,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -122,7 +123,7 @@ impl Gate {
         Ok((engine, clients))
     }
     fn new(binary: &Path, probe: &Path, tool: &Path) -> Result<Self> {
-        let binary = verify_binary(binary)?;
+        let (binary, binary_sha256) = verify_binary(binary)?;
         let dir = tempfile::Builder::new()
             .prefix("falinks-integration-")
             .tempdir_in("/tmp")?
@@ -147,15 +148,7 @@ impl Gate {
         }
         fs::copy(probe, dir.join("worker-tools/sandbox-probe"))?;
         fs::copy(tool, dir.join("worker-tools/falinks-claude-tool"))?;
-        let go_env = |key: &str| -> Result<PathBuf> {
-            let out = Command::new("go").args(["env", key]).output()?;
-            Ok(PathBuf::from(String::from_utf8(out.stdout)?.trim()))
-        };
-        let go = go_env("GOROOT")?.join("bin/go");
-        let gopls = match env::var_os("FALINKS_GOPLS") {
-            Some(path) => PathBuf::from(path),
-            None => go_env("GOPATH")?.join("bin/gopls"),
-        };
+        let (go, gopls) = go_tools()?;
         let (engine, clients) = Self::open(&dir, &go, &gopls)?;
         fs::write(dir.join("state/marker.txt"), b"marker\n")?;
         let [c0, c1] = clients;
@@ -168,7 +161,7 @@ impl Gate {
             transcripts: vec![],
         };
         let mut gate = Self {
-            evidence: json!({"root":dir,"binary":binary,"binary_sha256":file_hash(&binary)?,
+            evidence: json!({"root":dir,"binary":binary,"binary_sha256":binary_sha256,
                 "claude_code_version":VERSION,"model":MODEL,
                 "probe_sha256":file_hash(probe)?,"tool_sha256":file_hash(tool)?,
                 "go":go,"go_sha256":file_hash(&go)?,"gopls":gopls,"gopls_sha256":file_hash(&gopls)?,
@@ -190,26 +183,12 @@ impl Gate {
 
     /// The host worker processes queued runs while agents keep drafting.
     fn start_validator(&mut self) {
-        let (engine, stop, pause) = (
+        self.stop.store(false, Ordering::SeqCst);
+        self.validator = Some(engine_host::validator(
             Arc::clone(self.engine()),
             Arc::clone(&self.stop),
             Arc::clone(&self.pause),
-        );
-        self.stop.store(false, Ordering::SeqCst);
-        self.validator = Some(thread::spawn(move || {
-            let mut log = vec![];
-            while !stop.load(Ordering::SeqCst) {
-                if !pause.load(Ordering::SeqCst) {
-                    match engine.validate() {
-                        Ok(Some(run)) => log.push(json!({"run":run.id,"outcome":run.outcome})),
-                        Ok(None) => {}
-                        Err(error) => log.push(json!({"error":error.to_string()})),
-                    }
-                }
-                thread::sleep(Duration::from_millis(200));
-            }
-            log
-        }));
+        ));
     }
     fn stop_validator(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -271,13 +250,12 @@ impl Gate {
             }),
             true,
         )?;
+        let record = json!({"agent":agent,"resume":resume.is_some(),"source":launch.source,
+            "protected":launch.protected,"settings":runtime.settings,"args":runtime.args});
         let worker = &mut self.workers[agent];
         worker.session = Some(runtime.session.session().to_owned());
         worker.client = client;
         worker.runtime = Some(runtime);
-        let record = json!({"agent":agent,"resume":resume.is_some(),"source":launch.source,
-            "protected":launch.protected,"settings":fs::read_to_string(launch.controller.join("settings.json"))?,
-            "args":launch_args(&launch.controller, worker.session.as_deref().unwrap_or(""), resume.is_some())});
         if let Some(launches) = self.evidence["launches"].as_array_mut() {
             launches.push(record);
         }
@@ -293,11 +271,7 @@ impl Gate {
                 let entry = worker.controls.entry(control.clone()).or_insert(true);
                 *entry &= *passed;
             }
-            worker
-                .transcripts
-                .push(json!({"session":session.session(),"events":session.events,
-                "deliveries":session.deliveries,"permission_denials":session.denials,
-                "gate_failed":session.gate.failed,"project":session.project}));
+            worker.transcripts.push(session.transcript());
             if let Some(engine) = &self.engine {
                 engine.disconnect(&self.workers[agent].client)?;
             }
@@ -332,11 +306,7 @@ impl Gate {
     fn prompt(&mut self, agent: usize, steps: &str) -> Result<()> {
         let events = self.undelivered(agent)?;
         let pending = self.engine().pending(self.client(agent))?;
-        let deferred: Vec<Value> = pending
-            .deferred
-            .iter()
-            .map(|(event, note)| json!({"event":event,"note":note}))
-            .collect();
+        let deferred = engine_host::deferred(&pending);
         let text = format!(
             "{}\nEngine events since your last notice: {}\nYour deferred events: {}\nYour pending obligations: {}\n\n{steps}",
             self.header(agent)?,
@@ -457,7 +427,7 @@ impl Gate {
                 .to_string_lossy()
                 .into_owned(),
             root.join("price.go").to_string_lossy().into_owned(),
-            hash(&fs::read(root.join("price.go"))?),
+            file_hash(&root.join("price.go"))?,
             mine.join("scratch").to_string_lossy().into_owned(),
             format!("state={}", self.dir.join("state/marker.txt").display()),
             format!(
@@ -768,36 +738,8 @@ fn scenario(gate: &mut Gate) -> Result<()> {
         .cloned()
         .ok_or("obligation notice not sent mid-turn")?;
     // A native Read (not a capture) returned the peer's incomplete draft.
-    let reads: Vec<Value> = runtime
-        .session
-        .events
-        .iter()
-        .filter(|e| e["type"] == "assistant")
-        .flat_map(|e| {
-            e["message"]["content"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-        })
-        .filter(|b| b["type"] == "tool_use" && b["name"] == "Read")
-        .map(|b| b["id"].clone())
-        .collect();
-    let saw_draft = runtime
-        .session
-        .events
-        .iter()
-        .filter(|e| e["type"] == "user" && e["isReplay"] != true)
-        .flat_map(|e| {
-            e["message"]["content"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-        })
-        .any(|b| {
-            b["type"] == "tool_result"
-                && reads.contains(&b["tool_use_id"])
-                && b.to_string().contains("return gross /\\n")
-        });
+    let saw_draft = tool_results(&runtime.session.events, |b| b["name"] == "Read")
+        .any(|(e, b)| e["isReplay"] != true && b.to_string().contains("return gross /\\n"));
     let reviews = gate.accepted(1, "review");
     let edits = gate.calls(1, "edit").split_off(phase_edits);
     let refused = edits

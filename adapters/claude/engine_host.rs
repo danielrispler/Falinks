@@ -2,10 +2,19 @@
 //! The boundary has already bound host identity; this maps each operation to the
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
-use falinks::{Client, Engine, File, JobSpec, Outcome, Request, Review};
-use falinks_host::{Result, require};
+use falinks::{Client, Engine, File, JobSpec, Outcome, Pending, Request, Review};
+use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 
 pub struct EngineHost {
     engine: Arc<Engine>,
@@ -109,13 +118,8 @@ impl EngineHost {
             }
             "pending" => {
                 let pending = engine.pending(client)?;
-                let deferred: Vec<Value> = pending
-                    .deferred
-                    .iter()
-                    .map(|(event, note)| json!({"event":event,"note":note}))
-                    .collect();
                 json!({"accepted":true,"handled":pending.handled,"unhandled":pending.unhandled,
-                    "deferred":deferred,"obligations":pending.obligations})
+                    "deferred":deferred(&pending),"obligations":pending.obligations})
             }
             "post" => json!({"accepted":true,"event":engine.post(client, parse(request)?)?}),
             "withdraw" => {
@@ -272,11 +276,41 @@ pub const OPERATIONS: &[(&str, &str)] = &[
 ];
 /// MCP definitions for every agent-facing operation, bound to the worker's workspace.
 pub fn tools(workspace: &std::path::Path) -> Value {
-    json!(OPERATIONS.iter().map(|(operation, help)| json!({
-        "name":format!("falinks_{operation}"),
-        "description":format!("Falinks {operation}: {help} Call with {{\"workspace\": \"{}\", \"request\": {{...}}}}.", workspace.display()),
-        "inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},
-            "required":["workspace","request"],"additionalProperties":false}})).collect::<Vec<_>>())
+    json!(OPERATIONS.iter().map(|(operation, help)| tool(operation,
+        format!("Falinks {operation}: {help} Call with {{\"workspace\": \"{}\", \"request\": {{...}}}}.", workspace.display())
+    )).collect::<Vec<_>>())
+}
+
+/// Deferred events as agents see them: `{event, note}`.
+pub fn deferred(pending: &Pending) -> Vec<Value> {
+    pending
+        .deferred
+        .iter()
+        .map(|(event, note)| json!({"event":event,"note":note}))
+        .collect()
+}
+
+/// The host worker that processes queued check runs while agents keep drafting, until
+/// `stop`; `pause` holds runs queued. Returns its log.
+pub fn validator(
+    engine: Arc<Engine>,
+    stop: Arc<AtomicBool>,
+    pause: Arc<AtomicBool>,
+) -> JoinHandle<Vec<Value>> {
+    thread::spawn(move || {
+        let mut log = vec![];
+        while !stop.load(Ordering::SeqCst) {
+            match (!pause.load(Ordering::SeqCst)).then(|| engine.validate()) {
+                Some(Ok(Some(run))) => log.push(json!({"run":run.id,"outcome":run.outcome})),
+                Some(Ok(None)) | None => thread::sleep(Duration::from_millis(200)),
+                Some(Err(error)) => {
+                    log.push(json!({"error":error.to_string()}));
+                    thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
+        log
+    })
 }
 
 fn parse<T: serde::de::DeserializeOwned>(request: &Value) -> Result<T> {

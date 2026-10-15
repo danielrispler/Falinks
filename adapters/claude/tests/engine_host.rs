@@ -3,7 +3,7 @@
 use falinks::{Check, Engine, Language, Pin, Toolchain};
 use falinks_claude::engine_host::EngineHost;
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, process::Command, sync::Arc};
+use std::{fs, path::PathBuf, sync::Arc};
 
 const GO: &[(&str, &str)] = &[
     ("go.mod", "module example.com/gate\n\ngo 1.22\n"),
@@ -16,11 +16,6 @@ const GO: &[(&str, &str)] = &[
         "package gate\n\nfunc Label(name string) string {\n\treturn name\n}\n",
     ),
 ];
-
-fn go(key: &str) -> PathBuf {
-    let out = Command::new("go").args(["env", key]).output().unwrap();
-    PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
-}
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -38,16 +33,11 @@ fn fixture() -> Fixture {
     }
     let enrolled: Vec<_> = GO.iter().map(|(p, _)| *p).collect();
     let engine = Arc::new(Engine::open(&live, &root.join("state"), &enrolled).unwrap());
-    let gopls = std::env::var_os("FALINKS_GOPLS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| go("GOPATH").join("bin/gopls"));
+    let (go, gopls) = falinks_claude::go_tools().unwrap();
     engine
         .configure_analysis(vec![Toolchain {
             language: Language::Go,
-            executables: vec![
-                Pin::from_path(gopls).unwrap(),
-                Pin::from_path(go("GOROOT").join("bin/go")).unwrap(),
-            ],
+            executables: vec![Pin::from_path(gopls).unwrap(), Pin::from_path(&go).unwrap()],
             features: Vec::new(),
         }])
         .unwrap();
@@ -66,7 +56,7 @@ fn fixture() -> Fixture {
             Arc::clone(&engine),
             client,
             &format!("agent-{agent}"),
-            go("GOROOT").join("bin/gofmt"),
+            go.with_file_name("gofmt"),
         )
     };
     Fixture {

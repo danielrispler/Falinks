@@ -38,7 +38,6 @@ body:
       options:
         - Engine
         - Claude Code adapter
-        - Codex adapter
         - Evaluation harness
         - Other / not sure
     validations:
