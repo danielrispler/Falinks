@@ -77,18 +77,18 @@ fn scope(id: &str, nodes: &[&str]) -> Scope {
         depends: Default::default(),
     }
 }
+fn keep(scope: &str, revision: u64) -> Review {
+    Review {
+        scope: scope.into(),
+        revision,
+        decision: Decision::Keep,
+        note: "reread current owners".into(),
+    }
+}
 fn reread(engine: &Engine, client: &Client, scope: &str) -> Obligation {
-    let capture = engine.capture().unwrap();
+    let capture = engine.capture_for(client).unwrap();
     engine
-        .review(
-            client,
-            Review {
-                scope: scope.into(),
-                revision: capture.revision,
-                decision: Decision::Keep,
-                note: "reread current owners".into(),
-            },
-        )
+        .review(client, keep(scope, capture.revision))
         .unwrap()
 }
 fn pending(engine: &Engine, client: &Client) -> Vec<String> {
@@ -165,7 +165,7 @@ fn rust_relationships_notify_related_scopes_and_let_unrelated_work_proceed() {
         Outcome::Stale { .. }
     ));
     // An earlier review cannot cover a later change, even one restoring old bytes.
-    let reviewed_before = engine.capture().unwrap();
+    let reviewed_before = engine.capture_for(&alice).unwrap();
     let restore = "pub fn callee() -> i32 {\n    7\n}\n";
     engine
         .apply(
@@ -370,6 +370,69 @@ fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment(
         Outcome::Applied { .. }
     ));
     assert!(engine.request(&alice, "unreviewed").unwrap().is_some());
+}
+
+#[test]
+fn a_review_names_only_a_revision_captured_for_the_reviewer() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    engine.register(&alice, scope("a", &["a.rs"])).unwrap();
+    engine.register(&bob, scope("b", &["b.rs"])).unwrap();
+    let base = engine.capture_for(&alice).unwrap();
+    engine
+        .apply(&alice, edit("peer", &base, "a.rs", "fn a() { 2 }\n"))
+        .unwrap();
+    assert_eq!(pending(&engine, &bob), ["b"]);
+    // Alice's capture was given to Alice: Bob never read that revision.
+    let alices = engine.capture_for(&alice).unwrap();
+    let refused = engine.review(&bob, keep("b", alices.revision)).unwrap_err();
+    assert!(refused.to_string().contains("captured"), "{refused}");
+    assert_eq!(pending(&engine, &bob), ["b"]);
+    // Bob's own capture of the same revision accumulates beside Alice's.
+    let bobs = engine.capture_for(&bob).unwrap();
+    assert_eq!(bobs.revision, alices.revision);
+    assert!(
+        !engine
+            .review(&bob, keep("b", bobs.revision))
+            .unwrap()
+            .pending()
+    );
+    assert!(
+        !engine
+            .review(&alice, keep("a", alices.revision))
+            .unwrap()
+            .pending()
+    );
+}
+
+#[test]
+fn a_host_internal_capture_authorizes_an_offer_but_no_review() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    engine.register(&bob, scope("b", &["b.rs"])).unwrap();
+    let base = engine.capture_for(&alice).unwrap();
+    engine
+        .apply(&alice, edit("peer", &base, "a.rs", "fn a() { 2 }\n"))
+        .unwrap();
+    // The host read Bob's workspace without giving the read to Bob.
+    let host = engine.host_capture(&bob).unwrap();
+    assert_eq!(host.revision, base.revision + 1);
+    let refused = engine.review(&bob, keep("b", host.revision)).unwrap_err();
+    assert!(refused.to_string().contains("captured"), "{refused}");
+    assert_eq!(pending(&engine, &bob), ["b"]);
+    // Any recorded capture still names an offerable revision.
+    let offered = engine
+        .offer(
+            &alice,
+            Offer {
+                id: "host".into(),
+                task: "task a".into(),
+                revision: host.revision,
+                scope: Vec::new(),
+                text: "the revision the host checked".into(),
+                supersedes: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(offered.capture, host);
 }
 
 #[test]

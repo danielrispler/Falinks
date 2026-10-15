@@ -1,6 +1,6 @@
 //! The production engine behind authenticated tool envelopes (#26): scripted calls
 //! against a real temporary engine, Git and SQLite, with the pinned gopls/Go analysis.
-use falinks::{Check, Engine, Language, Pin, Toolchain, sha256_file};
+use falinks::{Check, Engine, Language, Pin, Toolchain};
 use falinks_claude::engine_host::EngineHost;
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, process::Command, sync::Arc};
@@ -17,12 +17,6 @@ const GO: &[(&str, &str)] = &[
     ),
 ];
 
-fn pin(path: PathBuf) -> Pin {
-    Pin {
-        sha256: sha256_file(&path).unwrap(),
-        path,
-    }
-}
 fn go(key: &str) -> PathBuf {
     let out = Command::new("go").args(["env", key]).output().unwrap();
     PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
@@ -50,7 +44,10 @@ fn fixture() -> Fixture {
     engine
         .configure_analysis(vec![Toolchain {
             language: Language::Go,
-            executables: vec![pin(gopls), pin(go("GOROOT").join("bin/go"))],
+            executables: vec![
+                Pin::from_path(gopls).unwrap(),
+                Pin::from_path(go("GOROOT").join("bin/go")).unwrap(),
+            ],
             features: Vec::new(),
         }])
         .unwrap();

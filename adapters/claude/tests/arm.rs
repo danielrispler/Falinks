@@ -420,6 +420,18 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     let check = run.call(1, "check", json!({}));
     assert_eq!(check["passed"], true, "{check}");
     assert!(check.get("oracle").is_none());
+    // The check's capture stays host-internal: it never stands in for the agent's own read.
+    let scope = json!({"id": "consumer", "task": "relationships", "nodes": ["consumer.go"]});
+    assert_eq!(run.call(1, "register", scope)["accepted"], true);
+    let review = run.call(
+        1,
+        "review",
+        json!({"scope": "consumer", "revision": check["revision"], "decision": "Keep", "note": "unread"}),
+    );
+    assert!(
+        review["reason"].as_str().unwrap().contains("captured"),
+        "{review}"
+    );
     assert_eq!(
         run.call(0, "ready", json!({}))["accepted"],
         false,

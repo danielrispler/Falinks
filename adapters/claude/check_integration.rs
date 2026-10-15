@@ -3,13 +3,13 @@
 //! and controlled faults. A saved report never authorizes another run.
 use falinks::{
     Action, Availability, Check, Client, Engine, Language, Pin, ProposalState, RunOutcome, Stage,
-    Toolchain, sha256_file,
+    Toolchain,
 };
 use falinks_claude::{
     Launch, MODEL, REQUIRED, Runtime, VERSION, engine_host::EngineHost, launch_args,
     probe_controls, probe_names, verify_binary,
 };
-use falinks_host::{Boundary, Result, file_hash, hash, require, runtime::EngineOutcome};
+use falinks_host::{Boundary, EngineOutcome, Result, file_hash, hash, require};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -97,15 +97,9 @@ impl Gate {
     fn open(dir: &Path, go: &Path, gopls: &Path) -> Result<(Engine, [Client; 2])> {
         let enrolled: Vec<&str> = FILES.iter().map(|(p, _)| *p).collect();
         let engine = Engine::open(&space(dir, 0), &dir.join("state"), &enrolled)?;
-        let pin = |path: &Path| -> Result<Pin> {
-            Ok(Pin {
-                sha256: sha256_file(path)?,
-                path: path.to_owned(),
-            })
-        };
         engine.configure_analysis(vec![Toolchain {
             language: Language::Go,
-            executables: vec![pin(gopls)?, pin(go)?],
+            executables: vec![Pin::from_path(gopls)?, Pin::from_path(go)?],
             features: Vec::new(),
         }])?;
         let go = go.to_string_lossy().into_owned();
@@ -628,7 +622,7 @@ fn scenario(gate: &mut Gate) -> Result<()> {
     gate.stop_worker(1)?;
     gate.start(1)?;
     // Unfinished work moved with its author; readiness did not move with it.
-    let moved = gate.engine().capture_for(gate.client(1))?;
+    let moved = gate.engine().host_capture(gate.client(1))?;
     let after = gate.engine().candidate(moved.revision)?;
     require(
         gate.read_live(0, "label.go")? == LABEL

@@ -23,6 +23,8 @@ Fixtures and server diagnostics remain under `/tmp/falinks-rust-adapter-*` (`/pr
 
 ## Engine-facing boundary
 
+`Boundary`, `ControlGate` and `ControlledHost` come from the shared `falinks-host` library (`adapters/host`); this package, `falinks-codex`, holds the Codex runtime and `check-adapter`.
+
 `Boundary::authenticate` accepts only edit, explicit review and offer tool calls from the bound runtime thread and active turn. The trusted host supplies agent, fresh connection session and canonical workspace. Model arguments cannot select identity or expose a generic privileged filesystem/shell operation. A successful request produces `{identity, operation, request}` for an engine callback; the engine still validates contents, paths, revisions and obligations. `Boundary::record_result` updates context only for engine-accepted explicit defer/keep/revise/drop outcomes.
 
 `Runtime` blocks engine dispatch until its fresh in-memory `ControlGate` passes every required category. A failure latches for that runtime; disconnects and attempted disabled capabilities revoke authority. The verifier uses the trusted `control_host` flag only for the fixed one-file `ControlledHost` while measuring startup controls. This host API is never an agent argument or tool. Production integration must run controls against the actual workspace/profile and guard publication/scoring with `require_supported`; a saved JSON report cannot authorize another process.

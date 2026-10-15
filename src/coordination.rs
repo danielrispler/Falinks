@@ -3,7 +3,7 @@
 use crate::analysis::{self, Evidence, Footprint};
 use crate::publication::{self, RunOutcome};
 use crate::regroup::scalar;
-use crate::{Capture, Client, Engine, Layout, Result, connect, fail, meta, retain};
+use crate::{Capture, Client, Engine, Layout, Result, connect, fail, retain};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -367,6 +367,24 @@ fn in_stream(db: &Connection, agent: usize, seq: u64) -> Result<bool> {
         |r| r.get(0),
     )?)
 }
+/// The first event after `after` that `agent` can see; given `sender`, the first message
+/// from that sender instead. SQL filters the rows, so no later event is parsed.
+fn next_event(
+    db: &Connection,
+    agent: usize,
+    after: u64,
+    sender: Option<usize>,
+) -> Result<Option<u64>> {
+    Ok(db
+        .query_row(
+            "SELECT seq FROM events WHERE seq>?1 AND audience & ?2 != 0
+             AND (?3 IS NULL OR json_extract(body, '$.Message.sender')=?3) ORDER BY seq LIMIT 1",
+            params![after as i64, mine(agent), sender.map(|s| s as i64)],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(|seq| seq as u64))
+}
 pub(crate) fn emit(db: &Connection, audience: i64, body: &Body) -> Result<u64> {
     db.execute(
         "INSERT INTO events(audience, body) VALUES(?,?)",
@@ -399,32 +417,47 @@ pub(crate) fn save_checkpoint(db: &Connection, checkpoint: &Checkpoint) -> Resul
     )?;
     Ok(())
 }
-pub(crate) fn captured(db: &Connection, revision: u64) -> Result<Option<Capture>> {
-    // Only a coherent capture an agent was actually given can be reviewed or offered.
+/// A recorded capture of `revision`. With `recipient`, only a capture given to that agent
+/// counts; without, any does, host-internal ones included.
+pub(crate) fn captured(
+    db: &Connection,
+    revision: u64,
+    recipient: Option<usize>,
+) -> Result<Option<Capture>> {
     let seen = db
         .query_row(
-            "SELECT 1 FROM captures WHERE json_extract(body, '$.revision')=? LIMIT 1",
-            [revision as i64],
+            "SELECT 1 FROM captures WHERE json_extract(body, '$.revision')=?1
+             AND (?2 IS NULL OR recipient=?2) LIMIT 1",
+            params![revision as i64, recipient.map(|a| a as i64)],
             |_| Ok(()),
         )
         .optional()?;
     if seen.is_none() {
         return Ok(None);
     }
-    db.query_row(
-        "SELECT body FROM revisions WHERE id=?",
-        [revision as i64],
-        |r| r.get::<_, String>(0),
-    )
-    .optional()?
-    .map(|b| Ok(serde_json::from_str(&b)?))
-    .transpose()
+    crate::revision(db, revision).map(Some)
 }
 
 /// Footprint of a proposed operation, carried from the gate to the commit.
 pub(crate) struct Change {
     footprint: Footprint,
     evidence: [Vec<Evidence>; 2],
+}
+impl Change {
+    /// Evidence for the before and after captures.
+    pub(crate) fn sides(&self) -> [&[Evidence]; 2] {
+        [&self.evidence[0], &self.evidence[1]]
+    }
+    /// The same evidence, with the footprint of changing `paths` from `before` to `after`.
+    pub(crate) fn for_paths(
+        mut self,
+        before: &Capture,
+        after: &Capture,
+        paths: &BTreeSet<String>,
+    ) -> Self {
+        self.footprint = analysis::change(before, after, paths, &self.sides());
+        self
+    }
 }
 
 impl Engine {
@@ -507,8 +540,9 @@ impl Engine {
             .is_empty();
         // ponytail: analysis runs inside the short writer operation; pre-analyze
         // proposals outside the lock if real edit throughput suffers.
-        let evidence = [self.evidence(before)?, self.evidence(proposed)?];
-        let unknown: Vec<_> = evidence
+        let change = self.view_change(before, proposed, paths)?;
+        let unknown: Vec<_> = change
+            .evidence
             .iter()
             .flatten()
             .flat_map(|e| e.unknown.iter().cloned())
@@ -518,13 +552,14 @@ impl Engine {
                 reason: format!("unknown analysis input universe; recapture required: {unknown:?}"),
             }));
         }
-        let sides = [evidence[0].as_slice(), evidence[1].as_slice()];
-        let footprint = analysis::change(before, proposed, paths, &sides);
         let blocked: BTreeMap<_, _> = obligations(db, client.agent)?
             .into_iter()
             .filter(|o| o.pending())
             .filter(|o| {
-                analysis::related(&footprint, &analysis::closure(&o.scope.relevant(), &sides))
+                analysis::related(
+                    &change.footprint,
+                    &analysis::closure(&o.scope.relevant(), &change.sides()),
+                )
             })
             .map(|o| (o.scope.id.clone(), o))
             .collect();
@@ -533,10 +568,7 @@ impl Engine {
                 obligations: blocked,
             }));
         }
-        Ok(Ok(Change {
-            footprint,
-            evidence,
-        }))
+        Ok(Ok(change))
     }
 
     /// Inside the completed-pointer transaction: the live-edit message and every
@@ -574,22 +606,22 @@ impl Engine {
                 reply_to: None,
             }),
         )?;
-        let sides = [change.evidence[0].as_slice(), change.evidence[1].as_slice()];
         for agent in (0..2).filter(|a| *a != client.agent && layout.placement[*a] == proposed.space)
         {
             renew(
                 tx,
                 agent,
                 &change.footprint,
-                &sides,
+                &change.sides(),
                 proposed.revision,
                 cause,
             )?;
         }
         Ok(cause)
     }
-    /// An agent's live view changing without its own edit. Analyzes before any
-    /// transaction opens, since analysis writes its cache on another connection.
+    /// The change an agent's live view sees from `before` to `after`: its own edit at
+    /// the gate, or a transition or incorporation. Analyzes before any transaction
+    /// opens, since analysis writes its cache on another connection.
     pub(crate) fn view_change(
         &self,
         before: &Capture,
@@ -597,12 +629,11 @@ impl Engine {
         paths: &BTreeSet<String>,
     ) -> Result<Change> {
         let evidence = [self.evidence(before)?, self.evidence(after)?];
-        let sides = [evidence[0].as_slice(), evidence[1].as_slice()];
-        let footprint = analysis::change(before, after, paths, &sides);
         Ok(Change {
-            footprint,
+            footprint: Footprint::default(),
             evidence,
-        })
+        }
+        .for_paths(before, after, paths))
     }
     /// Inside the transaction committing `revision`: renew the agent's related scopes.
     pub(crate) fn renew_for_view(
@@ -613,8 +644,14 @@ impl Engine {
         revision: u64,
         cause: u64,
     ) -> Result<()> {
-        let sides = [change.evidence[0].as_slice(), change.evidence[1].as_slice()];
-        renew(tx, agent, &change.footprint, &sides, revision, cause)
+        renew(
+            tx,
+            agent,
+            &change.footprint,
+            &change.sides(),
+            revision,
+            cause,
+        )
     }
 
     pub fn register(&self, client: &Client, scope: Scope) -> Result<Obligation> {
@@ -667,10 +704,9 @@ impl Engine {
             .find(|o| o.scope.id == review.scope)
             .ok_or("unknown scope")?;
         let space = self.layout()?.of(client.agent);
-        if captured(&db, review.revision)?.is_none_or(|c| c.space != space) {
-            return fail(
-                "review must name a revision of the client's workspace captured for rereading",
-            );
+        // Only a coherent read the reviewer was given shows what it reassessed.
+        if captured(&db, review.revision, Some(client.agent))?.is_none_or(|c| c.space != space) {
+            return fail("review must name a revision of the client's workspace captured for it");
         }
         obligation.reviewed = obligation.reviewed.max(review.revision);
         let tx = db.unchecked_transaction()?;
@@ -748,7 +784,7 @@ impl Engine {
             return Ok(existing);
         }
         let capture =
-            captured(&db, offer.revision)?.ok_or("offer must name a captured revision")?;
+            captured(&db, offer.revision, None)?.ok_or("offer must name a captured revision")?;
         // Its own workspace, or a retained candidate whose group it belonged to.
         if capture.space != self.layout()?.of(client.agent)
             && !capture.group.contains(&client.agent)
@@ -767,9 +803,7 @@ impl Engine {
             ));
         }
         retain(&self.state, &capture)?;
-        let base: u64 = meta(&db, "published")?
-            .ok_or("missing published pointer")?
-            .parse()?;
+        let base = publication::published(&db)?;
         let (members, contributions) = publication::coverage(&db, offer.revision, base)?;
         let reviews = obligations(&db, client.agent)?
             .into_iter()
@@ -993,11 +1027,10 @@ impl Engine {
             let db = connect(&self.state)?;
             match &condition {
                 Condition::Message { from, after } => {
-                    let found = events_after(&db, &self.identity.workspace, client.agent, *after)?
-                        .into_iter()
-                        .find(|e| matches!(&e.body, Body::Message(m) if m.sender == *from));
-                    if let Some(event) = found {
-                        return Ok(WaitOutcome::Met(event));
+                    if let Some(seq) = next_event(&db, client.agent, *after, Some(*from))? {
+                        let message = event(&db, &self.identity.workspace, seq)?
+                            .ok_or("message event missing")?;
+                        return Ok(WaitOutcome::Met(message));
                     }
                     if !connected.get(*from).copied().unwrap_or(false) {
                         return Ok(WaitOutcome::Disconnected { agent: *from });
