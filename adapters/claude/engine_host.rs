@@ -194,7 +194,7 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "register",
-        "{id, task, nodes: [path | path#Symbol], depends?: [node]} -> declare intended work before editing.",
+        "{id, task, nodes: [path | path#Symbol], depends?: [node]} -> declare intended work before editing. task names your own subtask; depends names the other agent's code that your work relies on. Register again with the same id when your intended work changes.",
     ),
     (
         "obligations",
@@ -232,11 +232,11 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "recommend",
-        "{} -> ask the engine whether to join, split or keep the current arrangement.",
+        "{} -> the engine's join, split or keep proposal for the current arrangement. The engine decides from registered scopes, declared dependencies, compiler relationships, review outcomes and refusals. Regrouping events report its join and split proposals and every change of their state to both agents.",
     ),
     (
         "propose",
-        "{action: Join|Split|Keep, text, failing: bool} -> propose a regrouping with your reasons.",
+        "{action: Join|Split|Keep, text, failing: bool} -> propose a regrouping with your reasons. Joined agents share one live workspace and review each other's related live edits. Split agents have separate live workspaces: each receives the other's live-edit messages without a review obligation, and receives the other's published work through incorporation.",
     ),
     (
         "respond",
