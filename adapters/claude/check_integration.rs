@@ -231,6 +231,7 @@ impl Gate {
                 &launch.controller.join("context.sqlite"),
                 &launch.source,
                 "host".into(),
+                vec![],
             )?
             .relocate(session, &name(agent))?;
         }

@@ -3,9 +3,10 @@
 use falinks::Language;
 use falinks::{Check, Engine};
 use falinks_claude::arm::{
-    Arm, Tools, agent_name, denied_roots, deny_check_reads, enrollment, language, prompt,
-    worker_protected,
+    Arm, HOST_TOOLS, MUTATIONS, Tools, agent_name, denied_roots, deny_check_reads, enrollment,
+    language, prompt, worker_protected,
 };
+use falinks_claude::engine_host::OPERATIONS;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -119,6 +120,21 @@ fn setup(name: &str) -> Run {
         denied,
     );
     Run { arm, dir }
+}
+
+/// `MUTATIONS` are engine operations the arm forwards; `HOST_TOOLS` are advertised and
+/// never shadow one. `ack`, `check` and `ready` dispatch in the milestone test below.
+#[test]
+fn mutations_and_host_tools_name_real_operations() {
+    let engine: Vec<&str> = OPERATIONS.iter().map(|(operation, _)| *operation).collect();
+    let advertised = falinks_host::operations(&falinks_claude::arm::tools(Path::new("/w")));
+    for mutation in MUTATIONS {
+        assert!(engine.contains(mutation), "{mutation}");
+    }
+    for (tool, _) in HOST_TOOLS {
+        assert!(!engine.contains(tool), "{tool}");
+        assert!(advertised.iter().any(|o| o == tool), "{tool}");
+    }
 }
 
 /// `claude-worker` (standalone evaluation crate) copies the adapter's turn cap.

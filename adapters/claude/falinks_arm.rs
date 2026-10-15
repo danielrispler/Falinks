@@ -116,6 +116,7 @@ impl Run {
                 &launch.controller.join("context.sqlite"),
                 &launch.source,
                 "host".into(),
+                vec![],
             )?
             .relocate(session, &agent_name(agent))?;
         }

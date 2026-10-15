@@ -261,9 +261,11 @@ pub fn tool(operation: &str, description: String) -> Value {
         "inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},
             "required":["workspace","request"],"additionalProperties":false}})
 }
+/// The fixture host's historical edit/review/offer operations.
+pub const OPERATIONS: [&str; 3] = ["edit", "review", "offer"];
 /// The historical edit/review/offer tools of the fixture host.
 pub fn tools(workspace: &str) -> Value {
-    json!(["edit", "review", "offer"].map(|operation| tool(
+    json!(OPERATIONS.map(|operation| tool(
         operation,
         format!("Submit an engine {operation}. Workspace: {workspace}")
     )))
@@ -287,16 +289,22 @@ pub struct Boundary {
     agent: Option<String>,
     pub turn: Option<String>,
     /// Registered `falinks_<operation>` tools; anything else is refused.
-    pub operations: Vec<String>,
+    operations: Vec<String>,
 }
 impl Boundary {
-    pub fn new(database: &Path, workspace: &Path, session: String) -> Result<Self> {
+    /// `operations` are the `falinks_<operation>` tools this boundary accepts.
+    pub fn new(
+        database: &Path,
+        workspace: &Path,
+        session: String,
+        operations: Vec<String>,
+    ) -> Result<Self> {
         let db = Connection::open(database)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS binding(thread TEXT PRIMARY KEY,agent TEXT,workspace TEXT); CREATE TABLE IF NOT EXISTS context(thread TEXT,event TEXT,payload TEXT,status TEXT,PRIMARY KEY(thread,event));")?;
         let workspace = workspace.canonicalize()?.to_string_lossy().into_owned();
         Ok(Self {
             db,
-            operations: operations(&tools(&workspace)),
+            operations,
             workspace,
             session,
             thread: None,
