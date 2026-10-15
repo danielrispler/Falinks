@@ -804,9 +804,9 @@ fn references(
     let _ = lsp.notify("exit", Value::Null);
     Ok(())
 }
-fn owner_at<'a>(owners: impl IntoIterator<Item = &'a Owner>, at: usize) -> Option<&'a Owner> {
+fn owner_at(owners: &[Owner], at: usize) -> Option<&Owner> {
     owners
-        .into_iter()
+        .iter()
         .filter(|o| o.start <= at && at < o.end)
         .min_by_key(|o| o.end - o.start)
 }
@@ -945,24 +945,42 @@ fn covering(owners: &[Owner], start: usize, region: &[u8], nodes: &mut BTreeSet<
         .iter()
         .filter(|o| o.start < end && start < o.end)
         .collect();
-    // The innermost owner only changes at an owner boundary, so look it up once per segment.
-    let mut cuts = BTreeSet::from([start, end]);
-    for o in &overlapping {
-        cuts.extend(
-            [o.start, o.end]
-                .into_iter()
-                .filter(|c| (start..end).contains(c)),
-        );
-    }
-    let cuts: Vec<_> = cuts.into_iter().collect();
+    // The innermost owner only changes at an owner boundary, so sweep the boundaries once,
+    // keeping open owners by (length, position): `owner_at` picks the first shortest.
+    let mut opens: Vec<_> = (0..overlapping.len())
+        .map(|i| (overlapping[i].start.max(start), i))
+        .collect();
+    let mut closes: Vec<_> = (0..overlapping.len())
+        .map(|i| (overlapping[i].end, i))
+        .collect();
+    opens.sort_unstable();
+    closes.sort_unstable();
+    let mut cuts: Vec<_> = [start, end]
+        .into_iter()
+        .chain(opens.iter().map(|(at, _)| *at))
+        .chain(closes.iter().map(|(at, _)| *at).filter(|at| *at < end))
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let length = |i: usize| overlapping[i].end - overlapping[i].start;
+    let (mut opened, mut closed, mut open) = (0, 0, BTreeSet::new());
     let mut covered = true;
     for segment in cuts.windows(2) {
-        match owner_at(overlapping.iter().copied(), segment[0]) {
-            Some(owner) => {
-                nodes.insert(owner.id.clone());
+        let at = segment[0];
+        for &(_, i) in opens[opened..].iter().take_while(|(s, _)| *s <= at) {
+            open.insert((length(i), i));
+            opened += 1;
+        }
+        for &(_, i) in closes[closed..].iter().take_while(|(e, _)| *e <= at) {
+            open.remove(&(length(i), i));
+            closed += 1;
+        }
+        match open.first() {
+            Some(&(_, i)) => {
+                nodes.insert(overlapping[i].id.clone());
             }
             None => {
-                covered &= region[segment[0] - start..segment[1] - start]
+                covered &= region[at - start..segment[1] - start]
                     .iter()
                     .all(u8::is_ascii_whitespace)
             }
@@ -1054,13 +1072,16 @@ mod tests {
             start,
             end,
         };
-        // Nested owners, a same-size tie, and gaps holding whitespace or code.
+        // Nested owners, a same-size tie, crossing and empty owners, and gaps holding
+        // whitespace or code.
         let owners = [
             owner("a", 2, 10),
             owner("a::b", 4, 7),
             owner("a::c", 4, 7),
             owner("d", 12, 14),
             owner("e", 15, 18),
+            owner("f", 13, 16),
+            owner("g", 20, 20),
         ];
         let text = b"x  fn a{ b }  \n d  e  y";
         for owners in [&owners[..], &[]] {
