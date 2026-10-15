@@ -5,9 +5,9 @@ use crate::analysis::{self, Footprint};
 use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, Work, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
-    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, all, audit, build_tree,
-    connect, ensure_empty, fail, install, meta, meta_value, next_revision, one, record, retain,
-    revision, set_meta,
+    Capture, Client, Engine, Fault, Layout, Result, VersionedFile, WRITER_LEASE, all, audit,
+    build_tree, connect, ensure_empty, fail, install, meta, meta_value, next_revision, one, record,
+    retain, revision, set_meta,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -733,7 +733,13 @@ impl Engine {
                     changed = true;
                 } else if proposal.agreed == proposal.agents {
                     changed |= match self.attempt(&db, &mut proposal) {
-                        Ok(changed) => changed,
+                        // Outside the blocker mapping: the transition is already committed.
+                        Ok(changed) => {
+                            if matches!(proposal.state, ProposalState::Applied { .. }) {
+                                self.fault(Fault::Committed)?;
+                            }
+                            changed
+                        }
                         Err(error) => {
                             proposal.state = ProposalState::Blocked {
                                 blocker: format!("transition failed: {error}"),
@@ -901,7 +907,8 @@ impl Engine {
 
     /// Applies an agreed proposal or records its blocker. Returns whether anything changed.
     fn attempt(&self, db: &Connection, proposal: &mut RegroupingProposal) -> Result<bool> {
-        let layout = self.layout()?;
+        // Copied out: no layout guard is held while the fault hook runs.
+        let layout = self.layout()?.clone();
         let moves = match self.plan(db, &layout, proposal)? {
             Ok(moves) => moves,
             Err(blocker) => {
@@ -955,7 +962,6 @@ impl Engine {
             Ok(())
         })();
         interrupted(db, shift, committed)?;
-        drop(layout);
         self.adopt(moves, proposal.target)?;
         Ok(true)
     }
@@ -966,11 +972,19 @@ impl Engine {
         let mut changed = false;
         let occupied: BTreeSet<usize> = self.layout()?.placement.into_iter().collect();
         for space in &occupied {
-            let layout = self.layout()?;
+            // Copied out: no layout guard is held while the fault hook runs.
+            let layout = {
+                let layout = self.layout()?;
+                if layout
+                    .current(*space)?
+                    .included
+                    .is_superset(&published.included)
+                {
+                    continue;
+                }
+                layout.clone()
+            };
             let workspace = layout.current(*space)?;
-            if workspace.included.is_superset(&published.included) {
-                continue;
-            }
             let members = layout.group(*space);
             let audience: i64 = members.iter().map(|a| crate::coordination::mine(*a)).sum();
             let (mut merged, overlaps) = merge(db, workspace, &published)?;
@@ -1023,8 +1037,8 @@ impl Engine {
                 Ok(())
             })();
             interrupted(db, shift, committed)?;
-            drop(layout);
             self.adopt(moves, placement)?;
+            self.fault(Fault::Committed)?;
             changed = true;
         }
         Ok(changed)
@@ -1067,15 +1081,23 @@ impl Engine {
         )?;
         let id = db.last_insert_rowid();
         let installed = (|| -> Result<()> {
+            self.fault(Fault::Journaled)?;
             for change in &shift.moves {
                 let root = &layout.roots[change.space];
                 for (path, file) in &change.after.files {
                     let before = change.before.as_ref().map(|b| &b.files[path].file);
                     if before != Some(&file.file) {
                         install(root, path, &file.file)?;
+                        self.fault(Fault::Installed {
+                            space: change.space,
+                            path: path.clone(),
+                        })?;
                     }
                 }
                 audit(root, &change.after)?;
+                self.fault(Fault::Audited {
+                    space: change.space,
+                })?;
             }
             Ok(())
         })();
@@ -1108,7 +1130,7 @@ impl Engine {
             "UPDATE shifts SET body=? WHERE id=?",
             params![serde_json::to_string(&recorded)?, shift],
         )?;
-        Ok(())
+        self.fault(Fault::Commit)
     }
     /// After the commit: the layout takes the committed revisions and placement.
     fn adopt(&self, moves: Vec<(usize, Capture)>, placement: [usize; 2]) -> Result<()> {

@@ -146,7 +146,9 @@ struct Identity {
 }
 
 /// Physical live workspaces and the agents placed in them. Changes only under the writer.
-/// Readers borrow it through `Engine::layout`; it is never copied.
+/// Readers borrow it through `Engine::layout`. A writer copies it out before calling host
+/// code; the copy stays current because every layout write happens under the writer.
+#[derive(Clone)]
 pub(crate) struct Layout {
     pub(crate) roots: Vec<PathBuf>,
     /// None until a provisioned root first receives a workspace.
@@ -188,6 +190,7 @@ pub struct Engine {
     validation: Mutex<()>,
     signal: std::sync::Arc<coordination::Signal>,
     leases: Mutex<Vec<WriterLease>>,
+    faults: Option<FaultHook>,
 }
 
 /// A ledger connection. The schema was set up when the engine opened, and write-ahead
@@ -699,6 +702,25 @@ fn writer_lease(path: &Path) -> Result<WriterLease> {
 
 impl Engine {
     pub fn open(live: &Path, state: &Path, enrolled: &[&str]) -> Result<Self> {
+        Self::opening(live, state, enrolled, None)
+    }
+    /// Host tests only: `hook` runs at each durable step of transitions, synchronization
+    /// and restart recovery, with no `RwLock` guard held. An error stops the engine there
+    /// as a real failure at that step would.
+    pub fn open_with_faults(
+        live: &Path,
+        state: &Path,
+        enrolled: &[&str],
+        hook: FaultHook,
+    ) -> Result<Self> {
+        Self::opening(live, state, enrolled, Some(hook))
+    }
+    fn opening(
+        live: &Path,
+        state: &Path,
+        enrolled: &[&str],
+        faults: Option<FaultHook>,
+    ) -> Result<Self> {
         git_program()?;
         let live = fs::canonicalize(live)?;
         fs::create_dir_all(state)?;
@@ -826,6 +848,7 @@ impl Engine {
             validation: Mutex::new(()),
             signal: coordination::Signal::new(),
             leases: Mutex::new(leases),
+            faults,
         };
         engine.recover()?;
         publication::repair_mirror(&engine.state, &engine.published()?.tree)?;
@@ -1229,7 +1252,8 @@ impl Engine {
     /// failed check records an incident and changes no root and no journal.
     fn recover(&self) -> Result<()> {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let layout = self.layout()?;
+        // Copied out: no layout guard is held while the fault hook runs.
+        let layout = self.layout()?.clone();
         let mut records = records(&db)?;
         for record in &records {
             if let Some(proposed) = &record.proposed {
@@ -1292,7 +1316,10 @@ impl Engine {
         };
         // Phase 2.
         for (space, before, changed) in restores {
-            restore(&layout.roots[space], before, &changed)?;
+            for path in changed {
+                restore(&layout.roots[space], before, std::slice::from_ref(&path))?;
+                self.fault(Fault::Restored { space, path })?;
+            }
         }
         // Phase 3: the journals.
         for mut record in records {
@@ -1350,7 +1377,37 @@ pub enum Phase {
     BeforeCommit,
     Committed,
 }
+/// A durable step of a transition, a synchronization or restart recovery, for the host
+/// fault hook; never exposed to untrusted clients. `space` names a live root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// The installation is recorded; no root is written yet.
+    Journaled,
+    Installed {
+        space: usize,
+        path: String,
+    },
+    /// A root holds its new state.
+    Audited {
+        space: usize,
+    },
+    /// Inside the commit transaction, before it commits.
+    Commit,
+    Committed,
+    /// Restart recovery put one path back to its before state.
+    Restored {
+        space: usize,
+        path: String,
+    },
+}
+/// Receives the engine so it may read it, as a host on the same thread could.
+pub type FaultHook = Box<dyn Fn(&Engine, Fault) -> Result<()> + Send + Sync>;
 impl Engine {
+    pub(crate) fn fault(&self, fault: Fault) -> Result<()> {
+        self.faults
+            .as_ref()
+            .map_or(Ok(()), |hook| hook(self, fault))
+    }
     pub fn apply_observed(
         &self,
         client: &Client,
@@ -1717,11 +1774,43 @@ mod tests {
     #[test]
     fn host_observers_run_with_every_rwlock_released() {
         let dir = tempfile::tempdir().unwrap();
-        let live = dir.path().join("live");
+        let (live, second) = (dir.path().join("live"), dir.path().join("second"));
         std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
         std::fs::write(live.join("a.rs"), "fn a() {}\n").unwrap();
-        let engine = Engine::open(&live, &dir.path().join("state"), &["a.rs"]).unwrap();
+        // The first commit fails, so a restart has a transition to restore.
+        let faults = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let hook = || -> FaultHook {
+            let faults = faults.clone();
+            Box::new(move |engine, fault| {
+                assert!(engine.rwlocks_free(), "guard held at {fault:?}");
+                let mut faults = faults.lock().unwrap();
+                let first_commit = fault == Fault::Commit && !faults.contains(&fault);
+                faults.push(fault);
+                if first_commit {
+                    return Err("interrupt".into());
+                }
+                Ok(())
+            })
+        };
+        let open = || Engine::open_with_faults(&live, &dir.path().join("state"), &["a.rs"], hook());
+        let engine = open().unwrap();
         let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
+        let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
+        engine.add_workspace(&second).unwrap();
+        let split = Propose {
+            action: Action::Split,
+            text: "split".into(),
+            failing: false,
+        };
+        let proposal = engine.propose(&bob, split).unwrap();
+        for client in [&alice, &bob] {
+            engine
+                .respond(client, &proposal.id, &proposal.context, Response::Agree)
+                .unwrap();
+        }
+        drop(engine);
+        let engine = open().unwrap();
 
         let base = engine.capture().unwrap();
         let request = Request {
@@ -1777,5 +1866,16 @@ mod tests {
             "{run:?}"
         );
         assert!(stages.contains(&Stage::Accepted), "{stages:?}");
+        // The split retried at the edit's boundary, then the publication reached `second`.
+        let faults = faults.lock().unwrap();
+        assert!(faults.contains(&Fault::Restored {
+            space: 1,
+            path: "a.rs".into()
+        }));
+        assert_eq!(
+            faults.iter().filter(|f| **f == Fault::Committed).count(),
+            2,
+            "{faults:?}"
+        );
     }
 }
