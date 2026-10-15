@@ -4,7 +4,9 @@
 //! `falinks_*` tools; `ack`, `ready` and `check` are evaluation-host tools, the rest map
 //! onto the engine via `EngineHost`.
 use crate::engine_host::{self, EngineHost};
-use falinks::{Check, Client, Engine, Language, Outcome, Pin, Toolchain};
+use falinks::{
+    Action, Body, Check, Client, Engine, Language, Outcome, Pin, ProposalState, Toolchain,
+};
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
@@ -376,6 +378,8 @@ pub struct Arm {
     pub calls: u64,
     /// Set once the clock stops: the usage drain refuses every call (#179).
     pub draining: bool,
+    /// Accepted `handle` calls that covered or cleared a `Regrouping` event.
+    regrouping_handles: u64,
 }
 
 impl Arm {
@@ -428,6 +432,7 @@ impl Arm {
             relocated: BTreeSet::new(),
             calls: 0,
             draining: false,
+            regrouping_handles: 0,
         }
     }
 
@@ -470,6 +475,8 @@ impl Arm {
         if self.ready[agent] && MUTATIONS.contains(&operation) {
             return Ok(Answer::now(refuse("you declared ready; no further edits")));
         }
+        // Read before the call moves the cursor.
+        let regrouping = operation == "handle" && self.handles_regrouping(agent, request)?;
         let mut stages = None;
         let result = match operation {
             "ack" | "ready" | "check" => {
@@ -517,12 +524,81 @@ impl Arm {
                     .then(|| result["reason"].as_str().unwrap_or_default().into()),
             });
         }
+        if regrouping && result["accepted"] == true {
+            self.regrouping_handles += 1;
+        }
         // Mutation results are accepted exactly when the engine applied them.
         if MUTATIONS.contains(&operation) && result["accepted"] == true {
             self.drafts[agent] += 1;
             self.trigger();
         }
         Ok(Answer::Now { result, stages })
+    }
+
+    /// Whether a `handle` request covers (`through`) or clears (`processed`) a `Regrouping` event.
+    fn handles_regrouping(&self, agent: usize, request: &Value) -> Result<bool> {
+        let pending = self.engine.pending(&self.clients[agent])?;
+        let through = request["through"].as_u64().unwrap_or(0);
+        let processed = request["processed"].as_array().cloned().unwrap_or_default();
+        let covered = pending.unhandled.iter().filter(|e| e.seq <= through);
+        let cleared =
+            (pending.deferred.iter().map(|(e, _)| e)).filter(|e| processed.contains(&json!(e.seq)));
+        Ok(covered
+            .chain(cleared)
+            .any(|e| matches!(e.body, Body::Regrouping(_))))
+    }
+
+    /// Regrouping result counts (#134 "Measurement"): proposals by action and proposer,
+    /// agreements, declines, `Blocked` proposals with their blockers, applied transitions,
+    /// accepted `handle` calls on `Regrouping` events, and model round-trips (distinct
+    /// assistant `message.id`s, as #116 counts them) containing `recommend`, `propose` or
+    /// `respond` across the workers' stream-json `transcripts`.
+    pub fn regrouping(&self, transcripts: &[Value]) -> Result<Value> {
+        let proposals = self.engine.proposals()?;
+        let mut by_action = json!({});
+        for action in [Action::Join, Action::Split, Action::Keep] {
+            let count = |proposer| {
+                (proposals.iter())
+                    .filter(|p| p.action == action && p.proposer == proposer)
+                    .count()
+            };
+            by_action[format!("{action:?}")] = json!({"engine": count(None),
+                agent_name(0): count(Some(0)), agent_name(1): count(Some(1))});
+        }
+        // Blocked is not final: every state change is a `Regrouping` event to both agents.
+        let mut blocked: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for event in self.engine.events(&self.clients[0], 0)? {
+            if let Body::Regrouping(p) = event.body
+                && let ProposalState::Blocked { blocker } = p.state
+            {
+                blocked.entry(p.id).or_default().insert(blocker);
+            }
+        }
+        let tools = ["recommend", "propose", "respond"].map(|o| format!("falinks_{o}"));
+        let round_trips: BTreeSet<&str> = transcripts
+            .iter()
+            .flat_map(|t| t["events"].as_array().into_iter().flatten())
+            .filter(|e| {
+                e["type"] == "assistant"
+                    && (e["message"]["content"].as_array().into_iter().flatten()).any(|b| {
+                        b["type"] == "tool_use"
+                            && b["name"]
+                                .as_str()
+                                .is_some_and(|n| tools.iter().any(|t| n.ends_with(t.as_str())))
+                    })
+            })
+            .filter_map(|e| e["message"]["id"].as_str())
+            .collect();
+        Ok(json!({
+            "proposals": by_action,
+            "agreements": proposals.iter().map(|p| p.agreed.len()).sum::<usize>(),
+            "declines": proposals.iter().filter(|p| matches!(p.state, ProposalState::Declined { .. })).count(),
+            "blocked": blocked.into_iter().map(|(id, blockers)| json!({"proposal": id, "blockers": blockers})).collect::<Vec<_>>(),
+            "transitions": proposals.iter().filter(|p| p.action != Action::Keep
+                && matches!(p.state, ProposalState::Applied { .. })).count(),
+            "regrouping_handles": self.regrouping_handles,
+            "regrouping_round_trips": round_trips.len(),
+        }))
     }
 
     /// Same observable triggers as the Git arm: a new nonempty draft from each agent

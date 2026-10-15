@@ -17,7 +17,7 @@
     "protected/go-page.json": "30c91a06e9c56e6449e77a029eaf05c89c84bd4b620b1f7bc9a3671a3bb658d2",
     "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
-    "result-schema.json": "a1ceee7ca2c88c3e0cee4b54430f7baf4bd5e65515c908c2b48fa7941e1e04a3",
+    "result-schema.json": "40096661322cbd53c37845a6194415d292d8708a8933bea15de47f96479d0fce",
     "src/baseline.rs": "38c80504ecde134ca4e726fee02e05dfbb22b2081a5d87b0d2b694416c77417e",
     "src/batch.rs": "4872eeca1900210b463c78f6ff99759062cdd3ab6d29a63ea190d0470c934906",
     "src/bin/claude-worker.rs": "a5c020eb116e4afbe37d719ac7c3e8b5af62fc211f9a03408574184d15f88580",
@@ -37,5 +37,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 24
+  "version": 25
 }
