@@ -20,6 +20,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     fs::{self, OpenOptions},
     io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -245,6 +246,14 @@ pub(crate) fn all<T: DeserializeOwned>(
 /// A JSON meta value, if set.
 pub(crate) fn meta_value<T: DeserializeOwned>(db: &Connection, key: &str) -> Result<Option<T>> {
     one(db, "SELECT value FROM meta WHERE key=?", [key])
+}
+/// The durable halt, if mutation is halted.
+pub(crate) fn halted(db: &Connection) -> Result<Option<Halt>> {
+    Ok(meta(db, "halted")?
+        .map(|stored| serde_json::from_str(&stored).unwrap_or_else(|_| Halt::legacy(&stored))))
+}
+pub(crate) fn set_halt(db: &Connection, halt: &Halt) -> Result<()> {
+    set_meta(db, "halted", &serde_json::to_string(halt)?)
 }
 fn set_meta(db: &Connection, key: &str, value: &str) -> Result<()> {
     db.execute(
@@ -995,7 +1004,7 @@ impl Engine {
             } else {
                 return fail("incomplete request requires restart reconciliation");
             }
-            if record.installation_pending || meta(&db, "halted")?.is_some() {
+            if record.installation_pending || halted(&db)?.is_some() {
                 return fail("restart reconciliation required before explicit retry");
             }
             record.attempts.push(Attempt {
@@ -1033,7 +1042,8 @@ impl Engine {
             save_record(&tx, &record)?;
             tx.commit()?;
         }
-        if let Some(reason) = meta(&db, "halted")? {
+        if let Some(halt) = halted(&db)? {
+            let reason = halt.to_string();
             return self.finish(&db, &mut record, Outcome::Rejected { reason });
         }
         if let Err(error) = audit(&live, &before) {
@@ -1084,10 +1094,12 @@ impl Engine {
              error: Box<dyn std::error::Error + Send + Sync>| {
                 // Leave exact before/proposed bytes and request recoverable; no automatic continuation.
                 let reason = error.to_string();
-                set_meta(
+                set_halt(
                     db,
-                    "halted",
-                    &format!("interrupted operation {}: {reason}", record.operation),
+                    &Halt::Interruption {
+                        installation: Interrupted::Operation(record.operation),
+                        reason: reason.clone(),
+                    },
                 )?;
                 self.finish(db, record, Outcome::Interrupted { reason })
             };
@@ -1347,13 +1359,12 @@ impl Engine {
             }
         }
         // Only known interrupted installations are cleared. Unexplained edits stay halted.
-        if meta(&db, "halted")?.is_some_and(|r| {
-            r.starts_with("interrupted operation ") || r.starts_with("interrupted transition ")
-        }) {
-            db.execute("DELETE FROM meta WHERE key='halted'", [])?;
-        }
-        if let Some(reason) = meta(&db, "halted")? {
-            return fail(format!("engine halted for reconciliation: {reason}"));
+        match halted(&db)? {
+            Some(Halt::Interruption { .. }) => {
+                db.execute("DELETE FROM meta WHERE key='halted'", [])?;
+            }
+            Some(halt) => return fail(format!("engine halted for reconciliation: {halt}")),
+            None => {}
         }
         Ok(())
     }
@@ -1620,6 +1631,60 @@ pub struct Incident {
     pub reason: String,
     pub files: BTreeMap<String, ObservedFile>,
 }
+/// Why mutation is halted. Restart clears only an interruption.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Halt {
+    /// An installation the engine started but did not commit; restart restores its before state.
+    Interruption {
+        installation: Interrupted,
+        reason: String,
+    },
+    /// A live-workspace state the engine cannot explain, until a trusted host resolves it.
+    Incident { reason: String },
+}
+/// The installation an interruption left uncommitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Interrupted {
+    Operation(u64),
+    Transition(i64),
+}
+impl Halt {
+    /// A halt stored as text by a version before typed halts. Only the two interruption
+    /// forms those versions wrote are interruptions.
+    fn legacy(stored: &str) -> Self {
+        let interruption = stored.strip_prefix("interrupted ").and_then(|rest| {
+            let (installation, reason) = rest.split_once(": ")?;
+            let installation = match installation.split_once(' ')? {
+                ("operation", id) => Interrupted::Operation(id.parse().ok()?),
+                ("transition", id) => Interrupted::Transition(id.parse().ok()?),
+                _ => return None,
+            };
+            Some(Halt::Interruption {
+                installation,
+                reason: reason.into(),
+            })
+        });
+        // Those versions always wrote the id; text that does not parse stays halted.
+        interruption.unwrap_or_else(|| Halt::Incident {
+            reason: stored.into(),
+        })
+    }
+}
+impl fmt::Display for Halt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Halt::Interruption {
+                installation: Interrupted::Operation(id),
+                reason,
+            } => write!(f, "interrupted operation {id}: {reason}"),
+            Halt::Interruption {
+                installation: Interrupted::Transition(id),
+                reason,
+            } => write!(f, "interrupted transition {id}: {reason}"),
+            Halt::Incident { reason } => write!(f, "incident: {reason}"),
+        }
+    }
+}
 fn observe(root: &Path, relative: &Path, files: &mut BTreeMap<String, ObservedFile>) -> Result<()> {
     for entry in fs::read_dir(root.join(relative))? {
         let entry = entry?;
@@ -1663,7 +1728,12 @@ impl Engine {
     /// `roots` are the layout's live roots; the caller may hold the layout guard.
     fn save_incident(&self, db: &Connection, roots: &[PathBuf], reason: &str) -> Result<()> {
         // Halt first even when retaining diagnostic evidence encounters another storage error.
-        set_meta(db, "halted", reason)?;
+        set_halt(
+            db,
+            &Halt::Incident {
+                reason: reason.into(),
+            },
+        )?;
         let mut incident = Incident {
             reason: reason.into(),
             files: BTreeMap::new(),
@@ -1688,6 +1758,13 @@ impl Engine {
     }
     pub fn incident(&self) -> Result<Option<Incident>> {
         Self::incident_at(&self.state)
+    }
+    /// The durable halt in the ledger under `state`, read without opening the engine.
+    pub fn halt_at(state: &Path) -> Result<Option<Halt>> {
+        halted(&Connection::open_with_flags(
+            state.join("ledger.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?)
     }
     pub fn incident_at(state: &Path) -> Result<Option<Incident>> {
         meta_value(

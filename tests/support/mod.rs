@@ -141,13 +141,9 @@ pub fn fail_commits(root: &Path, armed: bool) {
         })
         .unwrap();
 }
-/// The durable halt reason, read from the ledger directly.
-pub fn halt(root: &Path) -> Option<String> {
-    ledger(root)
-        .query_row("SELECT value FROM meta WHERE key='halted'", [], |r| {
-            r.get(0)
-        })
-        .ok()
+/// The durable halt, read from the ledger without opening the engine.
+pub fn halt(root: &Path) -> Option<Halt> {
+    Engine::halt_at(&root.join("state")).unwrap()
 }
 /// Recorded incident rows, read from the ledger directly.
 pub fn incidents(root: &Path) -> i64 {

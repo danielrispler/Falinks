@@ -555,8 +555,18 @@ fn split_commit_failure_is_an_interruption(operation_between: bool) {
         matches!(&failed.state, ProposalState::Blocked { blocker } if blocker.starts_with("transition failed")),
         "{failed:?}"
     );
-    let reason = halt(dir.path()).unwrap();
-    assert!(reason.starts_with("interrupted transition "), "{reason}");
+    let halted = halt(dir.path()).unwrap();
+    assert!(
+        matches!(
+            halted,
+            Halt::Interruption {
+                installation: Interrupted::Transition(_),
+                ..
+            }
+        ),
+        "{halted:?}"
+    );
+    let reason = halted.to_string();
     if operation_between {
         let current = engine.capture_for(&alice).unwrap();
         let later = engine
@@ -633,8 +643,11 @@ fn interrupted_transition_with_a_tampered_unaffected_root_refuses_without_change
         .unwrap();
     assert!(installing);
     assert_eq!(incidents(dir.path()), 1);
-    let reason = halt(dir.path()).unwrap();
-    assert!(reason.contains("unexplained source write"), "{reason}");
+    let halted = halt(dir.path()).unwrap();
+    assert!(
+        matches!(&halted, Halt::Incident { reason } if reason.contains("unexplained source write")),
+        "{halted:?}"
+    );
 }
 
 /// A statement failing inside the commit transaction that incorporates a publication into a
@@ -648,8 +661,18 @@ fn incorporation_commit_failure_is_an_interruption(operation_between: bool) {
     fail_commits(dir.path(), true);
     engine.validate().unwrap();
     fail_commits(dir.path(), false);
-    let reason = halt(dir.path()).unwrap();
-    assert!(reason.starts_with("interrupted transition "), "{reason}");
+    let halted = halt(dir.path()).unwrap();
+    assert!(
+        matches!(
+            halted,
+            Halt::Interruption {
+                installation: Interrupted::Transition(_),
+                ..
+            }
+        ),
+        "{halted:?}"
+    );
+    let reason = halted.to_string();
     if operation_between {
         let current = engine.capture_for(&bob).unwrap();
         let later = engine
