@@ -197,13 +197,6 @@ pub fn batch(
     };
     ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot,
         "after_pilot": after_pilot, "fixtures": fixtures, "config_sha256": config_sha, "configuration": config}));
-    if verify()? != 0 {
-        return pause(
-            &mut ledger,
-            &ledger_path,
-            "frozen fixture/oracle verification failed".into(),
-        );
-    }
     let mut gated = false;
     for slot in slots {
         let id = slot["slot"].as_str().unwrap().to_string();
@@ -257,6 +250,20 @@ pub fn batch(
             ledger["gates"].as_array_mut().unwrap().push(gate);
             if let Some(reason) = blocked {
                 return pause(&mut ledger, &ledger_path, reason);
+            }
+            // Verified only once a slot will run, and never remembered across invocations.
+            let passed = verify()? == 0;
+            ledger["invocations"]
+                .as_array_mut()
+                .unwrap()
+                .last_mut()
+                .unwrap()["verification"] = json!({"utc": utc_now(), "passed": passed});
+            if !passed {
+                return pause(
+                    &mut ledger,
+                    &ledger_path,
+                    "frozen fixture/oracle verification failed".into(),
+                );
             }
             gated = true;
         }

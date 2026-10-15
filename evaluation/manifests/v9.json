@@ -1,0 +1,29 @@
+{
+  "hashes": {
+    "Cargo.lock": "099dd6b53ea7191438c1712e4dc59789c8c0deff562d93a8a035e6977cf30cdf",
+    "Cargo.toml": "8ee2ba755137eb2ef516278f529b5be53aa74f8995cb1a6023114d49ec4beec3",
+    "config.json": "81fea04b94c754135debda37f757e016afef58c7f063517bd1b02cb5fc44790b",
+    "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
+    "fixtures/go-relationships.json": "3f3cdd1d1b061b9dcee056ea77a9fec999326684309b1ece06785ffb346b764e",
+    "fixtures/rust-errors.json": "c1ef8768913cd2e7278ae92bf64be61e6b25782814345d0e56d74bfe92002b0e",
+    "instructions/falinks.md": "c925b90b2114c1fbcc5e21e51708114c7acdbb2ffb34e7cde2157573d10aff36",
+    "instructions/git.md": "5324fe674118b8e5fcd0d0464a4c1e9e1f599adf1a493ae7257d950a0c72ec0e",
+    "protected/go-page.json": "30c91a06e9c56e6449e77a029eaf05c89c84bd4b620b1f7bc9a3671a3bb658d2",
+    "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
+    "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
+    "result-schema.json": "146b1594e9a262b2e1677d0b6cd557752eae9e95c1e9b6a6bbf0172a84af9c3c",
+    "src/baseline.rs": "7671202b0f54a3fefdeeb43e51f571a5f2b99b3eb5eb028642eb3b27344f164e",
+    "src/batch.rs": "95f8c60eefc32443707c4ae8e59cbad747441326ab66f94c138691ace197b935",
+    "src/bin/claude-worker.rs": "d95b4dcf3dd37f6dbe2bfa19894675cbcaf09a1747ac256559f49e0da3bf9f2d",
+    "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
+    "src/bin/scripted-worker.rs": "1ebaf2223124a99f09510b2c25c2f1f04a8b52853c64a69b3dc8c35dec58014a",
+    "src/main.rs": "b62d374dc763808fdff66f189041c7067cdbabd6d663197580ad73a01cc15fa5",
+    "src/report.rs": "c22b096fcd440fc5442f7c0555b2be3d271b6d3ce1dc78b2375662083b5bbf9a"
+  },
+  "initial_commits": {
+    "go-page": "0a9b7fb1c3ffc994d6748860c0c2dafb4a1d969b",
+    "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
+    "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
+  },
+  "version": 9
+}
