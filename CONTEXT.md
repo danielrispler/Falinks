@@ -85,6 +85,9 @@ _Avoid_: Reconciliation (for the automatic restore)
 A live-workspace state the engine cannot explain. It halts mutation until a trusted host resolves it; putting the old bytes back does not clear it.
 _Avoid_: Interruption (the engine knows what it was installing during an interruption)
 
+**Halt**:
+The engine's durable refusal of further mutation. It is either an interruption, which restart recovery clears, or an incident, which only reconciliation clears.
+
 **Reconciliation**:
 A trusted host's resolution of an incident. Distinct from restart recovery, which restores an interruption automatically.
 
