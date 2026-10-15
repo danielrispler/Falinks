@@ -18,7 +18,7 @@ Before handing off a change, run every CI check locally, cheapest first:
 cargo run --bin ci-checks
 ```
 
-It stops at the first failing step and names it. It skips the evaluation tests unless their inputs changed since `origin/main`; pass `-- --all` to force them. Prerequisites: Go on PATH (evaluation tests), `cargo-deny` (`cargo install cargo-deny --locked`) and `cargo-nextest` (`cargo install cargo-nextest --locked`). The list lives in `scripts/check_list.rs`; `tests/check_drift.rs` keeps it in step with `.github/workflows/`. The toolchain is pinned in `rust-toolchain.toml`.
+It stops at the first failing step and names it. It skips the evaluation tests and actionlint unless their inputs changed since `origin/main`; pass `-- --all` to force them. Prerequisites: Go on PATH (evaluation tests, actionlint), `shellcheck` (when workflows change), `cargo-deny` (`cargo install cargo-deny --locked`) and `cargo-nextest` (`cargo install cargo-nextest --locked`). The list lives in `scripts/check_list.rs`; `tests/check_drift.rs` keeps it in step with `.github/workflows/`. The toolchain is pinned in `rust-toolchain.toml`.
 
 ## Evaluation freeze
 

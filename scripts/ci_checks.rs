@@ -1,6 +1,6 @@
 //! Run every CI check locally, cheapest first; stop at the first failure and name it.
-//! The evaluation tests run only when their inputs changed since `origin/main`,
-//! as in CI; pass `--all` to run them anyway.
+//! The evaluation tests and actionlint run only when their inputs changed since
+//! `origin/main`; pass `--all` to run them anyway.
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -12,6 +12,8 @@ use std::{
 mod check_list;
 
 const PROBE_ARG: &str = "\"$probe\"";
+/// Path prefixes that trigger `check_list::ACTIONLINT`.
+const WORKFLOW_INPUTS: &[&str] = &[".github/workflows/"];
 
 /// Standalone probe crates, as the `probes` CI job finds them: every
 /// `adapters/*/Cargo.toml` that declares its own `[workspace]`.
@@ -54,12 +56,10 @@ fn changed_files(root: &Path) -> Option<Vec<String>> {
     )
 }
 
-fn evaluation_changed(changed: &[String]) -> bool {
-    changed.iter().any(|file| {
-        check_list::EVALUATION_INPUTS
-            .iter()
-            .any(|input| file.starts_with(input))
-    })
+fn changed_under(changed: &[String], inputs: &[&str]) -> bool {
+    changed
+        .iter()
+        .any(|file| inputs.iter().any(|input| file.starts_with(input)))
 }
 
 fn main() -> ExitCode {
@@ -92,11 +92,28 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     let all = std::env::args().any(|arg| arg == "--all");
-    let run_evaluation = all || changed_files(&root).is_none_or(|c| evaluation_changed(&c));
+    let changed = changed_files(&root);
+    let run_for =
+        |inputs: &[&str]| all || changed.as_ref().is_none_or(|c| changed_under(c, inputs));
+    let run_evaluation = run_for(check_list::EVALUATION_INPUTS);
+    let run_actionlint = run_for(WORKFLOW_INPUTS);
+    // actionlint skips shellcheck silently when it is missing; CI's image bundles it.
+    if run_actionlint
+        && !Command::new("shellcheck")
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
+    {
+        eprintln!(
+            "ci-checks: shellcheck is missing from PATH; install it (brew install shellcheck)"
+        );
+        return ExitCode::FAILURE;
+    }
     let probes = probe_manifests(&root);
     let checks: Vec<String> = check_list::CHECKS
         .iter()
         .filter(|check| run_evaluation || **check != check_list::EVALUATION_TESTS)
+        .filter(|check| run_actionlint || **check != check_list::ACTIONLINT)
         .flat_map(|check| {
             if check.contains(PROBE_ARG) {
                 probes.iter().map(|p| check.replace(PROBE_ARG, p)).collect()
@@ -108,6 +125,11 @@ fn main() -> ExitCode {
     if !run_evaluation {
         eprintln!(
             "ci-checks: evaluation inputs unchanged since origin/main; skipping its tests (--all runs them)"
+        );
+    }
+    if !run_actionlint {
+        eprintln!(
+            "ci-checks: workflows unchanged since origin/main; skipping actionlint (--all runs it)"
         );
     }
     let total = checks.len();
@@ -143,7 +165,10 @@ mod tests {
     #[test]
     fn only_evaluation_inputs_trigger_the_evaluation_tests() {
         let changed = |files: &[&str]| {
-            evaluation_changed(&files.iter().map(|f| f.to_string()).collect::<Vec<_>>())
+            changed_under(
+                &files.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
+                check_list::EVALUATION_INPUTS,
+            )
         };
         assert!(changed(&["src/lib.rs", "evaluation/src/main.rs"]));
         assert!(changed(&[".cargo/config.toml"]));
@@ -195,6 +220,6 @@ mod tests {
             changed.contains(&"evaluation/notes.txt".to_string()),
             "{changed:?}"
         );
-        assert!(evaluation_changed(&changed));
+        assert!(changed_under(&changed, check_list::EVALUATION_INPUTS));
     }
 }

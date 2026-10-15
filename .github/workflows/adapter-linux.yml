@@ -13,10 +13,8 @@ name: Claude Code adapter on Linux
 #
 # The live check logs in with the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`), the
 # maintainer's own subscription: a run on both runners adds about 2 points to its 5-hour
-# window. So pull requests never run it. It runs only:
-#   - daily at 01:00 UTC on main, when main has commits from the last 24 hours;
-#   - on a manual run, on any ref.
-# Agents never start a manual run; see "Live adapter checks" in docs/agents/ticket-authoring.md.
+# window. So pull requests never run it; "Live adapter checks" in
+# docs/agents/ticket-authoring.md says when it runs.
 on:
   schedule:
     - cron: "0 1 * * *"
