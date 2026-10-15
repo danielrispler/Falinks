@@ -429,10 +429,110 @@ fn a_host_internal_capture_authorizes_an_offer_but_no_review() {
                 scope: Vec::new(),
                 text: "the revision the host checked".into(),
                 supersedes: None,
+                reviews: Vec::new(),
             },
         )
         .unwrap();
     assert_eq!(offered.capture, host);
+}
+
+/// Bob's scope `b` renewed by Alice's edit of a.rs, and Bob's own read of that revision.
+fn renewed(engine: &Engine, alice: &Client, bob: &Client) -> Capture {
+    engine.register(bob, scope("b", &["b.rs"])).unwrap();
+    let base = engine.capture_for(alice).unwrap();
+    engine
+        .apply(alice, edit("peer", &base, "a.rs", "fn a() { 2 }\n"))
+        .unwrap();
+    assert_eq!(pending(engine, bob), ["b"]);
+    engine.capture_for(bob).unwrap()
+}
+
+#[test]
+fn an_inline_keep_lets_an_edit_apply_that_would_be_unreviewed() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let current = renewed(&engine, &alice, &bob);
+    let mut request = edit("inline", &current, "b.rs", "fn b() { 2 }\n");
+    request.reviews = vec![keep("b", current.revision)];
+    assert!(matches!(
+        engine.apply(&bob, request.clone()).unwrap(),
+        Outcome::Applied { .. }
+    ));
+    assert!(pending(&engine, &bob).is_empty());
+    // A replay returns the recorded outcome without reviewing again.
+    assert!(matches!(
+        engine.apply(&bob, request).unwrap(),
+        Outcome::Applied { .. }
+    ));
+    // Alice sees the review once, as a separate review call would show it.
+    let reviewed = engine.events(&alice, 0).unwrap();
+    let reviews = reviewed
+        .iter()
+        .filter(|e| matches!(&e.body, Body::Reviewed { agent: 1, review } if review.scope == "b"))
+        .count();
+    assert_eq!(reviews, 1, "{reviewed:?}");
+}
+
+#[test]
+fn an_invalid_inline_review_leaves_no_review_and_no_edit() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let current = renewed(&engine, &alice, &bob);
+    let before = engine.events(&alice, 0).unwrap().len();
+    let mut request = edit("invalid", &current, "b.rs", "fn b() { 2 }\n");
+    // The first review is valid; the second names a revision Bob was never given.
+    request.reviews = vec![keep("b", current.revision), keep("b", current.revision + 1)];
+    let refused = engine.apply(&bob, request).unwrap_err();
+    assert!(refused.to_string().contains("captured"), "{refused}");
+    assert_eq!(pending(&engine, &bob), ["b"]);
+    assert!(engine.request(&bob, "invalid").unwrap().is_none());
+    assert_eq!(engine.capture_for(&bob).unwrap().revision, current.revision);
+    assert_eq!(engine.events(&alice, 0).unwrap().len(), before);
+}
+
+#[test]
+fn a_stale_edit_keeps_its_inline_reviews() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let current = renewed(&engine, &alice, &bob);
+    // Bob also relies on a.rs as it was before Alice's edit.
+    let mut request = edit("stale", &current, "b.rs", "fn b() { 2 }\n");
+    request.expected.insert("a.rs".into(), 0);
+    request.reviews = vec![keep("b", current.revision)];
+    assert!(matches!(
+        engine.apply(&bob, request).unwrap(),
+        Outcome::Stale { .. }
+    ));
+    assert!(pending(&engine, &bob).is_empty());
+}
+
+#[test]
+fn an_offer_with_an_inline_review_clears_the_obligation_and_offers() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let current = renewed(&engine, &alice, &bob);
+    let offer = Offer {
+        id: "inline".into(),
+        task: "task b".into(),
+        revision: current.revision,
+        scope: vec!["b".into()],
+        text: "nothing of mine changed".into(),
+        supersedes: None,
+        reviews: Vec::new(),
+    };
+    let refused = engine.offer(&bob, offer.clone()).unwrap_err();
+    assert!(refused.to_string().contains("unreviewed"), "{refused}");
+    let offered = engine
+        .offer(
+            &bob,
+            Offer {
+                reviews: vec![keep("b", current.revision)],
+                ..offer
+            },
+        )
+        .unwrap();
+    assert_eq!(offered.state, Availability::Available);
+    assert!(pending(&engine, &bob).is_empty());
+    // A replayed offer reviews nothing again.
+    let before = engine.events(&alice, 0).unwrap().len();
+    assert_eq!(engine.offer(&bob, offered.offer.clone()).unwrap(), offered);
+    assert_eq!(engine.events(&alice, 0).unwrap().len(), before);
 }
 
 #[test]
@@ -694,6 +794,7 @@ fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding(
         scope: vec!["b.rs".into()],
         text: format!("offer {id}"),
         supersedes: supersedes.map(String::from),
+        reviews: Vec::new(),
     };
     let c1 = engine
         .offer(&bob, offer("c1", base.revision, None))

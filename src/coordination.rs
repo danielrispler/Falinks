@@ -107,6 +107,9 @@ pub struct Offer {
     pub scope: Vec<String>,
     pub text: String,
     pub supersedes: Option<String>,
+    /// Inline reviews, recorded before the pending-obligation check.
+    #[serde(default)]
+    pub reviews: Vec<Review>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Availability {
@@ -699,32 +702,63 @@ impl Engine {
     pub fn review(&self, client: &Client, review: Review) -> Result<Obligation> {
         self.authorize(client)?;
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let mut obligation = obligations(&db, client.agent)?
+        let scope = review.scope.clone();
+        let obligation = self
+            .record_reviews(&db, client, &[review])?
             .into_iter()
-            .find(|o| o.scope.id == review.scope)
+            .find(|o| o.scope.id == scope)
             .ok_or("unknown scope")?;
-        let space = self.layout()?.of(client.agent);
-        // Only a coherent read the reviewer was given shows what it reassessed.
-        if captured(&db, review.revision, Some(client.agent))?.is_none_or(|c| c.space != space) {
-            return fail("review must name a revision of the client's workspace captured for it");
-        }
-        obligation.reviewed = obligation.reviewed.max(review.revision);
-        let tx = db.unchecked_transaction()?;
-        save_obligation(&tx, &obligation)?;
-        emit(
-            &tx,
-            others(client.agent),
-            &Body::Reviewed {
-                agent: client.agent,
-                review,
-            },
-        )?;
-        tx.commit()?;
         drop(db);
-        self.signal.notify();
         // A cleared obligation may unblock an agreed transition.
         self.boundary();
         Ok(obligation)
+    }
+    /// Under the writer lock: validates every review, then records them all with their
+    /// `Reviewed` events. Any invalid review records none. Returns the client's obligations.
+    pub(crate) fn record_reviews(
+        &self,
+        db: &Connection,
+        client: &Client,
+        reviews: &[Review],
+    ) -> Result<Vec<Obligation>> {
+        let mut all = obligations(db, client.agent)?;
+        let space = self.layout()?.of(client.agent);
+        for review in reviews {
+            let obligation = all
+                .iter_mut()
+                .find(|o| o.scope.id == review.scope)
+                .ok_or("unknown scope")?;
+            // Only a coherent read the reviewer was given shows what it reassessed.
+            if captured(db, review.revision, Some(client.agent))?.is_none_or(|c| c.space != space) {
+                return fail(
+                    "review must name a revision of the client's workspace captured for it",
+                );
+            }
+            obligation.reviewed = obligation.reviewed.max(review.revision);
+        }
+        if reviews.is_empty() {
+            return Ok(all);
+        }
+        let tx = db.unchecked_transaction()?;
+        for obligation in all
+            .iter()
+            .filter(|o| reviews.iter().any(|r| r.scope == o.scope.id))
+        {
+            save_obligation(&tx, obligation)?;
+        }
+        for review in reviews {
+            emit(
+                &tx,
+                others(client.agent),
+                &Body::Reviewed {
+                    agent: client.agent,
+                    review: review.clone(),
+                },
+            )?;
+        }
+        tx.commit()?;
+        self.signal.notify();
+        Ok(all)
     }
     pub fn post(&self, client: &Client, plan: Plan) -> Result<Event> {
         self.authorize(client)?;
@@ -772,11 +806,26 @@ impl Engine {
         }
         Ok(())
     }
-    /// Offers an exact captured revision. Any unreviewed obligation blocks it.
+    /// Offers an exact captured revision. Any unreviewed obligation left after its inline
+    /// reviews blocks it.
     pub fn offer(&self, client: &Client, offer: Offer) -> Result<Checkpoint> {
+        let inline = !offer.reviews.is_empty();
+        let result = self.offer_locked(client, offer);
+        // A cleared obligation may unblock an agreed transition.
+        if inline {
+            self.boundary();
+        }
+        result
+    }
+    fn offer_locked(&self, client: &Client, offer: Offer) -> Result<Checkpoint> {
         self.authorize(client)?;
         let id = format!("{}/{}", client.agent, offer.id);
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
+        // Inline reviews stand even if the offer is then refused, as separate reviews would.
+        // A known ID already recorded them on its first call.
+        if checkpoint(&db, &id)?.is_none() {
+            self.record_reviews(&db, client, &offer.reviews)?;
+        }
         if let Some(existing) = checkpoint(&db, &id)? {
             if existing.offer != offer {
                 return fail("offer ID reused with changed contents");
