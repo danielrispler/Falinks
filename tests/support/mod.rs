@@ -107,3 +107,40 @@ pub fn go_toolchain() -> Toolchain {
         features: Vec::new(),
     }
 }
+
+/// Arms or drops a trigger that aborts the workspace-pointer update inside the commit
+/// transaction, after an installation's files are in place (#158). Drop it before the next
+/// operation and before reopening, so recovery's own statements cannot hit it.
+pub fn fail_commits(root: &Path, armed: bool) {
+    let db = rusqlite::Connection::open(root.join("state/ledger.sqlite")).unwrap();
+    db.execute_batch(if armed {
+        "CREATE TRIGGER probe BEFORE UPDATE ON spaces BEGIN SELECT RAISE(ABORT,'probe'); END;"
+    } else {
+        "DROP TRIGGER probe;"
+    })
+    .unwrap();
+}
+/// The durable halt reason, read from the ledger directly.
+pub fn halt(root: &Path) -> Option<String> {
+    let db = rusqlite::Connection::open(root.join("state/ledger.sqlite")).unwrap();
+    db.query_row("SELECT value FROM meta WHERE key='halted'", [], |r| {
+        r.get(0)
+    })
+    .ok()
+}
+/// Recorded incident rows, read from the ledger directly.
+pub fn incidents(root: &Path) -> i64 {
+    let db = rusqlite::Connection::open(root.join("state/ledger.sqlite")).unwrap();
+    db.query_row("SELECT count(*) FROM incidents", [], |r| r.get(0))
+        .unwrap()
+}
+/// Every file beneath `dir` with its bytes.
+pub fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    files_under(dir)
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect()
+}
