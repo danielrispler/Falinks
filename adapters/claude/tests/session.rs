@@ -531,7 +531,7 @@ fn a_masked_protected_write_passes_only_while_the_real_file_is_unchanged() {
 fn unavailable_fixture() -> (
     tempfile::TempDir,
     String,
-    std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
 ) {
     let dir = tempfile::tempdir().unwrap();
     for (name, bytes) in [
@@ -566,11 +566,11 @@ fn bash_result(command: &str, result: Value) -> [Value; 2] {
 fn classify(
     dir: &Path,
     command: &str,
-    before: &std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    before: &std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
     events: &[Value],
-) -> falinks_claude::SandboxOutcome {
+) -> falinks_claude::WorkerSandboxOutcome {
     let after = falinks_claude::fixture_files(dir).unwrap();
-    falinks_claude::sandbox_unavailable(events, command, before, &after)
+    falinks_claude::worker_sandbox_unavailable(events, command, before, &after)
 }
 
 #[test]
@@ -583,14 +583,14 @@ fn a_bash_error_with_unchanged_files_is_fail_closed() {
     );
     assert_eq!(
         classify(dir.path(), &command, &before, &events),
-        falinks_claude::SandboxOutcome::FailClosed(error.into())
+        falinks_claude::WorkerSandboxOutcome::FailClosed(error.into())
     );
 
     // The same error is fail-open once a protected file has changed.
     std::fs::write(dir.path().join("controller/secret.txt"), "BYPASS").unwrap();
     assert!(matches!(
         classify(dir.path(), &command, &before, &events),
-        falinks_claude::SandboxOutcome::FailOpen(_)
+        falinks_claude::WorkerSandboxOutcome::FailOpen(_)
     ));
 }
 
@@ -603,7 +603,7 @@ fn a_controls_line_is_fail_open() {
     );
     assert!(matches!(
         classify(dir.path(), &command, &before, &events),
-        falinks_claude::SandboxOutcome::FailOpen(_)
+        falinks_claude::WorkerSandboxOutcome::FailOpen(_)
     ));
 }
 
@@ -613,9 +613,16 @@ fn a_model_refusal_is_inconclusive() {
     let events = [json!({"type":"system","subtype":"model_refusal_fallback"})];
     assert_eq!(
         classify(dir.path(), &command, &before, &events),
-        falinks_claude::SandboxOutcome::Inconclusive
+        falinks_claude::WorkerSandboxOutcome::Inconclusive
     );
     assert!(falinks_claude::refused(&events));
+
+    // Fail-open evidence outranks a refusal.
+    std::fs::write(dir.path().join("source/source.txt"), "BYPASS").unwrap();
+    assert!(matches!(
+        classify(dir.path(), &command, &before, &events),
+        falinks_claude::WorkerSandboxOutcome::FailOpen(_)
+    ));
 }
 
 #[test]
@@ -627,7 +634,7 @@ fn a_probe_that_never_ran_is_failed() {
     );
     assert!(matches!(
         classify(dir.path(), &command, &before, &events),
-        falinks_claude::SandboxOutcome::Failed(_)
+        falinks_claude::WorkerSandboxOutcome::Failed(_)
     ));
     assert!(!falinks_claude::refused(&events));
 }

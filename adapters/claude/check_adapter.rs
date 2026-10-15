@@ -1,8 +1,8 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
 use falinks_claude::{
-    Launch, Runtime, SandboxOutcome, fixture_files, probe_controls, probe_names, refused,
-    sandbox_unavailable, verify_binary,
+    Launch, Runtime, WorkerSandboxOutcome, fixture_files, probe_controls, probe_names, refused,
+    verify_binary, worker_sandbox_unavailable,
 };
 use falinks_host::{Engine, Result, controlled_host::ControlledHost, file_hash, hash, require};
 use serde_json::{Value, json};
@@ -284,7 +284,7 @@ fn run_unavailable(
     probe: &Path,
     tool: &Path,
     evidence: &mut Value,
-) -> Result<SandboxOutcome> {
+) -> Result<WorkerSandboxOutcome> {
     let (binary, binary_sha256) = verify_binary(binary)?;
     let (probe, tool) = (probe.canonicalize()?, tool.canonicalize()?);
     let root = fixture(&probe, &tool)?;
@@ -310,7 +310,7 @@ fn run_unavailable(
         evidence["turn_error"] = json!(error.to_string());
     }
     runtime.close();
-    let outcome = sandbox_unavailable(
+    let outcome = worker_sandbox_unavailable(
         &runtime.session.events,
         &command,
         &before,
@@ -375,11 +375,14 @@ fn main() {
         match run_unavailable(&binary, &probe, &tool, &mut evidence) {
             Ok(outcome) => {
                 match &outcome {
-                    SandboxOutcome::FailClosed(error) => evidence["probe_error"] = json!(error),
-                    SandboxOutcome::FailOpen(failure) | SandboxOutcome::Failed(failure) => {
+                    WorkerSandboxOutcome::FailClosed(error) => {
+                        evidence["probe_error"] = json!(error)
+                    }
+                    WorkerSandboxOutcome::FailOpen(failure)
+                    | WorkerSandboxOutcome::Failed(failure) => {
                         evidence["failure"] = json!(failure);
                     }
-                    SandboxOutcome::Inconclusive => {}
+                    WorkerSandboxOutcome::Inconclusive => {}
                 }
                 outcome.name()
             }
