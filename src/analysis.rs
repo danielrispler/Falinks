@@ -139,9 +139,16 @@ pub(crate) fn verify(toolchain: &Toolchain) -> Result<Vec<Tool>> {
         .collect()
 }
 
-/// Analyze an exact capture in a disposable copy. Infrastructure failures become
-/// `errors` (conservative widening) rather than missing evidence.
-pub(crate) fn analyze(scratch: &Path, capture: &Capture, toolchain: &Toolchain) -> Evidence {
+/// Analyze an exact capture in a disposable copy. Go analysis runs no candidate code, so it
+/// keeps its build and gopls caches in `cache`, shared across the engine's analyses with this
+/// toolchain; Rust ignores it. Infrastructure failures become `errors` (conservative
+/// widening) rather than missing evidence.
+pub(crate) fn analyze(
+    scratch: &Path,
+    cache: &Path,
+    capture: &Capture,
+    toolchain: &Toolchain,
+) -> Evidence {
     let mut evidence = Evidence {
         tree: capture.tree.clone(),
         language: toolchain.language,
@@ -163,7 +170,7 @@ pub(crate) fn analyze(scratch: &Path, capture: &Capture, toolchain: &Toolchain) 
                 fs::write(src.join(path), &file.bytes)?;
             }
         }
-        let env = environment(scratch, toolchain)?;
+        let env = environment(scratch, cache, toolchain)?;
         match toolchain.language {
             Language::Rust => rust_units(&src, &env, toolchain, capture, &mut evidence)?,
             Language::Go => go_units(&src, &env, toolchain, capture, &mut evidence)?,
@@ -188,7 +195,11 @@ pub(crate) fn analyze(scratch: &Path, capture: &Capture, toolchain: &Toolchain) 
     evidence
 }
 
-fn environment(scratch: &Path, toolchain: &Toolchain) -> Result<Vec<(String, String)>> {
+fn environment(
+    scratch: &Path,
+    cache: &Path,
+    toolchain: &Toolchain,
+) -> Result<Vec<(String, String)>> {
     let dirs: BTreeSet<_> = toolchain
         .executables
         .iter()
@@ -224,7 +235,8 @@ fn environment(scratch: &Path, toolchain: &Toolchain) -> Result<Vec<(String, Str
                 ("GOFLAGS".into(), format!("-mod=mod -tags={tags}")),
                 ("CGO_ENABLED".into(), "0".into()),
                 ("GOPATH".into(), s(scratch.join("gopath"))?),
-                ("GOCACHE".into(), s(scratch.join("gocache"))?),
+                ("GOCACHE".into(), s(cache.join("go-build"))?),
+                ("GOPLSCACHE".into(), s(cache.join("gopls"))?),
             ]);
         }
     }

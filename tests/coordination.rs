@@ -4,7 +4,9 @@ mod support;
 
 use falinks::*;
 use std::{collections::BTreeMap, path::Path, time::Duration};
-use support::{GO, PAIR, edit, fixture, go_toolchain, open, pin, reopen};
+use support::{
+    GO, PAIR, analysis_caches, edit, files_under, fixture, go_toolchain, open, pin, reopen,
+};
 
 const RUST: &[(&str, &str)] = &[
     (
@@ -103,8 +105,10 @@ fn pending(engine: &Engine, client: &Client) -> Vec<String> {
 
 #[test]
 fn rust_relationships_notify_related_scopes_and_let_unrelated_work_proceed() {
-    let (_dir, engine, alice, bob) = fixture(RUST);
+    let (dir, engine, alice, bob) = fixture(RUST);
     engine.configure_analysis(vec![rust_toolchain()]).unwrap();
+    // `cargo check` runs candidate build scripts, so Rust analysis shares no cache (#82).
+    assert!(analysis_caches(dir.path()).is_empty());
     engine
         .register(&alice, scope("right", &["src/lib.rs#right"]))
         .unwrap();
@@ -257,6 +261,32 @@ fn broken_go_evidence_and_configuration_changes_widen_symmetrically() {
         ["left"],
         "configuration widens to everything"
     );
+}
+
+/// Go analysis runs no candidate code, so an engine's Go analyses share one build and gopls
+/// cache per toolchain, outside their disposable copies (#82).
+#[test]
+fn go_analyses_reuse_one_build_and_gopls_cache() {
+    let (dir, engine, _, bob) = fixture(GO);
+    engine.configure_analysis(vec![go_toolchain()]).unwrap();
+    let caches = analysis_caches(dir.path());
+    assert_eq!(caches.len(), 1, "{caches:?}");
+    let (build, gopls) = (caches[0].join("go-build"), caches[0].join("gopls"));
+    let before = (files_under(&build), files_under(&gopls));
+    assert!(!before.0.is_empty() && !before.1.is_empty(), "{before:?}");
+
+    let base = engine.capture().unwrap();
+    let callee = text(&base, "callee.go").replace("return 7", "return 8");
+    engine
+        .apply(&bob, edit("callee", &base, "callee.go", &callee))
+        .unwrap();
+    let evidence = engine.evidence(&engine.capture().unwrap()).unwrap();
+    assert!(evidence[0].errors.is_empty(), "{:?}", evidence[0].errors);
+    assert_eq!(analysis_caches(dir.path()), caches);
+    // The second analysis adds to the first one's entries rather than starting over.
+    let after = files_under(&build);
+    assert!(after.is_superset(&before.0) && after.len() > before.0.len());
+    assert!(files_under(&gopls).is_superset(&before.1));
 }
 
 #[test]

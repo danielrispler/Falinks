@@ -4,7 +4,7 @@
 
 use falinks::*;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -64,6 +64,28 @@ pub fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
         )]),
         reviews: Vec::new(),
     }
+}
+
+/// The engine's shared analysis caches under a fixture root, one per configured Go toolchain.
+pub fn analysis_caches(root: &Path) -> Vec<PathBuf> {
+    match fs::read_dir(root.join("state/analysis-cache")) {
+        Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => panic!("{e}"),
+    }
+}
+/// Every file beneath `dir`, recursively.
+pub fn files_under(dir: &Path) -> BTreeSet<PathBuf> {
+    let mut found = BTreeSet::new();
+    for entry in fs::read_dir(dir).into_iter().flatten() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.extend(files_under(&path));
+        } else {
+            found.insert(path);
+        }
+    }
+    found
 }
 
 pub fn pin(path: PathBuf) -> Pin {

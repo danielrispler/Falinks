@@ -8,7 +8,7 @@ use std::{
     fs,
     path::Path,
 };
-use support::{edit, open};
+use support::{GO, analysis_caches, edit, files_under, go_toolchain, open};
 use tempfile::TempDir;
 
 const FILES: &[(&str, &str)] = &[
@@ -855,4 +855,53 @@ fn checks_cannot_read_host_denied_roots_but_keep_the_slot_and_output() {
     if cfg!(target_os = "macos") {
         assert!(!results[3].passed, "{results:?}");
     }
+}
+
+/// Go analyses share a build cache, but checks run candidate code: each still starts from an
+/// empty `GOCACHE` in its own output, and none can read the analysis cache or plant an entry in
+/// it (#82).
+#[test]
+fn checks_start_from_an_empty_go_cache_and_cannot_write_the_analysis_cache() {
+    let (dir, engine, alice, _) = support::fixture(GO);
+    engine.configure_analysis(vec![go_toolchain()]).unwrap();
+    let cache = analysis_caches(dir.path())
+        .pop()
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let before = files_under(&cache);
+    assert!(!before.is_empty());
+    let sh = |name: &str, script: String| Check {
+        name: name.into(),
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), script],
+    };
+    engine
+        .configure_checks(vec![
+            sh(
+                "fresh",
+                "case \"$GOCACHE\" in \"$TMPDIR\"/?*) ;; *) exit 1 ;; esac && \
+                 { test ! -e \"$GOCACHE\" || test -z \"$(ls -A \"$GOCACHE\")\"; }"
+                    .into(),
+            ),
+            sh(
+                "plant",
+                format!("echo planted > '{}/go-build/planted'", cache.display()),
+            ),
+            sh("read", format!("ls '{}/go-build'", cache.display())),
+            sh(
+                "replace",
+                format!("mkdir '{}/gopls/planted'", cache.display()),
+            ),
+        ])
+        .unwrap();
+    engine.capture().unwrap();
+    engine.feedback(&alice, "caches", 0).unwrap();
+    let results = engine.validate().unwrap().unwrap().attempts[0]
+        .results
+        .clone();
+    assert!(results[0].passed, "{results:?}");
+    assert!(results[1..].iter().all(|r| !r.passed), "{results:?}");
+    assert_eq!(files_under(&cache), before);
+    assert!(!cache.join("gopls/planted").exists());
 }
