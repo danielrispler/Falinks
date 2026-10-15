@@ -4,8 +4,8 @@ use crate::coordination::{
     Availability, Body, captured, checkpoint, emit, obligations, save_checkpoint,
 };
 use crate::{
-    Capture, Client, Engine, Result, all, audit, connect, contain, fail, install, meta, meta_value,
-    nonce, object, one, read_file, record, retain, revision, set_meta,
+    Capture, Client, Engine, Result, all, audit, connect, contain, fail, halted, install, meta,
+    meta_value, nonce, object, one, read_file, record, retain, revision, set_meta,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -624,8 +624,8 @@ impl Engine {
                 )));
             }
         }
-        if let Some(reason) = meta(db, "halted")? {
-            return Ok(Err(format!("engine halted: {reason}")));
+        if let Some(halt) = halted(db)? {
+            return Ok(Err(format!("engine halted: {halt}")));
         }
         if *self.checks.read().map_err(|_| "checks lock poisoned")? != checks {
             return Ok(Err("required check set changed".into()));

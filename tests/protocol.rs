@@ -1090,6 +1090,55 @@ fn a_ledger_missing_later_tables_reopens_unchanged_and_regains_them() {
     assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
 }
 
+// Ledgers written before typed halts stored the halt as text. Its two interruption forms
+// are read as interruptions and cleared at restart; any other text is an incident (#161).
+#[test]
+fn a_legacy_text_halt_reopens_as_its_kind() {
+    let (dir, engine, ..) = fixture(PAIR);
+    drop(engine);
+    let store = |text: &str| {
+        ledger(dir.path())
+            .execute(
+                "INSERT INTO meta VALUES ('halted',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [text],
+            )
+            .unwrap();
+    };
+    let interruptions = [
+        (
+            "interrupted operation 7: disk full: a.rs",
+            Interrupted::Operation(7),
+        ),
+        (
+            "interrupted transition 3: probe",
+            Interrupted::Transition(3),
+        ),
+    ];
+    for (text, installation) in interruptions {
+        store(text);
+        let Some(Halt::Interruption {
+            installation: read, ..
+        }) = halt(dir.path())
+        else {
+            panic!("{text} not read as an interruption");
+        };
+        assert_eq!(read, installation);
+        drop(open(dir.path(), PAIR).unwrap());
+        assert_eq!(halt(dir.path()), None, "{text}");
+    }
+
+    store("unexplained source write: a.rs");
+    let incident = Halt::Incident {
+        reason: "unexplained source write: a.rs".into(),
+    };
+    assert_eq!(halt(dir.path()), Some(incident.clone()));
+    fails_with(
+        open(dir.path(), PAIR),
+        "engine halted for reconciliation: incident: unexplained source write: a.rs",
+    );
+    assert_eq!(halt(dir.path()), Some(incident));
+}
+
 /// A statement failing inside the commit transaction after installation (#158).
 fn commit_failure_after_installation_is_an_interruption(operation_between: bool) {
     let (dir, engine, alice, bob) = fixture(PAIR);
@@ -1103,8 +1152,18 @@ fn commit_failure_after_installation_is_an_interruption(operation_between: bool)
         matches!(outcome, Ok(Outcome::Interrupted { .. })),
         "{outcome:?}"
     );
-    let reason = halt(dir.path()).unwrap();
-    assert!(reason.starts_with("interrupted operation "), "{reason}");
+    let halted = halt(dir.path()).unwrap();
+    assert!(
+        matches!(
+            halted,
+            Halt::Interruption {
+                installation: Interrupted::Operation(_),
+                ..
+            }
+        ),
+        "{halted:?}"
+    );
+    let reason = halted.to_string();
     if operation_between {
         let later = engine
             .apply(&bob, edit("b", &base, "b.rs", "fn b() { 2; }\n"))
@@ -1171,8 +1230,11 @@ fn recovery_refuses_an_unexplained_root_without_change(process_exit: bool) {
         .unwrap();
     assert!(pending);
     assert_eq!(incidents(dir.path()), 1);
-    let reason = halt(dir.path()).unwrap();
-    assert!(reason.contains("unexplained source write"), "{reason}");
+    let halted = halt(dir.path()).unwrap();
+    assert!(
+        matches!(&halted, Halt::Incident { reason } if reason.contains("unexplained source write")),
+        "{halted:?}"
+    );
 
     fs::remove_file(second.join("x.rs")).unwrap();
     fails_with(open(dir.path(), PAIR), "engine halted for reconciliation");
@@ -1251,8 +1313,17 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         matches!(&failed.state, ProposalState::Blocked { blocker } if blocker.starts_with("transition failed")),
         "{failed:?}"
     );
-    let reason = halt(dir.path()).unwrap();
-    assert!(reason.starts_with("interrupted transition "), "{reason}");
+    let halted = halt(dir.path()).unwrap();
+    assert!(
+        matches!(
+            halted,
+            Halt::Interruption {
+                installation: Interrupted::Transition(_),
+                ..
+            }
+        ),
+        "{halted:?}"
+    );
     assert_eq!(incidents(dir.path()), 0);
     drop(engine);
 

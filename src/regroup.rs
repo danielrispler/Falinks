@@ -5,9 +5,9 @@ use crate::analysis::{self, Footprint};
 use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, Work, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
-    Capture, Client, Engine, Fault, Layout, Result, VersionedFile, WRITER_LEASE, all, audit,
-    build_tree, connect, ensure_empty, fail, install, meta, meta_value, next_revision, one, record,
-    retain, revision, set_meta,
+    Capture, Client, Engine, Fault, Halt, Interrupted, Layout, Result, VersionedFile, WRITER_LEASE,
+    all, audit, build_tree, connect, ensure_empty, fail, halted, install, meta, meta_value,
+    next_revision, one, record, retain, revision, set_halt, set_meta,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -771,8 +771,8 @@ impl Engine {
         layout: &Layout,
         proposal: &RegroupingProposal,
     ) -> Result<std::result::Result<Vec<(usize, Capture)>, String>> {
-        if let Some(reason) = meta(db, "halted")? {
-            return Ok(Err(format!("engine halted: {reason}")));
+        if let Some(halt) = halted(db)? {
+            return Ok(Err(format!("engine halted: {halt}")));
         }
         if let Some(run) = publication::publishing(db)? {
             return Ok(Err(format!("publication run {} in progress", run.id)));
@@ -1008,7 +1008,7 @@ impl Engine {
                 }
                 continue;
             }
-            if meta(db, "halted")?.is_some() {
+            if halted(db)?.is_some() {
                 continue;
             }
             merged.revision = next_revision(db)?;
@@ -1147,10 +1147,12 @@ impl Engine {
 /// engine wrote: halt durably until restart restores the before state.
 fn interrupted<T>(db: &Connection, shift: i64, result: Result<T>) -> Result<T> {
     if let Err(error) = &result {
-        set_meta(
+        set_halt(
             db,
-            "halted",
-            &format!("interrupted transition {shift}: {error}"),
+            &Halt::Interruption {
+                installation: Interrupted::Transition(shift),
+                reason: error.to_string(),
+            },
         )?;
     }
     result
