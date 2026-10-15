@@ -501,7 +501,8 @@ impl Engine {
                 None => {
                     let scratch = self.state.join("analysis").join(crate::nonce()?);
                     std::fs::create_dir_all(&scratch)?;
-                    let evidence = analysis::analyze(&scratch, capture, toolchain);
+                    let cache = self.state.join("analysis-cache").join(&key);
+                    let evidence = analysis::analyze(&scratch, &cache, capture, toolchain);
                     let _ = std::fs::remove_dir_all(&scratch);
                     // Failures are reported in the evidence but never cached as truth.
                     if evidence.errors.is_empty() {
