@@ -108,30 +108,34 @@ pub fn go_toolchain() -> Toolchain {
     }
 }
 
+/// A direct connection to a fixture root's ledger.
+pub fn ledger(root: &Path) -> rusqlite::Connection {
+    rusqlite::Connection::open(root.join("state/ledger.sqlite")).unwrap()
+}
 /// Arms or drops a trigger that aborts the workspace-pointer update inside the commit
 /// transaction, after an installation's files are in place (#158). Drop it before the next
 /// operation and before reopening, so recovery's own statements cannot hit it.
 pub fn fail_commits(root: &Path, armed: bool) {
-    let db = rusqlite::Connection::open(root.join("state/ledger.sqlite")).unwrap();
-    db.execute_batch(if armed {
-        "CREATE TRIGGER probe BEFORE UPDATE ON spaces BEGIN SELECT RAISE(ABORT,'probe'); END;"
-    } else {
-        "DROP TRIGGER probe;"
-    })
-    .unwrap();
+    ledger(root)
+        .execute_batch(if armed {
+            "CREATE TRIGGER probe BEFORE UPDATE ON spaces BEGIN SELECT RAISE(ABORT,'probe'); END;"
+        } else {
+            "DROP TRIGGER probe;"
+        })
+        .unwrap();
 }
 /// The durable halt reason, read from the ledger directly.
 pub fn halt(root: &Path) -> Option<String> {
-    let db = rusqlite::Connection::open(root.join("state/ledger.sqlite")).unwrap();
-    db.query_row("SELECT value FROM meta WHERE key='halted'", [], |r| {
-        r.get(0)
-    })
-    .ok()
+    ledger(root)
+        .query_row("SELECT value FROM meta WHERE key='halted'", [], |r| {
+            r.get(0)
+        })
+        .ok()
 }
 /// Recorded incident rows, read from the ledger directly.
 pub fn incidents(root: &Path) -> i64 {
-    let db = rusqlite::Connection::open(root.join("state/ledger.sqlite")).unwrap();
-    db.query_row("SELECT count(*) FROM incidents", [], |r| r.get(0))
+    ledger(root)
+        .query_row("SELECT count(*) FROM incidents", [], |r| r.get(0))
         .unwrap()
 }
 /// Every file beneath `dir` with its bytes.

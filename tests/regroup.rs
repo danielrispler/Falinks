@@ -571,6 +571,7 @@ fn split_commit_failure_is_an_interruption(operation_between: bool) {
 
     let (engine, alice, bob) = reopen(dir.path());
     assert_eq!([snapshot(&live), snapshot(&second)], roots);
+    assert_eq!(incidents(dir.path()), 0);
     assert_eq!(engine.placement().unwrap(), [0, 0]);
     // Agreement and context are unchanged, so the next boundary applies it.
     register(&engine, &alice, "left", "left task", &["siblings.go#Left"]);
@@ -615,6 +616,7 @@ fn incorporation_commit_failure_is_an_interruption(operation_between: bool) {
 
     let (engine, _, bob) = reopen(dir.path());
     assert_eq!(snapshot(&second), before);
+    assert_eq!(incidents(dir.path()), 0);
     assert_eq!(read(&second, "siblings.go"), GO[1].1);
     // The next boundary brings the publication in.
     register(

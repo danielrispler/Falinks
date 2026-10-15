@@ -1109,6 +1109,7 @@ fn commit_failure_after_installation_is_an_interruption(operation_between: bool)
 
     let (engine, alice, _) = reopen(dir.path(), PAIR);
     assert_eq!(snapshot(&dir.path().join("live")), live);
+    assert_eq!(incidents(dir.path()), 0);
     assert!(matches!(
         engine.apply(&alice, request.clone()).unwrap(),
         Outcome::Interrupted { .. }
