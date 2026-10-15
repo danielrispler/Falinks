@@ -326,12 +326,12 @@ fn claim(number: u64) -> Result<()> {
     println!("{}", plan.path);
     Ok(())
 }
-const USAGE: &str = "usage: wayfinder-startup [map-number] | --claim <issue>";
+const USAGE: &str = "usage: wayfinder-startup [map-number] [--body] | --claim <issue>";
 fn run() -> Result<()> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args == ["--help"] {
         println!(
-            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path."
+            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub; it prints the map title, URL and ticket rows, and --body appends the map body.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path."
         );
         return Ok(());
     }
@@ -341,6 +341,11 @@ fn run() -> Result<()> {
         };
         return claim(number.parse().map_err(|_| USAGE)?);
     }
+    let body = args.iter().any(|arg| arg == "--body");
+    let args = args
+        .iter()
+        .filter(|arg| *arg != "--body")
+        .collect::<Vec<_>>();
     require(args.len() <= 1, USAGE)?;
     let requested = args
         .first()
@@ -401,10 +406,9 @@ fn run() -> Result<()> {
         &format!("repos/{REPO}/issues/{map}/sub_issues"),
     ])?)?;
     println!(
-        "# {}\n{}\n\n{}\n\n## Open tickets (map order)\n",
+        "# {}\n{}\n\n## Open tickets (map order)\n",
         issue["title"].as_str().unwrap_or(""),
-        issue["url"].as_str().unwrap_or(""),
-        issue["body"].as_str().unwrap_or("")
+        issue["url"].as_str().unwrap_or("")
     );
     // One thread per blocked ticket; joining in order keeps rows in map order.
     // shortcut: no cap on concurrent `gh api` calls; batch them if a large map hits GitHub's secondary rate limit.
@@ -427,6 +431,9 @@ fn run() -> Result<()> {
     for (ticket, blockers) in tickets.iter_mut().zip(blockers) {
         ticket["blocked_by"] = json!(blockers);
         println!("{ticket}");
+    }
+    if body {
+        println!("\n## Map body\n\n{}", issue["body"].as_str().unwrap_or(""));
     }
     Ok(())
 }

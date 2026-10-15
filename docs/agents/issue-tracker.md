@@ -29,6 +29,7 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
    - An explicit closed or missing map is an error.
    - The live collaborative-editing tickets are children of #19. #19 is a `Spec:` issue without the map label, so pass `19` to see them.
    - It reads the map once, then the open children in map order. Each row shows the assignees, the open blocker numbers (`blocked_by`) and `frontier`. This repo uses native GitHub sub-issues and dependencies; missing blocker metadata is an error.
+   - It prints the map title and URL, then the rows. Add `--body` to append the map body, which holds Decisions-so-far and the implementation progress log.
 2. Use the named ticket, or the first row with `frontier: true`. Claim it before any work (see **Claim** below). Then work in the worktree path it prints.
 3. Load that ticket's body, its reading links and its required skills once. Expand to other decisions or evidence only when the question needs them. Check for superseded decisions. Read triage guidance only when triaging.
 4. Open the session with the state and goal brief in `docs/agents/learning.md`. Follow its explanation guidance when planning or asking decision questions.
