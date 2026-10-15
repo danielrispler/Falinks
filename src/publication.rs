@@ -4,10 +4,10 @@ use crate::coordination::{
     Availability, Body, captured, checkpoint, emit, obligations, save_checkpoint,
 };
 use crate::{
-    Capture, Client, Engine, Result, audit, connect, contain, fail, install, meta, nonce, object,
-    read_file, record, retain, revision, set_meta,
+    Capture, Client, Engine, Result, all, audit, connect, contain, fail, install, meta, meta_value,
+    nonce, object, one, read_file, record, retain, revision, set_meta,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -126,17 +126,10 @@ pub(crate) fn tables(db: &Connection) -> Result<()> {
     Ok(())
 }
 fn runs(db: &Connection) -> Result<Vec<Run>> {
-    let mut stmt = db.prepare("SELECT body FROM runs ORDER BY seq")?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-    rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    all(db, "SELECT body FROM runs ORDER BY seq", [])
 }
 fn run(db: &Connection, id: &str) -> Result<Option<Run>> {
-    db.query_row("SELECT body FROM runs WHERE id=?", [id], |r| {
-        r.get::<_, String>(0)
-    })
-    .optional()?
-    .map(|b| Ok(serde_json::from_str(&b)?))
-    .transpose()
+    one(db, "SELECT body FROM runs WHERE id=?", [id])
 }
 fn save_run(db: &Connection, run: &Run) -> Result<()> {
     db.execute(
@@ -151,7 +144,7 @@ pub(crate) fn published(db: &Connection) -> Result<u64> {
         .parse()?)
 }
 fn required(db: &Connection) -> Result<BTreeSet<usize>> {
-    meta(db, "required")?.map_or(Ok(BTreeSet::new()), |r| Ok(serde_json::from_str(&r)?))
+    Ok(meta_value(db, "required")?.unwrap_or_default())
 }
 /// `revision` contains everything `base` does and adds unpublished work.
 pub(crate) fn ahead(db: &Connection, revision_id: u64, base: u64) -> Result<bool> {
@@ -188,9 +181,8 @@ fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
     let tree = revision(db, revision_id)?.tree;
     let (members, contributions) = coverage(db, revision_id, base)?;
     let mut checkpoints = BTreeMap::new();
-    let mut stmt = db.prepare("SELECT body FROM checkpoints ORDER BY rowid")?;
-    for body in stmt.query_map([], |r| r.get::<_, String>(0))? {
-        let offered: crate::Checkpoint = serde_json::from_str(&body?)?;
+    for offered in all::<crate::Checkpoint>(db, "SELECT body FROM checkpoints ORDER BY rowid", [])?
+    {
         // Readiness never transfers: only an offer bound to this exact candidate counts.
         if offered.state == Availability::Available
             && offered.offer.revision == revision_id
@@ -327,16 +319,11 @@ impl Engine {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         let tx = db.unchecked_transaction()?;
         set_meta(&tx, "required", &serde_json::to_string(&members)?)?;
-        let mut offered = BTreeSet::new();
-        let mut stmt = tx.prepare("SELECT body FROM checkpoints")?;
-        for body in stmt.query_map([], |r| r.get::<_, String>(0))? {
-            offered.insert(
-                serde_json::from_str::<crate::Checkpoint>(&body?)?
-                    .offer
-                    .revision,
-            );
-        }
-        drop(stmt);
+        let offered: BTreeSet<u64> =
+            all::<crate::Checkpoint>(&tx, "SELECT body FROM checkpoints", [])?
+                .into_iter()
+                .map(|c| c.offer.revision)
+                .collect();
         for revision in offered {
             queue(&tx, revision)?;
         }

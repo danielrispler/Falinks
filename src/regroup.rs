@@ -5,11 +5,11 @@ use crate::analysis::{self, Footprint};
 use crate::coordination::{Body, Scope, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
-    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, audit, audit_interrupted,
-    build_tree, connect, ensure_empty, fail, install, meta, next_revision, record, restore, retain,
-    revision, set_meta,
+    Capture, Client, Engine, Layout, Result, VersionedFile, WRITER_LEASE, all, audit,
+    audit_interrupted, build_tree, connect, ensure_empty, fail, install, meta, meta_value,
+    next_revision, one, record, restore, retain, revision, set_meta,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -134,13 +134,11 @@ pub(crate) fn tables(db: &Connection) -> Result<()> {
     Ok(())
 }
 fn proposals(db: &Connection) -> Result<Vec<(u64, RegroupingProposal)>> {
-    let mut stmt = db.prepare("SELECT seq, body FROM proposals ORDER BY seq")?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-    rows.map(|row| {
-        let (seq, body) = row?;
-        Ok((seq as u64, serde_json::from_str(&body)?))
-    })
-    .collect()
+    all(
+        db,
+        "SELECT json_array(seq, json(body)) FROM proposals ORDER BY seq",
+        [],
+    )
 }
 fn save(db: &Connection, proposal: &RegroupingProposal) -> Result<()> {
     db.execute(
@@ -165,7 +163,7 @@ pub(crate) fn scalar(db: &Connection, sql: &str) -> Result<u64> {
     Ok(db.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
 }
 fn mark(db: &Connection) -> Result<Mark> {
-    meta(db, "regroup_mark")?.map_or(Ok(Mark::default()), |m| Ok(serde_json::from_str(&m)?))
+    Ok(meta_value(db, "regroup_mark")?.unwrap_or_default())
 }
 fn scopes(db: &Connection) -> Result<[Vec<Scope>; 2]> {
     let of = |agent| -> Result<Vec<Scope>> {
@@ -250,12 +248,9 @@ fn differing(before: &Capture, after: &Capture) -> BTreeSet<String> {
 /// Restart: an uncommitted workspace installation is put back to its recorded before
 /// state, only after every affected root matches before or after exactly.
 pub(crate) fn recover(engine: &Engine, db: &Connection, layout: &Layout) -> Result<()> {
-    let mut stmt = db.prepare("SELECT id, body FROM shifts")?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (id, body) in rows {
-        let mut shift: Installation = serde_json::from_str(&body)?;
+    let rows: Vec<(i64, Installation)> =
+        all(db, "SELECT json_array(id, json(body)) FROM shifts", [])?;
+    for (id, mut shift) in rows {
         if !shift.installing {
             continue;
         }
@@ -334,12 +329,7 @@ impl Engine {
     }
     pub fn proposal(&self, id: &str) -> Result<Option<RegroupingProposal>> {
         let db = connect(&self.state)?;
-        db.query_row("SELECT body FROM proposals WHERE id=?", [id], |r| {
-            r.get::<_, String>(0)
-        })
-        .optional()?
-        .map(|b| Ok(serde_json::from_str(&b)?))
-        .transpose()
+        one(&db, "SELECT body FROM proposals WHERE id=?", [id])
     }
     pub fn proposals(&self) -> Result<Vec<RegroupingProposal>> {
         Ok(proposals(&connect(&self.state)?)?
@@ -1041,9 +1031,8 @@ impl Engine {
             )?;
         }
         set_meta(tx, "placement", &serde_json::to_string(&placement)?)?;
-        let body: String =
-            tx.query_row("SELECT body FROM shifts WHERE id=?", [shift], |r| r.get(0))?;
-        let mut recorded: Installation = serde_json::from_str(&body)?;
+        let mut recorded: Installation =
+            one(tx, "SELECT body FROM shifts WHERE id=?", [shift])?.ok_or("unknown shift")?;
         recorded.installing = false;
         tx.execute(
             "UPDATE shifts SET body=? WHERE id=?",

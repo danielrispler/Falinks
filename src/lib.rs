@@ -17,7 +17,7 @@ pub use publication::{
 };
 pub use regroup::{Action, ProposalState, Propose, RegroupingProposal, Response, Signals};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
@@ -216,6 +216,32 @@ fn meta(db: &Connection, key: &str) -> Result<Option<String>> {
         .query_row("SELECT value FROM meta WHERE key=?", [key], |r| r.get(0))
         .optional()?)
 }
+/// The single JSON column of the row `sql` selects, if any.
+pub(crate) fn one<T: DeserializeOwned>(
+    db: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Option<T>> {
+    db.query_row(sql, params, |r| r.get::<_, String>(0))
+        .optional()?
+        .map(|b| Ok(serde_json::from_str(&b)?))
+        .transpose()
+}
+/// The stored body of every row `sql` selects, in its order. `sql` selects one JSON
+/// column; `json_array(seq, json(body))` pairs a body with its key.
+pub(crate) fn all<T: DeserializeOwned>(
+    db: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<T>> {
+    let mut stmt = db.prepare(sql)?;
+    let rows = stmt.query_map(params, |r| r.get::<_, String>(0))?;
+    rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+}
+/// A JSON meta value, if set.
+pub(crate) fn meta_value<T: DeserializeOwned>(db: &Connection, key: &str) -> Result<Option<T>> {
+    one(db, "SELECT value FROM meta WHERE key=?", [key])
+}
 fn set_meta(db: &Connection, key: &str, value: &str) -> Result<()> {
     db.execute(
         "INSERT INTO meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -224,38 +250,31 @@ fn set_meta(db: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 fn records(db: &Connection) -> Result<Vec<Record>> {
-    let mut stmt = db.prepare("SELECT body FROM requests ORDER BY id")?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-    rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    all(db, "SELECT body FROM requests ORDER BY id", [])
 }
 fn record(db: &Connection, operation: u64) -> Result<Record> {
-    Ok(serde_json::from_str(&db.query_row(
+    Ok(one(
+        db,
         "SELECT body FROM requests WHERE id=?",
         [operation as i64],
-        |r| r.get::<_, String>(0),
-    )?)?)
+    )?
+    .ok_or("unknown operation")?)
 }
 /// The record of a client's request ID, if it was ever submitted.
 fn request_record(db: &Connection, agent: usize, id: &str) -> Result<Option<Record>> {
-    db.query_row(
+    one(
+        db,
         "SELECT body FROM requests WHERE agent=? AND request_id=?",
         params![agent as i64, id],
-        |r| r.get::<_, String>(0),
     )
-    .optional()?
-    .map(|b| Ok(serde_json::from_str(&b)?))
-    .transpose()
 }
 pub(crate) fn revision(db: &Connection, revision: u64) -> Result<Capture> {
-    let body = db
-        .query_row(
-            "SELECT body FROM revisions WHERE id=?",
-            [revision as i64],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?
-        .ok_or("unknown completed revision")?;
-    Ok(serde_json::from_str(&body)?)
+    Ok(one(
+        db,
+        "SELECT body FROM revisions WHERE id=?",
+        [revision as i64],
+    )?
+    .ok_or("unknown completed revision")?)
 }
 /// Revision numbers are global across workspaces, so each names one occurrence.
 pub(crate) fn next_revision(db: &Connection) -> Result<u64> {
@@ -265,7 +284,7 @@ pub(crate) fn next_revision(db: &Connection) -> Result<u64> {
     Ok(max as u64 + 1)
 }
 pub(crate) fn placement(db: &Connection) -> Result<[usize; 2]> {
-    meta(db, "placement")?.map_or(Ok([0, 0]), |p| Ok(serde_json::from_str(&p)?))
+    Ok(meta_value(db, "placement")?.unwrap_or_default())
 }
 fn save_record(db: &Connection, record: &Record) -> Result<()> {
     db.execute(
@@ -698,8 +717,8 @@ impl Engine {
             completed: Vec::new(),
             placement: placement(&db)?,
         };
-        if let Some(stored) = meta(&db, "identity")? {
-            identity = serde_json::from_str(&stored)?;
+        if let Some(stored) = meta_value(&db, "identity")? {
+            identity = stored;
             if meta(&db, "live")?.as_deref() != live.to_str() {
                 return fail("workspace identity mismatch");
             }
@@ -729,11 +748,8 @@ impl Engine {
             {
                 return fail("enrollment changed; explicit reset required");
             }
-            for body in db
-                .prepare("SELECT body FROM revisions")?
-                .query_map([], |r| r.get::<_, String>(0))?
-            {
-                retain(&state, &serde_json::from_str::<Capture>(&body?)?)?;
+            for capture in all::<Capture>(&db, "SELECT body FROM revisions", [])? {
+                retain(&state, &capture)?;
             }
         } else {
             if state.join("objects.git").exists() {
@@ -1233,10 +1249,7 @@ impl Engine {
             }
         }
         publication::recover(&db)?;
-        let mut stmt = db.prepare("SELECT body FROM jobs")?;
-        let job_rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        for body in job_rows {
-            let mut job: Job = serde_json::from_str(&body?)?;
+        for mut job in all::<Job>(&db, "SELECT body FROM jobs", [])? {
             if !job.finished {
                 job.finished = true;
                 job.error = Some(
@@ -1325,14 +1338,11 @@ impl Engine {
     pub fn job(&self, client: &Client, id: &str) -> Result<Option<Job>> {
         self.authorize(client)?;
         let db = connect(&self.state)?;
-        let body = db
-            .query_row(
-                "SELECT body FROM jobs WHERE agent=? AND id=?",
-                params![client.agent as i64, id],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?;
-        body.map(|b| Ok(serde_json::from_str(&b)?)).transpose()
+        one(
+            &db,
+            "SELECT body FROM jobs WHERE agent=? AND id=?",
+            params![client.agent as i64, id],
+        )
     }
     pub fn run_job(&self, client: &Client, spec: JobSpec) -> Result<Job> {
         self.authorize(client)?;
@@ -1567,15 +1577,13 @@ impl Engine {
         Self::incident_at(&self.state)
     }
     pub fn incident_at(state: &Path) -> Result<Option<Incident>> {
-        meta(
+        meta_value(
             &Connection::open_with_flags(
                 state.join("ledger.sqlite"),
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
             )?,
             "incident",
-        )?
-        .map(|s| Ok(serde_json::from_str(&s)?))
-        .transpose()
+        )
     }
 }
 
