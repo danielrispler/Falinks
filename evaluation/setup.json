@@ -1,11 +1,16 @@
 {
-  "limit_seconds": 32400,
+  "limit_seconds": 36000,
   "scope": "Shared evaluation setup, including fixtures, baseline, pilot/integration repairs; excludes engine implementation and inactive user pauses.",
   "amendments": [
     {
       "source": "https://github.com/danielrispler/Falinks/issues/116#issuecomment-6169349150",
       "added_seconds": 3600,
       "reason": "#116 adds one hour to the eight-hour bound for the #126 re-freeze, the #122 unscored pilot pair on go-relationships and its gate. If the pilot needs more, it stops and asks."
+    },
+    {
+      "source": "https://github.com/danielrispler/Falinks/issues/122#issuecomment-6198509219",
+      "added_seconds": 3600,
+      "reason": "#126 and #83 used #116's extension before #122 started (32,417 s of 32,400 s). Daniel agreed one more hour for the #122 unscored pilot pair, its gate and its analysis."
     }
   ],
   "sessions": [
@@ -149,9 +154,19 @@
       "charged_seconds": 1393,
       "measurement": "Session wall time from the first timestamp after claiming #83 through the ledger entry, plus allowances for claiming and reading before that timestamp and for final CI, commit and PR. No real runs.",
       "work": "#83: batch runs verify() only after the gate passes, right before the first slot that will run, and records it on the invocation entry; an invocation that runs no slot or stops at a failing gate skips the 12 sandboxed builds. Evaluation shards rebalanced for the faster gate test. Versioned re-freeze v9 -> v10 (src/batch.rs changed; initial commits unchanged)."
+    },
+    {
+      "start_utc": "2026-10-15T17:27:09Z",
+      "stop_utc": "2026-10-15T17:45:26Z",
+      "measured_seconds": 1097,
+      "startup_allowance_seconds": 600,
+      "handoff_allowance_seconds": 600,
+      "charged_seconds": 2297,
+      "measurement": "Session wall time from claiming #122 through the ledger entry, including the gate and both pilot runs, plus allowances for reading before the claim and for final CI, commit and PR.",
+      "work": "#122: unscored pilot pair on go-relationships in /private/tmp/ev/p122 on manifest v10 with Claude Code 2.1.292; fresh gate 12/12; both arms success (Git 76.8 s, Falinks 160.7 s); round-trip categories compared with #116's projection (34 against 37-41 projected). No re-freeze."
     }
   ],
-  "charged_total_seconds": 32417,
-  "remaining_seconds": -17,
-  "status": "manifest v10: batch verifies frozen fixtures only when an invocation runs a slot (#83); run behaviour is unchanged, so v9 runs stay comparable; ledger past the setup limit"
+  "charged_total_seconds": 34714,
+  "remaining_seconds": 1286,
+  "status": "manifest v10; #122 pilot pair /private/tmp/ev/p122 passed on the second one-hour amendment; no scored batch until #123 is implemented"
 }
