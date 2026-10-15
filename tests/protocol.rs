@@ -992,11 +992,25 @@ fn a_ledger_missing_later_tables_reopens_unchanged_and_regains_them() {
     engine
         .apply(&alice, edit("a", &base, "a.rs", "fn a() { 1; }\n"))
         .unwrap();
+    let message = Plan {
+        task: "b".into(),
+        scope: vec!["b.rs".into()],
+        work: Work::None,
+        text: "taking b".into(),
+        reply_to: None,
+    };
+    engine.post(&bob, message).unwrap();
     let capture = engine.capture().unwrap();
-    let events = engine.events(&bob, 0).unwrap();
-    let pending = engine.pending(&bob).unwrap();
+    let events = [
+        engine.events(&alice, 0).unwrap(),
+        engine.events(&bob, 0).unwrap(),
+    ];
+    let pending = [
+        engine.pending(&alice).unwrap(),
+        engine.pending(&bob).unwrap(),
+    ];
     let record = format!("{:?}", engine.request(&alice, "a").unwrap());
-    assert!(!events.is_empty());
+    assert!(events.iter().all(|stream| !stream.is_empty()), "{events:?}");
     drop(engine);
 
     let ledger = dir.path().join("state/ledger.sqlite");
@@ -1027,8 +1041,20 @@ fn a_ledger_missing_later_tables_reopens_unchanged_and_regains_them() {
 
     let (engine, alice, bob) = reopen(dir.path(), PAIR);
     assert_eq!(engine.capture().unwrap(), capture);
-    assert_eq!(engine.events(&bob, 0).unwrap(), events);
-    assert_eq!(engine.pending(&bob).unwrap(), pending);
+    assert_eq!(
+        [
+            engine.events(&alice, 0).unwrap(),
+            engine.events(&bob, 0).unwrap()
+        ],
+        events
+    );
+    assert_eq!(
+        [
+            engine.pending(&alice).unwrap(),
+            engine.pending(&bob).unwrap()
+        ],
+        pending
+    );
     assert_eq!(
         format!("{:?}", engine.request(&alice, "a").unwrap()),
         record

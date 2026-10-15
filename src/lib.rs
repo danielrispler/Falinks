@@ -176,6 +176,7 @@ pub struct Engine {
     identity: Identity,
     // ponytail: one writer mutex; split only if short-operation throughput warrants it.
     writer: Mutex<Connection>,
+    // Every `RwLock` field is probed by `tests::rwlocks_free`; add new ones there.
     layout: RwLock<Layout>,
     jobs: Mutex<()>,
     analysis: RwLock<Vec<Toolchain>>,

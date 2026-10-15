@@ -15,7 +15,7 @@ Captured jobs and required checks are contained commands (`src/contain.rs`). On 
 
 ## Module map
 
-Each engine source file is 25–65 KB. Find the entry point here, then read that range.
+The engine source files are large. Find the entry point here, then read that range.
 
 - `src/lib.rs`: `Engine::open` (leases, `connect`, `schema`, `recover`), `capture`, `apply_locked` (gate, retention, installation, commit), `audit_all`, `run_job`/`execute_job`, Git storage (`git`, `retain`, `build_tree`) and `source_paths`.
 - `src/coordination.rs`: `configure_analysis`, `evidence`, `gate` and `view_change`, `register`, `review`, `post`, `offer`, `events`/`handle`/`pending`, `wait`.
@@ -24,7 +24,7 @@ Each engine source file is 25–65 KB. Find the entry point here, then read that
 - `src/analysis.rs`: Rust and Go evidence, `Footprint`, `Pin`.
 - `src/contain.rs`: contained commands, `run`, and the `falinks-contain` helper.
 
-Lock order is the writer `Mutex`, then the layout `RwLock`. `Engine::layout` returns a read guard. Release it before `layout.write()` and before calling host observers.
+Lock rules are under Locks in [CODING_STANDARDS.md](../CODING_STANDARDS.md).
 
 ## Host and client boundary
 
