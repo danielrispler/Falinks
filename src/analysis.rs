@@ -877,15 +877,13 @@ pub(crate) fn change(
 ) -> Footprint {
     let mut footprint = Footprint::default();
     for path in paths {
-        let bytes = |c: &Capture| {
+        let [old, new] = [before, after].map(|c| {
             c.files
                 .get(path)
                 .and_then(|f| f.file.as_ref())
-                .map(|f| f.bytes.clone())
-                .unwrap_or_default()
-        };
-        let (old, new) = (bytes(before), bytes(after));
-        let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+                .map_or(&[][..], |f| f.bytes.as_slice())
+        });
+        let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
         let suffix = old[prefix..]
             .iter()
             .rev()
@@ -893,7 +891,7 @@ pub(crate) fn change(
             .take_while(|(a, b)| a == b)
             .count();
         // ponytail: one hunk per file; per-hunk diff only if over-notification hurts.
-        for (side, bytes) in evidence.iter().zip([&old, &new]) {
+        for (side, bytes) in evidence.iter().zip([old, new]) {
             let region = &bytes[prefix..bytes.len() - suffix];
             touched(side, path, prefix, region, &mut footprint);
         }
@@ -925,28 +923,70 @@ fn touched(side: &[Evidence], path: &str, start: usize, region: &[u8], footprint
             .get(path)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let mut covered = true;
-        for (i, byte) in region.iter().enumerate() {
-            match owner_at(owners, start + i) {
-                Some(owner) => {
-                    footprint.nodes.insert(owner.id.clone());
-                }
-                None if byte.is_ascii_whitespace() => {}
-                None => covered = false,
-            }
-        }
-        if region.is_empty() {
-            match owner_at(owners, start) {
-                Some(owner) => {
-                    footprint.nodes.insert(owner.id.clone());
-                }
-                None => covered = start == 0 && owners.is_empty(),
-            }
-        }
-        if !covered {
+        if !covering(owners, start, region, &mut footprint.nodes) {
             footprint.nodes.insert(path.into());
         }
     }
+}
+/// Inserts the innermost owner of every byte in `region`, which starts at `start`.
+/// False when a non-whitespace byte, or an empty region, falls outside every owner.
+fn covering(owners: &[Owner], start: usize, region: &[u8], nodes: &mut BTreeSet<String>) -> bool {
+    if region.is_empty() {
+        return match owner_at(owners, start) {
+            Some(owner) => {
+                nodes.insert(owner.id.clone());
+                true
+            }
+            None => start == 0 && owners.is_empty(),
+        };
+    }
+    let end = start + region.len();
+    let overlapping: Vec<_> = owners
+        .iter()
+        .filter(|o| o.start < end && start < o.end)
+        .collect();
+    // The innermost owner only changes at an owner boundary, so sweep the boundaries once,
+    // keeping open owners by (length, position): `owner_at` picks the first shortest.
+    let mut opens: Vec<_> = (0..overlapping.len())
+        .map(|i| (overlapping[i].start.max(start), i))
+        .collect();
+    let mut closes: Vec<_> = (0..overlapping.len())
+        .map(|i| (overlapping[i].end, i))
+        .collect();
+    opens.sort_unstable();
+    closes.sort_unstable();
+    let mut cuts: Vec<_> = [start, end]
+        .into_iter()
+        .chain(opens.iter().map(|(at, _)| *at))
+        .chain(closes.iter().map(|(at, _)| *at).filter(|at| *at < end))
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let length = |i: usize| overlapping[i].end - overlapping[i].start;
+    let (mut opened, mut closed, mut open) = (0, 0, BTreeSet::new());
+    let mut covered = true;
+    for segment in cuts.windows(2) {
+        let at = segment[0];
+        for &(_, i) in opens[opened..].iter().take_while(|(s, _)| *s <= at) {
+            open.insert((length(i), i));
+            opened += 1;
+        }
+        for &(_, i) in closes[closed..].iter().take_while(|(e, _)| *e <= at) {
+            open.remove(&(length(i), i));
+            closed += 1;
+        }
+        match open.first() {
+            Some(&(_, i)) => {
+                nodes.insert(overlapping[i].id.clone());
+            }
+            None => {
+                covered &= region[at - start..segment[1] - start]
+                    .iter()
+                    .all(u8::is_ascii_whitespace)
+            }
+        }
+    }
+    covered
 }
 
 /// Registered work plus what it uses (transitively) and its direct users.
@@ -995,4 +1035,68 @@ pub(crate) fn closure(nodes: &BTreeSet<String>, evidence: &[&[Evidence]]) -> Foo
         }
     }
     footprint
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The per-byte walk `covering` replaces.
+    fn per_byte(owners: &[Owner], start: usize, region: &[u8]) -> (bool, BTreeSet<String>) {
+        let mut nodes = BTreeSet::new();
+        let mut covered = true;
+        for (i, byte) in region.iter().enumerate() {
+            match owner_at(owners, start + i) {
+                Some(owner) => {
+                    nodes.insert(owner.id.clone());
+                }
+                None if byte.is_ascii_whitespace() => {}
+                None => covered = false,
+            }
+        }
+        if region.is_empty() {
+            match owner_at(owners, start) {
+                Some(owner) => {
+                    nodes.insert(owner.id.clone());
+                }
+                None => covered = start == 0 && owners.is_empty(),
+            }
+        }
+        (covered, nodes)
+    }
+
+    #[test]
+    fn covering_matches_the_per_byte_walk() {
+        let owner = |id: &str, start, end| Owner {
+            id: id.into(),
+            start,
+            end,
+        };
+        // Nested owners, a same-size tie, crossing and empty owners, and gaps holding
+        // whitespace or code.
+        let owners = [
+            owner("a", 2, 10),
+            owner("a::b", 4, 7),
+            owner("a::c", 4, 7),
+            owner("d", 12, 14),
+            owner("e", 15, 18),
+            owner("f", 13, 16),
+            owner("g", 20, 20),
+        ];
+        let text = b"x  fn a{ b }  \n d  e  y";
+        for owners in [&owners[..], &[]] {
+            for start in 0..text.len() {
+                for end in start..=text.len() {
+                    let region = &text[start..end];
+                    let mut nodes = BTreeSet::new();
+                    let covered = covering(owners, start, region, &mut nodes);
+                    assert_eq!(
+                        (covered, nodes),
+                        per_byte(owners, start, region),
+                        "{start}..{end}"
+                    );
+                }
+            }
+        }
+    }
 }

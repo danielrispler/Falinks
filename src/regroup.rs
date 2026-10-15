@@ -179,7 +179,10 @@ fn scopes(db: &Connection) -> Result<[Vec<Scope>; 2]> {
 }
 /// Task and group context: any change voids agreement to an earlier proposal.
 fn current_context(db: &Connection) -> Result<String> {
-    let bytes = serde_json::to_vec(&(crate::placement(db)?, scopes(db)?))?;
+    context(db, &scopes(db)?)
+}
+fn context(db: &Connection, scopes: &[Vec<Scope>; 2]) -> Result<String> {
+    let bytes = serde_json::to_vec(&(crate::placement(db)?, scopes))?;
     Ok(crate::analysis::sha256(bytes))
 }
 /// The latest publication whose operations a workspace already contains.
@@ -406,9 +409,15 @@ impl Engine {
 
     // ponytail: evidence is gathered under the writer lock, like the edit gate; gather
     // outside it if reconsideration delays edits.
-    fn signals(&self, db: &Connection, layout: &Layout) -> Result<Signals> {
+    fn signals(
+        &self,
+        db: &Connection,
+        layout: &Layout,
+        scopes: &[Vec<Scope>; 2],
+        history: &[(u64, RegroupingProposal)],
+        mark: &Mark,
+    ) -> Result<Signals> {
         let mut signals = Signals::default();
-        let scopes = scopes(db)?;
         if self
             .analysis
             .read()
@@ -475,7 +484,6 @@ impl Engine {
             .intersection(&tasks(&scopes[1]))
             .cloned()
             .collect();
-        let mark = mark(db)?;
         signals.retries = db.query_row(
             "SELECT COUNT(*) FROM requests WHERE id>? AND (json_extract(body, '$.outcome.Stale') IS NOT NULL OR json_extract(body, '$.outcome.Unreviewed') IS NOT NULL)",
             [mark.request as i64],
@@ -492,8 +500,8 @@ impl Engine {
             [mark.wait as i64],
             |r| r.get::<_, i64>(0),
         )? as u64;
-        for (seq, earlier) in proposals(db)? {
-            if seq > mark.proposal
+        for (seq, earlier) in history {
+            if *seq > mark.proposal
                 && let Some(agent) = earlier.proposer
             {
                 signals
@@ -513,7 +521,10 @@ impl Engine {
         let proposal = {
             let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
             let layout = self.layout()?;
-            let mut signals = self.signals(&db, &layout)?;
+            let scopes = scopes(&db)?;
+            let history = proposals(&db)?;
+            let mark = mark(&db)?;
+            let mut signals = self.signals(&db, &layout, &scopes, &history, &mark)?;
             let joined = layout.placement[0] == layout.placement[1];
             let (mut action, mut reasoning) = match (&propose, proposer) {
                 (Some(propose), Some(agent)) => {
@@ -529,8 +540,6 @@ impl Engine {
                 action = Action::Keep;
                 reasoning = format!("already in the requested arrangement; {reasoning}");
             }
-            let scopes = scopes(&db)?;
-            let history = proposals(&db)?;
             // Reason-to-change rule: no reversal or repeat without new evidence or a failure report.
             let last = history
                 .iter()
@@ -569,7 +578,7 @@ impl Engine {
                     [stay, free]
                 }
             };
-            let context = current_context(&db)?;
+            let context = context(&db, &scopes)?;
             // An unchanged proposal from the same proposer since the last transition, including a
             // declined one, is not repeated.
             // A pending proposal with the same exact change stands, whoever proposed it.
@@ -581,7 +590,7 @@ impl Engine {
             }) {
                 return Ok(pending.clone());
             }
-            let since = mark(&db)?.proposal;
+            let since = mark.proposal;
             if let Some((_, previous)) = history.iter().rev().find(|(seq, p)| {
                 *seq > since
                     && p.proposer == proposer
