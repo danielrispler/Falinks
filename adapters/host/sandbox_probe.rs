@@ -8,7 +8,9 @@ use std::{
     process::{self, Command},
 };
 // Seatbelt denies with EPERM. On Linux, bubblewrap's read-only binds fail writes with
-// EROFS, and a rename between source and scratch (separate binds) fails with EXDEV.
+// EROFS, a rename between source and scratch (separate binds) fails with EXDEV, and a
+// masked read fails with ENOENT (`hidden` below). Per-control errno for every backend
+// tried: docs/research/sandbox-backends.md, "Per-property results".
 fn denied(result: io::Result<impl Sized>) -> bool {
     result.err().is_some_and(|error| {
         matches!(
