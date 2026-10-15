@@ -131,6 +131,24 @@ fn runs(db: &Connection) -> Result<Vec<Run>> {
 fn run(db: &Connection, id: &str) -> Result<Option<Run>> {
     one(db, "SELECT body FROM runs WHERE id=?", [id])
 }
+/// The oldest run awaiting validation.
+fn queued(db: &Connection) -> Result<Option<Run>> {
+    one(
+        db,
+        "SELECT body FROM runs WHERE json_extract(body, '$.outcome') IS NULL
+         AND NOT json_extract(body, '$.running') ORDER BY seq LIMIT 1",
+        [],
+    )
+}
+/// The oldest publication run without an outcome; it blocks regrouping.
+pub(crate) fn publishing(db: &Connection) -> Result<Option<Run>> {
+    one(
+        db,
+        "SELECT body FROM runs WHERE json_extract(body, '$.outcome') IS NULL
+         AND json_extract(body, '$.kind')='Publication' ORDER BY seq LIMIT 1",
+        [],
+    )
+}
 fn save_run(db: &Connection, run: &Run) -> Result<()> {
     db.execute(
         "INSERT INTO runs(id, body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
@@ -180,19 +198,23 @@ fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
     let base = published(db)?;
     let tree = revision(db, revision_id)?.tree;
     let (members, contributions) = coverage(db, revision_id, base)?;
-    let mut checkpoints = BTreeMap::new();
-    for offered in all::<crate::Checkpoint>(db, "SELECT body FROM checkpoints ORDER BY rowid", [])?
-    {
-        // Readiness never transfers: only an offer bound to this exact candidate counts.
-        if offered.state == Availability::Available
-            && offered.offer.revision == revision_id
-            && offered.base == base
-            && offered.members == members
-            && offered.contributions == contributions
-        {
-            checkpoints.insert(offered.agent, offered.id);
-        }
-    }
+    // Readiness never transfers: only an offer bound to this exact candidate counts.
+    let checkpoints: BTreeMap<usize, String> = all::<(usize, String)>(
+        db,
+        "SELECT json_array(json_extract(body, '$.agent'), json_extract(body, '$.id'))
+         FROM checkpoints WHERE json_extract(body, '$.state')='Available'
+         AND json_extract(body, '$.offer.revision')=?1 AND json_extract(body, '$.base')=?2
+         AND json_extract(body, '$.members')=json(?3)
+         AND json_extract(body, '$.contributions')=json(?4) ORDER BY rowid",
+        params![
+            revision_id as i64,
+            base as i64,
+            serde_json::to_string(&members)?,
+            serde_json::to_string(&contributions)?
+        ],
+    )?
+    .into_iter()
+    .collect();
     let missing = members
         .iter()
         .filter(|m| !checkpoints.contains_key(m))
@@ -319,11 +341,13 @@ impl Engine {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         let tx = db.unchecked_transaction()?;
         set_meta(&tx, "required", &serde_json::to_string(&members)?)?;
-        let offered: BTreeSet<u64> =
-            all::<crate::Checkpoint>(&tx, "SELECT body FROM checkpoints", [])?
-                .into_iter()
-                .map(|c| c.offer.revision)
-                .collect();
+        let offered: BTreeSet<u64> = all::<u64>(
+            &tx,
+            "SELECT DISTINCT json_quote(json_extract(body, '$.offer.revision')) FROM checkpoints",
+            [],
+        )?
+        .into_iter()
+        .collect();
         for revision in offered {
             queue(&tx, revision)?;
         }
@@ -422,10 +446,7 @@ impl Engine {
             .clone();
         let mut run = {
             let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-            let Some(mut run) = runs(&db)?
-                .into_iter()
-                .find(|r| r.outcome.is_none() && !r.running)
-            else {
+            let Some(mut run) = queued(&db)? else {
                 return Ok(None);
             };
             run.running = true;

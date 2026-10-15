@@ -140,6 +140,9 @@ fn proposals(db: &Connection) -> Result<Vec<(u64, RegroupingProposal)>> {
         [],
     )
 }
+fn proposal(db: &Connection, id: &str) -> Result<Option<RegroupingProposal>> {
+    one(db, "SELECT body FROM proposals WHERE id=?", [id])
+}
 fn save(db: &Connection, proposal: &RegroupingProposal) -> Result<()> {
     db.execute(
         "UPDATE proposals SET body=? WHERE id=?",
@@ -328,8 +331,7 @@ impl Engine {
         Ok(self.layout()?.placement)
     }
     pub fn proposal(&self, id: &str) -> Result<Option<RegroupingProposal>> {
-        let db = connect(&self.state)?;
-        one(&db, "SELECT body FROM proposals WHERE id=?", [id])
+        proposal(&connect(&self.state)?, id)
     }
     pub fn proposals(&self) -> Result<Vec<RegroupingProposal>> {
         Ok(proposals(&connect(&self.state)?)?
@@ -367,7 +369,7 @@ impl Engine {
         self.authorize(client)?;
         let proposal = {
             let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-            let mut proposal = self.proposal(id)?.ok_or("unknown proposal")?;
+            let mut proposal = proposal(&db, id)?.ok_or("unknown proposal")?;
             if !proposal.state.pending() {
                 return fail("proposal is not open");
             }
@@ -419,7 +421,7 @@ impl Engine {
         }
         let mut evidence = Vec::new();
         for space in layout.placement.iter().collect::<BTreeSet<_>>() {
-            evidence.extend(self.evidence(layout.current(*space)?)?);
+            evidence.extend(self.evidence_in(db, layout.current(*space)?)?);
         }
         for e in &evidence {
             if !e.errors.is_empty() || !e.unknown.is_empty() {
@@ -695,11 +697,7 @@ impl Engine {
         if let Some(reason) = meta(db, "halted")? {
             return Ok(Err(format!("engine halted: {reason}")));
         }
-        if let Some(run) = self
-            .runs()?
-            .into_iter()
-            .find(|r| r.outcome.is_none() && r.kind == publication::RunKind::Publication)
-        {
+        if let Some(run) = publication::publishing(db)? {
             return Ok(Err(format!("publication run {} in progress", run.id)));
         }
         let published = revision(db, published(db)?)?;
@@ -859,7 +857,7 @@ impl Engine {
                 views.push((
                     agent,
                     after.revision,
-                    self.view_change(before, after, &paths)?,
+                    self.view_change(db, before, after, &paths)?,
                 ));
             }
         }
@@ -928,7 +926,7 @@ impl Engine {
             merged.group = layout.group(*space);
             merged.tree = build_tree(&self.state, &merged.files, "")?;
             let moves = vec![(*space, merged.clone())];
-            let view = self.view_change(workspace, &merged, &differing(workspace, &merged))?;
+            let view = self.view_change(db, workspace, &merged, &differing(workspace, &merged))?;
             let shift = self.install_moves(db, &layout, &moves)?;
             let tx = db.unchecked_transaction()?;
             let event = emit(
