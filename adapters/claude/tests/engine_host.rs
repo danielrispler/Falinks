@@ -191,6 +191,17 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
         obligations["obligations"][0]["scope"]["id"], "discount",
         "{obligations}"
     );
+    // An inline review on the edit itself clears it in the same call.
+    let current = f.call(0, "capture", json!({}));
+    let inline = f.call(
+        0,
+        "edit",
+        json!({"id":"d2","expected":{"price.go":current["files"]["price.go"]["version"]},
+            "output":{"price.go":{"content":DISCOUNT}},
+            "reviews":[{"scope":"discount","revision":current["revision"],
+                "decision":"Keep","note":"reread Net"}]}),
+    );
+    assert_eq!(inline["accepted"], true, "{inline}");
 }
 
 #[test]

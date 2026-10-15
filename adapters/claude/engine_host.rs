@@ -2,7 +2,7 @@
 //! The boundary has already bound host identity; this maps each operation to the
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
-use falinks::{Client, Engine, File, JobSpec, Outcome, Pending, Request};
+use falinks::{Client, Engine, File, JobSpec, Outcome, Pending, Request, Review};
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
@@ -326,7 +326,7 @@ fn field<'a>(request: &'a Value, name: &str) -> Result<&'a str> {
         .as_str()
         .ok_or(format!("request.{name} must be a string"))?)
 }
-/// `{id, expected: {path: version}, output: {path: {content, executable?} | null}}`.
+/// `{id, expected: {path: version}, output: {path: {content, executable?} | null}, reviews?}`.
 fn edit(request: &Value) -> Result<Request> {
     let expected: BTreeMap<String, u64> = serde_json::from_value(request["expected"].clone())?;
     let mut output = BTreeMap::new();
@@ -347,10 +347,12 @@ fn edit(request: &Value) -> Result<Request> {
         };
         output.insert(path.clone(), file);
     }
+    let reviews: Option<Vec<Review>> = parse(&request["reviews"])?;
     Ok(Request {
         id: field(request, "id")?.into(),
         expected,
         output,
+        reviews: reviews.unwrap_or_default(),
     })
 }
 /// Agents read and write text: engine byte arrays become `content` strings.

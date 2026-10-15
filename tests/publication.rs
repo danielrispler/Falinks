@@ -68,6 +68,7 @@ fn offer(id: &str, revision: u64) -> Offer {
         scope: vec!["a.rs".into(), "b.rs".into()],
         text: format!("offer {id}"),
         supersedes: None,
+        reviews: Vec::new(),
     }
 }
 fn members(agents: &[usize]) -> BTreeSet<usize> {
