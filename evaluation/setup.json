@@ -122,9 +122,19 @@
       "charged_seconds": 1138,
       "measurement": "Two timed segments, excluding the user pause between them: the pilot3 batch invocation 11:22:51-11:35:34Z (verify, gate, both runs, cleanup; 763 s); evidence review and recording 11:38:08-11:39:23Z (75 s). Plus an allowance for issue resolution and handoff.",
       "work": "#80: the unscored pilot pair reran in /private/tmp/ev/pilot3 on the #112 repair and passed both arms with a fresh gate. Every Falinks-arm go test passed on its first run; no agent changed GOCACHE. This entry takes the ledger past the eight-hour setup ceiling. Scoring is not setup, so the scored shards add nothing here."
+    },
+    {
+      "start_utc": "2026-10-15T11:12:02Z",
+      "stop_utc": "2026-10-15T11:21:08Z",
+      "measured_seconds": 546,
+      "startup_allowance_seconds": 300,
+      "handoff_allowance_seconds": 300,
+      "charged_seconds": 1146,
+      "measurement": "Session wall time from reading the #139 fixture through review fixes, plus allowances for ticket reading before the worktree existed and for commit/handoff. No real runs.",
+      "work": "#139 staged, not frozen: go-relationships fixture version 2. B's follow-up moves to its own parse.go (Parse, IDs) using neither Consume nor Record; A keeps Stats and adds Duplicates; Render dropped; per-agent test files; neutral opening dependency line and one dependency line per milestone; oracle, reference, follow-up mutants and scripted workers updated. The freeze runs in the single re-freeze for the #123-gated scored batch; until then harness tests fail on the freeze guard."
     }
   ],
-  "charged_total_seconds": 29000,
-  "remaining_seconds": -200,
+  "charged_total_seconds": 30146,
+  "remaining_seconds": -1346,
   "status": "setup complete: pilot /private/tmp/ev/pilot3 passed (#80); manifest v8: the runtime pin moved from Claude Code 2.1.287 to 2.1.292 (config.json only), so runs before v8 are not comparable with later ones"
 }
