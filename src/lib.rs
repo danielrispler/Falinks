@@ -83,6 +83,9 @@ pub struct Request {
     pub expected: BTreeMap<String, u64>,
     /// Complete file replacements; None deletes an enrolled file.
     pub output: BTreeMap<String, Option<File>>,
+    /// Inline reviews, recorded before the gate and kept whatever the outcome.
+    #[serde(default)]
+    pub reviews: Vec<Review>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
@@ -852,6 +855,8 @@ impl Engine {
             return fail("request ID required");
         }
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
+        // Inline reviews stand even if the edit is then refused, as separate reviews would.
+        self.record_reviews(&db, client, &request.reviews)?;
         // Copied out: no layout guard is held while host observers run.
         let (space, live, before, group) = {
             let layout = self.layout()?;
@@ -1326,6 +1331,7 @@ impl Engine {
                 id: format!("job:{}", spec.id),
                 expected,
                 output: BTreeMap::new(),
+                reviews: Vec::new(),
             },
             finished: false,
             error: None,

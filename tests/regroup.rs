@@ -92,6 +92,7 @@ fn offer(engine: &Engine, client: &Client, id: &str) -> Checkpoint {
                 scope: Vec::new(),
                 text: id.into(),
                 supersedes: None,
+                reviews: Vec::new(),
             },
         )
         .unwrap()
@@ -500,6 +501,7 @@ fn interrupted_transition_restores_both_roots_and_retries_after_restart() {
                 id: "halted".into(),
                 expected: BTreeMap::from([("go.mod".into(), 0)]),
                 output: BTreeMap::from([("go.mod".into(), None)]),
+                reviews: Vec::new(),
             },
         )
         .unwrap();
@@ -594,6 +596,7 @@ fn retained_candidate_keeps_its_membership_across_a_split() {
                 scope: Vec::new(),
                 text: "held".into(),
                 supersedes: None,
+                reviews: Vec::new(),
             },
         )
         .unwrap();

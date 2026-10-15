@@ -68,6 +68,7 @@ fn offer(id: &str, revision: u64) -> Offer {
         scope: vec!["a.rs".into(), "b.rs".into()],
         text: format!("offer {id}"),
         supersedes: None,
+        reviews: Vec::new(),
     }
 }
 fn members(agents: &[usize]) -> BTreeSet<usize> {
@@ -311,6 +312,7 @@ fn feedback_and_failed_checks_preserve_drafts_candidates_and_published_state() {
 fn superseding(id: &str, revision: u64, old: &str) -> Offer {
     Offer {
         supersedes: Some(old.into()),
+        reviews: Vec::new(),
         ..offer(id, revision)
     }
 }

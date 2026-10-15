@@ -62,6 +62,7 @@ pub fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
                 executable: false,
             }),
         )]),
+        reviews: Vec::new(),
     }
 }
 
