@@ -40,12 +40,13 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
 
 ## Claim
 
-`cargo run --bin wayfinder-startup -- --claim <n>` is the only write path, and the session's first write.
+`cargo run --bin wayfinder-startup -- --claim <n>` is the session's first write.
 
 - It refuses closed tickets, blocked tickets and tickets assigned to someone else.
 - It assigns the issue to you.
 - It reuses the ticket's worktree, or checks out its existing local or `origin` `issue-<n>-*` branch, or creates branch `issue-<n>-<slug>` from `origin/main`. New worktrees go under `.claude/worktrees/`.
 - It prints the worktree path.
+- After the PR merges, `--done <n>` run from the main checkout removes that worktree and branch; `--help` lists what it refuses.
 
 Parallel tickets run in separate sessions that Daniel starts. Give one `--claim <n>` command and one prompt per terminal (do not attempt to spawn background general-purpose agents).
 

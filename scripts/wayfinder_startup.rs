@@ -1,4 +1,5 @@
-//! Read the live map and ordered ticket metadata, or every open issue with `--all`. Only `--claim` writes: it assigns a ticket and sets up its worktree.
+//! Read the live map and ordered ticket metadata, or every open issue with `--all`. `--claim` assigns a ticket
+//! and sets up its worktree; `--done` removes them after merge. Nothing else writes.
 use falinks_host::{Result, command_output, require};
 use serde_json::{Value, json};
 use std::{
@@ -240,6 +241,79 @@ pub fn claim_plan(
         workspace,
     })
 }
+#[derive(Debug, PartialEq)]
+pub struct DonePlan {
+    pub branch: String,
+    /// The live worktree that has the branch checked out, if any.
+    pub worktree: Option<String>,
+}
+/// Decide whether `--done` may delete the ticket's local branch and worktree: only when a
+/// merged PR ended on the branch's current commit, so nothing unmerged is lost.
+/// `branches` is `<name> <sha>` per local `issue-<n>-*` branch; `fetch_merged` lists the branch's
+/// merged PRs as `headRefName,headRefOid`; `cwd` must lie outside the worktree.
+pub fn done_plan(
+    number: u64,
+    worktrees: &str,
+    branches: &str,
+    fetch_merged: impl FnOnce(&str) -> Result<Value>,
+    cwd: &std::path::Path,
+) -> Result<DonePlan> {
+    let prefix = format!("issue-{number}-");
+    let ours = branches
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(name, _)| name.starts_with(&prefix))
+        .collect::<Vec<_>>();
+    let [(branch, head)] = ours.as_slice() else {
+        let names = ours.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        return Err(format!(
+            "#{number}: expected one local {prefix}* branch, found [{}]",
+            names.join(", ")
+        )
+        .into());
+    };
+    let merged_here = fetch_merged(branch)?
+        .as_array()
+        .ok_or("expected a merged PR list")?
+        .iter()
+        .any(|pr| pr["headRefName"] == *branch && pr["headRefOid"] == *head);
+    require(
+        merged_here,
+        &format!("{branch}: no merged PR ends at {head}; it has unmerged work or its PR is open"),
+    )?;
+    let mut worktree = None;
+    for stanza in worktrees.split("\n\n") {
+        let field = |key: &str| stanza.lines().find_map(|line| line.strip_prefix(key));
+        if let (Some(path), Some(name), None) = (
+            field("worktree "),
+            field("branch refs/heads/"),
+            field("prunable"),
+        ) && name == *branch
+        {
+            require(
+                !cwd.starts_with(path),
+                &format!("run --done from outside {path}"),
+            )?;
+            worktree = Some(path.to_owned());
+        }
+    }
+    Ok(DonePlan {
+        branch: (*branch).to_owned(),
+        worktree,
+    })
+}
+/// Files `git worktree remove` would lose: `git status --porcelain --ignored` lines other
+/// than an ignored Cargo `target/` build directory, at the root or in a nested crate.
+pub fn leftovers(status: &str) -> Vec<&str> {
+    status
+        .lines()
+        .filter(|line| {
+            !line
+                .strip_prefix("!! ")
+                .is_some_and(|path| path == "target/" || path.ends_with("/target/"))
+        })
+        .collect()
+}
 fn stdout(program: &str, args: &[&str]) -> Result<String> {
     let mut command = Command::new(program);
     command.args(args);
@@ -265,7 +339,7 @@ fn blockers_of(number: impl std::fmt::Display) -> Result<Vec<u64>> {
         &format!("repos/{REPO}/issues/{number}/dependencies/blocked_by"),
     ])?)
 }
-/// The only write path: assign the ticket, then create or reuse its worktree.
+/// Assign the ticket, then create or reuse its worktree.
 fn claim(number: u64) -> Result<()> {
     let id = number.to_string();
     let issue = gh(&[
@@ -363,21 +437,78 @@ fn claim(number: u64) -> Result<()> {
     println!("{}", plan.path);
     Ok(())
 }
-const USAGE: &str = "usage: wayfinder-startup [map-number] [--body] | --all | --claim <issue>";
+/// After merge: remove the ticket's worktree and local branch once `done_plan` allows it.
+fn done(number: u64) -> Result<()> {
+    let branches = stdout(
+        "git",
+        &[
+            "for-each-ref",
+            "--format=%(refname:short) %(objectname)",
+            &format!("refs/heads/issue-{number}-*"),
+        ],
+    )?;
+    let plan = done_plan(
+        number,
+        &stdout("git", &["worktree", "list", "--porcelain"])?,
+        &branches,
+        |branch| {
+            gh(&[
+                "pr",
+                "list",
+                "--repo",
+                REPO,
+                "--state",
+                "merged",
+                "--head",
+                branch,
+                "--json",
+                "headRefName,headRefOid",
+            ])
+        },
+        // Resolved, so a symlinked path into the worktree is still caught.
+        &env::current_dir()?.canonicalize()?,
+    )?;
+    if let Some(path) = &plan.worktree {
+        let status = stdout("git", &["-C", path, "status", "--porcelain", "--ignored"])?;
+        let left = leftovers(&status);
+        require(
+            left.is_empty(),
+            &format!(
+                "{path} has uncommitted, untracked or ignored files:\n{}",
+                left.join("\n")
+            ),
+        )?;
+        stdout("git", &["worktree", "remove", path])?;
+        println!("removed worktree {path}");
+    }
+    // A prunable worktree record still holds the branch; drop it so the branch can go.
+    stdout("git", &["worktree", "prune"])?;
+    // -D: a squash merge leaves the branch unmerged in Git's eyes; done_plan checked the PR head.
+    stdout("git", &["branch", "-D", &plan.branch])?;
+    println!("deleted branch {}", plan.branch);
+    Ok(())
+}
+const USAGE: &str =
+    "usage: wayfinder-startup [map-number] [--body] | --all | --claim <issue> | --done <issue>";
 const OPEN_ISSUES: &str = "query($endCursor: String) { repository(owner: \"danielrispler\", name: \"Falinks\") { issues(states: OPEN, first: 100, after: $endCursor) { pageInfo { hasNextPage endCursor } nodes { number title url parent { number } assignees(first: 20) { totalCount nodes { login } } blockedBy(first: 50) { totalCount nodes { number state } } } } } }";
 fn run() -> Result<()> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args == ["--help"] {
         println!(
-            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub; it prints the map title, URL and ticket rows, and --body appends the map body.\n--all lists every open issue repo-wide, by number, with its parent, assignees, open blockers and frontier, from one paginated GraphQL query.\n--claim <issue> is the only write path: it refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path."
+            "{USAGE}\nDefault map: newest open issue labelled wayfinder:map. The map listing only reads GitHub; it prints the map title, URL and ticket rows, and --body appends the map body.\n--all lists every open issue repo-wide, by number, with its parent, assignees, open blockers and frontier, from one paginated GraphQL query.\n--claim <issue> refuses closed, blocked or otherwise-assigned tickets, assigns the issue to you, reuses its worktree, or checks out its local or origin branch, or creates branch issue-<n>-<slug> from origin/main, under .claude/worktrees/, and prints the path.\n--done <issue> runs after merge, from outside the ticket's worktree: it removes that worktree and the ticket's one local issue-<n>-* branch, only if a merged PR ended on the branch's commit and the worktree has no uncommitted, untracked or ignored files apart from target/."
         );
         return Ok(());
     }
-    if args.first().is_some_and(|flag| flag == "--claim") {
+    let write: Option<fn(u64) -> Result<()>> = match args.first().map(String::as_str) {
+        Some("--claim") => Some(claim),
+        Some("--done") => Some(done),
+        _ => None,
+    };
+    if let Some(write) = write {
         let [_, number] = args.as_slice() else {
             return Err(USAGE.into());
         };
-        return claim(number.parse().map_err(|_| USAGE)?);
+        return write(number.parse().map_err(|_| USAGE)?);
     }
     if args == ["--all"] {
         let pages = gh(&[
@@ -767,5 +898,90 @@ mod claim_tests {
         issue["state"] = json!("CLOSED");
         let error = refusal(&issue, &[]);
         assert!(error.contains("#47 is closed"), "{error}");
+    }
+}
+#[cfg(test)]
+mod done_tests {
+    use super::*;
+    use std::path::Path;
+    const WORKTREES: &str = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo/.claude/worktrees/issue-47-x\nHEAD aaa\nbranch refs/heads/issue-47-x\n";
+    const BRANCH: &str = "issue-47-x aaa\n";
+    fn merged_at(sha: &str) -> Value {
+        json!([{"headRefName":"issue-47-x","headRefOid":sha}])
+    }
+    fn plan(worktrees: &str, branches: &str, merged: &Value, cwd: &str) -> Result<DonePlan> {
+        done_plan(
+            47,
+            worktrees,
+            branches,
+            |_| Ok(merged.clone()),
+            Path::new(cwd),
+        )
+    }
+    #[test]
+    fn branch_merged_at_its_head_loses_worktree_and_branch() {
+        assert_eq!(
+            plan(WORKTREES, BRANCH, &merged_at("aaa"), "/repo").unwrap(),
+            DonePlan {
+                branch: "issue-47-x".into(),
+                worktree: Some("/repo/.claude/worktrees/issue-47-x".into()),
+            }
+        );
+    }
+    #[test]
+    fn branch_without_worktree_is_still_deleted() {
+        let plan = plan(
+            "worktree /repo\nbranch refs/heads/main\n",
+            BRANCH,
+            &merged_at("aaa"),
+            "/repo",
+        );
+        assert_eq!(plan.unwrap().worktree, None);
+    }
+    #[test]
+    fn commits_after_the_merged_head_are_kept() {
+        let error = plan(WORKTREES, BRANCH, &merged_at("old"), "/repo").unwrap_err();
+        assert!(
+            error.to_string().contains("no merged PR ends at aaa"),
+            "{error}"
+        );
+    }
+    #[test]
+    fn unmerged_branch_is_kept() {
+        let error = plan(WORKTREES, BRANCH, &json!([]), "/repo").unwrap_err();
+        assert!(error.to_string().contains("no merged PR"), "{error}");
+    }
+    #[test]
+    fn running_inside_the_worktree_is_refused() {
+        let error = plan(
+            WORKTREES,
+            BRANCH,
+            &merged_at("aaa"),
+            "/repo/.claude/worktrees/issue-47-x/src",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("from outside"), "{error}");
+    }
+    #[test]
+    fn missing_or_ambiguous_branch_is_refused_before_asking_github() {
+        for branches in ["issue-470-y bbb\n", "issue-47-x aaa\nissue-47-y bbb\n"] {
+            let fetch = |_: &str| -> Result<Value> { panic!("fetched merged PRs") };
+            assert!(done_plan(47, WORKTREES, branches, fetch, Path::new("/repo")).is_err());
+        }
+    }
+    #[test]
+    fn prunable_worktree_is_not_removed() {
+        let worktrees =
+            format!("{WORKTREES}prunable gitdir file points to non-existent location\n");
+        let plan = plan(&worktrees, BRANCH, &merged_at("aaa"), "/repo").unwrap();
+        assert_eq!(plan.worktree, None);
+    }
+    #[test]
+    fn only_the_build_directory_may_be_left_behind() {
+        assert!(leftovers("!! evaluation/target/\n!! target/\n").is_empty());
+        assert_eq!(
+            leftovers("!! target/\n!! .env\n!! target.bak/\n?? target/\n M src/lib.rs\n"),
+            ["!! .env", "!! target.bak/", "?? target/", " M src/lib.rs"]
+        );
     }
 }
