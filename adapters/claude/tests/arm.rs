@@ -40,10 +40,6 @@ fn eval() -> PathBuf {
     assert!(status.success());
     repo().join("evaluation/target/debug/falinks-eval")
 }
-fn go_env(key: &str) -> PathBuf {
-    let out = Command::new("go").args(["env", key]).output().unwrap();
-    PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
-}
 
 struct Run {
     arm: Arm,
@@ -100,10 +96,7 @@ fn setup(name: &str) -> Run {
     assert!(!enrolled.contains(&".gitignore".to_string()));
     let enrolled: Vec<&str> = enrolled.iter().map(String::as_str).collect();
     let engine = Engine::open(&space, &root.join("state"), &enrolled).unwrap();
-    let gopls = std::env::var_os("FALINKS_GOPLS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| go_env("GOPATH").join("bin/gopls"));
-    let go = go_env("GOROOT").join("bin/go");
+    let (go, gopls) = falinks_claude::go_tools().unwrap();
     let tools = Tools {
         go: go.clone(),
         gopls,

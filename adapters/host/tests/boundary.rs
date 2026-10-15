@@ -190,3 +190,20 @@ fn relocation_rebinds_only_an_existing_thread_for_resume() -> falinks_host::Resu
     moved.bind("thread", "agent", true)?;
     Ok(())
 }
+
+#[test]
+fn streamed_file_hash_matches_the_whole_file_digest() -> falinks_host::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let small = dir.path().join("abc");
+    std::fs::write(&small, b"abc")?;
+    assert_eq!(
+        falinks_host::file_hash(&small)?,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    // Larger than one read buffer, so the digest spans several chunks.
+    let bytes: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    let large = dir.path().join("large");
+    std::fs::write(&large, &bytes)?;
+    assert_eq!(falinks_host::file_hash(&large)?, falinks_host::hash(&bytes));
+    Ok(())
+}

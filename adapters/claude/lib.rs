@@ -1,13 +1,14 @@
 //! Pinned Claude Code worker adapter: the #23 boundary ported to stream-json.
 //! Runtime-independent pieces (`Boundary`, `ControlGate`, `ControlledHost`) come from `falinks-host`.
 use falinks_host::{
-    Boundary, ControlGate, Engine, Notice, PinMap, Result, file_hash, platform_pin, require,
+    Boundary, ControlGate, Engine, Notice, PinMap, Result, file_hash, platform_pin, random_hex,
+    require,
 };
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Write},
     os::unix::{
         fs::OpenOptionsExt,
         net::{UnixListener, UnixStream},
@@ -15,8 +16,12 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc::{self, Receiver, Sender},
-    thread,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -95,33 +100,8 @@ pub fn probe_names(protected: &[&str]) -> Vec<String> {
 /// The exact probe command must have completed through the real Bash tool, reporting
 /// exactly `names`, all passing.
 pub fn probe_controls(events: &[Value], command: &str, names: &[String]) -> Result<Value> {
-    let blocks = |kind: &'static str| {
-        events
-            .iter()
-            .filter(move |e| e["type"] == kind)
-            .flat_map(|e| {
-                e["message"]["content"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-            })
-    };
-    let ids: Vec<Value> = blocks("assistant")
-        .filter(|b| {
-            b["type"] == "tool_use" && b["name"] == "Bash" && b["input"]["command"] == command
-        })
-        .map(|b| b["id"].clone())
-        .collect();
-    for event in events.iter().filter(|e| e["type"] == "user") {
-        let content = event["message"]["content"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        if !content.iter().any(|b| {
-            b["type"] == "tool_result" && ids.contains(&b["tool_use_id"]) && b["is_error"] != true
-        }) {
-            continue;
-        }
+    let bash = |b: &Value| b["name"] == "Bash" && b["input"]["command"] == command;
+    for (event, _) in tool_results(events, bash).filter(|(_, b)| b["is_error"] != true) {
         let Some(text) = event["tool_use_result"]["stdout"].as_str().and_then(|out| {
             out.lines()
                 .find_map(|l| l.strip_prefix("FALINKS_CONTROLS="))
@@ -150,11 +130,49 @@ pub fn probe_controls(events: &[Value], command: &str, names: &[String]) -> Resu
     Err("exact probe command did not complete through the actual Bash tool".into())
 }
 
+/// The content blocks of one stream-json message.
+pub fn blocks(event: &Value) -> impl Iterator<Item = &Value> {
+    event["message"]["content"].as_array().into_iter().flatten()
+}
+/// Each `tool_result` block, with the user event carrying it, that answers an assistant
+/// `tool_use` block matching `called`.
+pub fn tool_results(
+    events: &[Value],
+    called: impl Fn(&Value) -> bool,
+) -> impl Iterator<Item = (&Value, &Value)> {
+    let ids: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["type"] == "assistant")
+        .flat_map(blocks)
+        .filter(|b| b["type"] == "tool_use" && called(b))
+        .map(|b| &b["id"])
+        .collect();
+    events
+        .iter()
+        .filter(|e| e["type"] == "user")
+        .flat_map(|e| blocks(e).map(move |b| (e, b)))
+        .filter(move |(_, b)| b["type"] == "tool_result" && ids.contains(&&b["tool_use_id"]))
+}
+
+/// The Go toolchain (`GOROOT/bin/go`) and `gopls` (`FALINKS_GOPLS`, else `GOPATH/bin/gopls`).
+pub fn go_tools() -> Result<(PathBuf, PathBuf)> {
+    let go_env = |key: &str| -> Result<PathBuf> {
+        let out = Command::new("go").args(["env", key]).output()?;
+        Ok(PathBuf::from(String::from_utf8(out.stdout)?.trim()))
+    };
+    let gopls = match std::env::var_os("FALINKS_GOPLS") {
+        Some(path) => PathBuf::from(path),
+        None => go_env("GOPATH")?.join("bin/gopls"),
+    };
+    Ok((go_env("GOROOT")?.join("bin/go"), gopls))
+}
+
 pub fn pin(os: &str, arch: &str) -> Result<&'static str> {
     platform_pin(PINS, os, arch)
 }
 
-pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
+/// The canonical binary and the SHA-256 it was verified against.
+pub fn verify_binary(binary: &Path) -> Result<(PathBuf, &'static str)> {
     let pin = pin(std::env::consts::OS, std::env::consts::ARCH)?;
     let binary = binary.canonicalize()?;
     // Hash first: an unpinned executable is never run, and no other installed CLI is tried.
@@ -170,7 +188,7 @@ pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
             && String::from_utf8(version.stdout)?.trim() == format!("{VERSION} (Claude Code)"),
         "unsupported claude version",
     )?;
-    Ok(binary)
+    Ok((binary, pin))
 }
 
 /// What one worker launch may see and call. Controls come only from here, never from a saved session.
@@ -204,13 +222,7 @@ impl Launch {
     }
     /// `falinks_<operation>` names offered by this launch.
     pub fn operations(&self) -> Vec<String> {
-        self.tools
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|t| t["name"].as_str()?.strip_prefix("falinks_"))
-            .map(String::from)
-            .collect()
+        falinks_host::operations(&self.tools)
     }
     /// The exact runtime tool list `init` must report.
     pub fn allowed(&self) -> Vec<String> {
@@ -265,11 +277,6 @@ fn beneath(path: &Path, root: &Path) -> bool {
     }
 }
 
-fn random_hex(bytes: usize) -> Result<String> {
-    let mut random = vec![0u8; bytes];
-    fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
-    Ok(random.iter().map(|x| format!("{x:02x}")).collect())
-}
 /// Host-chosen runtime session identity (RFC 4122 version 4).
 pub fn session_id() -> Result<String> {
     let mut h = random_hex(16)?.into_bytes();
@@ -354,6 +361,12 @@ impl Session {
     pub fn session(&self) -> &str {
         &self.session
     }
+    /// This process's evidence: events, deliveries, denials and controls.
+    pub fn transcript(&self) -> Value {
+        json!({"session":self.session,"events":self.events,"deliveries":self.deliveries,
+            "permission_denials":self.denials,"gate_failed":self.gate.failed,
+            "controls":self.gate.controls,"project":self.project})
+    }
     /// Between `init` and `result`: a message sent now is presented within this turn.
     pub fn in_turn(&self) -> bool {
         self.in_turn
@@ -413,8 +426,7 @@ impl Session {
                     line["message"]["model"].as_str().is_none_or(|m| m == MODEL),
                     "model identity changed; run invalid",
                 )?;
-                let blocks = line["message"]["content"].as_array().into_iter().flatten();
-                for block in blocks.filter(|b| b["type"] == "tool_use") {
+                for block in blocks(line).filter(|b| b["type"] == "tool_use") {
                     require(
                         block["name"]
                             .as_str()
@@ -593,8 +605,6 @@ pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String
         "",
         "--strict-mcp-config",
         "--disable-slash-commands",
-        "--tools",
-        "Bash,Read,Glob,Grep",
         "--permission-mode",
         "dontAsk",
         "--max-turns",
@@ -604,6 +614,8 @@ pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String
     .to_vec();
     // Resume restores conversation only; every control is re-supplied by this launch.
     args.extend([
+        "--tools".into(),
+        NATIVE.join(","),
         "--settings".into(),
         controller
             .join("settings.json")
@@ -622,14 +634,58 @@ enum Input {
     Host(Value, Sender<Value>),
 }
 
+/// The host channel's accept loop. `stop` ends it and releases its descriptor.
+struct Listener {
+    socket: PathBuf,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+impl Listener {
+    fn bind(socket: PathBuf, host: Sender<Input>) -> Result<Self> {
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let thread = thread::spawn(move || {
+            for stream in listener.incoming().map_while(|s| s.ok()) {
+                if stopped.load(Ordering::SeqCst) {
+                    return;
+                }
+                let host = host.clone();
+                thread::spawn(move || serve(stream, &host));
+            }
+        });
+        Ok(Self {
+            socket,
+            stop,
+            thread: Some(thread),
+        })
+    }
+    /// A wake-up connection lets the blocked accept loop see the flag.
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // shortcut: if the socket file was removed under us the wake-up cannot connect and the
+        // thread stays blocked; join only when woken, so close never hangs.
+        if let Some(thread) = self.thread.take()
+            && UnixStream::connect(&self.socket).is_ok()
+        {
+            let _ = thread.join();
+        }
+        let _ = fs::remove_file(&self.socket);
+    }
+}
+
 pub struct Runtime {
     pub session: Session,
+    /// The exact arguments and settings this launch used.
+    pub args: Vec<String>,
+    pub settings: Value,
     binary: PathBuf,
     control_host: bool,
     child: Child,
     input: Option<ChildStdin>,
     inputs: Receiver<Input>,
-    socket: PathBuf,
+    listener: Listener,
     closed: bool,
 }
 impl Runtime {
@@ -642,7 +698,7 @@ impl Runtime {
         engine: Engine,
         control_host: bool,
     ) -> Result<Self> {
-        let binary = verify_binary(binary)?;
+        let (binary, _) = verify_binary(binary)?;
         for path in [
             &launch.source,
             &launch.scratch,
@@ -673,27 +729,17 @@ impl Runtime {
         };
         let mut session = Session::new(launch, agent, &id, &token, engine, resume.is_some())?;
         session.gate.record("pin", true)?;
-        fs::write(
-            controller.join("settings.json"),
-            settings(launch, &tool)?.to_string(),
-        )?;
+        let settings = settings(launch, &tool)?;
+        fs::write(controller.join("settings.json"), settings.to_string())?;
         fs::write(controller.join("tools.json"), launch.tools.to_string())?;
         let server = json!({"mcpServers":{"falinks":{"command":tool,"args":["mcp",controller]}}});
         fs::write(controller.join("mcp.json"), server.to_string())?;
         let (sender, inputs) = mpsc::channel();
-        let socket = controller.join("host.sock");
-        let _ = fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket)?;
-        let host = sender.clone();
-        thread::spawn(move || {
-            for stream in listener.incoming().map_while(|s| s.ok()) {
-                let host = host.clone();
-                thread::spawn(move || serve(stream, &host));
-            }
-        });
+        let listener = Listener::bind(controller.join("host.sock"), sender.clone())?;
+        let args = launch_args(&controller, &id, resume.is_some());
         let mut command = Command::new(&binary);
         command
-            .args(launch_args(&controller, &id, resume.is_some()))
+            .args(&args)
             .current_dir(&launch.scratch)
             .env("DISABLE_AUTOUPDATER", "1")
             // The Git arm's Go settings: the sandbox denies Go's default cache outside scratch (#112).
@@ -733,12 +779,14 @@ impl Runtime {
         });
         Ok(Self {
             session,
+            args,
+            settings,
             binary,
             control_host,
             child,
             input,
             inputs,
-            socket,
+            listener,
             closed: false,
         })
     }
@@ -855,7 +903,7 @@ impl Runtime {
             }
             let _ = self.child.wait();
         }
-        let _ = fs::remove_file(&self.socket);
+        self.listener.stop();
     }
 }
 impl Drop for Runtime {
@@ -881,5 +929,24 @@ fn serve(stream: UnixStream, host: &Sender<Input>) {
     }
     if let Ok(value) = answer.recv_timeout(Duration::from_secs(600)) {
         let _ = writeln!(writer, "{value}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_listener_ends_its_accept_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sender, inputs) = mpsc::channel();
+        let mut listener = Listener::bind(dir.path().join("host.sock"), sender).unwrap();
+        listener.stop();
+        // The accept thread held the last sender: the channel closes only once it exits.
+        assert!(matches!(
+            inputs.recv_timeout(Duration::from_secs(5)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+        assert!(!dir.path().join("host.sock").exists());
     }
 }

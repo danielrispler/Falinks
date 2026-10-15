@@ -6,7 +6,7 @@ use falinks::{Action, Engine, ProposalState};
 use falinks_claude::{
     Launch, MODEL, Runtime, VERSION,
     arm::{self, Arm, Tools, agent_name},
-    launch_args, verify_binary,
+    engine_host, go_tools, verify_binary,
 };
 use falinks_host::{Boundary, EngineOutcome, Result, file_hash, require};
 use serde_json::{Value, json};
@@ -22,7 +22,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread,
     time::{Duration, Instant},
 };
 
@@ -135,8 +134,7 @@ impl Run {
         )?;
         let session = runtime.session.session().to_owned();
         let record = json!({"agent": agent, "resume": resume.is_some(), "source": launch.source,
-            "protected": launch.protected, "settings": fs::read_to_string(launch.controller.join("settings.json"))?,
-            "args": launch_args(&launch.controller, &session, resume.is_some())});
+            "protected": launch.protected, "settings": runtime.settings, "args": runtime.args});
         self.evidence["launches"]
             .as_array_mut()
             .unwrap()
@@ -156,13 +154,7 @@ impl Run {
         let worker = &mut self.workers[agent];
         if let Some(mut runtime) = worker.runtime.take() {
             runtime.close();
-            let session = &runtime.session;
-            worker.transcripts.push(
-                json!({"session": session.session(), "events": session.events,
-                "deliveries": session.deliveries, "permission_denials": session.denials,
-                "gate_failed": session.gate.failed, "controls": session.gate.controls,
-                "project": session.project}),
-            );
+            worker.transcripts.push(runtime.session.transcript());
         }
     }
 
@@ -374,24 +366,11 @@ fn run(options: Options) -> Result<i32> {
         }
     };
     let stop = Arc::new(AtomicBool::new(false));
-    let validator = {
-        let (engine, stop) = (Arc::clone(&run.engine), Arc::clone(&stop));
-        // The host processes queued check runs while agents keep drafting.
-        thread::spawn(move || {
-            let mut log = vec![];
-            while !stop.load(Ordering::SeqCst) {
-                match engine.validate() {
-                    Ok(Some(run)) => log.push(json!({"run": run.id, "outcome": run.outcome})),
-                    Ok(None) => thread::sleep(Duration::from_millis(200)),
-                    Err(error) => {
-                        log.push(json!({"error": error.to_string()}));
-                        thread::sleep(Duration::from_millis(200));
-                    }
-                }
-            }
-            log
-        })
-    };
+    let validator = engine_host::validator(
+        Arc::clone(&run.engine),
+        Arc::clone(&stop),
+        Arc::new(AtomicBool::new(false)),
+    );
     let timeout = Duration::from_secs_f64(
         config["timeout_seconds"]
             .as_f64()
@@ -449,7 +428,7 @@ fn run(options: Options) -> Result<i32> {
         .values()
         .filter(|u| u.as_array().is_some_and(|u| !u.is_empty()))
         .count();
-    let mut evidence = run.evidence.clone();
+    let mut evidence = std::mem::take(&mut run.evidence);
     if let Some(final_outcome) = &arm.outcome {
         evidence["final_snapshot"] = final_outcome["final_snapshot"].clone();
         evidence["oracle"] = final_outcome["oracle"].clone();
@@ -509,14 +488,13 @@ fn setup(
         config["model"] == MODEL && config["runtime_version"] == VERSION,
         "run configuration must name the adapter's pinned model and runtime version",
     )?;
-    let binary = verify_binary(Path::new(
+    let (binary, hash) = verify_binary(Path::new(
         config["runtime_binary"]
             .as_str()
             .ok_or("runtime_binary must be a path")?,
     ))?;
-    let hash = file_hash(&binary)?;
     require(
-        config["runtime_sha256"] == hash.as_str(),
+        config["runtime_sha256"] == hash,
         "runtime binary hash differs from frozen run configuration",
     )?;
     evidence["runtime_verified_sha256"] = hash.into();
@@ -578,17 +556,11 @@ fn setup(
         &dir.join("controller/state"),
         &enrolled.iter().map(String::as_str).collect::<Vec<_>>(),
     )?;
-    let go_env = |key: &str| -> Result<PathBuf> {
-        let out = Command::new("go").args(["env", key]).output()?;
-        Ok(PathBuf::from(String::from_utf8(out.stdout)?.trim()))
-    };
     let rust = Command::new("rustup").args(["which", "cargo"]).output()?;
+    let (go, gopls) = go_tools()?;
     let tools = Tools {
-        go: go_env("GOROOT")?.join("bin/go"),
-        gopls: match env::var_os("FALINKS_GOPLS") {
-            Some(path) => PathBuf::from(path),
-            None => go_env("GOPATH")?.join("bin/gopls"),
-        },
+        go,
+        gopls,
         rust: PathBuf::from(String::from_utf8(rust.stdout)?.trim())
             .parent()
             .ok_or("rust toolchain")?
@@ -662,7 +634,6 @@ fn setup(
         let text = run.prompt[agent].clone();
         run.start(agent, text)?;
     }
-    *evidence = run.evidence.clone();
     Ok(run)
 }
 

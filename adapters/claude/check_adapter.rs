@@ -1,8 +1,6 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
-use falinks_claude::{
-    Launch, Runtime, launch_args, probe_controls, probe_names, settings, verify_binary,
-};
+use falinks_claude::{Launch, Runtime, probe_controls, probe_names, verify_binary};
 use falinks_host::{Engine, Result, controlled_host::ControlledHost, file_hash, hash, require};
 use serde_json::{Value, json};
 use std::{
@@ -81,21 +79,21 @@ fn snapshot(runtime: &Runtime, host: &Rc<RefCell<ControlledHost>>) -> Value {
 }
 
 fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result<()> {
-    let binary = verify_binary(binary)?;
+    let (binary, binary_sha256) = verify_binary(binary)?;
     let (probe, tool) = (probe.canonicalize()?, tool.canonicalize()?);
     let root = fixture(&probe, &tool)?;
     let workspace = root.join("source");
     evidence["binary"] = json!(binary);
-    evidence["binary_sha256"] = json!(file_hash(&binary)?);
+    evidence["binary_sha256"] = json!(binary_sha256);
     evidence["probe_sha256"] = json!(file_hash(&probe)?);
     evidence["tool_sha256"] = json!(file_hash(&tool)?);
     evidence["root"] = json!(root);
     let launch = Launch::fixture(&root);
-    evidence["settings"] = settings(&launch, &root.join("worker-tools/falinks-claude-tool"))?;
     let host = Rc::new(RefCell::new(ControlledHost::new(&root)?));
     let mut runtime = Runtime::new(&binary, &launch, AGENT, None, engine(&host), true)?;
     let session = runtime.session.session().to_owned();
-    evidence["launch"] = json!(launch_args(&launch.controller, &session, false));
+    evidence["settings"] = runtime.settings.clone();
+    evidence["launch"] = json!(runtime.args);
     let result = (|| -> Result<()> {
         let original = hash(b"original\n");
         runtime.start(&format!(

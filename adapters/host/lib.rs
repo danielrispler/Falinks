@@ -17,9 +17,6 @@ pub struct EngineOutcome {
     pub notice: Option<Notice>,
 }
 pub type Engine = Box<dyn FnMut(&Value) -> Result<EngineOutcome>>;
-pub fn tools(workspace: &str) -> Value {
-    json!(["edit","review","offer"].map(|operation|json!({"name":format!("falinks_{operation}"),"description":format!("Submit an engine {operation}. Workspace: {workspace}"),"inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},"required":["workspace","request"],"additionalProperties":false}})))
-}
 /// Verified pins keyed by `std::env::consts::{OS, ARCH}`. A platform is declared only after
 /// its adapter controls were re-run there (review-enforced); every other platform fails closed.
 pub type PinMap<T> = &'static [((&'static str, &'static str), T)];
@@ -66,14 +63,32 @@ pub fn require(condition: bool, message: &str) -> Result<()> {
         Err(message.to_owned().into())
     }
 }
-pub fn hash(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+pub fn hash(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes))
+}
+/// Streams the file: pinned runtimes are hundreds of megabytes.
 pub fn file_hash(path: &Path) -> Result<String> {
-    Ok(hash(&std::fs::read(path)?))
+    use std::io::BufRead;
+    let mut hasher = Sha256::new();
+    let mut file = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?);
+    loop {
+        let chunk = file.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(hex(&hasher.finalize()));
+        }
+        hasher.update(chunk);
+        let read = chunk.len();
+        file.consume(read);
+    }
+}
+/// `bytes` random bytes as lowercase hex: opaque tokens, nonces and identities.
+pub fn random_hex(bytes: usize) -> Result<String> {
+    let mut random = vec![0u8; bytes];
+    std::io::Read::read_exact(&mut std::fs::File::open("/dev/urandom")?, &mut random)?;
+    Ok(hex(&random))
 }
 
 /// `sandbox-probe` arguments for the historical fixture layout (`ROOT/{source,scratch,...}`).
@@ -121,6 +136,31 @@ impl ControlGate {
     }
 }
 
+/// One MCP tool definition: `falinks_<operation>` taking `{workspace, request}`, the
+/// argument shape `Boundary::authenticate` accepts.
+pub fn tool(operation: &str, description: String) -> Value {
+    json!({"name":format!("falinks_{operation}"),"description":description,
+        "inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},
+            "required":["workspace","request"],"additionalProperties":false}})
+}
+/// The historical edit/review/offer tools of the fixture host.
+pub fn tools(workspace: &str) -> Value {
+    json!(["edit", "review", "offer"].map(|operation| tool(
+        operation,
+        format!("Submit an engine {operation}. Workspace: {workspace}")
+    )))
+}
+/// The `<operation>` of every `falinks_<operation>` in an MCP tool list.
+pub fn operations(tools: &Value) -> Vec<String> {
+    tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["name"].as_str()?.strip_prefix("falinks_"))
+        .map(String::from)
+        .collect()
+}
+
 pub struct Boundary {
     db: Connection,
     pub workspace: String,
@@ -135,14 +175,15 @@ impl Boundary {
     pub fn new(database: &Path, workspace: &Path, session: String) -> Result<Self> {
         let db = Connection::open(database)?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS binding(thread TEXT PRIMARY KEY,agent TEXT,workspace TEXT); CREATE TABLE IF NOT EXISTS context(thread TEXT,event TEXT,payload TEXT,status TEXT,PRIMARY KEY(thread,event));")?;
+        let workspace = workspace.canonicalize()?.to_string_lossy().into_owned();
         Ok(Self {
             db,
-            workspace: workspace.canonicalize()?.to_string_lossy().into_owned(),
+            operations: operations(&tools(&workspace)),
+            workspace,
             session,
             thread: None,
             agent: None,
             turn: None,
-            operations: ["edit", "review", "offer"].map(String::from).to_vec(),
         })
     }
     pub fn bind(&mut self, thread: &str, agent: &str, resume: bool) -> Result<()> {

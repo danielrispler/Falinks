@@ -1,13 +1,13 @@
 //! Codex app-server runtime adapter on the shared trusted-host library.
 use falinks_host::{
-    Boundary, ControlGate, Engine, EngineOutcome, PinMap, Result, command_output, file_hash, hash,
-    platform_pin, require, tools,
+    Boundary, ControlGate, Engine, EngineOutcome, PinMap, Result, command_output, file_hash,
+    platform_pin, random_hex, require, tools,
 };
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -104,7 +104,8 @@ pub fn pin(os: &str, arch: &str) -> Result<Pin> {
     platform_pin(PINS, os, arch)
 }
 
-pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
+/// The canonical binary and the digests it was verified against.
+pub fn verify_binary(binary: &Path) -> Result<(PathBuf, Pin)> {
     let pin = pin(std::env::consts::OS, std::env::consts::ARCH)?;
     let binary = binary.canonicalize()?;
     require(
@@ -123,7 +124,7 @@ pub fn verify_binary(binary: &Path) -> Result<PathBuf> {
             && String::from_utf8(version.stdout)?.trim() == "codex-cli 0.160.0",
         "unsupported version",
     )?;
-    Ok(binary)
+    Ok((binary, pin))
 }
 fn verify_schema(binary: &Path) -> Result<Value> {
     let expected: BTreeMap<String, String> =
@@ -167,7 +168,7 @@ pub struct Runtime {
 }
 impl Runtime {
     pub fn new(binary: &Path, root: &Path, engine: Engine, control_host: bool) -> Result<Self> {
-        let binary = verify_binary(binary)?;
+        let (binary, _) = verify_binary(binary)?;
         let root = root.canonicalize()?;
         for name in [
             "source",
@@ -185,12 +186,10 @@ impl Runtime {
             )?;
         }
         let schema = verify_schema(&binary)?;
-        let mut random = [0u8; 16];
-        fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
         let boundary = Boundary::new(
             &root.join("controller/context.sqlite"),
             &root.join("source"),
-            hash(&random),
+            random_hex(16)?,
         )?;
         let mut child = Command::new(&binary)
             .args(["app-server", "--stdio"])

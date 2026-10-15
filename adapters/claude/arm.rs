@@ -5,7 +5,7 @@
 //! onto the engine via `EngineHost`.
 use crate::engine_host::{self, EngineHost};
 use falinks::{Check, Client, Engine, Language, Pin, Toolchain};
-use falinks_host::{Result, require};
+use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -42,10 +42,7 @@ pub fn tools(workspace: &Path) -> Value {
     let mut tools = engine_host::tools(workspace);
     let list = tools.as_array_mut().expect("tool list");
     for (operation, help) in HOST_TOOLS {
-        list.push(json!({"name": format!("falinks_{operation}"),
-            "description": format!("Evaluation host {operation}: {help} Call with {{\"workspace\": \"{}\", \"request\": {{...}}}}.", workspace.display()),
-            "inputSchema": {"type": "object", "properties": {"workspace": {"type": "string"}, "request": {"type": "object"}},
-                "required": ["workspace", "request"], "additionalProperties": false}}));
+        list.push(tool(operation, format!("Evaluation host {operation}: {help} Call with {{\"workspace\": \"{}\", \"request\": {{...}}}}.", workspace.display())));
     }
     tools
 }

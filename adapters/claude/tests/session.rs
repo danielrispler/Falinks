@@ -358,6 +358,21 @@ fn only_the_pinned_claude_executable_is_accepted() {
     assert!(falinks_claude::verify_binary(&dir.path().join("missing")).is_err());
 }
 
+/// The launch flag and the per-turn `init` check name the same native tools.
+#[test]
+fn the_launch_flag_offers_exactly_the_native_tools_init_expects() {
+    let args = falinks_claude::launch_args(Path::new("/c"), SESSION, false);
+    let tools = &args[args.iter().position(|a| a == "--tools").unwrap() + 1];
+    assert_eq!(tools, "Bash,Glob,Grep,Read");
+    let launch = Launch::fixture(Path::new("/root"));
+    let native: Vec<String> = launch
+        .allowed()
+        .into_iter()
+        .filter(|t| !t.starts_with("mcp__"))
+        .collect();
+    assert_eq!(tools.split(',').collect::<Vec<_>>(), native);
+}
+
 #[test]
 fn the_launch_tool_profile_sets_init_and_registered_operations() {
     let mut f = fixture();
