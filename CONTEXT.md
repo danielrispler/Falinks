@@ -77,6 +77,17 @@ Reassessment of affected planned or proposed work after a relevant change, follo
 **External edit**:
 A repository change made outside the engine's publication workflow.
 
+**Interruption**:
+A live-workspace installation the engine started but did not commit, with its before and after states recorded. Restart recovery puts the before state back.
+_Avoid_: Reconciliation (for the automatic restore)
+
+**Incident**:
+A live-workspace state the engine cannot explain. It halts mutation until a trusted host resolves it; putting the old bytes back does not clear it.
+_Avoid_: Interruption (the engine knows what it was installing during an interruption)
+
+**Reconciliation**:
+A trusted host's resolution of an incident. Distinct from restart recovery, which restores an interruption automatically.
+
 **Supported language**:
 A programming language whose repositories Falinks can coordinate, including related scope and checks. Currently Rust and Go. Distinct from a client, which is an authenticated agent session.
 
