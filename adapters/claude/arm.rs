@@ -4,7 +4,7 @@
 //! `falinks_*` tools; `ack`, `ready` and `check` are evaluation-host tools, the rest map
 //! onto the engine via `EngineHost`.
 use crate::engine_host::{self, EngineHost};
-use falinks::{Check, Client, Engine, Language, Pin, Toolchain, sha256_file};
+use falinks::{Check, Client, Engine, Language, Pin, Toolchain};
 use falinks_host::{Result, require};
 use serde_json::{Value, json};
 use std::{
@@ -95,19 +95,13 @@ pub struct Tools {
     pub rust: PathBuf,
 }
 impl Tools {
-    fn pin(path: &Path) -> Result<Pin> {
-        Ok(Pin {
-            sha256: sha256_file(path)?,
-            path: path.to_owned(),
-        })
-    }
     pub fn configure(&self, engine: &Engine, language: Language) -> Result<Value> {
         let (toolchain, checks) = if language == Language::Go {
             let go = self.go.to_string_lossy().into_owned();
             (
                 Toolchain {
                     language: Language::Go,
-                    executables: vec![Self::pin(&self.gopls)?, Self::pin(&self.go)?],
+                    executables: vec![Pin::from_path(&self.gopls)?, Pin::from_path(&self.go)?],
                     features: vec![],
                 },
                 vec![Check {
@@ -135,7 +129,7 @@ impl Tools {
                     language: Language::Rust,
                     executables: ["rust-analyzer", "cargo", "rustc"]
                         .iter()
-                        .map(|t| Self::pin(&self.rust.join(t)))
+                        .map(|t| Pin::from_path(self.rust.join(t)))
                         .collect::<Result<_>>()?,
                     features: vec![],
                 },
