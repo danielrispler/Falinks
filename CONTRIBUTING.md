@@ -21,6 +21,7 @@ You need:
 - Go on `PATH`, and `gopls` v0.22.0 (`go install golang.org/x/tools/gopls@v0.22.0`).
 - `cargo-deny`: `cargo install cargo-deny --locked`.
 - `cargo-nextest`: `cargo install cargo-nextest --locked`.
+- `shellcheck`, which actionlint uses to lint workflow `run:` steps: `brew install shellcheck` or `apt install shellcheck`.
 - A [supported platform](docs/platforms.md).
 
 ## Run the checks

@@ -1,5 +1,6 @@
 //! Keeps the local check list (`scripts/check_list.rs`, run by `ci-checks`) and the
-//! cargo steps in `.github/workflows/*.yml` identical as sets.
+//! cargo steps in `.github/workflows/*.yml` identical as sets, and the local actionlint
+//! version equal to CI's.
 //!
 //! - `${{ matrix.* }}` arguments are ignored: they shard a check, not change it.
 //! - Non-check cargo steps are ignored: `cargo build` and `cargo run` only produce or
@@ -59,6 +60,7 @@ fn check_list_matches_ci_workflows() {
     }
     let local: BTreeSet<String> = check_list::CHECKS
         .iter()
+        .filter(|c| **c != check_list::ACTIONLINT)
         .map(|c| without_matrix_args(c))
         .collect();
     let only_ci: Vec<_> = ci.difference(&local).collect();
@@ -66,6 +68,26 @@ fn check_list_matches_ci_workflows() {
     assert!(
         only_ci.is_empty() && only_local.is_empty(),
         "check list drifted from CI\nonly in CI: {only_ci:#?}\nonly in scripts/check_list.rs: {only_local:#?}"
+    );
+}
+
+#[test]
+fn actionlint_matches_the_ci_image() {
+    let (_, version) = check_list::ACTIONLINT
+        .split_once("@v")
+        .expect("ACTIONLINT pins a version");
+    let checks = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/checks.yml"),
+    )
+    .expect("checks workflow");
+    let images: Vec<&str> = checks
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("- uses: docker://rhysd/actionlint:"))
+        .collect();
+    assert_eq!(
+        images,
+        [version],
+        "checks.yml must run actionlint {version}"
     );
 }
 
