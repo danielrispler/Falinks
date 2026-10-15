@@ -95,8 +95,9 @@ status. The second producer/consumer trigger is a new nonempty draft from each
 worker after that worker acknowledges the contract development. These triggers
 are based on observed task activity, independent of recommendations, and do not
 say when to join or split. They expose unfinished coupling then separate
-producer Stats and consumer Render work. Deliver the same events using the same
-observable triggers in the Falinks arm; a checkpoint must not require compilation.
+producer Stats/Duplicates and consumer Parse/IDs work in separate files. Deliver
+the same events using the same observable triggers in the Falinks arm; a
+checkpoint must not require compilation.
 
 Freeze an actual batch configuration **before** pilots/scoring. The checked-in
 configuration is an intentionally incomplete template; placeholder identities
