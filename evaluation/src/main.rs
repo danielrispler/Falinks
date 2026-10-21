@@ -178,18 +178,29 @@ pub fn command(
     }
 }
 
-/// macOS sandbox wrapper. Host launches workers/checks; absence of the sandbox is fatal.
+/// The Linux backend: a single-threaded helper beside this executable (ADR 2).
+pub const HELPER: &str = "falinks-eval-contain";
+
+/// Sandbox wrapper over the per-OS backends: Seatbelt on macOS, the `HELPER` (Landlock
+/// and seccomp) on Linux. Host launches workers/checks; absence of the sandbox is fatal.
 #[derive(Clone)]
 pub struct Sandbox {
     pub writable: Vec<PathBuf>,
     pub denied: Vec<PathBuf>,
+    /// Readable and writable even beneath a denied root.
+    pub reopened: Vec<PathBuf>,
     pub network: bool,
 }
 
 impl Sandbox {
     pub fn wrap(&self, argv: Vec<String>) -> Result<Vec<String>> {
+        if cfg!(target_os = "linux") {
+            return self.landlock(argv);
+        }
         if !cfg!(target_os = "macos") || !Path::new("/usr/bin/sandbox-exec").exists() {
-            bail!("This runner requires macOS sandbox-exec; no unprotected fallback");
+            bail!(
+                "This runner requires macOS sandbox-exec or Linux Landlock; no unprotected fallback"
+            );
         }
         let quote = |p: &PathBuf| serde_json::to_string(&resolve(p).to_string_lossy()).unwrap();
         let mut profile = vec![
@@ -218,6 +229,12 @@ impl Sandbox {
             let p = quote(p);
             format!("(deny file-read* (subpath {p})) (deny file-write* (subpath {p}))")
         }));
+        // Later rules win.
+        profile.extend(
+            self.reopened
+                .iter()
+                .map(|p| format!("(allow file-read* file-write* (subpath {}))", quote(p))),
+        );
         let mut wrapped = vec![
             "/usr/bin/sandbox-exec".to_string(),
             "-p".into(),
@@ -226,6 +243,69 @@ impl Sandbox {
         wrapped.extend(argv);
         Ok(wrapped)
     }
+
+    /// Landlock allows only what it lists, so reads are everything outside the denied roots.
+    /// Without network, the helper also refuses every socket.
+    fn landlock(&self, argv: Vec<String>) -> Result<Vec<String>> {
+        let helper = env::current_exe()?.with_file_name(HELPER);
+        if !helper.is_file() {
+            bail!(
+                "Containment helper {} is missing; no unprotected fallback",
+                helper.display()
+            );
+        }
+        let (reads, writable) = self.landlock_rules()?;
+        let spec = json!({"reads": reads, "writable": writable, "network": self.network});
+        let mut wrapped = vec![helper.to_string_lossy().into_owned(), spec.to_string()];
+        wrapped.extend(argv);
+        Ok(wrapped)
+    }
+
+    /// Readable and writable trees. Landlock only adds rights, so where Seatbelt lets a
+    /// later deny win, a writable tree holding a denied root is split around it, and one
+    /// beneath a denied root is dropped. Then `reopened` is added back.
+    /// shortcut: Landlock grants only paths that exist at launch, so a missing writable
+    /// path (or one created later in a split tree) stays read-only; create it first if a
+    /// worker needs it.
+    fn landlock_rules(&self) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+        let denied: Vec<PathBuf> = self.denied.iter().map(|p| resolve(p)).collect();
+        let mut writable = Vec::new();
+        for tree in self.writable.iter().map(|p| resolve(p)) {
+            if denied.iter().any(|d| tree.starts_with(d)) {
+                continue;
+            }
+            if denied.iter().any(|d| d.starts_with(&tree)) {
+                writable.extend(complement(&tree, &denied)?);
+            } else {
+                writable.push(tree);
+            }
+        }
+        writable.extend(self.reopened.iter().map(|p| resolve(p)));
+        Ok((complement(Path::new("/"), &denied)?, writable))
+    }
+}
+
+/// Every tree beneath `top` outside `denied`, found by listing siblings along the
+/// denied roots' ancestors only. Symlinks are skipped: their targets are listed elsewhere or denied.
+/// `denied` must be canonical. Mirrors the engine's required-check reads (#35).
+fn complement(top: &Path, denied: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut allowed = Vec::new();
+    let mut pending = vec![top.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_symlink() || denied.contains(&path) {
+                continue;
+            }
+            if denied.iter().any(|d| d.starts_with(&path)) {
+                pending.push(path);
+            } else {
+                allowed.push(path);
+            }
+        }
+    }
+    Ok(allowed)
 }
 
 pub fn strings(argv: &[&str]) -> Vec<String> {
@@ -544,6 +624,7 @@ pub fn check(
     let sandbox = Sandbox {
         writable: SCRATCH_DIRS.map(|n| work.join(n)).to_vec(),
         denied,
+        reopened: Vec::new(),
         network: false,
     };
 
@@ -855,6 +936,54 @@ mod tests {
         assert_ne!(
             read(copy.join("manifest.json")).unwrap()["version"],
             version
+        );
+    }
+
+    #[test]
+    fn complement_excludes_denied_roots_and_keeps_their_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        for name in ["state", "live", "other"] {
+            fs::create_dir(root.join(name)).unwrap();
+        }
+        std::os::unix::fs::symlink(root.join("state"), root.join("link")).unwrap();
+        let denied = [root.join("state"), root.join("live")];
+        let allowed = complement(Path::new("/"), &denied).unwrap();
+        assert!(allowed.contains(&root.join("other")));
+        assert!(!allowed.contains(&root.join("link")));
+        assert!(allowed.iter().all(|a| {
+            denied
+                .iter()
+                .all(|d| !d.starts_with(a) && !a.starts_with(d))
+        }));
+    }
+
+    #[test]
+    fn landlock_writes_keep_denied_roots_out_as_seatbelt_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let (home, projects) = (root.join("home"), root.join("home/projects"));
+        let own = projects.join("own");
+        for path in [&own, &home.join("settings"), &root.join("secret/inner")] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let sandbox = Sandbox {
+            writable: vec![home.clone(), root.join("secret/inner")],
+            denied: vec![projects.clone(), root.join("secret")],
+            reopened: vec![own.clone()],
+            network: false,
+        };
+        let (reads, writes) = sandbox.landlock_rules().unwrap();
+        assert!(writes.contains(&home.join("settings")), "{writes:?}");
+        assert!(writes.contains(&own), "{writes:?}");
+        // A writable tree holding a denied root is split around it; one beneath is dropped.
+        assert!(!writes.contains(&home), "{writes:?}");
+        assert!(!writes.contains(&root.join("secret/inner")), "{writes:?}");
+        assert!(!writes.iter().any(|w| *w != own && w.starts_with(&projects)));
+        assert!(
+            !reads
+                .iter()
+                .any(|r| r.starts_with(&projects) || projects.starts_with(r))
         );
     }
 
