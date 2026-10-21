@@ -779,6 +779,106 @@ fn usage_is_complete_only_with_final_results_inside_the_drain_window() {
     }
 }
 
+/// `timing` on synthetic stream-json transcripts (`tests/timing/`), checked against values
+/// computed by hand. Times are seconds after 2026-10-21T10:00:00Z.
+#[test]
+fn timing_reports_hand_computed_figures() {
+    let figures = |run: &str| {
+        let output = cli([
+            OsStr::new("timing"),
+            root().join("tests/timing").join(run).as_os_str(),
+        ]);
+        assert!(output.status.success(), "{}", text(&output));
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let trips =
+        |edit: (u64, f64), refused: (u64, f64), native: (u64, f64), coordination: (u64, f64)| {
+            let total = (
+                edit.0 + refused.0 + native.0 + coordination.0,
+                edit.1 + refused.1 + native.1 + coordination.1,
+            );
+            let entry =
+                |(count, seconds): (u64, f64)| json!({"count": count, "model_seconds": seconds});
+            json!({"edit": entry(edit), "refused_edit": entry(refused), "native": entry(native),
+            "coordination": entry(coordination), "total": entry(total)})
+        };
+
+    // Git: the clock starts at 0.5 (to the millisecond) and stops at 20.5.
+    let git = figures("git");
+    assert_eq!(git["start_precision"], "millisecond");
+    assert_eq!(git["slowest_agent"], "A");
+    assert_eq!(
+        git["round_trips"],
+        json!({"count": 6, "model_seconds": 8.25})
+    );
+    assert_eq!(
+        git["agents"]["A"],
+        json!({
+            // Turns 2.5-7.0 and 12.0-24.0, the second clipped at the stopped clock: 4.5 + 8.5.
+            "busy_seconds": 13.0,
+            "launch_seconds": 2.0,
+            // 20.5 - 2.5 - 13.0.
+            "waiting_on_peer_seconds": 5.0,
+            // m1 (two events, last at 4.0) 4.0-2.5; m2 6.0-4.5; m3 7.0-6.5; m4 13.5-12.0;
+            // m5 15.0-14.0; m6 16.0-15.25; m7 24.0-16.5.
+            "model_seconds": 14.25,
+            // m1 here-document into producer.go; m4 a refused Write; m5 an Edit; m2 Bash share
+            // plus Read is native; m6 only Bash ready.
+            "round_trips": trips((2, 2.5), (1, 1.5), (1, 1.5), (1, 0.75)),
+            // t1 0.5, t2 0.25, t3 0.5, t4 0.5, t5 0.25, t6 0.5.
+            "tool_seconds": 2.5,
+            // 16 (here-document) + 35 (refused Write) + 22 (Edit's new string).
+            "output_bytes": 73,
+            // producer.go ends "package fixture\n\n// A\n": only "// A\n" is new.
+            "changed_bytes": 5,
+            "results": 2,
+            "usage_reports": 1,
+        })
+    );
+    assert_eq!(
+        git["agents"]["B"],
+        json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
+            "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
+            "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "usage_reports": 1})
+    );
+
+    // Falinks: the clock starts at 0 (to the second) and stops at 10; agent-0 resumes once.
+    let falinks = figures("falinks");
+    assert_eq!(falinks["start_precision"], "second");
+    assert_eq!(falinks["slowest_agent"], "agent-0");
+    assert_eq!(
+        falinks["round_trips"],
+        json!({"count": 4, "model_seconds": 4.0})
+    );
+    assert_eq!(
+        falinks["agents"]["agent-0"],
+        json!({
+            // Turns 1.5-4.5 and 8.0-9.25.
+            "busy_seconds": 4.25,
+            "launch_seconds": 1.5,
+            "waiting_on_peer_seconds": 4.25,
+            "model_seconds": 3.0,
+            // An accepted edit with a Read, an edit refused as Stale (its request a JSON string),
+            // then falinks_ready.
+            "round_trips": trips((1, 1.0), (1, 1.0), (0, 0.0), (1, 1.0)),
+            "tool_seconds": 1.75,
+            // 23 + 2; the refused edit is output but changes nothing.
+            "output_bytes": 25,
+            "changed_bytes": 7,
+            "results": 2,
+            "usage_reports": 2,
+        })
+    );
+    assert_eq!(
+        falinks["agents"]["agent-1"],
+        json!({"busy_seconds": 3.0, "launch_seconds": 2.0, "waiting_on_peer_seconds": 5.0,
+            "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (1, 1.0), (0, 0.0)),
+            "tool_seconds": 1.0, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "usage_reports": 1})
+    );
+}
+
 #[test]
 fn baseline_exchanges_unfinished_work_and_freezes_exact_candidate() {
     let tmp = tmp("falinks-baseline-test-");

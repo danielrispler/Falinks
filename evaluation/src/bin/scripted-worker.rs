@@ -127,7 +127,9 @@ fn relationships(usage_mode: Option<&str>) {
                 }
                 Some("late") => {
                     // SAFETY: the handler only stores an atomic flag.
-                    unsafe { libc::signal(libc::SIGTERM, stopping as libc::sighandler_t) };
+                    unsafe {
+                        libc::signal(libc::SIGTERM, stopping as *const () as libc::sighandler_t)
+                    };
                     while !STOPPING.load(Ordering::SeqCst) {
                         thread::sleep(Duration::from_millis(10));
                     }

@@ -1,0 +1,20 @@
+{"type":"system","subtype":"init"}
+{"type":"user","isReplay":true,"timestamp":"2026-10-21T10:00:02.500Z","message":{"role":"user","content":"You are agent A"}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:03.000Z","message":{"id":"m1","model":"scripted","content":[{"type":"text","text":"Writing producer.go"}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:04.000Z","message":{"id":"m1","model":"scripted","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cd /w/A && cat > producer.go <<'EOF'\npackage fixture\nEOF"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:04.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:06.000Z","message":{"id":"m2","model":"scripted","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"\"$FALINKS_HOST\" share"}},{"type":"tool_use","id":"t3","name":"Read","input":{"file_path":"/w/B/consumer.go"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:06.250Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:06.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:07.000Z","message":{"id":"m3","model":"scripted","content":[{"type":"text","text":"Shared."}]}}
+{"type":"result","subtype":"success","usage":{"output_tokens":1}}
+{"type":"system","subtype":"init"}
+{"type":"user","isReplay":true,"timestamp":"2026-10-21T10:00:12.000Z","message":{"role":"user","content":"Host event: {\"type\":\"peer_diff\"}"}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:13.500Z","message":{"id":"m4","model":"scripted","content":[{"type":"tool_use","id":"t4","name":"Write","input":{"file_path":"/w/A/consumer.go","content":"package fixture\n\nfunc Consume() {}\n"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:14.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"denied","is_error":true}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:15.000Z","message":{"id":"m5","model":"scripted","content":[{"type":"tool_use","id":"t5","name":"Edit","input":{"file_path":"/w/A/producer.go","old_string":"package fixture\n","new_string":"package fixture\n\n// A\n"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:15.250Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t5","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:16.000Z","message":{"id":"m6","model":"scripted","content":[{"type":"tool_use","id":"t6","name":"Bash","input":{"command":"\"$FALINKS_HOST\" ready"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:16.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t6","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:24.000Z","message":{"id":"m7","model":"scripted","content":[{"type":"text","text":"Ready; done."}]}}
+{"type":"result","subtype":"success","usage":{"output_tokens":1}}

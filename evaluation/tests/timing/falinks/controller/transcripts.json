@@ -1,0 +1,281 @@
+[
+ [
+  {
+   "session": "s0",
+   "events": [
+    {
+     "type": "system",
+     "subtype": "init"
+    },
+    {
+     "type": "user",
+     "isReplay": true,
+     "timestamp": "2026-10-21T10:00:01.500Z",
+     "message": {
+      "role": "user",
+      "content": "[Falinks host] You are agent-0"
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-10-21T10:00:02.500Z",
+     "message": {
+      "id": "f1",
+      "model": "scripted",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "e1",
+        "name": "mcp__falinks__falinks_edit",
+        "input": {
+         "workspace": "/w/space0",
+         "request": {
+          "id": "e1",
+          "output": {
+           "producer.go": {
+            "content": "package fixture\n// new\n"
+           }
+          }
+         }
+        }
+       },
+       {
+        "type": "tool_use",
+        "id": "r1",
+        "name": "Read",
+        "input": {
+         "file_path": "/w/space0/consumer.go"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "host_call": {
+      "operation": "edit",
+      "request": {
+       "id": "e1"
+      }
+     },
+     "result": {
+      "accepted": true
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-10-21T10:00:03.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "e1",
+        "content": [
+         {
+          "type": "text",
+          "text": "{\"accepted\":true}"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-10-21T10:00:03.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "r1",
+        "content": "1\tpackage fixture"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-10-21T10:00:04.000Z",
+     "message": {
+      "id": "f2",
+      "model": "scripted",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "e2",
+        "name": "mcp__falinks__falinks_edit",
+        "input": {
+         "workspace": "/w/space0",
+         "request": "{\"id\": \"e2\", \"output\": {\"consumer.go\": {\"content\": \"x\\n\"}}}"
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-10-21T10:00:04.500Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "e2",
+        "content": [
+         {
+          "type": "text",
+          "text": "{\"accepted\":false,\"reason\":\"Stale\"}"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "type": "result",
+     "subtype": "success",
+     "usage": {
+      "output_tokens": 1
+     }
+    }
+   ]
+  },
+  {
+   "session": "s0",
+   "events": [
+    {
+     "type": "system",
+     "subtype": "init"
+    },
+    {
+     "type": "user",
+     "isReplay": true,
+     "timestamp": "2026-10-21T10:00:08.000Z",
+     "message": {
+      "role": "user",
+      "content": "Host: the agreed regrouping moved your live workspace"
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-10-21T10:00:09.000Z",
+     "message": {
+      "id": "f3",
+      "model": "scripted",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "y1",
+        "name": "mcp__falinks__falinks_ready",
+        "input": {
+         "workspace": "/w/space0",
+         "request": {}
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-10-21T10:00:09.250Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "y1",
+        "content": [
+         {
+          "type": "text",
+          "text": "{\"accepted\":true}"
+         }
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "type": "result",
+     "subtype": "success",
+     "usage": {
+      "output_tokens": 1
+     }
+    }
+   ]
+  }
+ ],
+ [
+  {
+   "session": "s1",
+   "events": [
+    {
+     "type": "system",
+     "subtype": "init"
+    },
+    {
+     "type": "user",
+     "isReplay": true,
+     "timestamp": "2026-10-21T10:00:02.000Z",
+     "message": {
+      "role": "user",
+      "content": "[Falinks host] You are agent-1"
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-10-21T10:00:03.000Z",
+     "message": {
+      "id": "g1",
+      "model": "scripted",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "b1",
+        "name": "Bash",
+        "input": {
+         "command": "go test ./..."
+        }
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-10-21T10:00:04.000Z",
+     "message": {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "b1",
+        "content": "ok"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-10-21T10:00:05.000Z",
+     "message": {
+      "id": "g2",
+      "model": "scripted",
+      "content": [
+       {
+        "type": "text",
+        "text": "Waiting for my peer."
+       }
+      ]
+     }
+    },
+    {
+     "type": "result",
+     "subtype": "success",
+     "usage": {
+      "output_tokens": 1
+     }
+    }
+   ]
+  }
+ ]
+]

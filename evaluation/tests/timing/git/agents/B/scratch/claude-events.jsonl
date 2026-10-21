@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init"}
+{"type":"user","isReplay":true,"timestamp":"2026-10-21T10:00:03.000Z","message":{"role":"user","content":"You are agent B"}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:05.000Z","message":{"id":"n1","model":"scripted","content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"\"$FALINKS_HOST\" ready"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:05.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u1","content":"ok"}]}}
+{"type":"result","subtype":"success","usage":{"output_tokens":1}}

@@ -23,7 +23,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 /// An idle, unfinished agent with no new events is reminded after this long (both arms).
@@ -344,7 +344,10 @@ fn main() {
 }
 
 fn run(options: Options) -> Result<i32> {
-    let started = Instant::now();
+    let (started, start_unix) = (
+        Instant::now(),
+        SystemTime::now().duration_since(UNIX_EPOCH)?,
+    );
     let config = read(&options.config)?;
     fs::create_dir(&options.output)?; // Never reuse a run directory or previous contexts.
     let dir = options.output.canonicalize()?;
@@ -358,7 +361,7 @@ fn run(options: Options) -> Result<i32> {
         "retries": 0, "discarded_or_rewritten_work": {"status": "unavailable",
             "reason": "overwritten operations are retained in controller/history.json, not quantified"},
         "validation_attempts": [], "recommendations": 0, "transitions": 0, "launches": [],
-        "timing": {"start_utc": utc(), "endpoint": "clean preparation through exact published candidate passing the independent oracle"},
+        "timing": {"start_utc": utc(), "start_unix": start_unix.as_secs_f64(), "endpoint": "clean preparation through exact published candidate passing the independent oracle"},
         "tool_differences": config["tool_differences"],
     });
     let timeline = fs::File::create(private.join("events.jsonl"))?;

@@ -249,6 +249,14 @@ it as `usage_limit`.
     interrupted pilot run never affects the verdict.
   - **Agent mistakes** in either arm are refusals counted in `rejected_operations`. They
     are never infrastructure failures.
+  - **Timing**: `timing RUN_DIR` reports, per agent of one run of either arm, busy, model,
+    tool, launch and waiting-on-peer seconds, round-trips and their model seconds by
+    category (edit, refused edit, native, coordination), output bytes against changed bytes,
+    and the slowest agent, by #116's method. The definitions and heuristics are in
+    `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
+    Runs before #179 record their start to the second only (`start_precision`), so their
+    launch and waiting times are good to about a second. Its `results` and `usage_reports`
+    per agent compare the transcript's turn results with those recorded in `result.json`.
 
 Run the pilot and batch in a session **outside auto mode**, because they launch nested
 agents:

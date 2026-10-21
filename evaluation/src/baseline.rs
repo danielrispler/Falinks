@@ -1,7 +1,7 @@
 //! Two concurrent worker processes in Git worktrees, mediated by JSON lines on stdin/stdout.
 use crate::{
     Result, Sandbox, bail, check, command, fixture, frozen, git, git_env, initial, kill_group,
-    protected_roots, read, resolve, root, sha256, strings, utc_now, write,
+    protected_roots, read, resolve, root, sha256, strings, unix_now, utc_now, write,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -115,7 +115,7 @@ pub fn baseline(
     order: i64,
     scored: bool,
 ) -> Result<i32> {
-    let started = Instant::now();
+    let (started, start_unix) = (Instant::now(), unix_now());
     let config = read(config_path)?;
     let fixture = fixture(name)?;
     let manifest = frozen()?;
@@ -135,7 +135,7 @@ pub fn baseline(
         "usage_limit_interruptions": [], "rejected_operations": 0, "retries": 0,
         "discarded_or_rewritten_work": {"status": "unavailable"}, "validation_attempts": [],
         "recommendations": 0, "transitions": 0,
-        "timing": {"start_utc": utc_now(), "endpoint": "clean preparation through exact candidate passing checks"},
+        "timing": {"start_utc": utc_now(), "start_unix": start_unix, "endpoint": "clean preparation through exact candidate passing checks"},
         "tool_differences": read(root().join("config.json"))?["tool_differences"],
     });
     let timeout = config["timeout_seconds"].as_f64().unwrap_or(0.0);
