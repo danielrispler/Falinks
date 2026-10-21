@@ -1285,6 +1285,7 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
 
     // Bob's draft moves to `second`; `live` takes back the published `b.rs`.
     let engine = open(Some(Fault::Commit));
+    assert_eq!(take(), [Fault::Recovered]);
     let split = Propose {
         action: Action::Split,
         text: "split".into(),
@@ -1299,6 +1300,7 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         .respond(&bob, &proposal.id, &proposal.context, Response::Agree)
         .unwrap();
     let transition = vec![
+        Fault::Journaling,
         Fault::Journaled,
         installed(1, "a.rs"),
         installed(1, "b.rs"),
@@ -1334,7 +1336,8 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         [
             restored(1, "a.rs"),
             restored(1, "b.rs"),
-            restored(0, "b.rs")
+            restored(0, "b.rs"),
+            Fault::Recovered,
         ]
     );
     assert_eq!([snapshot(&live), snapshot(&second)], roots);
@@ -1377,6 +1380,7 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
     assert_eq!(
         take(),
         [
+            Fault::Journaling,
             Fault::Journaled,
             installed(1, "a.rs"),
             Fault::Audited { space: 1 },

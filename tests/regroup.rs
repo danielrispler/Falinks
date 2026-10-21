@@ -483,19 +483,27 @@ fn overlapping_publication_waits_for_explicit_incorporation() {
 
 #[test]
 fn interrupted_transition_restores_both_roots_and_retries_after_restart() {
-    use std::os::unix::fs::PermissionsExt;
     let (dir, engine, alice, bob) = fixture();
     independent(&engine, &alice, &bob);
     engine.add_workspace(&dir.path().join("second")).unwrap();
     let proposal = engine.reconsider().unwrap();
     agree(&engine, &alice, &proposal);
-    // The new root installs first; restoring Bob's moved path in the shared root then fails.
+    drop(engine);
+    // The new root installs first; the transition stops before it reaches the shared root.
     let live = dir.path().join("live");
-    fs::set_permissions(&live, fs::Permissions::from_mode(0o555)).unwrap();
+    let hook: FaultHook = Box::new(|_, fault| match fault {
+        Fault::Audited { space: 1 } => Err("interrupt".into()),
+        _ => Ok(()),
+    });
+    let enrolled: Vec<_> = GO.iter().map(|(p, _)| *p).collect();
+    let engine =
+        Engine::open_with_faults(&live, &dir.path().join("state"), &enrolled, hook).unwrap();
+    configure(&engine);
+    let alice = engine.authenticate(0, &engine.credentials()[0]).unwrap();
+    let bob = engine.authenticate(1, &engine.credentials()[1]).unwrap();
     let failed = engine
         .respond(&bob, &proposal.id, &proposal.context, Response::Agree)
         .unwrap();
-    fs::set_permissions(&live, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(
         matches!(&failed.state, ProposalState::Blocked { blocker } if blocker.starts_with("transition failed")),
         "{failed:?}"
