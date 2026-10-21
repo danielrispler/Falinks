@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -555,6 +556,173 @@ fn baseline_retains_resolved_same_handler_merge_for_final_check() {
     assert_eq!(attempts[1]["passed"], true);
     assert_eq!(attempts[2]["passed"], true);
     assert_eq!(evidence["final_snapshot"], attempts[1]["candidate"]);
+}
+
+/// Replaces temporary paths with `<tmp>` and each commit ID with `<commit-N>`, numbered by
+/// first appearance: the scripted conflict resolution commits at the current time.
+fn normalized(value: &Value, tmp: &Path) -> Value {
+    let canonical = fs::canonicalize(tmp).unwrap();
+    let mut text = value.to_string();
+    for path in [&canonical, tmp] {
+        text = text.replace(path.to_str().unwrap(), "<tmp>");
+    }
+    let (mut out, mut commits) = (String::new(), Vec::<String>::new());
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find(|c: char| c.is_ascii_hexdigit()) {
+        out.push_str(&rest[..start]);
+        let word = &rest[start..];
+        let end = word
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(word.len());
+        let token = &word[..end];
+        let commit = token.len() == 40 && token.bytes().all(|b| b.is_ascii_hexdigit());
+        let preceded = out.ends_with(|c: char| c.is_ascii_alphanumeric());
+        if commit && !preceded {
+            let n = commits.iter().position(|c| c == token).unwrap_or_else(|| {
+                commits.push(token.to_string());
+                commits.len() - 1
+            });
+            out.push_str(&format!("<commit-{}>", n + 1));
+        } else {
+            out.push_str(token);
+        }
+        rest = &word[end..];
+    }
+    out.push_str(rest);
+    serde_json::from_str(&out).unwrap()
+}
+
+/// What the host sent one agent, as the recording `tee` saw it: the start message, then its
+/// replies and the unsolicited events as two sequences. Their interleaving, like A/B order,
+/// depends on thread timing.
+fn host_messages(log: &Path) -> Value {
+    let messages: Vec<Value> = fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let unsolicited = |m: &&Value| {
+        matches!(
+            m["type"].as_str(),
+            Some("peer_message" | "peer_diff" | "development")
+        )
+    };
+    assert_eq!(messages[0]["type"], "start");
+    json!({
+        "start": messages[0],
+        "replies": messages[1..].iter().filter(|m| !unsolicited(m)).collect::<Vec<_>>(),
+        "events": messages[1..].iter().filter(unsolicited).collect::<Vec<_>>(),
+    })
+}
+
+/// Each development with the number of drafts every agent had shared when it fired.
+fn triggers(run: &Path) -> Value {
+    let mut shares = json!({"A": 0, "B": 0});
+    let mut triggers = vec![];
+    for line in fs::read_to_string(run.join("controller/events.jsonl"))
+        .unwrap()
+        .lines()
+    {
+        let row: Value = serde_json::from_str(line).unwrap();
+        match row["kind"].as_str() {
+            Some("draft_shared") => {
+                let agent = row["agent"].as_str().unwrap();
+                shares[agent] = json!(shares[agent].as_u64().unwrap() + 1);
+            }
+            Some("development") => {
+                triggers.push(json!({"milestone": row["milestone"]["id"], "shares": shares}))
+            }
+            _ => {}
+        }
+    }
+    json!(triggers)
+}
+
+/// The two-agent golden (#179, recorded at manifest v12, whose harness is v11's): what the
+/// host sends each agent, when developments fire and the instruction bytes, from scripted runs.
+/// A team of two must keep it (#178 C6.1); `FALINKS_GOLDEN=update` re-records it deliberately.
+#[test]
+fn two_agent_runs_match_the_golden_recording() {
+    let tmp = tmp("falinks-golden-test-");
+    let base = tmp.path();
+    let mut golden = json!({});
+    for (fixture, mode) in [
+        ("go-relationships", "relationships"),
+        ("go-page", "conflict"),
+    ] {
+        // `tee` logs each host message before the scripted worker reads it; scratch is never shared.
+        let command = format!("/usr/bin/tee scratch/host.jsonl | \"$0\" {mode}");
+        let config = config(
+            base,
+            SCRIPTED,
+            json!(["/bin/sh", "-c", command, "{worker}"]),
+            SCRIPTED,
+        );
+        let run = base.join(fixture);
+        successful_evidence(&baseline(fixture, &config, &run), &run);
+        let agents: serde_json::Map<String, Value> = ["A", "B"]
+            .iter()
+            .map(|a| {
+                let log = run.join("agents").join(a).join("scratch/host.jsonl");
+                (a.to_string(), host_messages(&log))
+            })
+            .collect();
+        golden[fixture] = json!({"agents": agents, "triggers": triggers(&run)});
+    }
+    // The Claude bridge's prompt to the runtime, logged by a wrapper around the fake runtime.
+    let runtime = base.join("fake-claude");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let wrapper = base.join("recording-claude");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n/usr/bin/tee \"$CLAUDE_CODE_TMPDIR/runtime-input.jsonl\" | {} \"$@\"\n",
+            runtime.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        wrapper.to_str().unwrap(),
+    );
+    let run = base.join("claude");
+    successful_evidence(&baseline("go-relationships", &config, &run), &run);
+    for agent in ["A", "B"] {
+        let input = fs::read_to_string(
+            run.join("agents")
+                .join(agent)
+                .join("scratch/runtime-input.jsonl"),
+        )
+        .unwrap();
+        let first: Value = serde_json::from_str(input.lines().next().unwrap()).unwrap();
+        golden["claude_prompts"][agent] = first["message"]["content"].clone();
+    }
+    let actual = serde_json::to_string_pretty(&normalized(&golden, base)).unwrap() + "\n";
+    let path = root().join("tests/golden/two-agent.json");
+    if std::env::var("FALINKS_GOLDEN").as_deref() == Ok("update") {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &actual).unwrap();
+    }
+    let expected = fs::read_to_string(&path).unwrap_or_default();
+    if let Some((line, (want, got))) = expected
+        .lines()
+        .zip(actual.lines())
+        .enumerate()
+        .find(|(_, (want, got))| want != got)
+    {
+        panic!(
+            "two-agent golden differs at line {}:\n  golden: {want}\n  actual: {got}",
+            line + 1
+        );
+    }
+    assert_eq!(
+        expected.lines().count(),
+        actual.lines().count(),
+        "two-agent golden length differs"
+    );
 }
 
 #[test]
