@@ -6,7 +6,7 @@ Falinks is developed on macOS. Support is claimed per component ([ADR 1](adr/000
 |---|---|---|---|---|
 | Engine | Supported | Supported | Supported | Not yet verified (fails closed) |
 | Claude Code adapter | Supported | Not yet verified (fails closed) | Supported | Supported |
-| Evaluation harness | Supported | Not yet verified (fails closed) | Not yet verified (fails closed) | Not yet verified (fails closed) |
+| Evaluation harness | Supported | Not yet verified (fails closed) | Supported | Not yet verified (fails closed) |
 
 The engine's Linux x86_64 cell rests on the `linux` CI job (#54). Linux aarch64 has no CI job; the backend is only type-checked there. Windows is planned through WSL 2, which is Linux; it is not yet verified. Native Windows and the BSDs are unsupported by decision (#34, #35). The evaluation harness's Linux x86_64 cell rests on the `ubuntu-latest` shards of `evaluation.yml` (#56); its Linux sandbox is the `falinks-eval-contain` helper, with the engine's kernel and mount requirements. Its worker sandbox with networking on allows every socket on Linux, while Seatbelt allows outbound connections and Unix sockets only in writable trees. Each evaluation batch records its platform and refuses another. The Claude Code adapter's Linux cells rest on the live runs of `adapter-linux.yml`, on the Ubuntu 24.04 x86_64 and arm64 runners (#57, #115). If the latest live run on `main` fails for a reason other than a model refusal, those cells are unverified until a run passes; open a bug. The Codex adapter is removed for now; Claude Code is the only supported worker runtime. It returns from Git history (`adapters/codex/` before #96) with a fresh adapter check.
 
