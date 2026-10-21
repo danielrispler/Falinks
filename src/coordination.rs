@@ -597,7 +597,7 @@ impl Engine {
                     change.footprint.nodes.iter().cloned().collect()
                 },
                 work: Work::Revision(proposed.revision),
-                text: format!("request {}", request.id),
+                text: request.note.clone(),
                 reply_to: None,
             }),
         )?;

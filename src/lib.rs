@@ -84,6 +84,10 @@ pub struct Request {
     pub expected: BTreeMap<String, u64>,
     /// Complete file replacements; None deletes an enrolled file.
     pub output: BTreeMap<String, Option<File>>,
+    /// The editing agent's short explanation, sent as the live-edit message text.
+    /// Records written before notes existed read with an empty one.
+    #[serde(default)]
+    pub note: String,
     /// Inline reviews, recorded before the gate and kept whatever the outcome.
     #[serde(default)]
     pub reviews: Vec<Review>,
@@ -977,6 +981,10 @@ impl Engine {
         // Inline reviews stand even if the edit is then refused, as separate reviews would.
         // A known ID already recorded them on its first call.
         if request_record(&db, client.agent, &request.id)?.is_none() {
+            // A known ID is held to its recorded note instead, which may be empty.
+            if request.note.trim().is_empty() {
+                return fail("edit note required");
+            }
             self.record_reviews(&db, client, &request.reviews)?;
         }
         // Copied out: no layout guard is held while host observers run.
@@ -1518,6 +1526,7 @@ impl Engine {
                 id: format!("job:{}", spec.id),
                 expected,
                 output: BTreeMap::new(),
+                note: format!("job {}: {}", spec.id, spec.outputs.join(", ")),
                 reviews: Vec::new(),
             },
             finished: false,
@@ -1908,6 +1917,7 @@ mod tests {
                     executable: false,
                 }),
             )]),
+            note: "change a".into(),
             reviews: Vec::new(),
         };
         let mut phases = Vec::new();
