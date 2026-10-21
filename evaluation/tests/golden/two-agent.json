@@ -69,7 +69,7 @@
             "reasoning": "none"
           },
           "peer_workspace": "<tmp>/go-page/agents/B",
-          "runtime_binary": "/Users/danielrispler/work/Falinks/.claude/worktrees/issue-179-team-size-1-t0/evaluation/target/debug/scripted-worker",
+          "runtime_binary": "<scripted-worker>",
           "runtime_home": null,
           "runtime_version": "scripted-v1",
           "task": {
@@ -148,7 +148,7 @@
             "reasoning": "none"
           },
           "peer_workspace": "<tmp>/go-page/agents/A",
-          "runtime_binary": "/Users/danielrispler/work/Falinks/.claude/worktrees/issue-179-team-size-1-t0/evaluation/target/debug/scripted-worker",
+          "runtime_binary": "<scripted-worker>",
           "runtime_home": null,
           "runtime_version": "scripted-v1",
           "task": {
@@ -272,7 +272,7 @@
             "reasoning": "none"
           },
           "peer_workspace": "<tmp>/go-relationships/agents/B",
-          "runtime_binary": "/Users/danielrispler/work/Falinks/.claude/worktrees/issue-179-team-size-1-t0/evaluation/target/debug/scripted-worker",
+          "runtime_binary": "<scripted-worker>",
           "runtime_home": null,
           "runtime_version": "scripted-v1",
           "task": {
@@ -382,7 +382,7 @@
             "reasoning": "none"
           },
           "peer_workspace": "<tmp>/go-relationships/agents/A",
-          "runtime_binary": "/Users/danielrispler/work/Falinks/.claude/worktrees/issue-179-team-size-1-t0/evaluation/target/debug/scripted-worker",
+          "runtime_binary": "<scripted-worker>",
           "runtime_home": null,
           "runtime_version": "scripted-v1",
           "task": {

@@ -595,11 +595,12 @@ fn baseline_retains_resolved_same_handler_merge_for_final_check() {
     assert_eq!(evidence["final_snapshot"], attempts[1]["candidate"]);
 }
 
-/// Replaces temporary paths with `<tmp>` and each commit ID with `<commit-N>`, numbered by
-/// first appearance: the scripted conflict resolution commits at the current time.
+/// Replaces temporary paths with `<tmp>`, the scripted worker binary with `<scripted-worker>`
+/// and each commit ID with `<commit-N>`, numbered by first appearance: the scripted conflict
+/// resolution commits at the current time.
 fn normalized(value: &Value, tmp: &Path) -> Value {
     let canonical = fs::canonicalize(tmp).unwrap();
-    let mut text = value.to_string();
+    let mut text = value.to_string().replace(SCRIPTED, "<scripted-worker>");
     for path in [&canonical, tmp] {
         text = text.replace(path.to_str().unwrap(), "<tmp>");
     }
