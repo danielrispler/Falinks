@@ -170,7 +170,7 @@ gives them `-rN` IDs and a `replaces` field.
 
 ## Paired evaluation (#27)
 
-Claude Code `2.1.292` with `claude-opus-5-5` is the evaluated runtime in both arms
+Claude Code `2.1.304` with `claude-opus-5-5` is the evaluated runtime in both arms
 ([#32](https://github.com/danielrispler/Falinks/issues/32#issuecomment-6096677771)).
 Both arms launch one long-lived `claude -p` stream-json session per agent with the same
 isolation flags (`--setting-sources ""`, `--strict-mcp-config`, `--disable-slash-commands`,
