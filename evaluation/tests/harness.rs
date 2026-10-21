@@ -178,23 +178,28 @@ fn setup_ledger_totals_match_its_sessions() {
 /// go-indep-2 is go-indep-4's semver and textwrap units, copied; keep the copies in step (#181).
 #[test]
 fn go_indep_2_is_a_subset_of_go_indep_4() {
-    let pair = |dir: &str| ["2", "4"].map(|n| read(root().join(format!("{dir}/go-indep-{n}.json"))));
+    let pair =
+        |dir: &str| ["2", "4"].map(|n| read(root().join(format!("{dir}/go-indep-{n}.json"))));
     let [small, large] = pair("fixtures");
     for (name, text) in small["files"].as_object().unwrap() {
         assert_eq!(&large["files"][name], text, "{name}");
     }
+    let requirements = large["requirements"].as_array().unwrap();
     for requirement in small["requirements"].as_array().unwrap() {
-        assert!(large["requirements"].as_array().unwrap().contains(requirement));
+        assert!(requirements.contains(requirement));
     }
     let [small, large] = pair("protected");
     for (name, text) in small["reference"].as_object().unwrap() {
         assert_eq!(&large["reference"][name], text, "{name}");
     }
     // Past the import block, every top-level declaration appears verbatim in the larger oracle.
-    let large_oracle = large["oracle"].as_str().unwrap();
-    let (_, declarations) = small["oracle"].as_str().unwrap().split_once("\n)\n").unwrap();
+    let (small, large) = (
+        small["oracle"].as_str().unwrap(),
+        large["oracle"].as_str().unwrap(),
+    );
+    let (_, declarations) = small.split_once("\n)\n").unwrap();
     for declaration in declarations.split_inclusive("\n}\n") {
-        assert!(large_oracle.contains(declaration.trim()), "{declaration}");
+        assert!(large.contains(declaration.trim()), "{declaration}");
     }
 }
 
