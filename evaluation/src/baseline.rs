@@ -235,6 +235,7 @@ fn execute(
     let public_guard = Sandbox {
         writable: vec![public.to_path_buf()],
         denied: denied.clone(),
+        reopened: Vec::new(),
         network: false,
     };
 
@@ -294,23 +295,24 @@ fn execute(
                 path.as_str().ok_or("runtime_writable must be paths")?,
             ));
         }
-        let sandbox = Sandbox {
-            writable,
-            denied: denied.clone(),
-            network: true,
-        };
-        let mut argv = sandbox.wrap(argv)?;
+        let mut reopened = Vec::new();
         if let Some(home) = config["runtime_home"].as_str() {
             // `~/.claude/projects` is denied (other sessions' transcripts); the runtime may still
-            // keep this worker's own session, whose cwd is its scratch. Later rules win.
+            // keep this worker's own session, whose cwd is its scratch. Created first, because
+            // Landlock grants only paths that exist.
             let own = Path::new(home)
                 .join(".claude/projects")
                 .join(crate::batch::project_folder(&scratch));
-            argv[2].push_str(&format!(
-                "\n(allow file-read* file-write* (subpath {}))",
-                serde_json::to_string(&own.to_string_lossy())?
-            ));
+            fs::create_dir_all(&own)?;
+            reopened.push(own);
         }
+        let sandbox = Sandbox {
+            writable,
+            denied: denied.clone(),
+            reopened,
+            network: true,
+        };
+        let argv = sandbox.wrap(argv)?;
         let mut child = Command::new(&argv[0])
             .args(&argv[1..])
             .current_dir(public.join(agent))
@@ -589,6 +591,7 @@ fn combine(
     let guard = Sandbox {
         writable: vec![public.to_path_buf()],
         denied: denied.to_vec(),
+        reopened: Vec::new(),
         network: false,
     };
     let (Some(a), Some(b)) = (&shares["A"], &shares["B"]) else {
@@ -645,6 +648,7 @@ fn combine(
     let fetch_guard = Sandbox {
         writable: vec![retained.to_path_buf()],
         denied: fetch_denied,
+        reopened: Vec::new(),
         network: false,
     };
     git(

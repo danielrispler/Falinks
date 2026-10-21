@@ -2,9 +2,16 @@
 
 This is an engine-independent evaluation harness, not an engine or performance result.
 It is a standalone Rust crate (independent of the engine crate) and needs Git,
-macOS `sandbox-exec`, Rust/Cargo and Go on PATH. The fixtures have no third-party
-dependencies. Verification used Rust 1.99.0 and Go 1.27.2 on macOS arm64.
+Rust/Cargo and Go on PATH, and a sandbox backend: macOS `sandbox-exec`, or on Linux
+Landlock ABI 3 with the `falinks-eval-contain` helper beside `falinks-eval` (#56; the
+kernel requirements are those of the engine in `docs/platforms.md`). The fixtures have
+no third-party dependencies. Verification used Rust 1.99.0 and Go 1.27.2 on macOS arm64;
+the Linux backend rests on the `ubuntu-latest` shards of `evaluation.yml`.
 Unsupported/missing sandbox execution fails closed.
+
+Each batch records its platform (`os-arch`) on every invocation in `batch.json`.
+Resuming a batch, scoring after a pilot or merging shards recorded on another
+platform is refused: one platform per batch.
 
 Binaries: `falinks-eval` (the host CLI), `claude-worker` (the Git-arm Claude Code
 bridge, #27), `codex-worker` (the historical baseline Codex bridge) and
@@ -120,7 +127,8 @@ check set. Do not impose the engine ledger on Git or claim an engine is present.
 ## Protection, reset and evidence
 
 The host process, binaries and material checkout are trusted. Worker and compiler/
-test descendants run in macOS sandboxes. Worker writes are restricted to their
+test descendants run in the host sandbox (Seatbelt on macOS; Landlock, plus seccomp
+socket denial when networking is off, on Linux). Worker writes are restricted to their
 own worktree, scratch, shared fixture Git metadata and integration worktree.
 Workers and host Git subprocesses cannot read/write controller state, this checkout, other worktrees of
 this setup repository or its shared Git object storage (which contains oracle
@@ -174,7 +182,7 @@ model in `modelUsage` invalidates the run. A `rate_limit_event` with status `rej
 it as `usage_limit`.
 
 - **Git arm** (`baseline` with `worker_script` = `claude-worker`): the worker runs in
-  the host sandbox-exec profile with Claude Code's sandbox off and tools
+  the host sandbox profile with Claude Code's sandbox off and tools
   `Bash,Read,Glob,Grep,Edit,Write`. The agent reaches the host by running
   `"$FALINKS_HOST" message|share|ack|check|ready` through Bash. A Unix socket relays those
   commands as the JSON-line requests above, and `ready` fills in the last shared commit.

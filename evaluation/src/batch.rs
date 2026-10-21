@@ -42,6 +42,25 @@ fn utilization(result: &Value) -> f64 {
     highest
 }
 
+/// The OS and architecture this host runs; a batch, its shards and its pilot share one.
+pub fn platform() -> String {
+    format!("{}-{}", env::consts::OS, env::consts::ARCH)
+}
+
+/// Refuses a ledger with an invocation recorded on another platform, or on none.
+fn one_platform(ledger: &Value) -> Result<()> {
+    let here = platform();
+    for invocation in ledger["invocations"].as_array().into_iter().flatten() {
+        if invocation["platform"] != here.as_str() {
+            bail!(
+                "Batch recorded on platform {}, this host is {here}; one platform per batch, so start a new batch directory",
+                invocation["platform"]
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Slots in schedule order: the unscored pilot pair, or the nine scored pairs.
 pub fn slots(pilot: bool) -> Vec<Value> {
     let schedule = schedule();
@@ -152,6 +171,7 @@ pub fn batch(
     if let Some(dir) = after_pilot {
         // Scoring follows a completed unscored pilot pair.
         let ledger = read(dir.join("batch.json"))?;
+        one_platform(&ledger)?;
         let done = slots(true).iter().all(|slot| {
             let mut runs = ledger["runs"].as_array().into_iter().flatten();
             runs.rfind(|r| r["slot"] == slot["slot"])
@@ -166,6 +186,7 @@ pub fn batch(
     let ledger_path = runs.join("batch.json");
     let mut ledger = read(&ledger_path)
         .unwrap_or_else(|_| json!({"runs": [], "gates": [], "pauses": [], "invocations": []}));
+    one_platform(&ledger)?;
     // An unsafe outcome means a repaired engine: its results belong in a new batch.
     if ledger["runs"]
         .as_array()
@@ -196,7 +217,7 @@ pub fn batch(
         None => Value::Null,
     };
     ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot,
-        "after_pilot": after_pilot, "fixtures": fixtures, "config_sha256": config_sha, "configuration": config}));
+        "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config}));
     let mut gated = false;
     for slot in slots {
         let id = slot["slot"].as_str().unwrap().to_string();
@@ -416,16 +437,20 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
 }
 
 /// Every run of one batch split across shard directories. The shards must share one
-/// configuration and one pilot, and no run may appear in two of them.
+/// configuration, one pilot and one platform, and no run may appear in two of them.
 pub fn merged(dirs: &[&Path]) -> Result<Vec<Value>> {
     let mut identity = None;
     let mut out: Vec<Value> = vec![];
     for dir in dirs {
         let ledger = read(dir.join("batch.json"))?;
         for invocation in ledger["invocations"].as_array().into_iter().flatten() {
-            let this = json!([invocation["config_sha256"], invocation["after_pilot"]]);
+            let this = json!([
+                invocation["config_sha256"],
+                invocation["after_pilot"],
+                invocation["platform"]
+            ]);
             if *identity.get_or_insert_with(|| this.clone()) != this {
-                bail!("Shards must share one configuration and one pilot");
+                bail!("Shards must share one configuration, one pilot and one platform");
             }
         }
         for result in results(dir)? {
@@ -516,7 +541,8 @@ mod tests {
             entry["run_dir"] = run_dir.to_string_lossy().into_owned().into();
             entries.push(entry);
         }
-        let invocation = json!({"config_sha256": "c0", "after_pilot": pilot});
+        let invocation =
+            json!({"config_sha256": "c0", "after_pilot": pilot, "platform": platform()});
         write(
             dir.join("batch.json"),
             &json!({"runs": entries, "invocations": [invocation]}),
@@ -560,6 +586,26 @@ mod tests {
         recorded(&other, &[], "/q");
         assert!(merged(&[dirs[0], &other]).is_err());
         assert!(merged(&[dirs[0], dirs[0]]).is_err());
+    }
+
+    #[test]
+    fn a_batch_its_shards_and_its_pilot_share_one_platform() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (here, there) = (tmp.path().join("here"), tmp.path().join("there"));
+        recorded(&here, &[], "/p");
+        recorded(&there, &[], "/p");
+        let mut ledger = read(there.join("batch.json")).unwrap();
+        ledger["invocations"][0]["platform"] = "plan9-mips".into();
+        write(there.join("batch.json"), &ledger).unwrap();
+
+        let refused = merged(&[&here, &there]).unwrap_err().to_string();
+        assert!(refused.contains("platform"), "{refused}");
+        assert!(one_platform(&read(here.join("batch.json")).unwrap()).is_ok());
+        let refused = one_platform(&ledger).unwrap_err().to_string();
+        assert!(refused.contains("plan9-mips"), "{refused}");
+        // A ledger from before platforms were recorded cannot be resumed or extended.
+        ledger["invocations"][0]["platform"] = Value::Null;
+        assert!(one_platform(&ledger).is_err());
     }
 
     #[test]
