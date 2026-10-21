@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "go-indep-2",
+  "language": "go",
+  "files": {
+    "go.mod": "module fixture\n\ngo 1.23\n",
+    ".gitignore": "/fixture.test\n",
+    "semver/semver.go": "// Package semver parses and orders Semantic Versioning 2.0.0 versions.\npackage semver\n\nimport \"errors\"\n\n// Version is a parsed version. Pre and Build hold the dot-separated identifiers.\ntype Version struct {\n\tMajor, Minor, Patch uint64\n\tPre                 []string\n\tBuild               []string\n}\n\n// Parse parses s as a SemVer 2.0.0 version.\nfunc Parse(s string) (Version, error) {\n\treturn Version{}, errors.New(\"semver: not implemented\")\n}\n\n// String formats v in SemVer syntax.\nfunc (v Version) String() string {\n\treturn \"\"\n}\n\n// Compare orders a and b by SemVer precedence: -1, 0 or 1.\nfunc Compare(a, b Version) int {\n\treturn 0\n}\n",
+    "textwrap/textwrap.go": "// Package textwrap wraps plain text to a width counted in runes.\npackage textwrap\n\n// Wrap wraps text into lines of at most width runes.\nfunc Wrap(text string, width int) []string {\n\treturn nil\n}\n\n// Fill is Wrap joined with newlines.\nfunc Fill(text string, width int) string {\n\treturn \"\"\n}\n\n// Indent adds prefix to the start of lines of text.\nfunc Indent(text, prefix string) string {\n\treturn text\n}\n\n// Dedent removes the common leading whitespace of text's lines.\nfunc Dedent(text string) string {\n\treturn text\n}\n"
+  },
+  "requirements": [
+    "semver/semver.go: Parse(s string) (Version, error) accepts exactly SemVer 2.0.0 syntax and returns an error for anything else: MAJOR.MINOR.PATCH decimal numbers that fit in uint64, then an optional -prerelease and an optional +build, each a dot-separated list of nonempty identifiers made only of ASCII letters, digits and hyphens. Core numbers and all-digit prerelease identifiers have no leading zeros (build identifiers may). Nothing may precede or follow the version, not even spaces. Pre and Build hold the identifiers in order. String() returns MAJOR.MINOR.PATCH, then -Pre and +Build joined with dots when nonempty, so it round-trips every valid input. Compare(a, b) returns -1, 0 or 1 by SemVer precedence: core numbers numerically; a version with a prerelease ranks below the same version without one; prerelease identifiers compare left to right, all-digit ones numerically and below any others, others in ASCII byte order; if every shared identifier is equal, the longer list ranks higher. Build metadata never affects Compare.",
+    "textwrap/textwrap.go: Wrap(text string, width int) []string wraps greedily, counting runes, not bytes. Blank lines (only whitespace) separate paragraphs: leading and trailing blank lines are dropped, and consecutive paragraphs are separated by exactly one \"\" line. Within a paragraph, words are maximal runs of non-whitespace; whitespace, newlines included, only separates them. Each line takes as many words as fit, joined by single spaces, with no leading or trailing space. A word longer than width starts a new line and is cut into width-rune pieces; its last piece may be followed by more words. Text with no words gives no lines, and width < 1 counts as 1. Fill joins Wrap's lines with \\n. Indent(text, prefix string) adds prefix to every line that contains non-whitespace; other lines and all newlines are unchanged. Dedent(text string) removes the longest run of spaces and tabs (compared byte for byte) that starts every line containing non-whitespace, and empties whitespace-only lines while keeping their newlines."
+  ],
+  "allocation": {
+    "A": "semver/semver.go, with focused tests.",
+    "B": "textwrap/textwrap.go, with focused tests."
+  },
+  "dependencies": [
+    "The units share no types, imports or files."
+  ],
+  "milestones": [],
+  "commands": [
+    "go test ./..."
+  ]
+}
