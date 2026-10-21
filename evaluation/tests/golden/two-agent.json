@@ -1,0 +1,429 @@
+{
+  "claude_prompts": {
+    "A": "You are agent A in a two-agent software task using Git worktrees. Your worktree is <tmp>/claude/agents/A; your current directory is its scratch/ subdirectory, which is never shared. Your peer's worktree (read only) is <tmp>/claude/agents/B. The shared integration worktree is <tmp>/claude/agents/integration.\nTalk to the host only by running these Bash commands, each of which prints the host's JSON reply:\n\"$FALINKS_HOST\" message \"TEXT\" | \"$FALINKS_HOST\" share | \"$FALINKS_HOST\" ack MILESTONE_ID | \"$FALINKS_HOST\" check [RESOLVED_MERGE_COMMIT] | \"$FALINKS_HOST\" ready\nThese send the requests the workflow below describes; ready names your last shared commit for you and is accepted only after you have acknowledged all 2 task development(s). Do not commit yourself: share asks the host to commit your draft. Peer messages, peer diffs and task developments arrive as messages starting with \"Host event\". When you have nothing to do until the next host event, end your turn; the next event starts a new turn. Do not run long sleeps or polling loops.\n\nTask: {\"allocation\":{\"A\":\"Producer in producer.go; subsequent producer developments.\",\"B\":\"Consumer in consumer.go; subsequent consumer developments.\"},\"commands\":[\"go test ./...\"],\"dependencies\":[\"Initially Produce returns []string consumed by Consume. Developments may change that shared contract.\"],\"language\":\"go\",\"name\":\"go-relationships\",\"requirements\":[\"Initial task: Produce trims each input and drops blank lines without mutating input. Consume preserves incoming order without mutating its input. Add focused tests. Further behavioral developments will arrive at the frozen milestones.\"],\"version\":1}\nYour allocation: \"Producer in producer.go; subsequent producer developments.\"\n\nWorkflow:\nImplement your allocated subtask with your peer. Announce your plan and dependency assumptions; discuss and inspect unfinished peer work. Intermediate drafts need not compile. Share at least one unfinished nonempty draft and keep collaborating as behavioral developments arrive. Never read the evaluation controller, oracle, reference or other runs.\n\nYou have an ordinary writable Git worktree, read access to your peer's worktree, and a host message/diff channel. Exchange feedback and resolve overlapping edits with ordinary Git. This arm has no Falinks review, offer or publication ledger. Final success requires both agents' final contributions combined and checked as one exact candidate.\n\nThe worker process speaks JSON lines on stdin/stdout. Keep logging on stderr. Requests are {\"action\":\"message\",\"text\":\"...\"}, {\"action\":\"share\"}, {\"action\":\"ack\",\"milestone\":\"id\"}, {\"action\":\"check\"}, {\"action\":\"check\",\"resolved\":\"merge-commit\"}, {\"action\":\"ready\",\"commit\":\"last-shared-commit\"}, {\"action\":\"usage\",\"usage\":{...}}, or {\"action\":\"limit\",\"detail\":\"...\"}. Stop edits while a share capture is pending. Share captures tracked and untracked files except scratch, without compiling them. Replies and unsolicited peer_message, peer_diff and development events arrive on stdin. Acknowledge each development before working on its requirements. Finish only after all developments are implemented. Both contributions must be ancestors of a manually resolved integration commit; give that commit to check. A passed check never means different later bytes were accepted. After a successful integration check, each agent sends ready for its last shared commit.\n\nDo not finish early or exit until the runner ends the run. Use scratch for caches/transient files. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The runner returns pass/fail and merge conflicts, without revealing hidden oracle cases. Report usage or usage interruption explicitly if your runtime exposes it.\n",
+    "B": "You are agent B in a two-agent software task using Git worktrees. Your worktree is <tmp>/claude/agents/B; your current directory is its scratch/ subdirectory, which is never shared. Your peer's worktree (read only) is <tmp>/claude/agents/A. The shared integration worktree is <tmp>/claude/agents/integration.\nTalk to the host only by running these Bash commands, each of which prints the host's JSON reply:\n\"$FALINKS_HOST\" message \"TEXT\" | \"$FALINKS_HOST\" share | \"$FALINKS_HOST\" ack MILESTONE_ID | \"$FALINKS_HOST\" check [RESOLVED_MERGE_COMMIT] | \"$FALINKS_HOST\" ready\nThese send the requests the workflow below describes; ready names your last shared commit for you and is accepted only after you have acknowledged all 2 task development(s). Do not commit yourself: share asks the host to commit your draft. Peer messages, peer diffs and task developments arrive as messages starting with \"Host event\". When you have nothing to do until the next host event, end your turn; the next event starts a new turn. Do not run long sleeps or polling loops.\n\nTask: {\"allocation\":{\"A\":\"Producer in producer.go; subsequent producer developments.\",\"B\":\"Consumer in consumer.go; subsequent consumer developments.\"},\"commands\":[\"go test ./...\"],\"dependencies\":[\"Initially Produce returns []string consumed by Consume. Developments may change that shared contract.\"],\"language\":\"go\",\"name\":\"go-relationships\",\"requirements\":[\"Initial task: Produce trims each input and drops blank lines without mutating input. Consume preserves incoming order without mutating its input. Add focused tests. Further behavioral developments will arrive at the frozen milestones.\"],\"version\":1}\nYour allocation: \"Consumer in consumer.go; subsequent consumer developments.\"\n\nWorkflow:\nImplement your allocated subtask with your peer. Announce your plan and dependency assumptions; discuss and inspect unfinished peer work. Intermediate drafts need not compile. Share at least one unfinished nonempty draft and keep collaborating as behavioral developments arrive. Never read the evaluation controller, oracle, reference or other runs.\n\nYou have an ordinary writable Git worktree, read access to your peer's worktree, and a host message/diff channel. Exchange feedback and resolve overlapping edits with ordinary Git. This arm has no Falinks review, offer or publication ledger. Final success requires both agents' final contributions combined and checked as one exact candidate.\n\nThe worker process speaks JSON lines on stdin/stdout. Keep logging on stderr. Requests are {\"action\":\"message\",\"text\":\"...\"}, {\"action\":\"share\"}, {\"action\":\"ack\",\"milestone\":\"id\"}, {\"action\":\"check\"}, {\"action\":\"check\",\"resolved\":\"merge-commit\"}, {\"action\":\"ready\",\"commit\":\"last-shared-commit\"}, {\"action\":\"usage\",\"usage\":{...}}, or {\"action\":\"limit\",\"detail\":\"...\"}. Stop edits while a share capture is pending. Share captures tracked and untracked files except scratch, without compiling them. Replies and unsolicited peer_message, peer_diff and development events arrive on stdin. Acknowledge each development before working on its requirements. Finish only after all developments are implemented. Both contributions must be ancestors of a manually resolved integration commit; give that commit to check. A passed check never means different later bytes were accepted. After a successful integration check, each agent sends ready for its last shared commit.\n\nDo not finish early or exit until the runner ends the run. Use scratch for caches/transient files. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The runner returns pass/fail and merge conflicts, without revealing hidden oracle cases. Report usage or usage interruption explicitly if your runtime exposes it.\n"
+  },
+  "go-page": {
+    "agents": {
+      "A": {
+        "events": [
+          {
+            "commit": "<commit-1>",
+            "diff": "diff --git a/handler.go b/handler.go\nindex c6c1a34..ff2b48e 100644\n--- a/handler.go\n+++ b/handler.go\n@@ -17,3 +17,5 @@ func Handler(items []Item) http.Handler {\n         json.NewEncoder(w).Encode(items)\n     })\n }\n+\n+// initial B",
+            "sender": "B",
+            "type": "peer_diff"
+          },
+          {
+            "id": "peer-drafts",
+            "requirements": [
+              "Integration observation: a red/blue interleaved input must be filtered before slicing; keep input order."
+            ],
+            "trigger": "both agents have shared at least one nonempty unfinished diff",
+            "type": "development"
+          },
+          {
+            "commit": "<commit-2>",
+            "diff": "diff --git a/handler.go b/handler.go\nindex c6c1a34..0ed9bf9 100644\n--- a/handler.go\n+++ b/handler.go\n@@ -3,6 +3,7 @@ package fixture\n import (\n     \"encoding/json\"\n     \"net/http\"\n+    \"strconv\"\n )\n \n type Item struct {\n@@ -10,10 +11,30 @@ type Item struct {\n     Kind string `json:\"kind\"`\n }\n \n-// Input order is the stable response order. The caller retains ownership of items.\n func Handler(items []Item) http.Handler {\n     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+        offset, limit := 0, -1\n+        for _, name := range []string{\"offset\", \"limit\"} {\n+            if raw, exists := r.URL.Query()[name]; exists {\n+                value, err := strconv.Atoi(raw[0])\n+                if err != nil || value < 0 {\n+                    http.Error(w, \"invalid pagination\", http.StatusBadRequest)\n+                    return\n+                }\n+                if name == \"offset\" { offset = value } else { limit = value }\n+            }\n+        }\n+        selected := make([]Item, 0)\n+        kind := r.URL.Query().Get(\"kind\")\n+        for _, item := range items {\n+            if kind == \"\" || item.Kind == kind { selected = append(selected, item) }\n+        }\n+        if offset > len(selected) { offset = len(selected) }\n+        selected = selected[offset:]\n+        if limit >= 0 && limit < len(selected) { selected = selected[:limit] }\n         w.Header().Set(\"Content-Type\", \"application/json\")\n-        json.NewEncoder(w).Encode(items)\n+        json.NewEncoder(w).Encode(selected)\n     })\n }\n+\n+// final B",
+            "sender": "B",
+            "type": "peer_diff"
+          }
+        ],
+        "replies": [
+          {
+            "commit": "<commit-3>",
+            "type": "shared"
+          },
+          {
+            "action": "ack",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-4>",
+            "type": "shared"
+          },
+          {
+            "candidate": null,
+            "conflict": "Auto-merging handler.go\nCONFLICT (content): Merge conflict in handler.go\nAutomatic merge failed; fix conflicts and then commit the result.\n",
+            "passed": false,
+            "type": "check_result"
+          },
+          {
+            "candidate": "<commit-5>",
+            "conflict": null,
+            "passed": true,
+            "type": "check_result"
+          },
+          {
+            "action": "ready",
+            "type": "ok"
+          }
+        ],
+        "start": {
+          "agent": "A",
+          "allocation": "Kind filtering in handler.go and focused tests.",
+          "development_count": 1,
+          "integration_workspace": "<tmp>/go-page/agents/integration",
+          "model": {
+            "model": "scripted",
+            "model_version": "test-v1",
+            "reasoning": "none"
+          },
+          "peer_workspace": "<tmp>/go-page/agents/B",
+          "runtime_binary": "<scripted-worker>",
+          "runtime_home": null,
+          "runtime_version": "scripted-v1",
+          "task": {
+            "allocation": {
+              "A": "Kind filtering in handler.go and focused tests.",
+              "B": "Offset/limit pagination in the same handler.go and focused tests."
+            },
+            "commands": [
+              "go test ./..."
+            ],
+            "dependencies": [
+              "Both subtasks edit Handler; selection order is filtering then offset then limit."
+            ],
+            "language": "go",
+            "name": "go-page",
+            "requirements": [
+              "Extend Handler(items []Item) http.Handler: optional kind filters by exact Kind; empty/missing kind selects all. Preserve input ordering and never mutate caller data.",
+              "Optional offset and limit are nonnegative decimal integers; missing offset=0, missing limit=unbounded. Invalid, empty, negative or overflowing numbers return HTTP 400. Filter BEFORE pagination; offset at/beyond end and limit=0 yield []. Successful results use application/json; unknown parameters are ignored; nil input yields []. Add focused handler tests."
+            ],
+            "version": 1
+          },
+          "type": "start",
+          "workflow": "Implement your allocated subtask with your peer. Announce your plan and dependency assumptions; discuss and inspect unfinished peer work. Intermediate drafts need not compile. Share at least one unfinished nonempty draft and keep collaborating as behavioral developments arrive. Never read the evaluation controller, oracle, reference or other runs.\n\nYou have an ordinary writable Git worktree, read access to your peer's worktree, and a host message/diff channel. Exchange feedback and resolve overlapping edits with ordinary Git. This arm has no Falinks review, offer or publication ledger. Final success requires both agents' final contributions combined and checked as one exact candidate.\n\nThe worker process speaks JSON lines on stdin/stdout. Keep logging on stderr. Requests are {\"action\":\"message\",\"text\":\"...\"}, {\"action\":\"share\"}, {\"action\":\"ack\",\"milestone\":\"id\"}, {\"action\":\"check\"}, {\"action\":\"check\",\"resolved\":\"merge-commit\"}, {\"action\":\"ready\",\"commit\":\"last-shared-commit\"}, {\"action\":\"usage\",\"usage\":{...}}, or {\"action\":\"limit\",\"detail\":\"...\"}. Stop edits while a share capture is pending. Share captures tracked and untracked files except scratch, without compiling them. Replies and unsolicited peer_message, peer_diff and development events arrive on stdin. Acknowledge each development before working on its requirements. Finish only after all developments are implemented. Both contributions must be ancestors of a manually resolved integration commit; give that commit to check. A passed check never means different later bytes were accepted. After a successful integration check, each agent sends ready for its last shared commit.\n\nDo not finish early or exit until the runner ends the run. Use scratch for caches/transient files. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The runner returns pass/fail and merge conflicts, without revealing hidden oracle cases. Report usage or usage interruption explicitly if your runtime exposes it.\n",
+          "workspace": "<tmp>/go-page/agents/A"
+        }
+      },
+      "B": {
+        "events": [
+          {
+            "commit": "<commit-3>",
+            "diff": "diff --git a/handler.go b/handler.go\nindex c6c1a34..25ec1d1 100644\n--- a/handler.go\n+++ b/handler.go\n@@ -17,3 +17,5 @@ func Handler(items []Item) http.Handler {\n         json.NewEncoder(w).Encode(items)\n     })\n }\n+\n+// initial A",
+            "sender": "A",
+            "type": "peer_diff"
+          },
+          {
+            "id": "peer-drafts",
+            "requirements": [
+              "Integration observation: a red/blue interleaved input must be filtered before slicing; keep input order."
+            ],
+            "trigger": "both agents have shared at least one nonempty unfinished diff",
+            "type": "development"
+          },
+          {
+            "commit": "<commit-4>",
+            "diff": "diff --git a/handler.go b/handler.go\nindex c6c1a34..dcadb13 100644\n--- a/handler.go\n+++ b/handler.go\n@@ -3,6 +3,7 @@ package fixture\n import (\n     \"encoding/json\"\n     \"net/http\"\n+    \"strconv\"\n )\n \n type Item struct {\n@@ -10,10 +11,30 @@ type Item struct {\n     Kind string `json:\"kind\"`\n }\n \n-// Input order is the stable response order. The caller retains ownership of items.\n func Handler(items []Item) http.Handler {\n     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n+        offset, limit := 0, -1\n+        for _, name := range []string{\"offset\", \"limit\"} {\n+            if raw, exists := r.URL.Query()[name]; exists {\n+                value, err := strconv.Atoi(raw[0])\n+                if err != nil || value < 0 {\n+                    http.Error(w, \"invalid pagination\", http.StatusBadRequest)\n+                    return\n+                }\n+                if name == \"offset\" { offset = value } else { limit = value }\n+            }\n+        }\n+        selected := make([]Item, 0)\n+        kind := r.URL.Query().Get(\"kind\")\n+        for _, item := range items {\n+            if kind == \"\" || item.Kind == kind { selected = append(selected, item) }\n+        }\n+        if offset > len(selected) { offset = len(selected) }\n+        selected = selected[offset:]\n+        if limit >= 0 && limit < len(selected) { selected = selected[:limit] }\n         w.Header().Set(\"Content-Type\", \"application/json\")\n-        json.NewEncoder(w).Encode(items)\n+        json.NewEncoder(w).Encode(selected)\n     })\n }\n+\n+// final A",
+            "sender": "A",
+            "type": "peer_diff"
+          }
+        ],
+        "replies": [
+          {
+            "commit": "<commit-1>",
+            "type": "shared"
+          },
+          {
+            "action": "ack",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-2>",
+            "type": "shared"
+          },
+          {
+            "action": "ready",
+            "type": "ok"
+          }
+        ],
+        "start": {
+          "agent": "B",
+          "allocation": "Offset/limit pagination in the same handler.go and focused tests.",
+          "development_count": 1,
+          "integration_workspace": "<tmp>/go-page/agents/integration",
+          "model": {
+            "model": "scripted",
+            "model_version": "test-v1",
+            "reasoning": "none"
+          },
+          "peer_workspace": "<tmp>/go-page/agents/A",
+          "runtime_binary": "<scripted-worker>",
+          "runtime_home": null,
+          "runtime_version": "scripted-v1",
+          "task": {
+            "allocation": {
+              "A": "Kind filtering in handler.go and focused tests.",
+              "B": "Offset/limit pagination in the same handler.go and focused tests."
+            },
+            "commands": [
+              "go test ./..."
+            ],
+            "dependencies": [
+              "Both subtasks edit Handler; selection order is filtering then offset then limit."
+            ],
+            "language": "go",
+            "name": "go-page",
+            "requirements": [
+              "Extend Handler(items []Item) http.Handler: optional kind filters by exact Kind; empty/missing kind selects all. Preserve input ordering and never mutate caller data.",
+              "Optional offset and limit are nonnegative decimal integers; missing offset=0, missing limit=unbounded. Invalid, empty, negative or overflowing numbers return HTTP 400. Filter BEFORE pagination; offset at/beyond end and limit=0 yield []. Successful results use application/json; unknown parameters are ignored; nil input yields []. Add focused handler tests."
+            ],
+            "version": 1
+          },
+          "type": "start",
+          "workflow": "Implement your allocated subtask with your peer. Announce your plan and dependency assumptions; discuss and inspect unfinished peer work. Intermediate drafts need not compile. Share at least one unfinished nonempty draft and keep collaborating as behavioral developments arrive. Never read the evaluation controller, oracle, reference or other runs.\n\nYou have an ordinary writable Git worktree, read access to your peer's worktree, and a host message/diff channel. Exchange feedback and resolve overlapping edits with ordinary Git. This arm has no Falinks review, offer or publication ledger. Final success requires both agents' final contributions combined and checked as one exact candidate.\n\nThe worker process speaks JSON lines on stdin/stdout. Keep logging on stderr. Requests are {\"action\":\"message\",\"text\":\"...\"}, {\"action\":\"share\"}, {\"action\":\"ack\",\"milestone\":\"id\"}, {\"action\":\"check\"}, {\"action\":\"check\",\"resolved\":\"merge-commit\"}, {\"action\":\"ready\",\"commit\":\"last-shared-commit\"}, {\"action\":\"usage\",\"usage\":{...}}, or {\"action\":\"limit\",\"detail\":\"...\"}. Stop edits while a share capture is pending. Share captures tracked and untracked files except scratch, without compiling them. Replies and unsolicited peer_message, peer_diff and development events arrive on stdin. Acknowledge each development before working on its requirements. Finish only after all developments are implemented. Both contributions must be ancestors of a manually resolved integration commit; give that commit to check. A passed check never means different later bytes were accepted. After a successful integration check, each agent sends ready for its last shared commit.\n\nDo not finish early or exit until the runner ends the run. Use scratch for caches/transient files. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The runner returns pass/fail and merge conflicts, without revealing hidden oracle cases. Report usage or usage interruption explicitly if your runtime exposes it.\n",
+          "workspace": "<tmp>/go-page/agents/B"
+        }
+      }
+    },
+    "triggers": [
+      {
+        "milestone": "peer-drafts",
+        "shares": {
+          "A": 1,
+          "B": 1
+        }
+      }
+    ]
+  },
+  "go-relationships": {
+    "agents": {
+      "A": {
+        "events": [
+          {
+            "sender": "B",
+            "text": "protected-read-denied",
+            "type": "peer_message"
+          },
+          {
+            "commit": "<commit-6>",
+            "diff": "diff --git a/consumer.go b/consumer.go\nindex cc025d3..ac64223 100644\n--- a/consumer.go\n+++ b/consumer.go\n@@ -3,3 +3,5 @@ package fixture\n func Consume(records []string) []string {\n     return append([]string{}, records...)\n }\n+\n+// first unfinished draft B",
+            "sender": "B",
+            "type": "peer_diff"
+          },
+          {
+            "id": "record-contract",
+            "requirements": [
+              "The upstream feed now requires public Record struct { ID int; Text string }. Produce(lines []string) []Record uses the original 1-based line number for ID, trims Text and drops blanks without renumbering. Consume(records []Record) []string formats ID:Text, retaining order and inputs. This replaces the string contract."
+            ],
+            "trigger": "both agents have shared at least one nonempty unfinished diff",
+            "type": "development"
+          },
+          {
+            "commit": "<commit-7>",
+            "diff": "diff --git a/consumer.go b/consumer.go\nindex cc025d3..f818ee6 100644\n--- a/consumer.go\n+++ b/consumer.go\n@@ -1,5 +1,18 @@\n package fixture\n \n-func Consume(records []string) []string {\n-    return append([]string{}, records...)\n+import (\n+    \"fmt\"\n+    \"strings\"\n+)\n+\n+func Consume(records []Record) []string {\n+    out := make([]string, 0, len(records))\n+    for _, record := range records { out = append(out, fmt.Sprintf(\"%d:%s\", record.ID, record.Text)) }\n+    return out\n+}\n+\n+func Render(records []Record) string {\n+    return strings.Join(Consume(records), \"\\n\")\n }\n+\n+// unfinished contract draft",
+            "sender": "B",
+            "type": "peer_diff"
+          },
+          {
+            "id": "follow-ups",
+            "requirements": [
+              "A: add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy.",
+              "B: add Render(records []Record) string joining Consume output with newline, with no trailing newline; empty is empty string. Keep record contract behavior."
+            ],
+            "trigger": "both agents have shared a new nonempty diff after acknowledging record-contract",
+            "type": "development"
+          },
+          {
+            "commit": "<commit-8>",
+            "diff": "diff --git a/consumer.go b/consumer.go\nindex cc025d3..0d43492 100644\n--- a/consumer.go\n+++ b/consumer.go\n@@ -1,5 +1,16 @@\n package fixture\n \n-func Consume(records []string) []string {\n-    return append([]string{}, records...)\n+import (\n+    \"fmt\"\n+    \"strings\"\n+)\n+\n+func Consume(records []Record) []string {\n+    out := make([]string, 0, len(records))\n+    for _, record := range records { out = append(out, fmt.Sprintf(\"%d:%s\", record.ID, record.Text)) }\n+    return out\n+}\n+\n+func Render(records []Record) string {\n+    return strings.Join(Consume(records), \"\\n\")\n }",
+            "sender": "B",
+            "type": "peer_diff"
+          }
+        ],
+        "replies": [
+          {
+            "action": "message",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-9>",
+            "type": "shared"
+          },
+          {
+            "action": "ack",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-10>",
+            "type": "shared"
+          },
+          {
+            "action": "ack",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-11>",
+            "type": "shared"
+          },
+          {
+            "action": "ready",
+            "type": "ok"
+          }
+        ],
+        "start": {
+          "agent": "A",
+          "allocation": "Producer in producer.go; subsequent producer developments.",
+          "development_count": 2,
+          "integration_workspace": "<tmp>/go-relationships/agents/integration",
+          "model": {
+            "model": "scripted",
+            "model_version": "test-v1",
+            "reasoning": "none"
+          },
+          "peer_workspace": "<tmp>/go-relationships/agents/B",
+          "runtime_binary": "<scripted-worker>",
+          "runtime_home": null,
+          "runtime_version": "scripted-v1",
+          "task": {
+            "allocation": {
+              "A": "Producer in producer.go; subsequent producer developments.",
+              "B": "Consumer in consumer.go; subsequent consumer developments."
+            },
+            "commands": [
+              "go test ./..."
+            ],
+            "dependencies": [
+              "Initially Produce returns []string consumed by Consume. Developments may change that shared contract."
+            ],
+            "language": "go",
+            "name": "go-relationships",
+            "requirements": [
+              "Initial task: Produce trims each input and drops blank lines without mutating input. Consume preserves incoming order without mutating its input. Add focused tests. Further behavioral developments will arrive at the frozen milestones."
+            ],
+            "version": 1
+          },
+          "type": "start",
+          "workflow": "Implement your allocated subtask with your peer. Announce your plan and dependency assumptions; discuss and inspect unfinished peer work. Intermediate drafts need not compile. Share at least one unfinished nonempty draft and keep collaborating as behavioral developments arrive. Never read the evaluation controller, oracle, reference or other runs.\n\nYou have an ordinary writable Git worktree, read access to your peer's worktree, and a host message/diff channel. Exchange feedback and resolve overlapping edits with ordinary Git. This arm has no Falinks review, offer or publication ledger. Final success requires both agents' final contributions combined and checked as one exact candidate.\n\nThe worker process speaks JSON lines on stdin/stdout. Keep logging on stderr. Requests are {\"action\":\"message\",\"text\":\"...\"}, {\"action\":\"share\"}, {\"action\":\"ack\",\"milestone\":\"id\"}, {\"action\":\"check\"}, {\"action\":\"check\",\"resolved\":\"merge-commit\"}, {\"action\":\"ready\",\"commit\":\"last-shared-commit\"}, {\"action\":\"usage\",\"usage\":{...}}, or {\"action\":\"limit\",\"detail\":\"...\"}. Stop edits while a share capture is pending. Share captures tracked and untracked files except scratch, without compiling them. Replies and unsolicited peer_message, peer_diff and development events arrive on stdin. Acknowledge each development before working on its requirements. Finish only after all developments are implemented. Both contributions must be ancestors of a manually resolved integration commit; give that commit to check. A passed check never means different later bytes were accepted. After a successful integration check, each agent sends ready for its last shared commit.\n\nDo not finish early or exit until the runner ends the run. Use scratch for caches/transient files. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The runner returns pass/fail and merge conflicts, without revealing hidden oracle cases. Report usage or usage interruption explicitly if your runtime exposes it.\n",
+          "workspace": "<tmp>/go-relationships/agents/A"
+        }
+      },
+      "B": {
+        "events": [
+          {
+            "sender": "A",
+            "text": "protected-read-denied",
+            "type": "peer_message"
+          },
+          {
+            "commit": "<commit-9>",
+            "diff": "diff --git a/producer.go b/producer.go\nindex 3e0f4ff..ff236ed 100644\n--- a/producer.go\n+++ b/producer.go\n@@ -7,3 +7,5 @@ func Produce(lines []string) []string {\n     for _, line := range lines { out = append(out, strings.TrimSpace(line)) }\n     return out\n }\n+\n+// first unfinished draft A",
+            "sender": "A",
+            "type": "peer_diff"
+          },
+          {
+            "id": "record-contract",
+            "requirements": [
+              "The upstream feed now requires public Record struct { ID int; Text string }. Produce(lines []string) []Record uses the original 1-based line number for ID, trims Text and drops blanks without renumbering. Consume(records []Record) []string formats ID:Text, retaining order and inputs. This replaces the string contract."
+            ],
+            "trigger": "both agents have shared at least one nonempty unfinished diff",
+            "type": "development"
+          },
+          {
+            "commit": "<commit-10>",
+            "diff": "diff --git a/producer.go b/producer.go\nindex 3e0f4ff..153de74 100644\n--- a/producer.go\n+++ b/producer.go\n@@ -2,8 +2,20 @@ package fixture\n \n import \"strings\"\n \n-func Produce(lines []string) []string {\n-    out := make([]string, 0, len(lines))\n-    for _, line := range lines { out = append(out, strings.TrimSpace(line)) }\n+type Record struct { ID int; Text string }\n+\n+func Produce(lines []string) []Record {\n+    out := make([]Record, 0, len(lines))\n+    for i, line := range lines {\n+        text := strings.TrimSpace(line)\n+        if text != \"\" { out = append(out, Record{ID:i+1, Text:text}) }\n+    }\n     return out\n }\n+\n+func Stats(lines []string) (kept int, dropped int) {\n+    kept = len(Produce(lines))\n+    return kept, len(lines)-kept\n+}\n+\n+// unfinished contract draft",
+            "sender": "A",
+            "type": "peer_diff"
+          },
+          {
+            "id": "follow-ups",
+            "requirements": [
+              "A: add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy.",
+              "B: add Render(records []Record) string joining Consume output with newline, with no trailing newline; empty is empty string. Keep record contract behavior."
+            ],
+            "trigger": "both agents have shared a new nonempty diff after acknowledging record-contract",
+            "type": "development"
+          },
+          {
+            "commit": "<commit-11>",
+            "diff": "diff --git a/producer.go b/producer.go\nindex 3e0f4ff..a298934 100644\n--- a/producer.go\n+++ b/producer.go\n@@ -2,8 +2,18 @@ package fixture\n \n import \"strings\"\n \n-func Produce(lines []string) []string {\n-    out := make([]string, 0, len(lines))\n-    for _, line := range lines { out = append(out, strings.TrimSpace(line)) }\n+type Record struct { ID int; Text string }\n+\n+func Produce(lines []string) []Record {\n+    out := make([]Record, 0, len(lines))\n+    for i, line := range lines {\n+        text := strings.TrimSpace(line)\n+        if text != \"\" { out = append(out, Record{ID:i+1, Text:text}) }\n+    }\n     return out\n }\n+\n+func Stats(lines []string) (kept int, dropped int) {\n+    kept = len(Produce(lines))\n+    return kept, len(lines)-kept\n+}",
+            "sender": "A",
+            "type": "peer_diff"
+          }
+        ],
+        "replies": [
+          {
+            "action": "message",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-6>",
+            "type": "shared"
+          },
+          {
+            "action": "ack",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-7>",
+            "type": "shared"
+          },
+          {
+            "action": "ack",
+            "type": "ok"
+          },
+          {
+            "commit": "<commit-8>",
+            "type": "shared"
+          },
+          {
+            "action": "ready",
+            "type": "ok"
+          }
+        ],
+        "start": {
+          "agent": "B",
+          "allocation": "Consumer in consumer.go; subsequent consumer developments.",
+          "development_count": 2,
+          "integration_workspace": "<tmp>/go-relationships/agents/integration",
+          "model": {
+            "model": "scripted",
+            "model_version": "test-v1",
+            "reasoning": "none"
+          },
+          "peer_workspace": "<tmp>/go-relationships/agents/A",
+          "runtime_binary": "<scripted-worker>",
+          "runtime_home": null,
+          "runtime_version": "scripted-v1",
+          "task": {
+            "allocation": {
+              "A": "Producer in producer.go; subsequent producer developments.",
+              "B": "Consumer in consumer.go; subsequent consumer developments."
+            },
+            "commands": [
+              "go test ./..."
+            ],
+            "dependencies": [
+              "Initially Produce returns []string consumed by Consume. Developments may change that shared contract."
+            ],
+            "language": "go",
+            "name": "go-relationships",
+            "requirements": [
+              "Initial task: Produce trims each input and drops blank lines without mutating input. Consume preserves incoming order without mutating its input. Add focused tests. Further behavioral developments will arrive at the frozen milestones."
+            ],
+            "version": 1
+          },
+          "type": "start",
+          "workflow": "Implement your allocated subtask with your peer. Announce your plan and dependency assumptions; discuss and inspect unfinished peer work. Intermediate drafts need not compile. Share at least one unfinished nonempty draft and keep collaborating as behavioral developments arrive. Never read the evaluation controller, oracle, reference or other runs.\n\nYou have an ordinary writable Git worktree, read access to your peer's worktree, and a host message/diff channel. Exchange feedback and resolve overlapping edits with ordinary Git. This arm has no Falinks review, offer or publication ledger. Final success requires both agents' final contributions combined and checked as one exact candidate.\n\nThe worker process speaks JSON lines on stdin/stdout. Keep logging on stderr. Requests are {\"action\":\"message\",\"text\":\"...\"}, {\"action\":\"share\"}, {\"action\":\"ack\",\"milestone\":\"id\"}, {\"action\":\"check\"}, {\"action\":\"check\",\"resolved\":\"merge-commit\"}, {\"action\":\"ready\",\"commit\":\"last-shared-commit\"}, {\"action\":\"usage\",\"usage\":{...}}, or {\"action\":\"limit\",\"detail\":\"...\"}. Stop edits while a share capture is pending. Share captures tracked and untracked files except scratch, without compiling them. Replies and unsolicited peer_message, peer_diff and development events arrive on stdin. Acknowledge each development before working on its requirements. Finish only after all developments are implemented. Both contributions must be ancestors of a manually resolved integration commit; give that commit to check. A passed check never means different later bytes were accepted. After a successful integration check, each agent sends ready for its last shared commit.\n\nDo not finish early or exit until the runner ends the run. Use scratch for caches/transient files. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The runner returns pass/fail and merge conflicts, without revealing hidden oracle cases. Report usage or usage interruption explicitly if your runtime exposes it.\n",
+          "workspace": "<tmp>/go-relationships/agents/B"
+        }
+      }
+    },
+    "triggers": [
+      {
+        "milestone": "record-contract",
+        "shares": {
+          "A": 1,
+          "B": 1
+        }
+      },
+      {
+        "milestone": "follow-ups",
+        "shares": {
+          "A": 2,
+          "B": 2
+        }
+      }
+    ]
+  }
+}

@@ -2,6 +2,7 @@
 mod baseline;
 mod batch;
 mod report;
+mod timing;
 
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -103,6 +104,13 @@ pub fn utc(secs: u64) -> String {
         rem % 3600 / 60,
         rem % 60
     )
+}
+
+pub fn unix_now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
 }
 
 pub fn utc_now() -> String {
@@ -765,7 +773,8 @@ const USAGE: &str = "usage: falinks-eval <command>
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR] [--fixtures NAME[,NAME]]
-  report --runs DIR [--runs DIR]...";
+  report --runs DIR [--runs DIR]...
+  timing RUN_DIR";
 
 struct Args {
     positional: Vec<String>,
@@ -887,6 +896,12 @@ fn run() -> Result<i32> {
             let dirs: Vec<&Path> = args.all("runs").into_iter().map(Path::new).collect();
             let summary = report::report(&batch::merged(&dirs)?);
             println!("{}", serde_json::to_string_pretty(&summary)?);
+            Ok(0)
+        }
+        Some("timing") => {
+            let run = args.positional.get(1).ok_or(USAGE)?;
+            let figures = timing::timing(Path::new(run))?;
+            println!("{}", serde_json::to_string_pretty(&figures)?);
             Ok(0)
         }
         _ => bail!("{USAGE}"),

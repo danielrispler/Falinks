@@ -1,0 +1,25 @@
+{
+ "run_id": "synthetic-git",
+ "arm": "git",
+ "fixture": "go-relationships",
+ "timing": {
+  "start_utc": "2026-10-21T10:00:00Z",
+  "start_unix": 1792576800.5,
+  "elapsed_seconds": 20.0
+ },
+ "usage": {
+  "status": "partial",
+  "agents": {
+   "A": [
+    {
+     "turn": 1
+    }
+   ],
+   "B": [
+    {
+     "turn": 1
+    }
+   ]
+  }
+ }
+}

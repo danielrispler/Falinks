@@ -159,7 +159,15 @@ recommendation/transition counts are zero by construction. Concurrent timeline
 intervals overlap and must not be summed into elapsed time.
 
 Success stops the completion clock after exact final checks pass; cleanup time
-is separate. Failures/timeouts/usage interruptions retain evidence and their
+is separate. Then both arms drain usage (#179): the host refuses every request
+while it waits up to `usage_drain_seconds` (60) for each worker's final turn
+result, its first after an accepted `ready`, and then stops the workers. Usage
+is `complete` only when every final result arrived within that window;
+otherwise it is `partial` (a result flushed while the worker stopped is kept
+with `late: true`, a worker stopped before its result has none) or
+`unavailable` when no turn reported. `usage.final_results` says which. Partial
+usage is never used for cost comparisons. The Codex bridge reports its last turn
+before `ready`, so its usage is never complete. Failures/timeouts/usage interruptions retain evidence and their
 reason; no automatic provider switch or silent replacement. The 30-minute
 budget includes preparation, communication, checks and integration. Every
 candidate check also has a bounded deadline. `schedule` emits the unscored
@@ -241,6 +249,14 @@ it as `usage_limit`.
     interrupted pilot run never affects the verdict.
   - **Agent mistakes** in either arm are refusals counted in `rejected_operations`. They
     are never infrastructure failures.
+  - **Timing**: `timing RUN_DIR` reports, per agent of one run of either arm, busy, model,
+    tool, launch and waiting-on-peer seconds, round-trips and their model seconds by
+    category (edit, refused edit, native, coordination), output bytes against changed bytes,
+    and the slowest agent, by #116's method. The definitions and heuristics are in
+    `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
+    Runs before #179 record their start to the second only (`start_precision`), so their
+    launch and waiting times are good to about a second. Its `results` and `usage_reports`
+    per agent compare the transcript's turn results with those recorded in `result.json`.
 
 Run the pilot and batch in a session **outside auto mode**, because they launch nested
 agents:
@@ -281,7 +297,11 @@ the setup ledger is `setup.json`. The shared setup ceiling is eight hours and
 covers this preparation plus remaining pilot/evaluation setup, **not engine
 implementation**. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
-for safety gates, run interpretation and continuation criteria.
+for safety gates, run interpretation and continuation criteria. Track T (#178) has
+its own `team_size_research` section with a 43,200 s limit; its sessions record
+implementation, run (including the usage drain) and preparation time and
+complete-only usage separately. The ledger test fails when either section is
+overdrawn: stop and ask before that happens.
 `freeze` lists each changed frozen path and refuses unstaged changes to them, so
 stage your repair first. Re-freeze before observing a red harness test, or the
 freeze guard fails first and masks the real failure.

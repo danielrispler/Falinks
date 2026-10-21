@@ -470,6 +470,12 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     assert_eq!(outcome["outcome"], "success", "{outcome}");
     assert_eq!(outcome["oracle"]["passed"], true);
     assert_eq!(run.arm.validation_attempts.len(), 1);
+
+    // After the clock stops, the usage drain refuses every call without counting it (#179).
+    let rejected = run.arm.rejected;
+    run.arm.draining = true;
+    assert_eq!(run.call(0, "capture", json!({}))["accepted"], false);
+    assert_eq!(run.arm.rejected, rejected);
 }
 
 /// The opening prompt carries the initial protocol state from a capture given to the agent,

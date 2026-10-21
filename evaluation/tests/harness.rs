@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -89,6 +90,7 @@ fn config(base: &Path, worker_script: &str, worker_command: Value, runtime: &str
         ("gate_command", json!(["/bin/cp", runtime, "{output}"])),
         ("denied_roots", json!([])),
         ("timeout_seconds", json!(90)),
+        ("usage_drain_seconds", json!(1)),
     ] {
         config[key] = value;
     }
@@ -173,6 +175,40 @@ fn setup_ledger_totals_match_its_sessions() {
     assert_eq!(ledger["charged_total_seconds"], charged);
     let limit = ledger["limit_seconds"].as_i64().unwrap();
     assert_eq!(ledger["remaining_seconds"], limit - charged);
+    assert!(limit >= charged, "setup ledger overdrawn: stop and ask");
+
+    // Track T's own budget (#178): each session's charge is its implementation, run (with the
+    // usage drain) and preparation time; usage comes from complete runs only.
+    let track = &ledger["team_size_research"];
+    let sessions = track["sessions"].as_array().unwrap();
+    let parts = [
+        "implementation_seconds",
+        "run_seconds",
+        "preparation_seconds",
+    ];
+    for session in sessions {
+        let charged: i64 = parts.iter().map(|p| session[p].as_i64().unwrap()).sum();
+        assert_eq!(session["charged_seconds"], charged, "{session}");
+    }
+    let totals = &track["totals"];
+    let sum = |value: &dyn Fn(&Value) -> &Value| -> i64 {
+        sessions.iter().map(|s| value(s).as_i64().unwrap()).sum()
+    };
+    for part in parts.iter().chain(&["charged_seconds"]) {
+        assert_eq!(totals[part], sum(&|s| &s[part]), "totals.{part}");
+    }
+    for key in totals["complete_usage"].as_object().unwrap().keys() {
+        let key = key.as_str();
+        let summed = sum(&|s| &s["complete_usage"][key]);
+        assert_eq!(
+            totals["complete_usage"][key], summed,
+            "totals.complete_usage.{key}"
+        );
+    }
+    let charged = totals["charged_seconds"].as_i64().unwrap();
+    let limit = track["limit_seconds"].as_i64().unwrap();
+    assert_eq!(track["remaining_seconds"], limit - charged);
+    assert!(limit >= charged, "track T budget overdrawn: stop and ask");
 }
 
 #[test]
@@ -296,7 +332,9 @@ fn codex_bridge_waits_for_peer_events_and_retains_all_usage() {
     );
     let run = base.join("run");
     let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
-    assert_eq!(evidence["usage"]["status"], "available");
+    // Codex reports its last turn before `ready`, so no final result follows it; the Codex
+    // arm is outside track T (#178).
+    assert_eq!(evidence["usage"]["status"], "partial");
     for agent in ["A", "B"] {
         let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
         let turns = fs::read_dir(run.join("agents").join(agent).join("scratch"))
@@ -329,7 +367,7 @@ fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage
     );
     let run = base.join("run");
     let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
-    assert_eq!(evidence["usage"]["status"], "available");
+    assert_eq!(evidence["usage"]["status"], "complete");
     for agent in ["A", "B"] {
         let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
         assert_eq!(reports[0]["subtype"], "error_max_turns");
@@ -555,6 +593,325 @@ fn baseline_retains_resolved_same_handler_merge_for_final_check() {
     assert_eq!(attempts[1]["passed"], true);
     assert_eq!(attempts[2]["passed"], true);
     assert_eq!(evidence["final_snapshot"], attempts[1]["candidate"]);
+}
+
+/// Replaces temporary paths with `<tmp>`, the scripted worker binary with `<scripted-worker>`
+/// and each commit ID with `<commit-N>`, numbered by first appearance: the scripted conflict
+/// resolution commits at the current time.
+fn normalized(value: &Value, tmp: &Path) -> Value {
+    let canonical = fs::canonicalize(tmp).unwrap();
+    let mut text = value.to_string().replace(SCRIPTED, "<scripted-worker>");
+    for path in [&canonical, tmp] {
+        text = text.replace(path.to_str().unwrap(), "<tmp>");
+    }
+    let (mut out, mut commits) = (String::new(), Vec::<String>::new());
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find(|c: char| c.is_ascii_hexdigit()) {
+        out.push_str(&rest[..start]);
+        let word = &rest[start..];
+        let end = word
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(word.len());
+        let token = &word[..end];
+        let commit = token.len() == 40 && token.bytes().all(|b| b.is_ascii_hexdigit());
+        let preceded = out.ends_with(|c: char| c.is_ascii_alphanumeric());
+        if commit && !preceded {
+            let n = commits.iter().position(|c| c == token).unwrap_or_else(|| {
+                commits.push(token.to_string());
+                commits.len() - 1
+            });
+            out.push_str(&format!("<commit-{}>", n + 1));
+        } else {
+            out.push_str(token);
+        }
+        rest = &word[end..];
+    }
+    out.push_str(rest);
+    serde_json::from_str(&out).unwrap()
+}
+
+/// What the host sent one agent, as the recording `tee` saw it: the start message, then its
+/// replies and the unsolicited events as two sequences. Their interleaving, like A/B order,
+/// depends on thread timing.
+fn host_messages(log: &Path) -> Value {
+    let messages: Vec<Value> = fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let unsolicited = |m: &&Value| {
+        matches!(
+            m["type"].as_str(),
+            Some("peer_message" | "peer_diff" | "development")
+        )
+    };
+    assert_eq!(messages[0]["type"], "start");
+    json!({
+        "start": messages[0],
+        "replies": messages[1..].iter().filter(|m| !unsolicited(m)).collect::<Vec<_>>(),
+        "events": messages[1..].iter().filter(unsolicited).collect::<Vec<_>>(),
+    })
+}
+
+/// Each development with the number of drafts every agent had shared when it fired.
+fn triggers(run: &Path) -> Value {
+    let mut shares = json!({"A": 0, "B": 0});
+    let mut triggers = vec![];
+    for line in fs::read_to_string(run.join("controller/events.jsonl"))
+        .unwrap()
+        .lines()
+    {
+        let row: Value = serde_json::from_str(line).unwrap();
+        match row["kind"].as_str() {
+            Some("draft_shared") => {
+                let agent = row["agent"].as_str().unwrap();
+                shares[agent] = json!(shares[agent].as_u64().unwrap() + 1);
+            }
+            Some("development") => {
+                triggers.push(json!({"milestone": row["milestone"]["id"], "shares": shares}))
+            }
+            _ => {}
+        }
+    }
+    json!(triggers)
+}
+
+/// The two-agent golden (#179, recorded at manifest v12, whose harness is v11's): what the
+/// host sends each agent, when developments fire and the instruction bytes, from scripted runs.
+/// A team of two must keep it (#178 C6.1); `FALINKS_GOLDEN=update` re-records it deliberately.
+#[test]
+fn two_agent_runs_match_the_golden_recording() {
+    let tmp = tmp("falinks-golden-test-");
+    let base = tmp.path();
+    let mut golden = json!({});
+    for (fixture, mode) in [
+        ("go-relationships", "relationships"),
+        ("go-page", "conflict"),
+    ] {
+        // `tee` logs each host message before the scripted worker reads it; scratch is never shared.
+        let command = format!("/usr/bin/tee scratch/host.jsonl | \"$0\" {mode}");
+        let config = config(
+            base,
+            SCRIPTED,
+            json!(["/bin/sh", "-c", command, "{worker}"]),
+            SCRIPTED,
+        );
+        let run = base.join(fixture);
+        successful_evidence(&baseline(fixture, &config, &run), &run);
+        let agents: serde_json::Map<String, Value> = ["A", "B"]
+            .iter()
+            .map(|a| {
+                let log = run.join("agents").join(a).join("scratch/host.jsonl");
+                (a.to_string(), host_messages(&log))
+            })
+            .collect();
+        golden[fixture] = json!({"agents": agents, "triggers": triggers(&run)});
+    }
+    // The Claude bridge's prompt to the runtime, logged by a wrapper around the fake runtime.
+    let runtime = base.join("fake-claude");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let wrapper = base.join("recording-claude");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n/usr/bin/tee \"$CLAUDE_CODE_TMPDIR/runtime-input.jsonl\" | {} \"$@\"\n",
+            runtime.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        wrapper.to_str().unwrap(),
+    );
+    let run = base.join("claude");
+    successful_evidence(&baseline("go-relationships", &config, &run), &run);
+    for agent in ["A", "B"] {
+        let input = fs::read_to_string(
+            run.join("agents")
+                .join(agent)
+                .join("scratch/runtime-input.jsonl"),
+        )
+        .unwrap();
+        let first: Value = serde_json::from_str(input.lines().next().unwrap()).unwrap();
+        golden["claude_prompts"][agent] = first["message"]["content"].clone();
+    }
+    let actual = serde_json::to_string_pretty(&normalized(&golden, base)).unwrap() + "\n";
+    let path = root().join("tests/golden/two-agent.json");
+    if std::env::var("FALINKS_GOLDEN").as_deref() == Ok("update") {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &actual).unwrap();
+    }
+    let expected = fs::read_to_string(&path).unwrap_or_default();
+    if let Some((line, (want, got))) = expected
+        .lines()
+        .zip(actual.lines())
+        .enumerate()
+        .find(|(_, (want, got))| want != got)
+    {
+        panic!(
+            "two-agent golden differs at line {}:\n  golden: {want}\n  actual: {got}",
+            line + 1
+        );
+    }
+    assert_eq!(
+        expected.lines().count(),
+        actual.lines().count(),
+        "two-agent golden length differs"
+    );
+}
+
+/// The bounded usage drain (#179), with a 1 s window: a final result sent at once is complete;
+/// one sent only when the host stops the worker (late) or never sent (missing) is partial. The
+/// earlier turn report is kept, and the clock stops before the drain in all three.
+#[test]
+fn usage_is_complete_only_with_final_results_inside_the_drain_window() {
+    let tmp = tmp("falinks-drain-test-");
+    for (mode, status, final_result) in [
+        ("received", "complete", "received"),
+        ("late", "partial", "late"),
+        ("never", "partial", "missing"),
+    ] {
+        let config = config(
+            tmp.path(),
+            SCRIPTED,
+            json!(["{worker}", "relationships", mode]),
+            SCRIPTED,
+        );
+        let run = tmp.path().join(mode);
+        let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
+        let usage = &evidence["usage"];
+        assert_eq!(usage["status"], status, "{mode}: {usage}");
+        for agent in ["A", "B"] {
+            assert_eq!(usage["final_results"][agent], final_result, "{mode}");
+            assert_eq!(usage["agents"][agent][0]["turn"], 1, "{mode}");
+            let late = usage["agents"][agent].as_array().unwrap().last().unwrap()["late"] == true;
+            assert_eq!(late, mode == "late", "{mode}");
+        }
+        let drained = usage["drain"]["seconds"].as_f64().unwrap();
+        assert_eq!(
+            drained < 1.0,
+            mode == "received",
+            "{mode}: drained {drained} s"
+        );
+        let at = |kind: &str| {
+            fs::read_to_string(run.join("controller/events.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .find(|row| row["kind"] == kind)
+                .unwrap()["elapsed"]
+                .as_f64()
+                .unwrap()
+        };
+        let elapsed = evidence["timing"]["elapsed_seconds"].as_f64().unwrap();
+        assert!(
+            at("final_validation") <= elapsed && elapsed <= at("drain"),
+            "{mode}: the clock must stop at the final validation, before the drain"
+        );
+    }
+}
+
+/// `timing` on synthetic stream-json transcripts (`tests/timing/`), checked against values
+/// computed by hand. Times are seconds after 2026-10-21T10:00:00Z.
+#[test]
+fn timing_reports_hand_computed_figures() {
+    let figures = |run: &str| {
+        let output = cli([
+            OsStr::new("timing"),
+            root().join("tests/timing").join(run).as_os_str(),
+        ]);
+        assert!(output.status.success(), "{}", text(&output));
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let trips =
+        |edit: (u64, f64), refused: (u64, f64), native: (u64, f64), coordination: (u64, f64)| {
+            let total = (
+                edit.0 + refused.0 + native.0 + coordination.0,
+                edit.1 + refused.1 + native.1 + coordination.1,
+            );
+            let entry =
+                |(count, seconds): (u64, f64)| json!({"count": count, "model_seconds": seconds});
+            json!({"edit": entry(edit), "refused_edit": entry(refused), "native": entry(native),
+            "coordination": entry(coordination), "total": entry(total)})
+        };
+
+    // Git: the clock starts at 0.5 (to the millisecond) and stops at 20.5.
+    let git = figures("git");
+    assert_eq!(git["start_precision"], "millisecond");
+    assert_eq!(git["slowest_agent"], "A");
+    assert_eq!(
+        git["round_trips"],
+        json!({"count": 6, "model_seconds": 8.25})
+    );
+    assert_eq!(
+        git["agents"]["A"],
+        json!({
+            // Turns 2.5-7.0 and 12.0-24.0, the second clipped at the stopped clock: 4.5 + 8.5.
+            "busy_seconds": 13.0,
+            "launch_seconds": 2.0,
+            // 20.5 - 2.5 - 13.0.
+            "waiting_on_peer_seconds": 5.0,
+            // m1 (two events, last at 4.0) 4.0-2.5; m2 6.0-4.5; m3 7.0-6.5; m4 13.5-12.0;
+            // m5 15.0-14.0; m6 16.0-15.25; m7 24.0-16.5.
+            "model_seconds": 14.25,
+            // m1 here-document into producer.go; m4 a refused Write; m5 an Edit; m2 Bash share
+            // plus Read is native; m6 only Bash ready.
+            "round_trips": trips((2, 2.5), (1, 1.5), (1, 1.5), (1, 0.75)),
+            // t1 0.5, t2 0.25, t3 0.5, t4 0.5, t5 0.25, t6 0.5.
+            "tool_seconds": 2.5,
+            // 16 (here-document) + 35 (refused Write) + 22 (Edit's new string).
+            "output_bytes": 73,
+            // producer.go ends "package fixture\n\n// A\n": only "// A\n" is new.
+            "changed_bytes": 5,
+            "results": 2,
+            "usage_reports": 1,
+        })
+    );
+    assert_eq!(
+        git["agents"]["B"],
+        json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
+            "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
+            "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "usage_reports": 1})
+    );
+
+    // Falinks: the clock starts at 0 (to the second) and stops at 10; agent-0 resumes once.
+    let falinks = figures("falinks");
+    assert_eq!(falinks["start_precision"], "second");
+    assert_eq!(falinks["slowest_agent"], "agent-0");
+    assert_eq!(
+        falinks["round_trips"],
+        json!({"count": 4, "model_seconds": 4.0})
+    );
+    assert_eq!(
+        falinks["agents"]["agent-0"],
+        json!({
+            // Turns 1.5-4.5 and 8.0-9.25.
+            "busy_seconds": 4.25,
+            "launch_seconds": 1.5,
+            "waiting_on_peer_seconds": 4.25,
+            "model_seconds": 3.0,
+            // An accepted edit with a Read, an edit refused as Stale (its request a JSON string),
+            // then falinks_ready.
+            "round_trips": trips((1, 1.0), (1, 1.0), (0, 0.0), (1, 1.0)),
+            "tool_seconds": 1.75,
+            // 23 + 2; the refused edit is output but changes nothing.
+            "output_bytes": 25,
+            "changed_bytes": 7,
+            "results": 2,
+            "usage_reports": 2,
+        })
+    );
+    assert_eq!(
+        falinks["agents"]["agent-1"],
+        json!({"busy_seconds": 3.0, "launch_seconds": 2.0, "waiting_on_peer_seconds": 5.0,
+            "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (1, 1.0), (0, 0.0)),
+            "tool_seconds": 1.0, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "usage_reports": 1})
+    );
 }
 
 #[test]

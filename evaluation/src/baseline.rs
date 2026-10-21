@@ -1,7 +1,7 @@
 //! Two concurrent worker processes in Git worktrees, mediated by JSON lines on stdin/stdout.
 use crate::{
     Result, Sandbox, bail, check, command, fixture, frozen, git, git_env, initial, kill_group,
-    protected_roots, read, resolve, root, sha256, strings, utc_now, write,
+    protected_roots, read, resolve, root, sha256, strings, unix_now, utc_now, write,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,6 +65,46 @@ impl Run {
         }));
         Ok(())
     }
+
+    /// Records one worker turn report. The first after the agent's accepted `ready` is its final
+    /// result; usage is complete only when every agent's final result arrived within the drain.
+    fn usage(&mut self, agent: &str, mut report: Value, after_ready: bool, arrival: &str) {
+        if arrival == "late" {
+            report["late"] = true.into();
+        }
+        let usage = &mut self.evidence["usage"];
+        let reports = &mut usage["agents"][agent];
+        if reports.is_null() {
+            *reports = json!([]);
+        }
+        reports.as_array_mut().unwrap().push(report);
+        if after_ready && usage["final_results"][agent].is_null() {
+            usage["final_results"][agent] = arrival.into();
+        }
+        let complete = AGENTS
+            .iter()
+            .all(|a| usage["final_results"][a] == "received");
+        usage["status"] = if complete { "complete" } else { "partial" }.into();
+    }
+
+    /// `SIGTERM` to every worker's process group, 3 s to exit, then `SIGKILL`. Runs once.
+    fn stop(&mut self) -> Result<()> {
+        let mut children = std::mem::take(&mut self.children);
+        for (child, _) in children.values_mut() {
+            if child.try_wait()?.is_none() {
+                kill_group(child.id(), libc::SIGTERM);
+            }
+        }
+        let grace = Instant::now() + Duration::from_secs(3);
+        for (child, _) in children.values_mut() {
+            while child.try_wait()?.is_none() && Instant::now() < grace {
+                thread::sleep(Duration::from_millis(10));
+            }
+            kill_group(child.id(), libc::SIGKILL);
+            child.wait()?;
+        }
+        Ok(())
+    }
 }
 
 pub fn baseline(
@@ -75,7 +115,7 @@ pub fn baseline(
     order: i64,
     scored: bool,
 ) -> Result<i32> {
-    let started = Instant::now();
+    let (started, start_unix) = (Instant::now(), unix_now());
     let config = read(config_path)?;
     let fixture = fixture(name)?;
     let manifest = frozen()?;
@@ -90,11 +130,12 @@ pub fn baseline(
         "schema_version": 1, "run_id": destination.file_name().unwrap().to_string_lossy(), "arm": "git",
         "fixture": name, "fixture_version": fixture["version"], "freeze": manifest, "configuration": config,
         "order": order, "pair": pair, "scored": scored, "outcome": "infrastructure_failure",
-        "usage": {"status": "unavailable", "reason": "worker has not reported usage"},
+        "usage": {"status": "unavailable", "agents": {}, "final_results": {},
+            "format": "per-turn result reports; not cumulative totals or cost"},
         "usage_limit_interruptions": [], "rejected_operations": 0, "retries": 0,
         "discarded_or_rewritten_work": {"status": "unavailable"}, "validation_attempts": [],
         "recommendations": 0, "transitions": 0,
-        "timing": {"start_utc": utc_now(), "endpoint": "clean preparation through exact candidate passing checks"},
+        "timing": {"start_utc": utc_now(), "start_unix": start_unix, "endpoint": "clean preparation through exact candidate passing checks"},
         "tool_differences": read(root().join("config.json"))?["tool_differences"],
     });
     let timeout = config["timeout_seconds"].as_f64().unwrap_or(0.0);
@@ -109,19 +150,7 @@ pub fn baseline(
         run.evidence["failure_reason"] = error.to_string().into();
         let _ = run.event("failure", json!({"reason": error.to_string()}));
     }
-    for (child, _) in run.children.values_mut() {
-        if child.try_wait()?.is_none() {
-            kill_group(child.id(), libc::SIGTERM);
-        }
-    }
-    let grace = Instant::now() + Duration::from_secs(3);
-    for (child, _) in run.children.values_mut() {
-        while child.try_wait()?.is_none() && Instant::now() < grace {
-            thread::sleep(Duration::from_millis(10));
-        }
-        kill_group(child.id(), libc::SIGKILL);
-        child.wait()?;
-    }
+    run.stop()?;
     let timing = &mut run.evidence["timing"];
     if timing.get("elapsed_seconds").is_none() {
         timing["elapsed_seconds"] = started.elapsed().as_secs_f64().into();
@@ -184,6 +213,10 @@ fn execute(
             .collect::<Option<_>>()
             .ok_or("Worker command must be argv of strings")?,
         _ => bail!("Worker command must be argv; maximum run duration is 1800 seconds"),
+    };
+    let drain = match config["usage_drain_seconds"].as_f64() {
+        Some(seconds) if (0.0..=60.0).contains(&seconds) => Duration::from_secs_f64(seconds),
+        _ => bail!("usage_drain_seconds must be 0 to 60"),
     };
     let name = fixture["name"].as_str().unwrap();
     let milestones = fixture["milestones"].as_array().unwrap().clone();
@@ -420,27 +453,12 @@ fn execute(
                 run.send(agent, json!({"type": "ok", "action": action}))?;
             }
             "usage" => {
-                let reports = run
-                    .evidence
-                    .as_object_mut()
-                    .unwrap()
-                    .entry("worker_usage")
-                    .or_insert(json!({}));
-                reports
-                    .as_object_mut()
-                    .unwrap()
-                    .entry(agent)
-                    .or_insert(json!([]))
-                    .as_array_mut()
-                    .unwrap()
-                    .push(request["usage"].clone());
-                let status = if reports.as_object().unwrap().len() == 2 {
-                    "available"
-                } else {
-                    "partial"
-                };
-                let agents = reports.clone();
-                run.evidence["usage"] = json!({"status": status, "agents": agents, "format": "per-turn reports; not cumulative totals"});
+                run.usage(
+                    agent,
+                    request["usage"].clone(),
+                    ready.contains(agent),
+                    "received",
+                );
                 run.send(agent, json!({"type": "ok", "action": action}))?;
             }
             "limit" => {
@@ -573,6 +591,79 @@ fn execute(
     )?;
     run.evidence["timing"]["elapsed_seconds"] = run.started.elapsed().as_secs_f64().into();
     run.evidence["timing"]["stop_utc"] = utc_now().into();
+    drain_usage(run, &incoming, drain)
+}
+
+/// After the clock stops (#179): refuse every request while waiting up to `window` for each
+/// worker's final result, then stop the workers. Without this the host stopped reading as soon
+/// as both agents were ready, before their final turns reported. A report flushed while the
+/// workers stop is kept as late; a worker stopped before its final result has none.
+fn drain_usage(
+    run: &mut Run,
+    incoming: &Receiver<(&'static str, Option<String>)>,
+    window: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    run.event("drain", json!({"window_seconds": window.as_secs_f64()}))?;
+    let finished =
+        |run: &Run, agent: &str| !run.evidence["usage"]["final_results"][agent].is_null();
+    let mut closed = BTreeSet::new();
+    while AGENTS
+        .iter()
+        .any(|a| !finished(run, a) && !closed.contains(a))
+    {
+        let remaining = (started + window).saturating_duration_since(Instant::now());
+        let (agent, line) = match incoming.recv_timeout(remaining) {
+            Ok(message) => message,
+            Err(_) => break,
+        };
+        let Some(line) = line else {
+            closed.insert(agent);
+            continue;
+        };
+        let request: Value = serde_json::from_str(&line)?;
+        run.event(
+            "worker_request",
+            json!({"agent": agent, "request": request}),
+        )?;
+        // A worker that already exited cannot take the reply.
+        let _ = if request["action"] == "usage" {
+            run.usage(agent, request["usage"].clone(), true, "received");
+            run.send(agent, json!({"type": "ok", "action": "usage"}))
+        } else {
+            run.event(
+                "drain_refused",
+                json!({"agent": agent, "action": request["action"]}),
+            )?;
+            run.send(
+                agent,
+                json!({"type": "refused", "action": request["action"],
+                "reason": "the run is finished; no further requests"}),
+            )
+        };
+    }
+    run.stop()?;
+    // The reader threads pass on what the workers wrote before they stopped, then end.
+    let flushed = Instant::now() + Duration::from_secs(1);
+    while let Ok((agent, line)) =
+        incoming.recv_timeout(flushed.saturating_duration_since(Instant::now()))
+    {
+        let request: Value = match line.map(|l| serde_json::from_str(&l)) {
+            Some(Ok(request)) => request,
+            _ => continue,
+        };
+        if request["action"] == "usage" {
+            run.usage(agent, request["usage"].clone(), true, "late");
+        }
+    }
+    let usage = &mut run.evidence["usage"];
+    for agent in AGENTS {
+        if usage["final_results"][agent].is_null() {
+            usage["final_results"][agent] = "missing".into();
+        }
+    }
+    usage["drain"] = json!({"window_seconds": window.as_secs_f64(),
+        "seconds": started.elapsed().as_secs_f64()});
     Ok(())
 }
 

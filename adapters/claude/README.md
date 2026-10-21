@@ -122,6 +122,6 @@ The result follows `evaluation/result-schema.json`. Retained evidence includes:
 - engine history, runs, proposals and validator log
 - transcripts without reasoning
 - oracle evidence for every candidate (`controller/oracle/`)
-- per-turn usage with the last `rate_limit_event`
+- per-turn usage with the last `rate_limit_event`, drained after the clock stops: every call is refused while the host waits up to `usage_drain_seconds` for each worker to end its turn (#179)
 
 Limits: the runner has not yet run against real agents. The pilot is its first real exercise. Natural-timing runs may meet stream-json shapes the gate has not recorded (for example, a compaction boundary in a long session). The adapter fails closed on those, so the run is recorded as an infrastructure failure.

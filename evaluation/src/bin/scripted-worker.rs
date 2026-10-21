@@ -1,7 +1,9 @@
 //! Test-only scripted workers and fake Codex runtime. They test orchestration, not model
 //! performance; reference bytes are embedded by the trusted test host, never given to real workers.
 //!
-//! `scripted-worker relationships|conflict` speaks the host JSON-line protocol;
+//! `scripted-worker relationships [received|late|never]|conflict` speaks the host JSON-line
+//! protocol; with a usage mode, `relationships` reports a turn at start and its final result
+//! after `ready` at once, only when the host stops it, or never;
 //! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
 //! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge;
 //! `scripted-worker <fixture> --output DIR ...` impersonates the Falinks-arm runner for batches.
@@ -9,6 +11,8 @@ use serde_json::{Value, json};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use std::{env, fs, thread};
 
 fn reference(fixture: &str, file: &str) -> String {
@@ -40,7 +44,7 @@ fn park() -> ! {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("relationships") => relationships(),
+        Some("relationships") => relationships(args.get(1).map(String::as_str)),
         Some("conflict") => conflict(),
         Some("exec") => fake_codex(&args),
         Some("-p") => fake_claude(&args),
@@ -55,7 +59,21 @@ fn lines() -> impl Iterator<Item = Value> {
         .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
 }
 
-fn relationships() {
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn stopping(_: libc::c_int) {
+    STOPPING.store(true, Ordering::SeqCst);
+}
+
+/// A turn result like the Claude bridge's.
+fn usage(turn: u64) {
+    send(json!({"action": "usage", "usage": {"turn": turn, "usage": {"output_tokens": 3}}}));
+}
+
+fn relationships(usage_mode: Option<&str>) {
+    if usage_mode.is_some() {
+        usage(1);
+    }
     let mut events = lines();
     let start = events.next().unwrap();
     let agent = start["agent"].as_str().unwrap().to_string();
@@ -102,7 +120,24 @@ fn relationships() {
             ("shared", _) if last_final => {
                 send(json!({"action": "ready", "commit": event["commit"]}))
             }
-            ("ok", Some("ready")) => park(),
+            ("ok", Some("ready")) => match usage_mode {
+                Some("received") => {
+                    usage(2);
+                    park()
+                }
+                Some("late") => {
+                    // SAFETY: the handler only stores an atomic flag.
+                    unsafe {
+                        libc::signal(libc::SIGTERM, stopping as *const () as libc::sighandler_t)
+                    };
+                    while !STOPPING.load(Ordering::SeqCst) {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    usage(2);
+                    std::process::exit(0)
+                }
+                _ => park(),
+            },
             _ => {}
         }
     }
