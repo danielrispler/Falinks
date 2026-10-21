@@ -683,12 +683,20 @@ fn drain(run: &mut Run) -> Result<Value> {
     run.arm.borrow_mut().draining = true;
     let started = Instant::now();
     run.event("drain", json!({"window_seconds": run.drain.as_secs_f64()}))?;
-    let mut waiting = [true; 2];
+    let (mut waiting, mut errors) = ([true; 2], serde_json::Map::new());
     while waiting.contains(&true) && started.elapsed() < run.drain {
         for (agent, waiting) in waiting.iter_mut().enumerate() {
-            *waiting &= run.workers[agent].runtime.as_mut().is_some_and(|runtime| {
-                !runtime.session.idle() && runtime.step(Duration::from_millis(20)).is_ok()
-            });
+            let Some(runtime) = run.workers[agent].runtime.as_mut() else {
+                *waiting = false;
+                continue;
+            };
+            if !*waiting || runtime.session.idle() {
+                *waiting = false;
+            } else if let Err(error) = runtime.step(Duration::from_millis(20)) {
+                // The outcome stands; a control failure after the clock stopped is evidence.
+                errors.insert(agent_name(agent), error.to_string().into());
+                *waiting = false;
+            }
         }
     }
     let mut finals = serde_json::Map::new();
@@ -706,7 +714,7 @@ fn drain(run: &mut Run) -> Result<Value> {
     }
     Ok(
         json!({"final_results": finals, "drain": {"window_seconds": run.drain.as_secs_f64(),
-        "seconds": started.elapsed().as_secs_f64()}}),
+        "seconds": started.elapsed().as_secs_f64(), "errors": errors}}),
     )
 }
 

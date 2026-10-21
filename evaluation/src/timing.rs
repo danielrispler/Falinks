@@ -42,7 +42,8 @@ pub fn unix(timestamp: &str) -> Option<f64> {
     Some(days as f64 * 86_400.0 + hour * 3600.0 + minute * 60.0 + second)
 }
 
-fn millis(seconds: f64) -> Value {
+/// Seconds rounded to the millisecond.
+fn rounded(seconds: f64) -> Value {
     json!((seconds * 1000.0).round() / 1000.0)
 }
 
@@ -76,9 +77,9 @@ fn refused(block: &Value) -> bool {
         || serde_json::from_str::<Value>(&text).is_ok_and(|v| v["accepted"] == false)
 }
 
-/// File writes in a `Bash` command made by here-documents redirected to a file:
-/// `(path, append, body)`. Other shell writes are not recognized.
-fn heredocs(command: &str) -> Vec<(String, bool, String)> {
+/// File writes in a `Bash` command made by here-documents redirected to a file. Other shell
+/// writes (`sed -i`, `cp`, `printf >`, `tee`) are not recognized, so they count as native.
+fn heredocs(command: &str) -> Vec<(String, Write)> {
     let lines: Vec<&str> = command.split('\n').collect();
     let (mut writes, mut i) = (vec![], 0);
     while i < lines.len() {
@@ -112,12 +113,18 @@ fn heredocs(command: &str) -> Vec<(String, bool, String)> {
             Some((append, path.trim_matches(|c| c == '\'' || c == '"')))
         });
         if let Some((append, path)) = redirect {
-            writes.push((path.to_string(), append, body));
+            let write = if append {
+                Write::Append(body)
+            } else {
+                Write::Replace(body)
+            };
+            writes.push((path.to_string(), write));
         }
     }
     writes
 }
 
+#[derive(Debug, PartialEq)]
 enum Write {
     Replace(String),
     Append(String),
@@ -145,14 +152,7 @@ fn writes(call: &Call, bash_writes_source: bool) -> Vec<(String, Write, bool)> {
         )],
         "Bash" => heredocs(input["command"].as_str().unwrap_or_default())
             .into_iter()
-            .map(|(path, append, body)| {
-                let write = if append {
-                    Write::Append(body)
-                } else {
-                    Write::Replace(body)
-                };
-                (path, write, bash_writes_source)
-            })
+            .map(|(path, write)| (path, write, bash_writes_source))
             .collect(),
         name if name
             .strip_prefix(FALINKS)
@@ -297,7 +297,7 @@ fn agent(
         .map(|(name, (count, seconds))| {
             (
                 name.to_string(),
-                json!({"count": count, "model_seconds": millis(seconds)}),
+                json!({"count": count, "model_seconds": rounded(seconds)}),
             )
         })
         .collect();
@@ -306,7 +306,7 @@ fn agent(
         .fold((0, 0.0), |sum, c| (sum.0 + c.0, sum.1 + c.1));
     round_trips.insert(
         "total".into(),
-        json!({"count": total.0, "model_seconds": millis(total.1)}),
+        json!({"count": total.0, "model_seconds": rounded(total.1)}),
     );
 
     // Initial content of the source files, keyed by fixture path; other source writes start empty.
@@ -360,11 +360,11 @@ fn agent(
         .filter_map(|c| Some(c.result?.0 - c.emitted))
         .sum();
     json!({
-        "busy_seconds": millis(busy),
-        "model_seconds": millis(messages.iter().map(model).sum()),
-        "tool_seconds": millis(tool),
-        "launch_seconds": start.zip(first).map(|(start, first)| millis(first - start)),
-        "waiting_on_peer_seconds": stop.zip(first).map(|(stop, first)| millis((stop - first - busy).max(0.0))),
+        "busy_seconds": rounded(busy),
+        "model_seconds": rounded(messages.iter().map(model).sum()),
+        "tool_seconds": rounded(tool),
+        "launch_seconds": start.zip(first).map(|(start, first)| rounded(first - start)),
+        "waiting_on_peer_seconds": stop.zip(first).map(|(stop, first)| rounded((stop - first - busy).max(0.0))),
         "round_trips": round_trips,
         "output_bytes": output,
         "changed_bytes": changed,
@@ -450,7 +450,7 @@ pub fn timing(run: &Path) -> Result<Value> {
         "run": result["run_id"], "arm": arm, "fixture": result["fixture"],
         "elapsed_seconds": timing["elapsed_seconds"], "start_precision": precision,
         "slowest_agent": slowest,
-        "round_trips": {"count": count as u64, "model_seconds": millis(seconds)},
+        "round_trips": {"count": count as u64, "model_seconds": rounded(seconds)},
         "agents": figures,
     }))
 }
@@ -482,12 +482,14 @@ mod tests {
     fn heredocs_find_redirected_bodies_only() {
         let command = "cd /w/A && cat > producer.go <<'EOF'\nline 1\nline 2\nEOF\n\
                        cat <<EOF >> scratch/log\nx\nEOF\n\"$FALINKS_HOST\" message \"$(cat <<'EOF'\nhi\nEOF\n)\"";
-        let writes: Vec<(String, bool, String)> = heredocs(command);
         assert_eq!(
-            writes,
+            heredocs(command),
             [
-                ("producer.go".into(), false, "line 1\nline 2\n".into()),
-                ("scratch/log".into(), true, "x\n".into()),
+                (
+                    "producer.go".into(),
+                    Write::Replace("line 1\nline 2\n".into())
+                ),
+                ("scratch/log".into(), Write::Append("x\n".into())),
             ]
         );
     }

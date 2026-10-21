@@ -192,14 +192,14 @@
       {
         "issue": 179,
         "start_utc": "2026-10-21T14:34:29Z",
-        "stop_utc": "2026-10-21T15:02:13Z",
-        "measured_seconds": 1664,
+        "stop_utc": "2026-10-21T15:11:35Z",
+        "measured_seconds": 2226,
         "startup_allowance_seconds": 300,
-        "handoff_allowance_seconds": 2400,
-        "implementation_seconds": 4364,
+        "handoff_allowance_seconds": 900,
+        "implementation_seconds": 3426,
         "run_seconds": 0,
         "preparation_seconds": 0,
-        "charged_seconds": 4364,
+        "charged_seconds": 3426,
         "complete_usage": {
           "runs": 0,
           "input_tokens": 0,
@@ -207,15 +207,15 @@
           "cache_read_input_tokens": 0,
           "cache_creation_input_tokens": 0
         },
-        "measurement": "Session wall time from claiming #179 (the GitHub assignment) through this entry, plus allowances for reading before the claim and for the re-freeze, the full ci-checks run, review and the PR. No real runs, so no run or preparation time and no usage.",
+        "measurement": "Session wall time from claiming #179 (the GitHub assignment) through this entry, including both ci-checks runs and the two-axis review, plus allowances for reading before the claim and for the last ci-checks run and the PR. No real runs, so no run or preparation time and no usage.",
         "work": "#179 (T0): the two-agent golden recording (first commit, unchanged harness); the bounded usage drain in both arms; `timing RUN_DIR` with synthetic-transcript tests and the local #122 cross-check (34 round-trips and 204.735 s; 24 and 93.186 s); timing.start_unix; this ledger section; re-freeze v12 -> v13."
       }
     ],
     "totals": {
-      "implementation_seconds": 4364,
+      "implementation_seconds": 3426,
       "run_seconds": 0,
       "preparation_seconds": 0,
-      "charged_seconds": 4364,
+      "charged_seconds": 3426,
       "complete_usage": {
         "runs": 0,
         "input_tokens": 0,
@@ -224,6 +224,6 @@
         "cache_creation_input_tokens": 0
       }
     },
-    "remaining_seconds": 38836
+    "remaining_seconds": 39774
   }
 }
