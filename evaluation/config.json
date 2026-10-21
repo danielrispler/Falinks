@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "timeout_seconds": 1800,
+  "usage_drain_seconds": 60,
   "setup_limit_seconds": 28800,
   "agents": [
     "A",

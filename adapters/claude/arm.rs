@@ -302,6 +302,8 @@ pub struct Arm {
     pub relocated: BTreeSet<usize>,
     /// Mediated calls so far: only a call can apply a regrouping and move a root.
     pub calls: u64,
+    /// Set once the clock stops: the usage drain refuses every call (#179).
+    pub draining: bool,
 }
 
 impl Arm {
@@ -349,6 +351,7 @@ impl Arm {
             outcome: None,
             relocated: BTreeSet::new(),
             calls: 0,
+            draining: false,
         }
     }
 
@@ -363,6 +366,9 @@ impl Arm {
     /// One authenticated tool envelope from `agent`. Agent mistakes are refusals; an
     /// engine error or incident is an error that latches the worker's gate.
     pub fn call(&mut self, agent: usize, envelope: &Value) -> Result<Value> {
+        if self.draining {
+            return Ok(refuse("the run is finished; no further requests"));
+        }
         self.calls += 1;
         let operation = envelope["operation"].as_str().unwrap_or_default();
         let request = &envelope["request"];

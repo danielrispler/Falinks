@@ -49,6 +49,39 @@ struct Worker {
     transcripts: Vec<Value>,
 }
 
+impl Worker {
+    /// Records the rate limits and turn results the runtime wrote since the last scan; a late
+    /// result was written while the worker stopped after the drain. Returns whether a limit was
+    /// rejected and how many results were new.
+    fn scan(&mut self, late: bool) -> (bool, usize) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return (false, 0);
+        };
+        let events = &runtime.session.events;
+        let new = events[self.scanned.min(events.len())..].to_vec();
+        self.scanned = events.len();
+        let (mut rejected, mut results) = (false, 0);
+        for event in new {
+            if event["type"] == "rate_limit_event" {
+                self.rate_limit = event["rate_limit_info"].clone();
+                rejected |= self.rate_limit["status"] == "rejected";
+            }
+            if event["type"] == "result" {
+                results += 1;
+                // Token counts only: they do not establish subscription cost.
+                let mut report = json!({"turn": self.usage.len() + 1, "subtype": event["subtype"],
+                    "usage": event["usage"], "num_turns": event["num_turns"],
+                    "duration_ms": event["duration_ms"], "rate_limit": self.rate_limit});
+                if late {
+                    report["late"] = true.into();
+                }
+                self.usage.push(report);
+            }
+        }
+        (rejected, results)
+    }
+}
+
 struct Run {
     dir: PathBuf,
     binary: PathBuf,
@@ -57,6 +90,8 @@ struct Run {
     arm: Rc<RefCell<Arm>>,
     workers: [Worker; 2],
     prompt: [String; 2],
+    /// The usage drain window after the clock stops.
+    drain: Duration,
     protected: Vec<PathBuf>,
     timeline: fs::File,
     evidence: Value,
@@ -156,12 +191,23 @@ impl Run {
         )
     }
 
-    fn stop(&mut self, agent: usize) {
+    /// Closes the worker's runtime and records the results it wrote while stopping (`late`
+    /// after the drain); returns how many there were.
+    fn stop(&mut self, agent: usize, late: bool) -> usize {
         let worker = &mut self.workers[agent];
-        if let Some(mut runtime) = worker.runtime.take() {
-            runtime.close();
+        let Some(runtime) = worker.runtime.as_mut() else {
+            return 0;
+        };
+        runtime.close();
+        // Lines the runtime wrote before it exited are still queued.
+        while let Ok(true) = runtime.step(Duration::from_millis(100)) {}
+        let (_, results) = worker.scan(late);
+        // The next runtime's events start again from zero.
+        worker.scanned = 0;
+        if let Some(runtime) = worker.runtime.take() {
             worker.transcripts.push(runtime.session.transcript());
         }
+        results
     }
 
     fn send(&mut self, agent: usize, text: String, event: Option<&str>) -> Result<()> {
@@ -227,27 +273,12 @@ impl Run {
     fn observe(&mut self, agent: usize) -> Result<Option<&'static str>> {
         let ready = self.arm.borrow().is_ready(agent);
         let worker = &mut self.workers[agent];
+        if worker.scan(false).0 {
+            return Ok(Some("usage_limit"));
+        }
         let Some(runtime) = worker.runtime.as_ref() else {
             return Ok(None);
         };
-        let events = &runtime.session.events;
-        for event in &events[worker.scanned.min(events.len())..] {
-            if event["type"] == "rate_limit_event" {
-                worker.rate_limit = event["rate_limit_info"].clone();
-                if worker.rate_limit["status"] == "rejected" {
-                    return Ok(Some("usage_limit"));
-                }
-            }
-            if event["type"] == "result" {
-                // Token counts only: they do not establish subscription cost.
-                worker.usage.push(
-                    json!({"turn": worker.usage.len() + 1, "subtype": event["subtype"],
-                    "usage": event["usage"], "num_turns": event["num_turns"],
-                    "duration_ms": event["duration_ms"], "rate_limit": worker.rate_limit}),
-                );
-            }
-        }
-        worker.scanned = events.len();
         let idle = runtime.session.idle();
         if runtime.session.last_result != worker.last_result {
             worker.last_result = runtime.session.last_result.clone();
@@ -384,8 +415,13 @@ fn run(options: Options) -> Result<i32> {
         run.event("failure", json!({"reason": reason}))?;
         run.evidence["failure_reason"] = reason.clone().into();
     }
+    let drained = if run.arm.borrow().outcome.is_some() {
+        Some(drain(&mut run)?)
+    } else {
+        None
+    };
     for agent in 0..2 {
-        run.stop(agent);
+        run.stop(agent, false);
     }
     let arm = run.arm.borrow();
     let proposals = run.engine.proposals()?;
@@ -413,8 +449,17 @@ fn run(options: Options) -> Result<i32> {
         evidence["oracle"] = final_outcome["oracle"].clone();
         evidence["published_revision"] = final_outcome["published_revision"].clone();
     }
-    evidence["usage"] = json!({"status": match reported { 2 => "available", 1 => "partial", _ => "unavailable" },
+    let complete = drained.as_ref().is_some_and(|d| {
+        d["final_results"]
+            .as_object()
+            .is_some_and(|f| f.values().all(|r| r == "received"))
+    });
+    evidence["usage"] = json!({"status": match reported { _ if complete => "complete", 0 => "unavailable", _ => "partial" },
         "agents": usage, "format": "per-turn result reports; not cumulative totals or cost"});
+    if let Some(drained) = drained {
+        evidence["usage"]["final_results"] = drained["final_results"].clone();
+        evidence["usage"]["drain"] = drained["drain"].clone();
+    }
     if outcome == "usage_limit" {
         let limits: Vec<Value> = (0..2)
             .map(|a| json!({"agent": a, "detail": run.workers[a].rate_limit}))
@@ -467,6 +512,10 @@ fn setup(
         config["model"] == MODEL && config["runtime_version"] == VERSION,
         "run configuration must name the adapter's pinned model and runtime version",
     )?;
+    let drain = config["usage_drain_seconds"]
+        .as_f64()
+        .filter(|seconds| (0.0..=60.0).contains(seconds))
+        .ok_or("usage_drain_seconds must be 0 to 60")?;
     let (binary, hash) = verify_binary(Path::new(
         config["runtime_binary"]
             .as_str()
@@ -608,6 +657,7 @@ fn setup(
         arm: Rc::new(RefCell::new(arm)),
         workers: [worker(), worker()],
         prompt,
+        drain: Duration::from_secs_f64(drain),
         protected,
         timeline,
         evidence: evidence.clone(),
@@ -621,6 +671,40 @@ fn setup(
         run.start(agent, text)?;
     }
     Ok(run)
+}
+
+/// After the clock stops (#179): every mediated call is refused while the host waits up to the
+/// drain window for each worker to end its turn, then stops both. A result written while a
+/// worker stops is late; usage is complete only when both turns ended within the window.
+fn drain(run: &mut Run) -> Result<Value> {
+    run.arm.borrow_mut().draining = true;
+    let started = Instant::now();
+    run.event("drain", json!({"window_seconds": run.drain.as_secs_f64()}))?;
+    let mut waiting = [true; 2];
+    while waiting.contains(&true) && started.elapsed() < run.drain {
+        for (agent, waiting) in waiting.iter_mut().enumerate() {
+            *waiting &= run.workers[agent].runtime.as_mut().is_some_and(|runtime| {
+                !runtime.session.idle() && runtime.step(Duration::from_millis(20)).is_ok()
+            });
+        }
+    }
+    let mut finals = serde_json::Map::new();
+    for agent in 0..2 {
+        let worker = &mut run.workers[agent];
+        let ended = worker.runtime.as_ref().is_some_and(|r| r.session.idle());
+        worker.scan(false);
+        let late = run.stop(agent, true) > 0;
+        let result = match (ended, late) {
+            (true, _) => "received",
+            (false, true) => "late",
+            (false, false) => "missing",
+        };
+        finals.insert(agent_name(agent), result.into());
+    }
+    Ok(
+        json!({"final_results": finals, "drain": {"window_seconds": run.drain.as_secs_f64(),
+        "seconds": started.elapsed().as_secs_f64()}}),
+    )
 }
 
 /// Pump both workers until both are ready (final oracle decided), a limit or a failure.
@@ -656,7 +740,7 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
                 let client = run.arm.borrow().client(agent).clone();
                 let root = run.engine.root(&client)?.canonicalize()?;
                 if moved || root != run.workers[agent].source {
-                    run.stop(agent);
+                    run.stop(agent, false);
                     run.event("relocated", json!({"agent": agent, "root": root}))?;
                     let text = format!(
                         "Host: the agreed regrouping moved your live workspace to {}. Use that path as \"workspace\" in every falinks call from now on and continue your task.",

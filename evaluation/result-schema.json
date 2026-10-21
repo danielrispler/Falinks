@@ -15,7 +15,12 @@
     "pair": {"type": "string"},
     "scored": {"type": "boolean"},
     "outcome": {"enum": ["success", "task_failure", "timeout", "infrastructure_failure", "usage_limit", "safety_failure"]},
-    "usage": {"type": "object", "required": ["status"], "properties": {"status": {"enum": ["available", "partial", "unavailable"]}}},
+    "usage": {"type": "object", "required": ["status"], "properties": {
+      "status": {"enum": ["complete", "partial", "unavailable"], "description": "complete: every agent's final turn result (its first after an accepted ready) arrived within the drain window"},
+      "agents": {"type": "object", "description": "Per-agent turn result reports in arrival order; a late one carries late: true"},
+      "final_results": {"type": "object", "additionalProperties": {"enum": ["received", "late", "missing"]}},
+      "drain": {"type": "object", "description": "After the clock stops, requests are refused while the host waits up to window_seconds for final results",
+        "properties": {"window_seconds": {"type": "number"}, "seconds": {"type": "number"}}}}},
     "usage_limit_interruptions": {"type": "array"},
     "rejected_operations": {"type": ["integer", "object"]},
     "retries": {"type": ["integer", "object"]},

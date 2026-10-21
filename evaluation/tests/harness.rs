@@ -90,6 +90,7 @@ fn config(base: &Path, worker_script: &str, worker_command: Value, runtime: &str
         ("gate_command", json!(["/bin/cp", runtime, "{output}"])),
         ("denied_roots", json!([])),
         ("timeout_seconds", json!(90)),
+        ("usage_drain_seconds", json!(1)),
     ] {
         config[key] = value;
     }
@@ -297,7 +298,9 @@ fn codex_bridge_waits_for_peer_events_and_retains_all_usage() {
     );
     let run = base.join("run");
     let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
-    assert_eq!(evidence["usage"]["status"], "available");
+    // Codex reports its last turn before `ready`, so no final result follows it; the Codex
+    // arm is outside track T (#178).
+    assert_eq!(evidence["usage"]["status"], "partial");
     for agent in ["A", "B"] {
         let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
         let turns = fs::read_dir(run.join("agents").join(agent).join("scratch"))
@@ -330,7 +333,7 @@ fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage
     );
     let run = base.join("run");
     let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
-    assert_eq!(evidence["usage"]["status"], "available");
+    assert_eq!(evidence["usage"]["status"], "complete");
     for agent in ["A", "B"] {
         let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
         assert_eq!(reports[0]["subtype"], "error_max_turns");
@@ -723,6 +726,57 @@ fn two_agent_runs_match_the_golden_recording() {
         actual.lines().count(),
         "two-agent golden length differs"
     );
+}
+
+/// The bounded usage drain (#179), with a 1 s window: a final result sent at once is complete;
+/// one sent only when the host stops the worker (late) or never sent (missing) is partial. The
+/// earlier turn report is kept, and the clock stops before the drain in all three.
+#[test]
+fn usage_is_complete_only_with_final_results_inside_the_drain_window() {
+    let tmp = tmp("falinks-drain-test-");
+    for (mode, status, final_result) in [
+        ("received", "complete", "received"),
+        ("late", "partial", "late"),
+        ("never", "partial", "missing"),
+    ] {
+        let config = config(
+            tmp.path(),
+            SCRIPTED,
+            json!(["{worker}", "relationships", mode]),
+            SCRIPTED,
+        );
+        let run = tmp.path().join(mode);
+        let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
+        let usage = &evidence["usage"];
+        assert_eq!(usage["status"], status, "{mode}: {usage}");
+        for agent in ["A", "B"] {
+            assert_eq!(usage["final_results"][agent], final_result, "{mode}");
+            assert_eq!(usage["agents"][agent][0]["turn"], 1, "{mode}");
+            let late = usage["agents"][agent].as_array().unwrap().last().unwrap()["late"] == true;
+            assert_eq!(late, mode == "late", "{mode}");
+        }
+        let drained = usage["drain"]["seconds"].as_f64().unwrap();
+        assert_eq!(
+            drained < 1.0,
+            mode == "received",
+            "{mode}: drained {drained} s"
+        );
+        let at = |kind: &str| {
+            fs::read_to_string(run.join("controller/events.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .find(|row| row["kind"] == kind)
+                .unwrap()["elapsed"]
+                .as_f64()
+                .unwrap()
+        };
+        let elapsed = evidence["timing"]["elapsed_seconds"].as_f64().unwrap();
+        assert!(
+            at("final_validation") <= elapsed && elapsed <= at("drain"),
+            "{mode}: the clock must stop at the final validation, before the drain"
+        );
+    }
 }
 
 #[test]

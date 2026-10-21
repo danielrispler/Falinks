@@ -159,7 +159,15 @@ recommendation/transition counts are zero by construction. Concurrent timeline
 intervals overlap and must not be summed into elapsed time.
 
 Success stops the completion clock after exact final checks pass; cleanup time
-is separate. Failures/timeouts/usage interruptions retain evidence and their
+is separate. Then both arms drain usage (#179): the host refuses every request
+while it waits up to `usage_drain_seconds` (60) for each worker's final turn
+result, its first after an accepted `ready`, and then stops the workers. Usage
+is `complete` only when every final result arrived within that window;
+otherwise it is `partial` (a result flushed while the worker stopped is kept
+with `late: true`, a worker stopped before its result has none) or
+`unavailable` when no turn reported. `usage.final_results` says which. Partial
+usage is never used for cost comparisons. The Codex bridge reports its last turn
+before `ready`, so its usage is never complete. Failures/timeouts/usage interruptions retain evidence and their
 reason; no automatic provider switch or silent replacement. The 30-minute
 budget includes preparation, communication, checks and integration. Every
 candidate check also has a bounded deadline. `schedule` emits the unscored
