@@ -1,5 +1,5 @@
 {
-  "limit_seconds": 36000,
+  "limit_seconds": 40517,
   "scope": "Shared evaluation setup, including fixtures, baseline, pilot/integration repairs; excludes engine implementation and inactive user pauses.",
   "amendments": [
     {
@@ -11,6 +11,11 @@
       "source": "https://github.com/danielrispler/Falinks/issues/122#issuecomment-6198509219",
       "added_seconds": 3600,
       "reason": "#126 and #83 used #116's extension before #122 started (32,417 s of 32,400 s). Daniel agreed one more hour for the #122 unscored pilot pair, its gate and its analysis."
+    },
+    {
+      "source": "https://github.com/danielrispler/Falinks/issues/123#issuecomment-6318080290",
+      "added_seconds": 4517,
+      "reason": "#123 decision 10: one hour for #188's re-freeze and pilots on top of the 917 s overrun of #56 (a 40,517 s limit), with stop-and-ask beyond it. Recorded by #179, whose ledger test now fails on a negative balance in either section; #188 draws on it."
     }
   ],
   "sessions": [
@@ -177,6 +182,48 @@
     }
   ],
   "charged_total_seconds": 36917,
-  "remaining_seconds": -917,
-  "status": "manifest v12: the runtime pin moved from Claude Code 2.1.292 to 2.1.304 (config.json only), so runs before v12 are not comparable with later ones; v11 was #56 harness on per-OS backends, one platform per batch; setup ledger 917 s over its limit pending Daniel's decision; no scored batch until #123 is implemented"
+  "remaining_seconds": 3600,
+  "status": "manifest v13: #179's bounded usage drain in both arms (usage_drain_seconds), timing.start_unix and the timing subcommand; v12 was the Claude Code 2.1.304 pin, so runs before v12 are not comparable with later ones; #123 decision 10's amendment is recorded; no scored batch until #123 is implemented",
+  "team_size_research": {
+    "source": "https://github.com/danielrispler/Falinks/issues/178",
+    "limit_seconds": 43200,
+    "scope": "Track T steps 1-5 (#179, #180, #181, #189, #182, #183), Q17/Q22. It never draws on the setup budget above. Each session records implementation, run wall time (including the usage drain), harness preparation and complete-only usage separately. Hard stop: stop and ask before exceeding it; re-estimated at #182.",
+    "sessions": [
+      {
+        "issue": 179,
+        "start_utc": "2026-10-21T14:34:29Z",
+        "stop_utc": "2026-10-21T15:02:13Z",
+        "measured_seconds": 1664,
+        "startup_allowance_seconds": 300,
+        "handoff_allowance_seconds": 2400,
+        "implementation_seconds": 4364,
+        "run_seconds": 0,
+        "preparation_seconds": 0,
+        "charged_seconds": 4364,
+        "complete_usage": {
+          "runs": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "measurement": "Session wall time from claiming #179 (the GitHub assignment) through this entry, plus allowances for reading before the claim and for the re-freeze, the full ci-checks run, review and the PR. No real runs, so no run or preparation time and no usage.",
+        "work": "#179 (T0): the two-agent golden recording (first commit, unchanged harness); the bounded usage drain in both arms; `timing RUN_DIR` with synthetic-transcript tests and the local #122 cross-check (34 round-trips and 204.735 s; 24 and 93.186 s); timing.start_unix; this ledger section; re-freeze v12 -> v13."
+      }
+    ],
+    "totals": {
+      "implementation_seconds": 4364,
+      "run_seconds": 0,
+      "preparation_seconds": 0,
+      "charged_seconds": 4364,
+      "complete_usage": {
+        "runs": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    },
+    "remaining_seconds": 38836
+  }
 }

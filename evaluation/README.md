@@ -297,7 +297,11 @@ the setup ledger is `setup.json`. The shared setup ceiling is eight hours and
 covers this preparation plus remaining pilot/evaluation setup, **not engine
 implementation**. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
-for safety gates, run interpretation and continuation criteria.
+for safety gates, run interpretation and continuation criteria. Track T (#178) has
+its own `team_size_research` section with a 43,200 s limit; its sessions record
+implementation, run (including the usage drain) and preparation time and
+complete-only usage separately. The ledger test fails when either section is
+overdrawn: stop and ask before that happens.
 `freeze` lists each changed frozen path and refuses unstaged changes to them, so
 stage your repair first. Re-freeze before observing a red harness test, or the
 freeze guard fails first and masks the real failure.
