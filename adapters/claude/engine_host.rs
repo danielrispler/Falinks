@@ -389,10 +389,13 @@ fn edit(request: &Value) -> Result<Request> {
         output.insert(path.clone(), file);
     }
     let reviews: Option<Vec<Review>> = parse(&request["reviews"])?;
+    let id = field(request, "id")?;
     Ok(Request {
-        id: field(request, "id")?.into(),
+        id: id.into(),
         expected,
         output,
+        // shortcut: the edit tools take no note yet, so edits keep the old text; drop when #192 adds one.
+        note: format!("request {id}"),
         reviews: reviews.unwrap_or_default(),
     })
 }

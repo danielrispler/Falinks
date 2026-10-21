@@ -123,6 +123,108 @@ fn restored_bytes_are_a_new_occurrence_and_duplicate_requests_do_not_apply_twice
     assert_eq!(reopened.capture().unwrap(), restored);
 }
 
+/// The text of every live-edit message in `client`'s stream.
+fn live_edit_texts(engine: &Engine, client: &Client) -> Vec<String> {
+    engine
+        .events(client, 0)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.body {
+            Body::Message(m) if m.kind == Kind::LiveEdit => Some(m.text),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_edit_note_is_the_live_edit_message_text() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let base = engine.capture().unwrap();
+    let mut request = edit("rename", &base, "a.rs", "fn renamed() {}\n");
+    request.note = "rename a to renamed".into();
+    engine.apply(&alice, request).unwrap();
+    assert_eq!(live_edit_texts(&engine, &bob), ["rename a to renamed"]);
+}
+
+#[test]
+fn an_edit_without_a_note_is_refused_before_any_request_is_recorded() {
+    let (_dir, engine, alice, bob) = fixture(PAIR);
+    let base = engine.capture().unwrap();
+    for note in ["", " \n"] {
+        let mut request = edit("silent", &base, "a.rs", "fn a() { 1; }\n");
+        request.note = note.into();
+        fails_with(engine.apply(&alice, request.clone()), "edit note required");
+        fails_with(engine.incorporate(&alice, request), "edit note required");
+    }
+    assert!(engine.request(&alice, "silent").unwrap().is_none());
+    assert_eq!(engine.capture().unwrap(), base);
+    assert!(live_edit_texts(&engine, &bob).is_empty());
+}
+
+/// Applies `request` as alice, interrupts it after installation and closes the engine.
+fn interrupt(engine: Engine, alice: &Client, request: Request) {
+    let outcome = engine
+        .apply_observed(alice, request, |phase| {
+            if matches!(phase, Phase::Installed(_)) {
+                return Err("controlled interruption".into());
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        matches!(outcome, Outcome::Interrupted { .. }),
+        "{outcome:?}"
+    );
+    drop(engine);
+}
+
+#[test]
+fn a_retry_must_repeat_the_recorded_note() {
+    let (dir, engine, alice, _) = fixture(PAIR);
+    let base = engine.capture().unwrap();
+    let request = edit("noted", &base, "a.rs", "fn a() { 1; }\n");
+    interrupt(engine, &alice, request.clone());
+    let (engine, alice, bob) = reopen(dir.path(), PAIR);
+    let mut changed = request.clone();
+    changed.note = "a different explanation".into();
+    fails_with(
+        engine.retry(&alice, changed),
+        "request ID reused with changed contents",
+    );
+    assert!(matches!(
+        engine.retry(&alice, request.clone()).unwrap(),
+        Outcome::Applied { .. }
+    ));
+    assert_eq!(live_edit_texts(&engine, &bob), [request.note]);
+}
+
+// Records written before edit notes existed have no note; they read with an empty one,
+// which their retry repeats (#190).
+#[test]
+fn a_request_recorded_without_a_note_opens_and_retries_with_an_empty_one() {
+    let (dir, engine, alice, _) = fixture(PAIR);
+    let base = engine.capture().unwrap();
+    let mut request = edit("old", &base, "a.rs", "fn a() { 1; }\n");
+    interrupt(engine, &alice, request.clone());
+    ledger(dir.path())
+        .execute(
+            "UPDATE requests SET body=json_remove(body, '$.request.note') WHERE request_id='old'",
+            [],
+        )
+        .unwrap();
+    let (engine, alice, bob) = reopen(dir.path(), PAIR);
+    request.note = String::new();
+    assert_eq!(
+        engine.request(&alice, "old").unwrap().unwrap().request,
+        request
+    );
+    assert!(matches!(
+        engine.retry(&alice, request).unwrap(),
+        Outcome::Applied { .. }
+    ));
+    assert_eq!(live_edit_texts(&engine, &bob), [""]);
+}
+
 #[test]
 fn interrupted_installation_retains_evidence_and_requires_explicit_retry() {
     let (dir, engine, alice, _) = fixture(PAIR);
@@ -215,7 +317,7 @@ fn recovered_interruption_is_not_replayed_over_later_work_and_keeps_attempt_evid
 
 #[test]
 fn captured_job_applies_coherent_output_with_invoker_attribution() {
-    let (_dir, engine, alice, _) = fixture(PAIR);
+    let (_dir, engine, alice, bob) = fixture(PAIR);
     let base = engine.capture().unwrap();
     let spec = JobSpec {
         id: "generator".into(),
@@ -245,6 +347,7 @@ fn captured_job_applies_coherent_output_with_invoker_attribution() {
         b"fn a() {}\n"
     );
     assert_eq!(engine.history().unwrap().last().unwrap().agent, 0);
+    assert_eq!(live_edit_texts(&engine, &bob), ["job generator: b.rs"]);
 }
 
 #[test]
