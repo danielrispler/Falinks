@@ -91,7 +91,7 @@ fn mediated_edits_carry_host_identity_and_stale_requests_apply_nothing() {
     let applied = f.call(
         0,
         "edit",
-        json!({"id":"draft","expected":{"price.go":version},"output":{"price.go":{"content":draft}}}),
+        json!({"id": "draft", "note": "n","expected":{"price.go":version},"output":{"price.go":{"content":draft}}}),
     );
     assert_eq!(applied["accepted"], true, "{applied}");
     assert_eq!(fs::read_to_string(f.live.join("price.go")).unwrap(), draft);
@@ -101,7 +101,7 @@ fn mediated_edits_carry_host_identity_and_stale_requests_apply_nothing() {
     let stale = f.call(
         1,
         "edit",
-        json!({"id":"both","expected":{"price.go":version,"label.go":label},
+        json!({"id": "both", "note": "n","expected":{"price.go":version,"label.go":label},
             "output":{"price.go":{"content":"package gate\n"},"label.go":{"content":"package gate\n"}}}),
     );
     assert_eq!(stale["accepted"], false, "{stale}");
@@ -139,7 +139,7 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
     let applied = f.call(
         0,
         "edit",
-        json!({"id":"d1","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
+        json!({"id": "d1", "note": "n","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
     );
     assert_eq!(applied["accepted"], true, "{applied}");
 
@@ -163,8 +163,7 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
         current["revision"].clone(),
         current["files"]["price.go"]["version"].clone(),
     );
-    let edit =
-        json!({"id":"n1","expected":{"price.go":version},"output":{"price.go":{"content":NET}}});
+    let edit = json!({"id": "n1", "note": "n","expected":{"price.go":version},"output":{"price.go":{"content":NET}}});
     let blocked = f.call(1, "edit", edit.clone());
     assert!(blocked["outcome"]["Unreviewed"].is_object(), "{blocked}");
     let offer = json!({"id":"o1","task":"net","revision":revision,"scope":["net"],"text":"net"});
@@ -182,7 +181,7 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
     let applied = f.call(
         1,
         "edit",
-        json!({"id":"n2","expected":edit["expected"],"output":edit["output"]}),
+        json!({"id": "n2", "note": "n","expected":edit["expected"],"output":edit["output"]}),
     );
     assert_eq!(applied["accepted"], true, "{applied}");
     // Agent 0 now owes a review of agent 1's change before it may offer.
@@ -196,7 +195,7 @@ fn relevant_peer_edits_gate_writes_and_offers_until_an_engine_review() {
     let inline = f.call(
         0,
         "edit",
-        json!({"id":"d2","expected":{"price.go":current["files"]["price.go"]["version"]},
+        json!({"id": "d2", "note": "n","expected":{"price.go":current["files"]["price.go"]["version"]},
             "output":{"price.go":{"content":DISCOUNT}},
             "reviews":[{"scope":"discount","revision":current["revision"],
                 "decision":"Keep","note":"reread Net"}]}),
@@ -211,7 +210,7 @@ fn exact_offers_publish_the_checked_candidate_and_feedback_never_publishes() {
     let applied = f.call(
         0,
         "edit",
-        json!({"id":"d1","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
+        json!({"id": "d1", "note": "n","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
     );
     let revision = applied["outcome"]["Applied"]["revision"].clone();
     // Feedback, offers and reviews name a revision the agent captured.
@@ -239,6 +238,10 @@ fn exact_offers_publish_the_checked_candidate_and_feedback_never_publishes() {
         json!({"id":"o1","task":"discount","revision":revision,"scope":[],"text":"discount"}),
     );
     assert_eq!(offered["accepted"], true, "{offered}");
+    // The offer result reports coverage as of its own commit.
+    assert_eq!(offered["missing"], json!([]), "{offered}");
+    assert_eq!(offered["queued"], true, "{offered}");
+    assert!(offered["reason"].is_null(), "{offered}");
     assert!(f.engine.validate().unwrap().is_some());
     let keys = |reply: &Value| {
         reply
@@ -281,7 +284,7 @@ fn an_offer_that_queues_nothing_shows_its_state_and_why() {
         let reply = f.call(
             agent,
             "edit",
-            json!({"id":id,"expected":{path:version},
+            json!({"id": id, "note": "n","expected":{path:version},
             "output":{path:{"content":content}}}),
         );
         assert_eq!(reply["accepted"], true, "{reply}");
@@ -382,7 +385,7 @@ fn the_enrolled_formatter_runs_as_a_captured_job_attributed_to_its_invoker() {
     let applied = f.call(
         1,
         "edit",
-        json!({"id":"l1","expected":{"label.go":version},"output":{"label.go":{"content":messy}}}),
+        json!({"id": "l1", "note": "n","expected":{"label.go":version},"output":{"label.go":{"content":messy}}}),
     );
     let revision = applied["outcome"]["Applied"]["revision"].clone();
     assert_eq!(f.call(1, "capture", json!({}))["revision"], revision);
@@ -428,7 +431,7 @@ fn foreign_identity_and_unknown_source_changes_are_host_errors() {
             0,
             &f.live,
             "edit",
-            json!({"id":"x","expected":{"label.go":version},"output":{"label.go":{"content":"package gate\n"}}}),
+            json!({"id": "x", "note": "n","expected":{"label.go":version},"output":{"label.go":{"content":"package gate\n"}}}),
         ))
         .unwrap_err();
     assert!(error.to_string().contains("incident"), "{error}");
@@ -508,7 +511,7 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
     let applied = f.call(
         0,
         "edit",
-        json!({"id":"d1","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
+        json!({"id": "d1", "note": "n","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
     );
     assert_eq!(applied["accepted"], true, "{applied}");
     let events = f.engine.events(&f.clients[1], 0).unwrap();
@@ -525,7 +528,7 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
     let inline = f.call(
         1,
         "edit",
-        json!({"id":"n1","expected":{"price.go":notice["files"]["price.go"]["version"]},
+        json!({"id": "n1", "note": "n","expected":{"price.go":notice["files"]["price.go"]["version"]},
             "output":{"price.go":{"content":NET}},
             "reviews":[{"scope":"net","revision":notice["revision"],
                 "decision":"Keep","note":"reread Discount in the notice"}]}),
@@ -543,7 +546,7 @@ fn edit_output_values_are_whole_text_or_null_and_other_forms_are_refused() {
         f.call(
             0,
             "edit",
-            json!({"id":id,"expected":{"label.go":version},"output":{"label.go":value}}),
+            json!({"id": id, "note": "n","expected":{"label.go":version},"output":{"label.go":value}}),
         )
     };
     for value in [
@@ -589,12 +592,12 @@ fn wrapped_unknown_or_missing_request_keys_are_refused_by_name() {
         ("obligations", json!({"all":true}), "obligations takes {}"),
         (
             "edit",
-            json!({"id":"e","expected":{"label.go":version},"output":output,"request":{}}),
-            "edit takes {id, expected, output, reviews?}",
+            json!({"id": "e", "note": "n","expected":{"label.go":version},"output":output,"request":{}}),
+            "edit takes {id, expected, output, note, reviews?}",
         ),
         (
             "edit",
-            json!({"id":"e","expected":{"label.go":version},"output":output,
+            json!({"id": "e", "note": "n","expected":{"label.go":version},"output":output,
             "reviews":[{"scope":"s","revision":0,"decision":"Keep"}]}),
             "reviews[] takes {scope, revision, decision, note}",
         ),
@@ -630,7 +633,7 @@ fn wrapped_unknown_or_missing_request_keys_are_refused_by_name() {
     let edit = f.call(
         0,
         "edit",
-        json!({"id":"e","expected":{"label.go":version},"output":output}),
+        json!({"id": "e", "note": "n","expected":{"label.go":version},"output":output}),
     );
     assert_eq!(edit["accepted"], true, "{edit}");
     // An optional key keeps its default.
@@ -698,14 +701,14 @@ fn post_results_notices_and_edit_results_carry_no_unused_ids() {
     let applied = f.call(
         0,
         "edit",
-        json!({"id":"e","expected":{"label.go":before["files"]["label.go"]["version"]},
+        json!({"id":"e","note":"n","expected":{"label.go":before["files"]["label.go"]["version"]},
             "output":{"label.go":{"content":"package gate\n"}}}),
     );
     assert_eq!(applied["accepted"], true, "{applied}");
     let stale = f.call(
         1,
         "edit",
-        json!({"id":"s","expected":{"label.go":before["files"]["label.go"]["version"]},
+        json!({"id":"s","note":"n","expected":{"label.go":before["files"]["label.go"]["version"]},
             "output":{"label.go":null}}),
     );
     assert!(stale["outcome"]["Stale"].is_object(), "{stale}");
@@ -847,4 +850,35 @@ fn each_description_names_the_keys_its_operation_takes() {
             "{operation}: {reason}"
         );
     }
+}
+
+/// The edit note is required and reaches the peer as the live edit's text (#192).
+#[test]
+fn the_edit_note_is_required_and_is_the_peers_live_edit_text() {
+    let f = fixture();
+    let version = f.call(0, "capture", json!({}))["files"]["price.go"]["version"].clone();
+    let unnoted = f.call(
+        0,
+        "edit",
+        json!({"id":"d1","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
+    );
+    let reason = unnoted["reason"].as_str().unwrap_or_default();
+    assert!(reason.contains("missing [\"note\"]"), "{unnoted}");
+    let blank = f.call(
+        0,
+        "edit",
+        json!({"id":"d1","note":" ","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
+    );
+    // The engine refuses a blank note ("edit note required"); the adapter checks only the key.
+    assert_eq!(blank["accepted"], false, "{blank}");
+    let note = "Discount takes a tenth of gross";
+    let applied = f.call(
+        0,
+        "edit",
+        json!({"id":"d1","note":note,"expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
+    );
+    assert_eq!(applied["accepted"], true, "{applied}");
+    let events = serde_json::to_string(&f.engine.events(&f.clients[1], 0).unwrap()).unwrap();
+    assert!(events.contains(note), "{events}");
+    assert!(!events.contains("request d1"), "{events}");
 }

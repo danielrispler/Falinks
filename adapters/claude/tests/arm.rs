@@ -61,7 +61,7 @@ impl Run {
         self.call(
             agent,
             "edit",
-            json!({"id": id, "expected": {path: version}, "output": {path: {"content": content}}}),
+            json!({"id": id, "note": "n", "expected": {path: version}, "output": {path: {"content": content}}}),
         )
     }
     fn milestone(&mut self) -> String {
@@ -327,7 +327,7 @@ fn the_host_check_denies_agent_tests_the_rest_of_the_run() {
     let edit = run.call(
         0,
         "edit",
-        json!({"id": "probe", "expected": expected, "output": output}),
+        json!({"id": "probe", "note": "n", "expected": expected, "output": output}),
     );
     assert_eq!(edit["accepted"], true, "{edit}");
     // Checks return pass/fail only and are retained as host evidence.
@@ -367,7 +367,7 @@ fn rust_visible_checks_pass_the_reference_under_the_engine() {
     let edit = run.call(
         0,
         "edit",
-        json!({"id": "r", "expected": expected, "output": output}),
+        json!({"id": "r", "note": "n", "expected": expected, "output": output}),
     );
     assert_eq!(edit["accepted"], true, "{edit}");
     let revision = run.call(0, "capture", json!({}))["revision"]
@@ -541,13 +541,13 @@ fn per_form_edit_counts_match_the_recorded_ledger() {
     let stale = run.call(
         0,
         "edit",
-        json!({"id": "a2", "expected": {"producer.go": old}, "output": content}),
+        json!({"id": "a2", "note": "n", "expected": {"producer.go": old}, "output": content}),
     );
     assert!(stale["outcome"]["Stale"].is_object(), "{stale}");
     let rejected = run.call(
         0,
         "edit",
-        json!({"id": "a3", "expected": {}, "output": content}),
+        json!({"id": "a3", "note": "n", "expected": {}, "output": content}),
     );
     assert!(rejected["outcome"]["Rejected"].is_object(), "{rejected}");
     // A scratch reference to a missing file never reaches the ledger.
@@ -555,7 +555,7 @@ fn per_form_edit_counts_match_the_recorded_ledger() {
     let refused = run.call(
         0,
         "edit",
-        json!({"id": "a4", "expected": {"producer.go": old}, "output": reference}),
+        json!({"id": "a4", "note": "n", "expected": {"producer.go": old}, "output": reference}),
     );
     assert!(refused.get("outcome").is_none(), "{refused}");
     // Brings the marker back, reusing the refused reference's unused ID as `content`.
@@ -676,7 +676,7 @@ fn an_edit_answers_with_the_engine_stage_report_and_a_check_defers_its_oracle() 
     let envelope = |operation: &str, request: Value| json!({"identity": {"agent": agent_name(0), "workspace": root}, "operation": operation, "request": request});
     let edit = envelope(
         "edit",
-        json!({"id": "a1", "expected": {"producer.go": file["version"]},
+        json!({"id": "a1", "note": "n", "expected": {"producer.go": file["version"]},
             "output": {"producer.go": {"content": content}}}),
     );
     let Answer::Now { result, stages } = run.arm.answer(0, &edit).unwrap() else {

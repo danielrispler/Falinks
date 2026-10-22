@@ -535,7 +535,7 @@ fn unreviewed(retry: &str) -> String {
 }
 fn edit_step(id: &str, path: &str, content: &str, version: &str) -> String {
     format!(
-        "falinks_edit with input {{\"id\": \"{id}\", \"expected\": {{\"{path}\": {version}}}, \"output\": {{\"{path}\": {{\"content\": {}}}}}}}",
+        "falinks_edit with input {{\"id\": \"{id}\", \"note\": \"{id}\", \"expected\": {{\"{path}\": {version}}}, \"output\": {{\"{path}\": {{\"content\": {}}}}}}}",
         json!(content)
     )
 }
@@ -826,7 +826,7 @@ fn stale(gate: &mut Gate) -> Result<()> {
         .map(|e| e["result"]["files"]["price.go"]["version"].clone())
         .ok_or("phase 1 capture missing")?;
     let current = gate.engine().capture()?;
-    let stale = json!({"id":"both-stale","expected":{"price.go":first,
+    let stale = json!({"id": "both-stale", "note": "n","expected":{"price.go":first,
         "label.go":current.files["label.go"].version,"summary.go":current.files["summary.go"].version},
         "output":{"label.go":{"content":"package gate\n\nfunc Label(name string) string {\n\treturn \"x\"\n}\n"},
             "summary.go":{"content":"package gate\n"}}});

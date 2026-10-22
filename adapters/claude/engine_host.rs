@@ -90,7 +90,7 @@ impl EngineHost {
                 reply
             }
             "edit" | "retry" | "incorporate" => {
-                takes(&["id", "expected", "output"], &["reviews"])?;
+                takes(&["id", "expected", "output", "note"], &["reviews"])?;
                 require_review_keys(request)?;
                 let request = edit(request)?;
                 let mode = match operation {
@@ -240,7 +240,7 @@ impl EngineHost {
 
 /// The JSON type of each key of an edit, retry or incorporation.
 const EDIT_TYPES: &str =
-    r#"{"id":"string","expected":"object","output":"object","reviews":"array"}"#;
+    r#"{"id":"string","expected":"object","output":"object","note":"string","reviews":"array"}"#;
 /// Agent-facing operations, the JSON type of each request key, and their request shapes.
 /// Host-only calls (checks, validation, workspaces, reconsideration, disconnect, run retry,
 /// space-0 capture, `pending`, `events`) are never tools.
@@ -253,17 +253,17 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "edit",
         EDIT_TYPES,
-        "{id, expected: {path: version}, output: {path: {content, executable?} | null}, reviews?: [{scope, revision, decision: Keep|Revise|Drop, note}]} -> applies all outputs or nothing. expected names every input and output. Stale returns current versions; reread and use a new id. Unreviewed names the obligations that need a review. reviews are review requests sent inline: each is checked first, any invalid one refuses the whole call, and valid ones are recorded before the edit is gated, so they stand even if it comes back Stale.",
+        "{id, expected: {path: version}, output: {path: {content, executable?} | null}, note, reviews?: [{scope, revision, decision: Keep|Revise|Drop, note}]} -> applies all outputs or nothing. note is required and non-empty: a short explanation your peer sees as the live edit's text, so do not post it again. expected names every input and output. Stale returns current versions; reread and use a new id. Unreviewed names the obligations that need a review. reviews are review requests sent inline: each is checked first, any invalid one refuses the whole call, and valid ones are recorded before the edit is gated, so they stand even if it comes back Stale.",
     ),
     (
         "retry",
         EDIT_TYPES,
-        "Same shape as edit, same id: explicitly retry an interrupted request after restart.",
+        "Same shape as edit, same id and note: explicitly retry an interrupted request after restart.",
     ),
     (
         "incorporate",
         EDIT_TYPES,
-        "Same shape as edit: install the published state with your resolution of every file a Behind event names.",
+        "Same shape as edit, note included: install the published state with your resolution of every file a Behind event names.",
     ),
     (
         "request",
@@ -293,7 +293,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "offer",
         r#"{"id":"string","task":"string","revision":"integer","scope":"array","text":"string","supersedes":"string","reviews":"array"}"#,
-        "{id, task, revision, scope: [scope id], text, supersedes?: offer id, reviews?: [{scope, revision, decision, note}]} -> offer an exact captured revision for publication. Refused while any obligation is pending. reviews are checked and recorded first, as in edit.",
+        "{id, task, revision, scope: [scope id], text, supersedes?: offer id, reviews?: [{scope, revision, decision, note}]} -> offer an exact captured revision for publication. Refused while any obligation is pending. reviews are checked and recorded first, as in edit. The result reports coverage as of this offer: missing names the members still lacking an offer of this revision, queued says whether a publication run was queued, and reason (missing-members, not-ahead-of-base or no-members) says why not. The outcome arrives later as a Published or Validated event.",
     ),
     (
         "withdraw",
@@ -542,7 +542,7 @@ fn field<'a>(request: &'a Value, name: &str) -> Result<&'a str> {
         .as_str()
         .ok_or(format!("request.{name} must be a string"))?)
 }
-/// `{id, expected: {path: version}, output: {path: {content, executable?} | null}, reviews?}`.
+/// `{id, expected: {path: version}, output: {path: {content, executable?} | null}, note, reviews?}`.
 fn edit(request: &Value) -> Result<Request> {
     let expected: BTreeMap<String, u64> = serde_json::from_value(request["expected"].clone())?;
     let mut output = BTreeMap::new();
@@ -577,8 +577,7 @@ fn edit(request: &Value) -> Result<Request> {
         id: id.into(),
         expected,
         output,
-        // shortcut: the edit tools take no note yet, so edits keep the old text; drop when #192 adds one.
-        note: format!("request {id}"),
+        note: field(request, "note")?.into(),
         reviews: reviews.unwrap_or_default(),
     })
 }
