@@ -206,8 +206,9 @@ fn label(git: &[Option<f64>], falinks: &[Option<f64>]) -> &'static str {
 /// `runs` are every recorded result (pilot included) in batch order; all are listed. The
 /// metrics use scored runs only. A record naming an earlier one in `replaces` supersedes it. A
 /// replaceable outcome is an interruption, not a task outcome: its repetition lacks every
-/// metric and, until replaced, it is named in `gaps`.
-pub fn report(runs: &[Value]) -> Value {
+/// metric and, until replaced, it is named in `gaps`. Without `show_code`,
+/// `reverted_peer_text` gives a line count in place of the lines (#228 decision 28).
+pub fn report(runs: &[Value], show_code: bool) -> Value {
     let replaced: Vec<&Value> = runs.iter().filter_map(|r| r.get("replaces")).collect();
     let current: Vec<&Value> = runs
         .iter()
@@ -368,6 +369,10 @@ pub fn report(runs: &[Value]) -> Value {
                 let entries = r["edits"]["reverted_peer_text"].as_array().cloned();
                 entries.into_iter().flatten().map(|mut entry| {
                     entry["run_id"] = r["run_id"].clone();
+                    entry["line_count"] = json!(entry["lines"].as_array().map_or(0, Vec::len));
+                    if !show_code {
+                        entry.as_object_mut().map(|e| e.remove("lines"));
+                    }
                     entry
                 })
             })
@@ -716,7 +721,7 @@ mod tests {
 
     #[test]
     fn the_report_computes_no_winner() {
-        let out = report(&uniform());
+        let out = report(&uniform(), false);
         for key in [
             "verdict",
             "continuation_signal",
@@ -738,7 +743,10 @@ mod tests {
 
     #[test]
     fn non_overlapping_ranges_print_consistent_with_the_note() {
-        let out = report(&batch([[700.0, 800.0, 900.0], [800.0; 3], [1100.0; 3]]));
+        let out = report(
+            &batch([[700.0, 800.0, 900.0], [800.0; 3], [1100.0; 3]]),
+            false,
+        );
         let rust = &out["fixtures"]["rust-errors"];
         let time = &rust["metrics"]["completion_seconds"];
         assert_eq!(time["label"], "consistent", "{time}");
@@ -764,7 +772,10 @@ mod tests {
 
     #[test]
     fn overlapping_ranges_print_mixed() {
-        let out = report(&batch([[900.0, 1000.0, 1100.0], [800.0; 3], [800.0; 3]]));
+        let out = report(
+            &batch([[900.0, 1000.0, 1100.0], [800.0; 3], [800.0; 3]]),
+            false,
+        );
         let time = &out["fixtures"]["rust-errors"]["metrics"]["completion_seconds"];
         assert_eq!(time["label"], "mixed", "{time}");
     }
@@ -776,14 +787,14 @@ mod tests {
             run["tokens"] = json!({"cost_usd": 1.0, "tokens": {"output": 10}});
             run["transcript"] = json!({"round_trips": {"count": 20, "model_seconds": 50.0}});
         }
-        let out = report(&runs);
+        let out = report(&runs, false);
         let metrics = &out["fixtures"]["go-page"]["metrics"];
         assert_eq!(metrics["cost_usd"]["label"], "mixed");
         assert_eq!(metrics["round_trips"]["label"], "mixed");
         let page = find(&mut runs, "go-page-1-f");
         page["tokens"] = json!({"status": "missing", "cost_usd": null, "tokens": null});
         page["transcript"] = Value::Null;
-        let out = report(&runs);
+        let out = report(&runs, false);
         let metrics = &out["fixtures"]["go-page"]["metrics"];
         for metric in ["cost_usd", "tokens_output", "model_seconds", "round_trips"] {
             assert_eq!(metrics[metric]["label"], "incomplete", "{metric}");
@@ -806,7 +817,7 @@ mod tests {
             run["tokens"] = json!({"cost_usd": 1.0, "tokens": {"output": 10}});
         }
         find(&mut runs, "go-page-0-f")["outcome"] = "task_failure".into();
-        let out = report(&runs);
+        let out = report(&runs, false);
         let page = &out["fixtures"]["go-page"];
         let falinks = &page["cost"]["falinks"];
         // Three runs cost $3 and two succeeded.
@@ -823,7 +834,7 @@ mod tests {
         );
         assert_eq!(page["qualifying_pairs"], 2);
         find(&mut runs, "go-page-0-f")["tokens"] = json!({"status": "missing", "cost_usd": null});
-        let falinks = &report(&runs)["fixtures"]["go-page"]["cost"]["falinks"];
+        let falinks = &report(&runs, false)["fixtures"]["go-page"]["cost"]["falinks"];
         assert_eq!(falinks["missing"], 1);
         assert_eq!(falinks["cost_per_success_usd"], Value::Null);
     }
@@ -854,7 +865,7 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("edits");
-        let out = report(&runs);
+        let out = report(&runs, false);
         let page = &out["fixtures"]["go-page"];
         let content = &page["falinks_edits"]["content"];
         assert_eq!(
@@ -902,7 +913,7 @@ mod tests {
             };
         }
         find(&mut runs, "go-page-1-g")["tokens"]["cold_start_cost_usd"] = json!(1.2);
-        let out = report(&runs);
+        let out = report(&runs, false);
         let page = &out["fixtures"]["go-page"];
         let cold = &page["metrics"]["cold_start_cost_usd"];
         assert_eq!(
@@ -933,7 +944,8 @@ mod tests {
             run["tokens"] = usage("falinks", 3.0, 3.0, Some(2.9));
         }
         let sandbox = |runs: &[Value]| {
-            report(runs)["fixtures"]["go-page"]["cost"]["falinks"]["sandbox_excluded"].clone()
+            report(runs, false)["fixtures"]["go-page"]["cost"]["falinks"]["sandbox_excluded"]
+                .clone()
         };
         let line = sandbox(&runs);
         assert_eq!(
@@ -957,7 +969,7 @@ mod tests {
         find(&mut runs, "go-page-0-f")["transcript"] =
             json!({"request_key_refusals": {"handle": 2, "ack": 1}});
         find(&mut runs, "go-page-1-f")["transcript"] = json!({"request_key_refusals": {}});
-        let refusals = &report(&runs)["fixtures"]["go-page"]["falinks_request_key_refusals"];
+        let refusals = &report(&runs, false)["fixtures"]["go-page"]["falinks_request_key_refusals"];
         // The third run has no transcript: missing, never zero.
         assert_eq!(refusals["ops"]["handle"]["values"], json!([2.0, 0.0, null]));
         assert_eq!(refusals["ops"]["ack"]["values"], json!([1.0, 0.0, null]));
@@ -974,7 +986,7 @@ mod tests {
         {
             run["outcome"] = "timeout".into();
         }
-        let out = report(&runs);
+        let out = report(&runs, false);
         let page = &out["fixtures"]["go-page"];
         assert_eq!(page["qualifying_pairs"], 0);
         assert_eq!(page["median_reduction"], Value::Null);
@@ -992,7 +1004,7 @@ mod tests {
         replacement["replaces"] = runs[0]["run_id"].clone();
         replacement["outcome"] = "success".into();
         runs.push(replacement);
-        let out = report(&runs);
+        let out = report(&runs, false);
         assert_eq!(out["fixtures"]["rust-errors"]["qualifying_pairs"], 3);
         assert_eq!(out["replaced_runs"], json!(["rust-errors-0-g"]));
         assert_eq!(out["gaps"], json!([]));
@@ -1007,7 +1019,7 @@ mod tests {
             .position(|r| r["run_id"] == "go-page-0-g")
             .unwrap();
         runs[page]["concurrency"] = json!({"start": ["rust-errors-0-g"], "stop": []});
-        let out = report(&runs);
+        let out = report(&runs, false);
         assert_eq!(
             out["concurrent_runs"],
             json!(["rust-errors-0-g", "go-page-0-g"])
@@ -1027,7 +1039,7 @@ mod tests {
         let mut runs = uniform();
         runs.truncate(16);
         runs[15]["outcome"] = "usage_limit".into();
-        let out = report(&runs);
+        let out = report(&runs, false);
         let gaps = out["gaps"].as_array().unwrap();
         assert_eq!(gaps.len(), 2, "{gaps:?}");
         assert!(
@@ -1036,7 +1048,7 @@ mod tests {
                 .contains(runs[15]["run_id"].as_str().unwrap())
         );
         runs[3]["outcome"] = "safety_failure".into();
-        let out = report(&runs);
+        let out = report(&runs, false);
         assert_eq!(out["safety_failures"], json!([runs[3]["run_id"]]));
         let safety = &out["fixtures"]["rust-errors"]["metrics"]["safety_incidents"];
         assert_eq!(safety["falinks"]["values"], json!([0.0, 1.0, 0.0]));
@@ -1062,7 +1074,7 @@ mod tests {
         ] {
             let mut runs = uniform();
             find(&mut runs, &id)["outcome"] = outcome;
-            let out = report(&runs);
+            let out = report(&runs, false);
             let fixture = &out["fixtures"][f0];
             assert_eq!(fixture["pairs"].as_array().unwrap().len(), 3);
             assert_eq!(fixture["complete_pairs"], 2);
@@ -1086,7 +1098,7 @@ mod tests {
             runs[i]["outcome"] = outcome.into();
             runs.push(replacement);
         }
-        let out = report(&runs);
+        let out = report(&runs, false);
         assert_eq!(out["gaps"], json!([]), "{out}");
         assert_eq!(out["replaced_runs"].as_array().unwrap().len(), 2);
     }
@@ -1100,6 +1112,6 @@ mod tests {
         pilot["scored"] = false.into();
         pilot["outcome"] = "usage_limit".into();
         runs.insert(0, pilot);
-        assert_eq!(report(&runs)["gaps"], json!([]));
+        assert_eq!(report(&runs, false)["gaps"], json!([]));
     }
 }

@@ -1295,3 +1295,79 @@ fn track_t_batch_runs_both_team_sizes_with_run_isolation() {
     assert!(time["label"].is_string());
     assert_eq!(report["gaps"], json!([]));
 }
+
+/// #228 decision 28: `report` prints no source text unless `--show-code` asks for it.
+#[test]
+fn report_prints_reverted_lines_only_with_show_code() {
+    let tmp = tmp("falinks-report-code-");
+    let run = tmp.path().join("go-page-0-f");
+    fs::create_dir_all(run.join("controller")).unwrap();
+    let secret = "return nil // agent code";
+    fs::write(
+        run.join("controller/result.json"),
+        json!({"outcome": "success", "edits": {"forms": {}, "reverted_peer_text":
+            [{"agent": 1, "id": "b3", "path": "a.go", "peer_id": "a2", "lines": [secret, "}"]}]}})
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("batch.json"),
+        json!({"runs": [{"run_dir": run, "run_id": "go-page-0-f", "pair": "go-page-1",
+            "fixture": "go-page", "arm": "falinks", "scored": true}]})
+        .to_string(),
+    )
+    .unwrap();
+    let report = |extra: &[&str]| {
+        let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]
+            .into_iter()
+            .chain(extra.iter().copied()));
+        assert!(output.status.success(), "{}", text(&output));
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let hidden = report(&[]);
+    assert!(!hidden.contains(secret), "{hidden}");
+    let entry = &serde_json::from_str::<Value>(&hidden).unwrap()["fixtures"]["go-page"]["reverted_peer_text"]
+        [0];
+    assert_eq!(
+        *entry,
+        json!({"agent": 1, "id": "b3", "path": "a.go", "peer_id": "a2", "line_count": 2,
+            "run_id": "go-page-0-f"})
+    );
+    let shown: Value = serde_json::from_str(&report(&["--show-code"])).unwrap();
+    assert_eq!(
+        shown["fixtures"]["go-page"]["reverted_peer_text"][0]["lines"],
+        json!([secret, "}"])
+    );
+}
+
+/// #228 decision 27: every differential property quotes its requirement sentence verbatim
+/// from the frozen fixture definition, and the judge uses the run configuration's pins.
+#[test]
+fn code_quality_definitions_trace_to_fixture_requirements() {
+    let definitions = read(root().join("code-quality.json"));
+    let properties = definitions["properties"]["list"].as_array().unwrap();
+    assert_eq!(properties.len(), 13);
+    for property in properties {
+        let fixture = read(
+            root()
+                .join("fixtures")
+                .join(format!("{}.json", property["fixture"].as_str().unwrap())),
+        );
+        let requirement = &property["requirement"];
+        let at = requirement["at"].as_str().unwrap();
+        let sentence = requirement["text"].as_str().unwrap();
+        let source = fixture
+            .pointer(at)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            source.contains(sentence),
+            "{}: {sentence:?} is not in {at}",
+            property["id"]
+        );
+    }
+    let config = read(root().join("config.json"));
+    let judge = &definitions["judge"];
+    assert_eq!(judge["model"], config["model"]);
+    assert_eq!(judge["runtime_version"], config["runtime_version"]);
+}

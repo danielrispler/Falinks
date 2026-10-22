@@ -464,7 +464,7 @@ pub fn batch(
     let summary = if track_t {
         track_t_report(&results)
     } else {
-        report(&results)
+        report(&results, false)
     };
     write(runs.join("report.json"), &summary)?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -641,7 +641,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let all = slots(false);
         recorded(&tmp.path().join("one"), &all, "/p");
-        let one = report(&results(&tmp.path().join("one")).unwrap());
+        let one = report(&results(&tmp.path().join("one")).unwrap(), false);
         let shards: Vec<PathBuf> = FIXTURES.map(|f| tmp.path().join(f)).to_vec();
         for (fixture, dir) in FIXTURES.iter().zip(&shards) {
             let only: Vec<Value> = all
@@ -652,7 +652,7 @@ mod tests {
             recorded(dir, &only, "/p");
         }
         let dirs: Vec<&Path> = shards.iter().map(PathBuf::as_path).collect();
-        let split = report(&merged(&dirs).unwrap());
+        let split = report(&merged(&dirs).unwrap(), false);
         assert_eq!(one["gaps"], json!([]));
         for key in ["fixtures", "successes", "gaps"] {
             assert_eq!(split[key], one[key], "{key}");

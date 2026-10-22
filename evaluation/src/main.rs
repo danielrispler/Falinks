@@ -386,6 +386,7 @@ fn material_hashes(root: &Path) -> Result<Value> {
     files.extend(
         [
             "config.json",
+            "code-quality.json",
             "result-schema.json",
             "Cargo.toml",
             "Cargo.lock",
@@ -782,7 +783,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t] [--fixtures NAME[,NAME]]
-  report --runs DIR [--runs DIR]... [--schedule track-t]
+  report --runs DIR [--runs DIR]... [--schedule track-t] [--show-code]
   timing RUN_DIR";
 
 struct Args {
@@ -795,6 +796,8 @@ impl Args {
         let (mut positional, mut options, mut raw) = (Vec::new(), Vec::new(), raw.into_iter());
         while let Some(arg) = raw.next() {
             match arg.strip_prefix("--") {
+                // The one flag without a value.
+                Some("show-code") => options.push(("show-code".into(), String::new())),
                 Some(key) => options.push((
                     key.to_string(),
                     raw.next().ok_or(format!("--{key} needs a value"))?,
@@ -911,7 +914,7 @@ fn run() -> Result<i32> {
             let dirs: Vec<&Path> = args.all("runs").into_iter().map(Path::new).collect();
             let runs = batch::merged(&dirs)?;
             let summary = match args.get("schedule") {
-                None => report::report(&runs),
+                None => report::report(&runs, args.get("show-code").is_some()),
                 Some("track-t") => report::track_t_report(&runs),
                 Some(_) => bail!("--schedule takes track-t\n{USAGE}"),
             };

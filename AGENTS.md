@@ -24,6 +24,15 @@ It stops at the first failing step and names it. It skips actionlint unless a wo
 
 The evaluation sources are hash-frozen in `evaluation/manifest.json`. Before you edit `evaluation/`, read "Freeze and setup budget" in `evaluation/README.md` for the re-freeze procedure.
 
+## Scored-batch inspection
+
+Until #228's stage 2 freezes (the calibration ticket lifts this rule):
+
+- Except as the next bullet allows, never open a scored run's final tree, diffs, transcripts, `events.jsonl` or session JSONL. Never run `report --show-code` on a scored batch.
+- When diagnosing an infrastructure or safety failure, you may open any file in the failed run's own directory, plus code-free batch files. Never open other runs' directories. List the run and every file you opened in the ticket comment. Never measure a failed run; its replacement runs in a new directory.
+
+The rules are frozen in `evaluation/code-quality.json`; the batch steps are in `evaluation/README.md`, "Paired evaluation (#27)".
+
 ## Agent skills
 
 ### Learning
