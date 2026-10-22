@@ -28,18 +28,18 @@ use std::{
 pub const PINS: PinMap<&str> = &[
     (
         ("macos", "aarch64"),
-        "b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a",
+        "ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37",
     ),
     (
         ("linux", "x86_64"),
-        "ea0f135784631619a7a409d07322ecec964f9cc4fd377508ed1ba3f141f27912",
+        "356733f185fa988e6bf3aa9a555269fdd167982a2e2a80d3c8a78037bb92ad58",
     ),
     (
         ("linux", "aarch64"),
-        "c487117526509ab6d2ee6013e14f181faf68d6d6afe6bb0d4b2b4a9feca5ecb3",
+        "fdd22e6cbb734d580f5664c48df4294eeec850218ff07f186f9af30426396ee1",
     ),
 ];
-pub const VERSION: &str = "2.1.304";
+pub const VERSION: &str = "2.1.308";
 pub const MODEL: &str = "claude-opus-5-5";
 /// Built-in tools every worker gets; the launch adds its `falinks` tools.
 pub const NATIVE: &[&str] = &["Bash", "Glob", "Grep", "Read"];

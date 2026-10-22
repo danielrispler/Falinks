@@ -4,7 +4,7 @@
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
-    FIXTURES, Result, bail, read, report::report, schedule, sha256, utc_now, verify, write,
+    FIXTURES, Result, bail, read, report::report, schedule, sha256, tokens, utc_now, verify, write,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -458,12 +458,13 @@ pub fn batch(
 /// Every recorded run's evidence, in ledger order.
 pub fn results(runs: &Path) -> Result<Vec<Value>> {
     let ledger = read(runs.join("batch.json"))?;
+    let prices = tokens::prices()?;
     let mut out = vec![];
     for entry in ledger["runs"].as_array().into_iter().flatten() {
-        let mut result = read(
-            Path::new(entry["run_dir"].as_str().unwrap_or_default()).join("controller/result.json"),
-        )
-        .unwrap_or_else(|_| json!({"outcome": "infrastructure_failure"}));
+        let run_dir = Path::new(entry["run_dir"].as_str().unwrap_or_default());
+        let mut result = read(run_dir.join("controller/result.json"))
+            .unwrap_or_else(|_| json!({"outcome": "infrastructure_failure"}));
+        result["tokens"] = tokens::tokens(run_dir, &result, &prices)?;
         for key in ["run_id", "pair", "fixture", "arm", "scored", "concurrency"] {
             result[key] = entry[key].clone();
         }

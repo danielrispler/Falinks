@@ -124,6 +124,9 @@ _Avoid_: Sandbox contract (a contract is an agreement a proposal depends on)
 The isolation a worker runtime applies to its own tool commands, such as bubblewrap on Linux or Seatbelt on macOS, which must refuse to run them when it cannot start. Distinct from the containment guarantee, which the engine gives contained commands.
 _Avoid_: Sandbox (alone), containment
 
+**Freeze**:
+The hash pinning of evaluation materials in `evaluation/manifest.json`. Changing frozen material needs a versioned re-freeze; the procedure is in `evaluation/README.md`, "Freeze and setup budget".
+
 **Supported platform**:
 An operating system on which a Falinks component upholds its guarantees and CI or recorded evidence proves it. Support is claimed per component: the engine and each worker-runtime adapter separately.
 _Avoid_: Development platform (the OS Falinks is built on, currently macOS)

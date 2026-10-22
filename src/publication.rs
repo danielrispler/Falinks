@@ -233,15 +233,43 @@ fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
         missing,
     })
 }
-/// Queues the publication run for a completely covered unpublished candidate.
-pub(crate) fn queue(db: &Connection, revision: u64) -> Result<()> {
+/// Why an offered revision queued no publication run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Unqueued {
+    MissingMembers,
+    NotAheadOfBase,
+    NoMembers,
+}
+/// Offer coverage of a revision, true as of the transaction that computed it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Coverage {
+    /// Members still lacking an offer of this revision.
+    pub missing: BTreeSet<usize>,
+    pub queued: bool,
+    pub reason: Option<Unqueued>,
+}
+/// Queues the publication run for a completely covered unpublished candidate, or
+/// reports why none was queued. With `write` false it only reports.
+pub(crate) fn queue(db: &Connection, revision: u64, write: bool) -> Result<Coverage> {
     let candidate = candidate(db, revision)?;
     let binding = candidate.binding;
-    if !candidate.missing.is_empty()
-        || !ahead(db, revision, binding.base)?
-        || binding.members.is_empty()
-    {
-        return Ok(());
+    let reason = if !candidate.missing.is_empty() {
+        Some(Unqueued::MissingMembers)
+    } else if !ahead(db, revision, binding.base)? {
+        Some(Unqueued::NotAheadOfBase)
+    } else if binding.members.is_empty() {
+        Some(Unqueued::NoMembers)
+    } else {
+        None
+    };
+    let coverage = Coverage {
+        missing: candidate.missing,
+        queued: reason.is_none(),
+        reason,
+    };
+    if !coverage.queued || !write {
+        return Ok(coverage);
     }
     let ids: Vec<_> = binding.checkpoints.values().cloned().collect();
     let id = format!("publish:{revision}:{}:{}", binding.base, ids.join(","));
@@ -258,7 +286,7 @@ pub(crate) fn queue(db: &Connection, revision: u64) -> Result<()> {
             },
         )?;
     }
-    Ok(())
+    Ok(coverage)
 }
 /// Restart: an uncommitted running attempt is never resumed; it awaits explicit retry.
 pub(crate) fn recover(db: &Connection) -> Result<()> {
@@ -352,7 +380,7 @@ impl Engine {
         .into_iter()
         .collect();
         for revision in offered {
-            queue(&tx, revision)?;
+            queue(&tx, revision, true)?;
         }
         tx.commit()?;
         drop(db);

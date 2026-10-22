@@ -109,15 +109,45 @@ fn complete_offer_coverage_runs_checks_and_publishes_only_the_exact_candidate() 
     let status = engine.candidate(candidate.revision).unwrap();
     assert_eq!(status.binding.members, members(&[0, 1]));
     assert_eq!(status.missing, members(&[0, 1]));
-    engine
+    let alices = engine
         .offer(&alice, offer("alice", candidate.revision))
         .unwrap();
+    assert_eq!(
+        alices.coverage,
+        Coverage {
+            missing: members(&[1]),
+            queued: false,
+            reason: Some(Unqueued::MissingMembers),
+        }
+    );
     assert!(engine.validate().unwrap().is_none(), "Bob's offer missing");
+    // A repeated offer ID reports coverage as of the repeat.
+    let repeat = engine
+        .offer(&alice, offer("alice", candidate.revision))
+        .unwrap();
+    assert_eq!(repeat.coverage, alices.coverage);
     let bobs = engine
         .offer(&bob, offer("bob", candidate.revision))
         .unwrap();
-    assert_eq!(bobs.base, 0);
-    assert_eq!(bobs.members, members(&[0, 1]));
+    // The peer's later offer reports the queued run in its own result.
+    assert_eq!(
+        bobs.coverage,
+        Coverage {
+            missing: members(&[]),
+            queued: true,
+            reason: None,
+        }
+    );
+    assert_eq!(
+        engine
+            .offer(&alice, offer("alice", candidate.revision))
+            .unwrap()
+            .coverage,
+        bobs.coverage,
+        "the repeat sees Bob's offer"
+    );
+    assert_eq!(bobs.checkpoint.base, 0);
+    assert_eq!(bobs.checkpoint.members, members(&[0, 1]));
     // Live drafting continues, including broken code, after the offers.
     applied(&engine, &alice, "draft", "a.rs", "pub fn a( unfinished");
     let run = engine.validate().unwrap().expect("coverage queued a run");
@@ -130,6 +160,20 @@ fn complete_offer_coverage_runs_checks_and_publishes_only_the_exact_candidate() 
         panic!("{run:?}");
     };
     assert_eq!(engine.published().unwrap(), candidate);
+    let again = engine
+        .offer(&alice, offer("alice-again", candidate.revision))
+        .unwrap();
+    assert!(!again.coverage.queued);
+    assert_eq!(again.coverage.reason, Some(Unqueued::NotAheadOfBase));
+    assert_eq!(
+        engine
+            .offer(&bob, offer("bob", candidate.revision))
+            .unwrap()
+            .coverage
+            .reason,
+        Some(Unqueued::NotAheadOfBase),
+        "a repeat after publication reports the new base"
+    );
     for id in ["0/alice", "1/bob"] {
         assert_eq!(
             engine.checkpoint(id).unwrap().unwrap().state,
@@ -623,7 +667,7 @@ fn publication_crash_boundaries_accept_all_or_none_and_recover_committed_outcome
             // Duplicate requests recover the committed outcome without another publication.
             assert_eq!(engine.retry_run(&alice, &id).unwrap(), run);
             let duplicate = engine.offer(&alice, alices.clone()).unwrap();
-            assert_eq!(duplicate.state, Availability::Accepted { event });
+            assert_eq!(duplicate.checkpoint.state, Availability::Accepted { event });
             fails_with(
                 engine.offer(
                     &alice,
@@ -786,7 +830,7 @@ fn a_failing_check_on_a_two_member_candidate_accepts_neither_member() {
     let bobs = engine
         .offer(&bob, offer("bob", candidate.revision))
         .unwrap();
-    assert_eq!(bobs.members, members(&[0, 1]));
+    assert_eq!(bobs.checkpoint.members, members(&[0, 1]));
     // Both compile; the fixed test fails only for the combination.
     let run = engine.validate().unwrap().expect("coverage queued a run");
     assert_eq!(
@@ -798,7 +842,11 @@ fn a_failing_check_on_a_two_member_candidate_accepts_neither_member() {
     assert_eq!(engine.published().unwrap(), initial);
     for checkpoint in [alices, bobs] {
         assert_eq!(
-            engine.checkpoint(&checkpoint.id).unwrap().unwrap().state,
+            engine
+                .checkpoint(&checkpoint.checkpoint.id)
+                .unwrap()
+                .unwrap()
+                .state,
             Availability::Available,
             "a failed group accepts no member"
         );

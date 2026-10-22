@@ -10,8 +10,21 @@
   "model": "claude-opus-5-5",
   "model_version": "claude-opus-5-5 (the pinned runtime reports no finer version; init and modelUsage must name exactly this ID)",
   "reasoning": "default (no effort flag) in both arms",
-  "runtime_version": "2.1.304",
-  "runtime_sha256": "b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a",
+  "prices": {
+    "model": "claude-opus-5-5",
+    "usd_per_million_tokens": {
+      "input": 4,
+      "output": 20,
+      "cache_write_5m": 5,
+      "cache_write_1h": 8,
+      "cache_read": 0.2
+    },
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing (cache writes 1.25x input for 5 minutes, 2x for 1 hour)",
+    "date": "2026-10-22",
+    "label": "API-equivalent list price, not billed cost"
+  },
+  "runtime_version": "2.1.308",
+  "runtime_sha256": "ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37",
   "worker_command": [
     "{worker}"
   ],
@@ -23,7 +36,7 @@
     "nested_agents": "Both arms (#178 C7): a Bash command whose first word is claude, codex, node, npx or the configured runtime binary, or a session in the worker's runtime project folder the host did not launch, makes the run invalid; the batch stops and asks. Not detected: a nested instance with its own HOME or CLAUDE_CONFIG_DIR under scratch, an obfuscated launch, a direct API curl, a launch wrapped in another program (bash -c, xargs, sudo), and a session written outside the worker's own project folder (another cwd)."
   },
   "worker_script": "REQUIRED: absolute evaluation/target/release/claude-worker",
-  "runtime_binary": "REQUIRED: absolute dedicated copy of the pinned claude 2.1.304",
+  "runtime_binary": "REQUIRED: absolute dedicated copy of the pinned claude 2.1.308",
   "auth_file": null,
   "denied_roots": [
     "REQUIRED: checkout, other runs and any reference copies"

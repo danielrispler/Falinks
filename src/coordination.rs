@@ -140,6 +140,12 @@ pub struct Checkpoint {
     /// The offerer's reviewed revision per registered scope.
     pub reviews: BTreeMap<String, u64>,
 }
+/// An offer's checkpoint and its coverage as of the offer's commit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Offered {
+    pub checkpoint: Checkpoint,
+    pub coverage: publication::Coverage,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Body {
     Message(Message),
@@ -805,7 +811,7 @@ impl Engine {
     }
     /// Offers an exact captured revision. Any unreviewed obligation left after its inline
     /// reviews blocks it.
-    pub fn offer(&self, client: &Client, offer: Offer) -> Result<Checkpoint> {
+    pub fn offer(&self, client: &Client, offer: Offer) -> Result<Offered> {
         let inline = !offer.reviews.is_empty();
         let result = self.offer_locked(client, offer);
         // A cleared obligation may unblock an agreed transition.
@@ -814,7 +820,7 @@ impl Engine {
         }
         result
     }
-    fn offer_locked(&self, client: &Client, offer: Offer) -> Result<Checkpoint> {
+    fn offer_locked(&self, client: &Client, offer: Offer) -> Result<Offered> {
         self.authorize(client)?;
         let id = format!("{}/{}", client.agent, offer.id);
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
@@ -827,7 +833,12 @@ impl Engine {
             if existing.offer != offer {
                 return fail("offer ID reused with changed contents");
             }
-            return Ok(existing);
+            // A repeat reports coverage as of the repeat; the first call queued any run.
+            let coverage = publication::queue(&db, existing.offer.revision, false)?;
+            return Ok(Offered {
+                checkpoint: existing,
+                coverage,
+            });
         }
         let capture =
             captured(&db, offer.revision, None)?.ok_or("offer must name a captured revision")?;
@@ -902,11 +913,14 @@ impl Engine {
             }),
         )?;
         // Complete coverage queues the combined checks in the same commit.
-        publication::queue(&tx, offer.revision)?;
+        let coverage = publication::queue(&tx, offer.revision, true)?;
         tx.commit()?;
         drop(db);
         self.signal.notify();
-        Ok(created)
+        Ok(Offered {
+            checkpoint: created,
+            coverage,
+        })
     }
     pub fn withdraw(&self, client: &Client, offer: &str) -> Result<Checkpoint> {
         self.authorize(client)?;
