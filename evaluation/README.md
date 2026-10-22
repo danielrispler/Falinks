@@ -293,6 +293,21 @@ it as `usage_limit`.
       - A tool failure makes that metric missing with the tool's error. Each run's
         `versions` gives `go version`, `rustc -V`, `clippy-driver -V` and `rustfmt -V`, and
         `go_note` says when the tools' Go is not the Go the batch's checks resolved.
+      - `failing_properties` (#231): the number of the fixture's differential properties
+        whose output differs from the formatted reference's, with the failing IDs in
+        `properties`. The suites (`protected/properties/<fixture>.rs` or `_test.go`) print
+        one line per seeded input, with the frozen seed and input count; they use only the
+        API the oracle imports, and run without the snapshot's own tests through the
+        oracle's contained path. A suite that does not compile gives missing, with the
+        compiler's error.
+      - Before any property value, `quality` checks two gates per fixture (#228 decision
+        13): the reference gives every input of every property without a panic, and each
+        property fails on its broken copy (`protected/properties/broken.json`, one edit of
+        the reference per property). When a gate fails, every run of that fixture lacks
+        `failing_properties`, and the reason names the property and the gate.
+        `quality.json`'s `property_gates` gives each fixture's result. Tests point
+        `FALINKS_PROPERTY_SUITES` at other suites; `measurement.property_suites` then
+        records it.
       - **Judge** (#232), with `quality ... --judge CONFIG`, where CONFIG is a run
         configuration whose `runtime_version` and `model` must equal `code-quality.json`'s
         judge pin and whose `runtime_binary` must match `runtime_sha256`. Each call is a
@@ -314,7 +329,6 @@ it as `usage_limit`.
           `Not yet calibrated` instead of its values. The calibration ticket adds the record.
         - Tests use the scripted worker's fake judge only; real calls need a session outside
           auto mode.
-      - The differential properties are a later #228 stage 2 ticket.
     - **Values and labels.** Each metric gives every repetition's value per arm, its
       `median`, `range`, `n` and `missing`. A repetition lacks a value when its run is
       absent, interrupted or lacks the metric; missing data is never imputed. The `label`

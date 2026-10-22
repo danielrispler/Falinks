@@ -211,7 +211,8 @@ const TREATMENT: [&str; 2] = [
 
 /// One fixture's deterministic code-quality metrics from `quality` (#230), per arm, with the
 /// usual statistics and labels. Each repetition that lacks a value names why in
-/// `missing_reasons`; each lint count gives its per-lint breakdown per repetition.
+/// `missing_reasons`; each lint count gives its per-lint breakdown per repetition, and
+/// `failing_properties` (#231) the failing property IDs.
 fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
     let rust = crate::fixture(fixture).is_ok_and(|f| f["language"] == "rust");
     let lint = if rust {
@@ -224,6 +225,7 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
         "test_lines_added",
         "test_functions",
         lint,
+        "failing_properties",
     ];
     let mut out = serde_json::Map::new();
     let mut labels = serde_json::Map::new();
@@ -253,12 +255,17 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
             let (present, reasons): (Vec<Option<f64>>, Vec<Value>) = cells.into_iter().unzip();
             let mut figure = stats(&present);
             figure["missing_reasons"] = json!(reasons);
-            if metric == lint {
-                figure["lints"] = slots[arm]
+            let breakdown = match metric {
+                "failing_properties" => Some("properties"),
+                _ if metric == lint => Some("lints"),
+                _ => None,
+            };
+            if let Some(key) = breakdown {
+                figure[key] = slots[arm]
                     .iter()
                     .map(|r| {
                         r.map_or(Value::Null, |r| {
-                            r["quality"]["metrics"][metric]["lints"].clone()
+                            r["quality"]["metrics"][metric][key].clone()
                         })
                     })
                     .collect();
