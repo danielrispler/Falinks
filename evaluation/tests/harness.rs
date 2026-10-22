@@ -1371,3 +1371,234 @@ fn code_quality_definitions_trace_to_fixture_requirements() {
     assert_eq!(judge["model"], config["model"]);
     assert_eq!(judge["runtime_version"], config["runtime_version"]);
 }
+
+/// Commits `files` over a prepared fixture repository and returns the commit.
+fn snapshot(fixture: &str, repo: &Path, files: &[(&str, &str)]) -> String {
+    fs::create_dir_all(repo.parent().unwrap()).unwrap();
+    prepare(fixture, repo);
+    for (name, text) in files {
+        fs::write(repo.join(name), text).unwrap();
+    }
+    if !files.is_empty() {
+        commit(repo, "Final snapshot");
+    }
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    String::from_utf8(head.stdout).unwrap().trim().to_string()
+}
+
+/// #230, seam A: `quality` measures synthetic runs in both arms' storage layouts, and `report`
+/// reads the results into `code_quality`. Every value is computed by hand on the formatted
+/// trees.
+#[test]
+fn quality_measures_both_arms_and_report_shows_code_quality() {
+    let tmp = tmp("falinks-quality-");
+    let batch = tmp.path();
+    let result = |run: &Path, value: Value| {
+        fs::create_dir_all(run.join("controller")).unwrap();
+        fs::write(run.join("controller/result.json"), value.to_string()).unwrap();
+    };
+
+    // Git arm, rust-errors. consumer.rs against the formatted initial: total's two-line chain
+    // becomes three lines, and describe's `match` and its closing `}` become `return match` and
+    // `};` (4 removed, 5 added). catalog.rs gains a blank production line and a 14-line inline
+    // test module with two #[test] functions. Production: 4 + 5 + 1 = 10. clippy's
+    // needless_return is on an added line and counts; the unused import on the fixture's
+    // unchanged line 1 does not.
+    let rust_git = batch.join("rust-errors-1-git");
+    let catalog = "pub fn lookup(key: &str) -> Result<u32, String> {
+    match key {
+        \"apple\" => Ok(3),
+        \"pear\" => Ok(7),
+        \"offline\" => Err(\"unavailable\".into()),
+        _ => Err(\"missing\".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lookup;
+
+    #[test]
+    fn apple() {
+        assert_eq!(lookup(\"apple\"), Ok(3));
+    }
+
+    #[test]
+    fn pear() {
+        assert_eq!(lookup(\"pear\"), Ok(7));
+    }
+}
+";
+    let consumer = "use crate::catalog::lookup;
+
+pub fn total(keys: &[&str]) -> Result<u32, String> {
+    keys.iter().try_fold(0, |sum, key| {
+        crate::catalog::lookup(key).map(|value| sum + value)
+    })
+}
+
+pub fn describe(key: &str) -> String {
+    return match crate::catalog::lookup(key) {
+        Ok(value) => format!(\"{key}={value}\"),
+        Err(error) => format!(\"error:{error}\"),
+    };
+}
+";
+    let sha = snapshot(
+        "rust-errors",
+        &rust_git.join("agents/repo"),
+        &[("src/catalog.rs", catalog), ("src/consumer.rs", consumer)],
+    );
+    result(
+        &rust_git,
+        json!({"arm": "git", "outcome": "success", "final_snapshot": sha}),
+    );
+
+    // Falinks arm, rust-errors: the final snapshot does not parse, so rustfmt fails.
+    let rust_falinks = batch.join("rust-errors-1-falinks");
+    let sha = snapshot(
+        "rust-errors",
+        &rust_falinks.join("controller/oracle/candidate-1"),
+        &[("src/consumer.rs", "pub fn total(\n")],
+    );
+    result(
+        &rust_falinks,
+        json!({"arm": "falinks", "outcome": "success", "final_snapshot": sha}),
+    );
+
+    // Falinks arm, go-relationships, written unformatted. Formatted, producer.go replaces
+    // `import "strings"` with a 4-line import block and appends a blank line and the 3-line
+    // Label: 1 removed + 8 added = 9 production lines. The Sprintf on an added line is one
+    // printf finding. producer_test.go adds 13 test lines and two Test functions. The final
+    // snapshot is the second of two oracle candidates.
+    let go_falinks = batch.join("go-relationships-1-falinks");
+    let oracle = go_falinks.join("controller/oracle");
+    snapshot("go-relationships", &oracle.join("candidate-1"), &[]);
+    let producer = "package fixture
+
+import (
+    \"fmt\"
+    \"strings\"
+)
+
+func Produce(lines []string) []string {
+    out := make([]string, 0, len(lines))
+    for _, line := range lines { out = append(out, strings.TrimSpace(line)) }
+    return out
+}
+
+func Label(n int) string {
+    return fmt.Sprintf(\"%s\", n)
+}
+";
+    let test = "package fixture
+
+import \"testing\"
+
+func TestProduce(t *testing.T) {
+	if got := Produce([]string{\" a \"}); got[0] != \"a\" {
+		t.Fatal(got)
+	}
+}
+
+func TestLabel(t *testing.T) {
+	_ = Label(1)
+}
+";
+    let sha = snapshot(
+        "go-relationships",
+        &oracle.join("candidate-2"),
+        &[("producer.go", producer), ("producer_test.go", test)],
+    );
+    result(
+        &go_falinks,
+        json!({"arm": "falinks", "outcome": "success", "final_snapshot": sha}),
+    );
+
+    // Git arm, go-relationships: the final oracle failed, so the run is not measured.
+    let go_git = batch.join("go-relationships-1-git");
+    result(&go_git, json!({"arm": "git", "outcome": "task_failure"}));
+
+    let entry = |run: &Path, fixture: &str, arm: &str| {
+        json!({"run_dir": run, "run_id": run.file_name().unwrap().to_str().unwrap(),
+            "pair": format!("{fixture}-1"), "fixture": fixture, "arm": arm, "scored": true})
+    };
+    fs::write(
+        batch.join("batch.json"),
+        json!({"runs": [
+            entry(&rust_git, "rust-errors", "git"),
+            entry(&rust_falinks, "rust-errors", "falinks"),
+            entry(&go_falinks, "go-relationships", "falinks"),
+            entry(&go_git, "go-relationships", "git"),
+        ], "invocations": [{"commit": "f00d", "go": "go version go0.0 test/arch"}]})
+        .to_string(),
+    )
+    .unwrap();
+
+    let measured = cli(["quality", "--runs", batch.to_str().unwrap()]);
+    assert!(measured.status.success(), "{}", text(&measured));
+    for run in [&rust_git, &rust_falinks, &go_falinks, &go_git] {
+        assert!(!run.join("quality.json").exists());
+    }
+    let quality = read(batch.join("quality.json"));
+    let rust = &quality["runs"]["rust-errors-1-git"];
+    assert_eq!(
+        rust["metrics"],
+        json!({"production_lines_changed": {"value": 10}, "test_lines_added": {"value": 14},
+            "test_functions": {"value": 2},
+            "clippy_findings": {"value": 1, "lints": {"clippy::needless_return": 1}}}),
+        "{rust}"
+    );
+    for tool in ["go", "rustc", "clippy", "rustfmt"] {
+        assert!(rust["versions"][tool].is_string());
+    }
+    assert!(rust["go_note"].as_str().unwrap().contains("go0.0"));
+    assert_eq!(quality["measurement"]["batch_commits"], json!(["f00d"]));
+    assert!(quality["measurement"]["commit"].is_string());
+    let go = &quality["runs"]["go-relationships-1-falinks"];
+    assert_eq!(
+        go["metrics"],
+        json!({"production_lines_changed": {"value": 9}, "test_lines_added": {"value": 13},
+            "test_functions": {"value": 2}, "vet_findings": {"value": 1, "lints": {"printf": 1}}}),
+        "{go}"
+    );
+    let broken = &quality["runs"]["rust-errors-1-falinks"]["metrics"];
+    for metric in ["production_lines_changed", "clippy_findings"] {
+        let reason = broken[metric]["missing"].as_str().unwrap();
+        assert!(reason.starts_with("rustfmt failed"), "{reason}");
+    }
+
+    let output = cli(["report", "--runs", batch.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", text(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rel = &report["fixtures"]["go-relationships"]["code_quality"];
+    assert_eq!(
+        rel["falinks"]["production_lines_changed"],
+        json!({"values": [9.0], "median": 9.0, "range": [9.0, 9.0], "n": 1, "missing": 0,
+            "missing_reasons": [null]})
+    );
+    assert_eq!(
+        rel["git"]["test_functions"]["missing_reasons"],
+        json!(["not measured: outcome task_failure"])
+    );
+    assert_eq!(
+        rel["falinks"]["vet_findings"]["lints"],
+        json!([{"printf": 1}])
+    );
+    assert_eq!(rel["labels"]["vet_findings"], "incomplete");
+    assert!(rel["reference_production_lines_changed"]["value"].is_u64());
+    let treatment = rel["treatment_properties"].to_string();
+    assert!(treatment.contains("fixes the file set") && treatment.contains("rustfmt job"));
+    let rust = &report["fixtures"]["rust-errors"]["code_quality"];
+    assert_eq!(rust["git"]["clippy_findings"]["values"], json!([1.0]));
+    assert!(
+        rust["falinks"]["clippy_findings"]["missing_reasons"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("rustfmt failed")
+    );
+}

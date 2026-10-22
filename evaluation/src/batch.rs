@@ -4,9 +4,9 @@
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
-    FIXTURES, Result, bail, read,
+    FIXTURES, Result, bail, git, read,
     report::{report, track_t_report},
-    schedule, sha256, timing, tokens, utc_now, verify, write,
+    root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -253,8 +253,17 @@ pub fn batch(
         Some(dir) => Value::from(dir.canonicalize()?.to_string_lossy().into_owned()),
         None => Value::Null,
     };
+    // The code-quality measurement records both commits and checks it uses this Go (#228 decisions 26, 29a).
+    let commit = git(&root(), &["rev-parse", "HEAD"], None).ok();
+    let go = Command::new("go")
+        .arg("version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": track_t,
-        "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config}));
+        "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config,
+        "commit": commit, "go": go}));
     let mut gated = false;
     for slot in slots {
         let id = slot["slot"].as_str().unwrap().to_string();
@@ -475,6 +484,7 @@ pub fn batch(
 pub fn results(runs: &Path) -> Result<Vec<Value>> {
     let ledger = read(runs.join("batch.json"))?;
     let prices = tokens::prices()?;
+    let quality = read(runs.join("quality.json")).unwrap_or(Value::Null);
     let mut out = vec![];
     for entry in ledger["runs"].as_array().into_iter().flatten() {
         let run_dir = Path::new(entry["run_dir"].as_str().unwrap_or_default());
@@ -493,6 +503,8 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
             }
         }
         result["developments"] = developments(run_dir);
+        // Written by `quality` (#230); a run it has not measured has none.
+        result["quality"] = quality["runs"][entry["run_id"].as_str().unwrap_or_default()].clone();
         out.push(result);
     }
     Ok(out)

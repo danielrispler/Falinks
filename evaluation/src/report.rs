@@ -203,6 +203,105 @@ fn label(git: &[Option<f64>], falinks: &[Option<f64>]) -> &'static str {
     }
 }
 
+/// #228 decision 5: properties of the treatment, stated rather than measured.
+const TREATMENT: [&str; 2] = [
+    "The Falinks arm's enrollment fixes the file set: no new production files, and one test file per source file.",
+    "Formatter access differs: the Git arm runs gofmt and cargo fmt directly, while the Falinks arm has only an enrolled gofmt job and no rustfmt job (#224). Formatting is normalized before measurement and is not a metric.",
+];
+
+/// One fixture's deterministic code-quality metrics from `quality` (#230), per arm, with the
+/// usual statistics and labels. Each repetition that lacks a value names why in
+/// `missing_reasons`; each lint count gives its per-lint breakdown per repetition.
+fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
+    let lint = if fixture == "rust-errors" {
+        "clippy_findings"
+    } else {
+        "vet_findings"
+    };
+    let metrics = [
+        "production_lines_changed",
+        "test_lines_added",
+        "test_functions",
+        lint,
+    ];
+    let mut out = serde_json::Map::new();
+    let mut labels = serde_json::Map::new();
+    let mut values = BTreeMap::new();
+    for arm in ARMS {
+        let mut entry = serde_json::Map::new();
+        for metric in metrics {
+            let cells: Vec<(Option<f64>, Value)> = slots[arm]
+                .iter()
+                .map(|run| {
+                    let Some(run) = run else {
+                        return (None, json!("no run: absent or interrupted"));
+                    };
+                    let quality = &run["quality"];
+                    let cell = &quality["metrics"][metric];
+                    let reason = [&cell["missing"], &quality["missing"]]
+                        .into_iter()
+                        .find(|r| r.is_string())
+                        .cloned()
+                        .unwrap_or_else(|| json!("not measured: run quality on this batch"));
+                    match cell["value"].as_f64() {
+                        Some(value) => (Some(value), Value::Null),
+                        None => (None, reason),
+                    }
+                })
+                .collect();
+            let (present, reasons): (Vec<Option<f64>>, Vec<Value>) = cells.into_iter().unzip();
+            let mut figure = stats(&present);
+            figure["missing_reasons"] = json!(reasons);
+            if metric == lint {
+                figure["lints"] = slots[arm]
+                    .iter()
+                    .map(|r| {
+                        r.map_or(Value::Null, |r| {
+                            r["quality"]["metrics"][metric]["lints"].clone()
+                        })
+                    })
+                    .collect();
+            }
+            entry.insert(metric.into(), figure);
+            values.insert((arm, metric), present);
+        }
+        let runs = slots[arm].iter().flatten();
+        entry.insert(
+            "versions".into(),
+            runs.clone().map(|r| json!({"run_id": r["run_id"], "versions": r["quality"]["versions"], "go_note": r["quality"]["go_note"]})).collect(),
+        );
+        out.insert(arm.into(), Value::Object(entry));
+    }
+    for metric in metrics {
+        labels.insert(
+            metric.into(),
+            label(&values[&("git", metric)], &values[&("falinks", metric)]).into(),
+        );
+    }
+    let measured = ARMS.iter().flat_map(|arm| slots[arm].iter().flatten());
+    let reference = measured
+        .clone()
+        .map(|r| &r["quality"]["reference_production_lines_changed"])
+        .find(|r| !r.is_null());
+    let measurements: Vec<&Value> = measured
+        .map(|r| &r["quality"]["measurement"])
+        .filter(|m| !m.is_null())
+        .fold(Vec::new(), |mut seen, m| {
+            if !seen.contains(&m) {
+                seen.push(m);
+            }
+            seen
+        });
+    out.insert("labels".into(), Value::Object(labels));
+    out.insert(
+        "reference_production_lines_changed".into(),
+        json!(reference),
+    );
+    out.insert("treatment_properties".into(), json!(TREATMENT));
+    out.insert("measurements".into(), json!(measurements));
+    Value::Object(out)
+}
+
 /// `runs` are every recorded result (pilot included) in batch order; all are listed. The
 /// metrics use scored runs only. A record naming an earlier one in `replaces` supersedes it. A
 /// replaceable outcome is an interruption, not a task outcome: its repetition lacks every
@@ -396,7 +495,7 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
                 "median_seconds": {"git": git, "falinks": falinks}, "median_reduction": reduction,
                 "metrics": metrics, "label_note": LABEL_NOTE,
                 "cost": costs,
-                "code_quality": {"git": null, "falinks": null, "reserved_for": "#203's pre-registered metrics"},
+                "code_quality": code_quality(fixture, &slots),
                 "falinks_edits": edits,
                 "falinks_request_key_refusals": refusals,
                 "reverted_peer_text": reverted,
@@ -734,10 +833,10 @@ mod tests {
         // The time difference stays as a number.
         assert!((page["median_reduction"].as_f64().unwrap() - 0.2).abs() < 1e-9);
         assert_eq!(out["gaps"], json!([]));
-        assert_eq!(
-            page["code_quality"]["reserved_for"],
-            "#203's pre-registered metrics"
-        );
+        // Code quality per arm, labelled like every metric, with no winner either.
+        let quality = &page["code_quality"];
+        assert_eq!(quality["labels"]["vet_findings"], "incomplete");
+        assert!(quality["git"].is_object() && quality.get("winner").is_none());
         assert_eq!(out["regrouping_benefit"], "unestablished: no transitions");
     }
 

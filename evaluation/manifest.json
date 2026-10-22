@@ -19,13 +19,14 @@
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
     "result-schema.json": "a1ceee7ca2c88c3e0cee4b54430f7baf4bd5e65515c908c2b48fa7941e1e04a3",
     "src/baseline.rs": "38c80504ecde134ca4e726fee02e05dfbb22b2081a5d87b0d2b694416c77417e",
-    "src/batch.rs": "ce142e0df5d68366dcf8b6310fa87cbbe929bf6f4caade37f610264c61ca1c71",
+    "src/batch.rs": "2880a10885c4b2a31aabd8c21e99eeb562ca887878bbee3932e00d703fbeb4f7",
     "src/bin/claude-worker.rs": "a5c020eb116e4afbe37d719ac7c3e8b5af62fc211f9a03408574184d15f88580",
     "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
     "src/bin/falinks-eval-contain.rs": "c5c53fad8087a3b8d6cf3f31f04b96ae2946dfa530093d9b902c307871513a10",
     "src/bin/scripted-worker.rs": "3f2880258291e4a73cb5dda92f486c3df2f35da3b24b65501cbd1aae413e014a",
-    "src/main.rs": "a90feeadc9f8fc87517c9631939aed88bdbac44cb38ec2f4a0c1976c325c93e7",
-    "src/report.rs": "6c4c508a134781cd8aee50c8a6182eb6b2f48ec163059323c1b45ffb6216c0f0",
+    "src/main.rs": "ff0efc7f4bf66233a62f4c358a589e638d06bde6fdce131c3802e8d343a2535a",
+    "src/quality.rs": "ba2e9e36e1705efbcb35cff2012f27552181b6a9faf05293c237aa6e656e2eb1",
+    "src/report.rs": "d4e04090248d5fa105bbf74965a58792f4817b2954eb6577d116734bc252a3bc",
     "src/timing.rs": "826e0b76ea8607213c58916a773283bbdc219919975ea9b9e37ac07932e034eb",
     "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
   },
@@ -36,5 +37,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 22
+  "version": 23
 }
