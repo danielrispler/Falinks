@@ -268,7 +268,8 @@ impl ControlGate {
 
 /// One MCP tool definition: `falinks_<operation>` taking the request as its whole input, the
 /// argument shape `Boundary::authenticate` accepts. `types` maps each request key to its JSON
-/// type (`{"nodes":"array"}`): untyped, the runtime sends arrays as encoded strings (#239).
+/// type or list of types (`{"nodes":"array","work":["string","object"]}`): untyped, the
+/// runtime sends arrays as encoded strings (#239).
 /// No key is required, because the adapter checks the request's keys.
 pub fn tool(operation: &str, types: &str, description: String) -> Value {
     let types: serde_json::Map<String, Value> =

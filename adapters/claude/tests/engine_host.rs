@@ -699,6 +699,16 @@ fn signature(text: &str) -> std::collections::BTreeMap<String, String> {
         .collect()
 }
 
+/// The help that gives an operation's request shape: edit's, for operations of the same shape.
+fn request_shape(help: &'static str) -> &'static str {
+    use falinks_claude::engine_host::OPERATIONS;
+    if help.starts_with("Same shape as edit") {
+        OPERATIONS.iter().find(|(o, ..)| *o == "edit").unwrap().2
+    } else {
+        help
+    }
+}
+
 /// Each tool's input schema types every key its help names, so the runtime sends arrays and
 /// objects as JSON rather than encoded strings (#239). The help is tied to each parser by
 /// `each_description_names_the_keys_its_operation_takes`, and for host tools by
@@ -707,13 +717,8 @@ fn signature(text: &str) -> std::collections::BTreeMap<String, String> {
 fn each_tool_types_the_keys_its_help_names() {
     use falinks_claude::{arm::HOST_TOOLS, engine_host::OPERATIONS};
     let tools = falinks_claude::arm::tools();
-    let edit = OPERATIONS.iter().find(|(o, ..)| *o == "edit").unwrap().2;
     for (operation, _, help) in OPERATIONS.iter().chain(HOST_TOOLS) {
-        let help = if help.starts_with("Same shape as edit") {
-            edit
-        } else {
-            help
-        };
+        let help = request_shape(help);
         let tool = tools
             .as_array()
             .unwrap()
@@ -759,13 +764,8 @@ fn each_tool_types_the_keys_its_help_names() {
 fn each_description_names_the_keys_its_operation_takes() {
     use falinks_claude::engine_host::OPERATIONS;
     let f = fixture();
-    let edit = OPERATIONS.iter().find(|(o, ..)| *o == "edit").unwrap().2;
     for (operation, _, help) in OPERATIONS {
-        let help = if help.starts_with("Same shape as edit") {
-            edit
-        } else {
-            help
-        };
+        let help = request_shape(help);
         let reply = f.call(0, operation, json!({"unknown":true}));
         let reason = reply["reason"].as_str().unwrap_or_default();
         let takes = reason
