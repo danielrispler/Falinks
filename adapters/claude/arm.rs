@@ -388,6 +388,7 @@ impl Arm {
         eval: PathBuf,
         private: PathBuf,
         denied: Vec<PathBuf>,
+        scratch: [PathBuf; 2],
     ) -> Self {
         let host = |agent: usize| {
             EngineHost::new(
@@ -395,6 +396,7 @@ impl Arm {
                 clients[agent].clone(),
                 &agent_name(agent),
                 formatter.clone(),
+                scratch[agent].clone(),
             )
         };
         Self {

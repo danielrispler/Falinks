@@ -460,7 +460,8 @@ fn git(state: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
 fn object(state: &Path, args: &[&str], input: &[u8]) -> Result<String> {
     Ok(String::from_utf8(git(state, args, input)?)?.trim().into())
 }
-fn valid_path(path: &str) -> Result<()> {
+/// A source path: ASCII, normalized, relative, with no hidden or aliased part.
+pub fn valid_path(path: &str) -> Result<()> {
     if !path.is_ascii() || path.is_empty() || path.contains(['\0', '\n', '\r', '\t', '\\', '"']) {
         return fail("unsupported source path");
     }

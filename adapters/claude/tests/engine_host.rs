@@ -3,7 +3,7 @@
 use falinks::{Check, Client, Engine, Language, Pin, Toolchain};
 use falinks_claude::engine_host::EngineHost;
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf, process::Command, sync::Arc};
 
 const GO: &[(&str, &str)] = &[
     ("go.mod", "module example.com/gate\n\ngo 1.22\n"),
@@ -23,6 +23,8 @@ struct Fixture {
     engine: Arc<Engine>,
     clients: [Client; 2],
     hosts: [EngineHost; 2],
+    /// Each agent's scratch, beside the live root.
+    scratch: [PathBuf; 2],
 }
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
@@ -56,12 +58,18 @@ fn fixture() -> Fixture {
             clients[agent].clone(),
             &format!("agent-{agent}"),
             go.with_file_name("gofmt"),
+            root.join(format!("agent-{agent}/scratch")),
         )
     };
     Fixture {
         hosts: [host(0), host(1)],
         clients,
         engine: Arc::clone(&engine),
+        scratch: [0, 1].map(|a| {
+            let scratch = root.join(format!("agent-{a}/scratch"));
+            fs::create_dir_all(&scratch).unwrap();
+            scratch
+        }),
         _dir: dir,
         live,
     }
@@ -72,6 +80,15 @@ fn envelope(agent: usize, workspace: &std::path::Path, operation: &str, request:
         "turn":"turn","workspace":workspace},"operation":operation,"request":request})
 }
 impl Fixture {
+    /// Agent 0's edit of `label.go` at its current version, with `value` as its output.
+    fn edit_label(&self, id: &str, value: Value) -> Value {
+        let version = self.call(0, "capture", json!({}))["files"]["label.go"]["version"].clone();
+        self.call(
+            0,
+            "edit",
+            json!({"id": id, "note": "n","expected":{"label.go":version},"output":{"label.go":value}}),
+        )
+    }
     fn call(&self, agent: usize, operation: &str, request: Value) -> Value {
         self.hosts[agent]
             .call(&envelope(agent, &self.live, operation, request))
@@ -539,40 +556,177 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
 /// An edit output value is `{content, executable?}` or null. A mixed or unknown form is refused
 /// before the engine sees it, so the file is untouched and the request ID stays free.
 #[test]
-fn edit_output_values_are_whole_text_or_null_and_other_forms_are_refused() {
+fn edit_output_values_take_exactly_one_form_and_mixed_or_unknown_keys_are_refused() {
     let f = fixture();
-    let edit = |id: &str, value: Value| {
-        let version = f.call(0, "capture", json!({}))["files"]["label.go"]["version"].clone();
-        f.call(
-            0,
-            "edit",
-            json!({"id": id, "note": "n","expected":{"label.go":version},"output":{"label.go":value}}),
-        )
-    };
+    fs::write(f.scratch[0].join("label.go"), "package gate\n").unwrap();
     for value in [
         json!({"content":"package gate\n","replace":[{"old":"gate","new":"other"}]}),
         json!({"content":"package gate\n","from":"label.go"}),
+        json!({"replace":[{"old":"gate","new":"other"}],"from":"label.go"}),
         json!({"content":"package gate\n","mode":"0755"}),
+        json!({"mode":"0755"}),
     ] {
-        let refused = edit("x", value.clone());
+        let refused = f.edit_label("x", value.clone());
         assert_eq!(refused["accepted"], false, "{value}: {refused}");
         let reason = refused["reason"].as_str().unwrap();
         assert!(reason.starts_with("request keys:"), "{reason}");
-        assert!(reason.contains("content, executable?"), "{reason}");
+        for form in [
+            "{content, executable?}",
+            "{replace: [{old, new}], executable?}",
+            "{from, executable?}",
+        ] {
+            assert!(reason.contains(form), "{reason}");
+        }
         assert_eq!(
             fs::read_to_string(f.live.join("label.go")).unwrap(),
             GO[2].1
         );
+        assert!(f.engine.history().unwrap().is_empty(), "{value}");
     }
-    let whole = edit("x", json!({"content":"package gate\n"}));
+    let whole = f.edit_label("x", json!({"content":"package gate\n"}));
     assert_eq!(whole["accepted"], true, "{whole}");
     assert_eq!(
         fs::read_to_string(f.live.join("label.go")).unwrap(),
         "package gate\n"
     );
-    let deleted = edit("y", Value::Null);
+    let deleted = f.edit_label("y", Value::Null);
     assert_eq!(deleted["accepted"], true, "{deleted}");
     assert!(!f.live.join("label.go").exists());
+}
+
+/// Replacement hunks reach the engine as sent, and it resolves them against the expected version.
+#[test]
+fn replace_hunks_reach_the_engine_unchanged() {
+    let f = fixture();
+    let hunks =
+        json!([{"old":"return name","new":"return \"<\" + name"},{"old":"Label","new":"Tag"}]);
+    let applied = f.edit_label("r", json!({"replace":hunks}));
+    assert_eq!(applied["accepted"], true, "{applied}");
+    assert_eq!(
+        fs::read_to_string(f.live.join("label.go")).unwrap(),
+        "package gate\n\nfunc Tag(name string) string {\n\treturn \"<\" + name\n}\n"
+    );
+    let record = &f.engine.history().unwrap()[0];
+    let falinks::Output::Replace {
+        replace,
+        executable,
+    } = &record.request.output["label.go"]
+    else {
+        panic!("{record:?}");
+    };
+    assert_eq!(*executable, None);
+    let sent: Vec<(String, String)> = replace
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8(h.old.clone()).unwrap(),
+                String::from_utf8(h.new.clone()).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            ("return name".into(), "return \"<\" + name".into()),
+            ("Label".into(), "Tag".into())
+        ]
+    );
+}
+
+/// A scratch reference applies the file's bytes, with `executable` from the request only; a
+/// resend after the scratch file changed is refused as changed contents.
+#[test]
+fn a_scratch_reference_applies_its_bytes_and_a_changed_resend_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let draft = f.scratch[0].join("draft/label.go");
+    fs::create_dir_all(draft.parent().unwrap()).unwrap();
+    fs::write(&draft, "package gate\n\n// drafted\n").unwrap();
+    fs::set_permissions(&draft, fs::Permissions::from_mode(0o755)).unwrap();
+    let version = f.call(0, "capture", json!({}))["files"]["label.go"]["version"].clone();
+    let request = json!({"id":"s","note":"n","expected":{"label.go":version},
+        "output":{"label.go":{"from":"draft/label.go"}}});
+    let applied = f.call(0, "edit", request.clone());
+    assert_eq!(applied["accepted"], true, "{applied}");
+    let live = f.live.join("label.go");
+    assert_eq!(
+        fs::read_to_string(&live).unwrap(),
+        "package gate\n\n// drafted\n"
+    );
+    assert_eq!(fs::metadata(&live).unwrap().permissions().mode() & 0o111, 0);
+    // The same ID and unchanged file returns the recorded outcome.
+    assert_eq!(f.call(0, "edit", request.clone())["accepted"], true);
+    fs::write(&draft, "package gate\n\n// changed\n").unwrap();
+    let changed = f.call(0, "edit", request);
+    assert_eq!(changed["accepted"], false, "{changed}");
+    assert!(
+        changed["reason"]
+            .as_str()
+            .unwrap()
+            .contains("changed contents"),
+        "{changed}"
+    );
+    assert_eq!(
+        fs::read_to_string(&live).unwrap(),
+        "package gate\n\n// drafted\n"
+    );
+}
+
+/// A reference that could make the unsandboxed host read outside the agent's own scratch, or
+/// read something other than one small text file, is refused before the engine sees it (#193).
+#[test]
+fn unsafe_scratch_references_are_refused_and_use_no_request_id() {
+    use std::os::unix::fs::symlink;
+    let f = fixture();
+    let scratch = &f.scratch[0];
+    let secret = f.live.join("price.go");
+    fs::write(f.scratch[1].join("peer.go"), "package gate\n").unwrap();
+    symlink(f.live.parent().unwrap(), scratch.join("up")).unwrap();
+    symlink(&secret, scratch.join("link.go")).unwrap();
+    fs::write(scratch.join("own.go"), "package gate\n").unwrap();
+    fs::hard_link(scratch.join("own.go"), scratch.join("hard.go")).unwrap();
+    fs::write(scratch.join("big.go"), vec![b'a'; (1 << 20) + 1]).unwrap();
+    fs::write(scratch.join("binary.go"), [0xff, 0xfe]).unwrap();
+    fs::create_dir(scratch.join("dir.go")).unwrap();
+    assert!(
+        Command::new("mkfifo")
+            .arg(scratch.join("fifo.go"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    let peer = "../../agent-1/scratch/peer.go";
+    let absolute = scratch.join("own.go").display().to_string();
+    for (path, rule) in [
+        ("up/live/price.go", "symlink"),
+        ("link.go", "symlink"),
+        ("hard.go", "hard link"),
+        (peer, "normalized"),
+        ("../own.go", "normalized"),
+        (absolute.as_str(), "normalized"),
+        ("big.go", "1 MiB"),
+        ("binary.go", "UTF-8"),
+        ("dir.go", "regular file"),
+        ("fifo.go", "regular file"),
+        ("missing.go", "cannot open"),
+    ] {
+        let refused = f.edit_label("ref", json!({"from":path}));
+        let reason = refused["reason"].as_str().unwrap_or_default();
+        assert!(refused.get("outcome").is_none(), "{path}: {refused}");
+        assert!(
+            reason.contains("from refused") && reason.contains(rule),
+            "{path}: {reason}"
+        );
+        assert!(f.engine.history().unwrap().is_empty(), "{path}");
+    }
+    assert_eq!(
+        fs::read_to_string(f.live.join("label.go")).unwrap(),
+        GO[2].1
+    );
+    // The refused references used no ID.
+    fs::write(scratch.join("label.go"), "package gate\n").unwrap();
+    let applied = f.edit_label("ref", json!({"from":"label.go"}));
+    assert_eq!(applied["accepted"], true, "{applied}");
 }
 
 /// Every operation checks its request keys, top level and nested, before the engine sees them,

@@ -118,6 +118,7 @@ fn setup(name: &str) -> Run {
         eval,
         private,
         denied,
+        [0, 1].map(|a| root.join(agent_name(a)).join("scratch")),
     );
     Run { arm, dir }
 }
