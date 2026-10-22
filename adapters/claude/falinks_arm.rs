@@ -26,6 +26,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// What an idle, unfinished agent is told (#123 decision 4).
+pub const IDLE_NUDGE: &str = "Host: no new events for two minutes. If your part is unfinished, or your latest offer was not published, continue it: check, then offer again. If you are waiting for your peer's offer or for validation, end your turn; the result arrives as a notice. If your part is finished and published, call falinks_ready.";
 /// An idle, unfinished agent with no new events is reminded after this long (both arms).
 const NUDGE: Duration = Duration::from_secs(120);
 
@@ -317,7 +319,7 @@ impl Run {
                 other => return Err(format!("runtime turn failed: {other:?}").into()),
             }
         } else if idle && !ready && worker.last_activity.elapsed() >= NUDGE {
-            self.send(agent, "Host: no new events for two minutes. If your part is unfinished, continue it; otherwise follow the workflow (offer, check, ready).".into(), None)?;
+            self.send(agent, IDLE_NUDGE.into(), None)?;
         }
         Ok(None)
     }
@@ -811,5 +813,15 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
                 return Err(format!("engine incident: {}", incident.reason).into());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_idle_nudge_says_check_then_offer() {
+        let check = super::IDLE_NUDGE.find("check").unwrap();
+        assert!(check < super::IDLE_NUDGE.find("offer again").unwrap());
+        assert!(super::IDLE_NUDGE.contains("falinks_ready"));
     }
 }
