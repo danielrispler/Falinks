@@ -54,7 +54,7 @@ const TRACK_T_METRICS: [&str; 7] = [
     "drafts_after_first_development",
 ];
 /// Track T runs five repetitions per cell (#182), so its chance figures are for n = 5.
-const TRACK_T_NOTE: &str = "consistent: every repetition of one team size is below every repetition of the other, with no data missing; mixed: the ranges overlap; incomplete: a repetition lacks the metric. Chance alone gives consistent 2/252 of the time per cell at n = 5, and five paired differences of one sign 2/32; neither is proof of a meaningful or generalizable advantage.";
+const TRACK_T_NOTE: &str = "consistent: every repetition of one team size is below every repetition of the other, with no data missing; mixed: the ranges overlap; incomplete: a repetition lacks the metric; n/a: the fixture has no milestones, so no development arrives. Chance alone gives consistent 2/252 of the time per cell at n = 5, and five paired differences of one sign 2/32; neither is proof of a meaningful or generalizable advantage.";
 /// Printed with the cost lines (#5 amendments, decision 3).
 const COST_LABEL: &str = "API-equivalent list price, not billed cost";
 const SANDBOX_LABEL: &str = "API-equivalent list price, not billed cost; estimate ±15%";
@@ -660,6 +660,8 @@ pub fn track_t_report(runs: &[Value]) -> Value {
         if complete < 5 {
             gaps.push(format!("{fixture}: {complete} of 5 complete pairs"));
         }
+        let no_milestones = crate::fixture(fixture)
+            .is_ok_and(|f| f["milestones"].as_array().is_some_and(Vec::is_empty));
         let names = METRICS
             .iter()
             .chain(&TRACK_T_METRICS)
@@ -687,9 +689,15 @@ pub fn track_t_report(runs: &[Value]) -> Value {
                     .map(|(s, v)| (s.to_string(), json!(variation(v))))
                     .collect();
             }
+            // Without milestones the host never delivers a development (#257).
+            let label = if no_milestones && metric.contains("development") {
+                "n/a"
+            } else {
+                label(&one, &two)
+            };
             metrics.insert(
                 metric.clone(),
-                json!({"1": stats(&one), "2": stats(&two), "label": label(&one, &two),
+                json!({"1": stats(&one), "2": stats(&two), "label": label,
                     "paired_differences": paired}),
             );
         }
@@ -806,11 +814,15 @@ mod tests {
 
     /// Five track-T pairs on go-indep-4; `secs` are (one agent, two agents) per repetition.
     fn track_t_runs(secs: [(f64, f64); 5]) -> Vec<Value> {
+        track_t_fixture_runs("go-indep-4", secs)
+    }
+
+    fn track_t_fixture_runs(fixture: &str, secs: [(f64, f64); 5]) -> Vec<Value> {
         let mut runs = vec![];
         for (rep, (one, two)) in secs.into_iter().enumerate() {
             for (size, secs) in [(1, one), (2, two)] {
-                let id = format!("go-indep-4-{}-git-{size}", rep + 1);
-                let mut run = run(&id, "go-indep-4", rep as u32 + 1, "git", "success", secs);
+                let id = format!("{fixture}-{}-git-{size}", rep + 1);
+                let mut run = run(&id, fixture, rep as u32 + 1, "git", "success", secs);
                 run["scored"] = json!(false);
                 run["team_size"] = json!(size);
                 runs.push(run);
@@ -865,6 +877,29 @@ mod tests {
         assert_eq!(time["label"], "incomplete");
         assert_eq!(time["paired_differences"][4], Value::Null);
         assert_eq!(out["gaps"], json!(["go-indep-4: 4 of 5 complete pairs"]));
+    }
+
+    /// #257: a fixture with no milestones never receives a development, so its development
+    /// metrics are n/a; with milestones, a run lacking them stays incomplete.
+    #[test]
+    fn track_t_development_metrics_are_na_without_milestones() {
+        let secs = [(300.0, 200.0); 5];
+        let out = track_t_report(&track_t_runs(secs));
+        let metrics = &out["fixtures"]["go-indep-4"]["metrics"];
+        for metric in [
+            "first_development_seconds",
+            "drafts_after_first_development",
+        ] {
+            assert_eq!(metrics[metric]["label"], "n/a", "{metric}");
+        }
+        let out = track_t_report(&track_t_fixture_runs("go-page", secs));
+        let metrics = &out["fixtures"]["go-page"]["metrics"];
+        for metric in [
+            "first_development_seconds",
+            "drafts_after_first_development",
+        ] {
+            assert_eq!(metrics[metric]["label"], "incomplete", "{metric}");
+        }
     }
 
     /// #232: ratings print only for a calibrated dimension; a missing guess lowers n.
