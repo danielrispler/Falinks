@@ -1,11 +1,39 @@
 //! Scored-batch interpretation: every outcome, paired successes, medians and the agreed
 //! continuation signal. Exploratory evidence only; never a statistical or cost claim.
-use crate::{FIXTURES, batch::replaceable};
+use crate::{FIXTURES, batch::replaceable, tokens::CLASSES};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// Continuation signal: at least this much lower median time on two of three fixtures.
 const REDUCTION: f64 = 0.2;
+
+/// Tokens by class and API-equivalent cost of every scored run of one arm on one fixture,
+/// failed, interrupted and replaced runs included, and that cost per successful run. A run
+/// without session JSONL is counted as missing, and the cost per success is then unknown.
+fn cost(runs: &[&Value], successes: u64) -> Value {
+    let missing = runs
+        .iter()
+        .filter(|r| r["tokens"]["cost_usd"].is_null())
+        .count();
+    let tokens: serde_json::Map<String, Value> = CLASSES
+        .iter()
+        .map(|c| {
+            let sum: u64 = runs
+                .iter()
+                .filter_map(|r| r["tokens"]["tokens"][c].as_u64())
+                .sum();
+            (c.to_string(), json!(sum))
+        })
+        .collect();
+    let usd: f64 = runs
+        .iter()
+        .filter_map(|r| r["tokens"]["cost_usd"].as_f64())
+        .sum();
+    let per_success =
+        (missing == 0 && successes > 0).then(|| (usd / successes as f64 * 1e4).round() / 1e4);
+    json!({"runs": runs.len(), "missing": missing, "tokens": tokens,
+        "cost_usd": (usd * 1e4).round() / 1e4, "cost_per_success_usd": per_success})
+}
 
 fn median(mut values: Vec<f64>) -> Option<f64> {
     values.sort_by(f64::total_cmp);
@@ -79,6 +107,16 @@ pub fn report(runs: &[Value]) -> Value {
         for (arm, n) in &arm_successes {
             *successes.get_mut(arm).unwrap() += n;
         }
+        let costs: serde_json::Map<String, Value> = ["git", "falinks"]
+            .iter()
+            .map(|arm| {
+                let all: Vec<&Value> = runs
+                    .iter()
+                    .filter(|r| r["scored"] == true && r["fixture"] == fixture && r["arm"] == *arm)
+                    .collect();
+                (arm.to_string(), cost(&all, arm_successes[arm]))
+            })
+            .collect();
         let complete = pairs.values().filter(|arms| arms.len() == 2).count();
         if complete < 3 {
             inconclusive.push(format!("{fixture}: {complete} of 3 complete pairs"));
@@ -97,6 +135,7 @@ pub fn report(runs: &[Value]) -> Value {
                 "successes": arm_successes, "qualifying_pairs": qualifying,
                 "median_seconds": {"git": git, "falinks": falinks},
                 "median_reduction": reduction, "meets_threshold": meets,
+                "cost": costs,
             }),
         );
     }
@@ -131,7 +170,9 @@ pub fn report(runs: &[Value]) -> Value {
         "qualification": "Exploratory: three repetitions per fixture; not statistical proof, general superiority or a cost claim.",
         "runs": runs.iter().map(|r| json!({"run_id": r["run_id"], "pair": r["pair"], "arm": r["arm"],
             "scored": r["scored"], "outcome": r["outcome"], "replaces": r.get("replaces"),
-            "failure_reason": r.get("failure_reason"), "concurrency": r.get("concurrency")})).collect::<Vec<_>>(),
+            "failure_reason": r.get("failure_reason"), "concurrency": r.get("concurrency"),
+            "tokens": r.get("tokens")})).collect::<Vec<_>>(),
+        "cost_label": "API-equivalent list price, not billed cost: the runs use a subscription login.",
         "concurrent_runs": runs.iter().filter(|r| concurrent(r)).map(|r| &r["run_id"]).collect::<Vec<_>>(),
         "concurrency_note": "Times of concurrent_runs were measured while another shard's run was active.",
         "fixtures": fixtures,
@@ -358,5 +399,28 @@ mod tests {
         pilot["outcome"] = "usage_limit".into();
         runs.insert(0, pilot);
         assert_eq!(report(&runs)["verdict"], "continuation_signal");
+    }
+
+    #[test]
+    fn cost_per_success_counts_every_run_and_refuses_missing_usage() {
+        let mut runs = signalling();
+        let priced = |usd: f64| json!({"cost_usd": usd, "tokens": {"output": 10}});
+        for run in runs.iter_mut() {
+            run["tokens"] = priced(1.0);
+        }
+        let failed = runs
+            .iter()
+            .position(|r| r["run_id"] == "go-page-0-f")
+            .unwrap();
+        runs[failed]["outcome"] = "task_failure".into();
+        let out = report(&runs);
+        let falinks = &out["fixtures"]["go-page"]["cost"]["falinks"];
+        // Three runs cost $3 and two succeeded.
+        assert_eq!(falinks["cost_per_success_usd"], 1.5);
+        assert_eq!(falinks["tokens"]["output"], 30);
+        runs[failed]["tokens"] = json!({"status": "missing", "cost_usd": null});
+        let falinks = &report(&runs)["fixtures"]["go-page"]["cost"]["falinks"];
+        assert_eq!(falinks["missing"], 1);
+        assert_eq!(falinks["cost_per_success_usd"], Value::Null);
     }
 }

@@ -10,6 +10,19 @@
   "model": "claude-opus-5-5",
   "model_version": "claude-opus-5-5 (the pinned runtime reports no finer version; init and modelUsage must name exactly this ID)",
   "reasoning": "default (no effort flag) in both arms",
+  "prices": {
+    "model": "claude-opus-5-5",
+    "usd_per_million_tokens": {
+      "input": 4,
+      "output": 20,
+      "cache_write_5m": 5,
+      "cache_write_1h": 8,
+      "cache_read": 0.2
+    },
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing (cache writes 1.25x input for 5 minutes, 2x for 1 hour)",
+    "date": "2026-10-22",
+    "label": "API-equivalent list price, not billed cost"
+  },
   "runtime_version": "2.1.304",
   "runtime_sha256": "b9ac5374839f14abf3f1f45610637c332b5daee5ce0d1634726cef87aab78e6a",
   "worker_command": [
