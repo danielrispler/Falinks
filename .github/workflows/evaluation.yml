@@ -2,14 +2,14 @@ name: Evaluation tests
 
 # The evaluation crate is standalone (see evaluation/Cargo.toml), so its slow
 # macOS and Linux tests run only when its inputs change. Lint and deny stay in checks.yml.
+# Pull requests only: a PR that changes these inputs waits for this run before merge
+# (AGENTS.md, "Checks"; no required check enforces it), so main does not repeat it
+# and hold four macOS runners.
 on:
   pull_request:
     paths: ["evaluation/**", "rust-toolchain.toml", ".cargo/**", ".github/workflows/evaluation.yml"]
-  push:
-    branches: [main]
-    paths: ["evaluation/**", "rust-toolchain.toml", ".cargo/**", ".github/workflows/evaluation.yml"]
 
-# A new push cancels its pull request's older run; every main commit runs to completion.
+# A new push cancels its pull request's older run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
