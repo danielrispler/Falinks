@@ -251,9 +251,10 @@ impl Run {
                     .map_or("", |d| d["id"].as_str().unwrap_or(""))
             )
         });
+        let header = engine_host::notice_header(&events).unwrap_or_else(|| id.clone());
         let mut text = format!(
-            "Host notice {id}. Engine events: {}. Task developments: {}. Your pending obligations: {}.",
-            serde_json::to_string(&events)?,
+            "Host notice {header}. Engine events: {}. Task developments: {}. Your pending obligations: {}.",
+            engine_host::notice_events(&events)?,
             serde_json::to_string(&developments)?,
             serde_json::to_string(&pending.obligations)?
         );

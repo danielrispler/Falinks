@@ -42,14 +42,19 @@ impl EngineHost {
                 && identity["workspace"].as_str() == root.to_str(),
             "envelope identity is not this agent's current workspace",
         )?;
-        let request = &envelope["request"];
-        let outcome = self.dispatch(envelope["operation"].as_str().unwrap_or(""), request);
+        let (operation, request) = (
+            envelope["operation"].as_str().unwrap_or(""),
+            &envelope["request"],
+        );
+        let outcome = self.dispatch(operation, request);
         // An unknown change halts the engine: stop this worker's capability too.
         if let Some(incident) = self.engine.incident()? {
             return Err(format!("engine incident: {}", incident.reason).into());
         }
         Ok(match outcome {
-            Ok(value) => text(value),
+            // shortcut: offer, withdraw and checkpoint keep their IDs until #222.
+            Ok(value) if matches!(operation, "offer" | "withdraw" | "checkpoint") => text(value),
+            Ok(value) => text(lean(value)),
             Err(error) => json!({"accepted":false,"reason":error.to_string()}),
         })
     }
@@ -71,7 +76,6 @@ impl EngineHost {
                     .collect();
                 let mut reply = view(&capture, |path| wanted.contains(&path));
                 reply["accepted"] = json!(true);
-                reply["tree"] = json!(capture.tree);
                 reply["space"] = json!(capture.space);
                 reply
             }
@@ -132,7 +136,7 @@ impl EngineHost {
                 if !reply_to.is_null() {
                     require_keys(reply_to, "reply_to", &["event", "work"], &[])?;
                 }
-                json!({"accepted":true,"event":engine.post(client, parse(request)?)?})
+                json!({"accepted":true,"seq":engine.post(client, parse(request)?)?.seq})
             }
             "withdraw" => {
                 takes(&["offer"], &[])?;
@@ -252,7 +256,7 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "post",
-        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to?: null | {event: seq, work}} -> advisory plan message to your peer. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
+        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to?: null | {event: seq, work}} -> advisory plan message to your peer; returns its seq. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
     ),
     (
         "offer",
@@ -369,6 +373,28 @@ fn versions(capture: &Capture) -> BTreeMap<String, u64> {
         .iter()
         .map(|(path, f)| (path.clone(), f.version))
         .collect()
+}
+
+/// Notice events as agents see them: each event's ID is its `seq`, and a `Message` drops
+/// `workspace`, which the notice header names once (#221).
+pub fn notice_events(events: &[Event]) -> Result<Value> {
+    let mut shown = serde_json::to_value(events)?;
+    for event in shown.as_array_mut().into_iter().flatten() {
+        if let Some(event) = event.as_object_mut() {
+            event.remove("id");
+        }
+        if let Some(message) = event["body"]["Message"].as_object_mut() {
+            message.remove("workspace");
+        }
+    }
+    Ok(shown)
+}
+/// The notice header's ID: the last event's seq and the workspace identity, the
+/// nonce in the engine's `nonce:seq` event IDs.
+pub fn notice_header(events: &[Event]) -> Option<String> {
+    let last = events.last()?;
+    let nonce = last.id.split_once(':').map_or(last.id.as_str(), |(n, _)| n);
+    Some(format!("{} (workspace {nonce})", last.seq))
 }
 
 /// Deferred events as agents see them: `{event, note}`.
@@ -501,6 +527,23 @@ fn edit(request: &Value) -> Result<Request> {
         note: format!("request {id}"),
         reviews: reviews.unwrap_or_default(),
     })
+}
+/// Results drop the engine's Git tree and blob IDs, which agents never use (#221). Only
+/// string or null values go, so a file named `tree` or `blob` stays.
+fn lean(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(key, value)| {
+                    !(matches!(key.as_str(), "tree" | "blob")
+                        && (value.is_string() || value.is_null()))
+                })
+                .map(|(key, value)| (key, lean(value)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(lean).collect()),
+        other => other,
+    }
 }
 /// Agents read and write text: engine byte arrays become `content` strings.
 fn text(value: Value) -> Value {
