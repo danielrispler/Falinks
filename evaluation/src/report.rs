@@ -2,7 +2,7 @@
 //! per successful task and the agreed continuation signal. Exploratory evidence only; never a
 //! statistical claim, and the cost is list price, never billed cost.
 use crate::{
-    FIXTURES,
+    SCORED_FIXTURES,
     batch::replaceable,
     tokens::{CLASSES, usd},
 };
@@ -72,7 +72,7 @@ pub fn report(runs: &[Value]) -> Value {
     let mut fixtures = serde_json::Map::new();
     let (mut counted, mut successes) = (0, BTreeMap::from([("git", 0), ("falinks", 0)]));
     let mut inconclusive = Vec::new();
-    for fixture in FIXTURES {
+    for fixture in SCORED_FIXTURES {
         let mut pairs: BTreeMap<&str, BTreeMap<&str, &Value>> = BTreeMap::new();
         for run in scored.iter().filter(|r| r["fixture"] == fixture) {
             let (Some(pair), Some(arm)) = (run["pair"].as_str(), run["arm"].as_str()) else {
@@ -213,7 +213,7 @@ mod tests {
     /// Three complete pairs per fixture; `falinks_secs` are the Falinks-arm times.
     fn batch(falinks_secs: [[f64; 3]; 3]) -> Vec<Value> {
         let mut runs = vec![];
-        for (f, fixture) in FIXTURES.iter().enumerate() {
+        for (f, fixture) in SCORED_FIXTURES.iter().enumerate() {
             for rep in 0..3 {
                 let id = format!("{fixture}-{rep}");
                 runs.push(run(
@@ -265,7 +265,7 @@ mod tests {
     fn lower_success_rate_blocks_the_signal() {
         let mut runs = batch([[700.0; 3], [700.0; 3], [700.0; 3]]);
         // A Falinks failure on every fixture: faster medians cannot compensate.
-        for fixture in FIXTURES {
+        for fixture in SCORED_FIXTURES {
             let run = runs
                 .iter_mut()
                 .find(|r| r["fixture"] == fixture && r["arm"] == "falinks")
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn unreplaced_interruptions_in_either_arm_are_inconclusive_and_named() {
-        let f0 = FIXTURES[0];
+        let f0 = SCORED_FIXTURES[0];
         // A result with no outcome reads as an infrastructure failure.
         for (id, outcome, named) in [
             (

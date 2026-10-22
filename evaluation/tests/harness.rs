@@ -153,7 +153,13 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
     let fixtures = evidence["fixtures"].as_object().unwrap();
     assert_eq!(
         fixtures.keys().collect::<Vec<_>>(),
-        ["go-page", "go-relationships", "rust-errors"]
+        [
+            "go-indep-2",
+            "go-indep-4",
+            "go-page",
+            "go-relationships",
+            "rust-errors"
+        ]
     );
     for fixture in fixtures.values() {
         assert_eq!(fixture["initial"]["passed"], false);
@@ -214,6 +220,55 @@ fn setup_ledger_totals_match_its_sessions() {
     let limit = track["limit_seconds"].as_i64().unwrap();
     assert_eq!(track["remaining_seconds"], limit - charged);
     assert!(limit >= charged, "track T budget overdrawn: stop and ask");
+}
+
+/// The result schema's fixture enum names every fixture file, so registering one cannot skip it.
+#[test]
+fn result_schema_names_every_fixture() {
+    let schema = read(root().join("result-schema.json"));
+    let mut named: Vec<&str> = schema["properties"]["fixture"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    named.sort();
+    let mut files: Vec<String> = fs::read_dir(root().join("fixtures"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension() == Some(OsStr::new("json")))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(named, files);
+}
+
+/// go-indep-2 is go-indep-4's semver and textwrap units, copied; keep the copies in step (#181).
+#[test]
+fn go_indep_2_is_a_subset_of_go_indep_4() {
+    let pair =
+        |dir: &str| ["2", "4"].map(|n| read(root().join(format!("{dir}/go-indep-{n}.json"))));
+    let [small, large] = pair("fixtures");
+    for (name, text) in small["files"].as_object().unwrap() {
+        assert_eq!(&large["files"][name], text, "{name}");
+    }
+    let requirements = large["requirements"].as_array().unwrap();
+    for requirement in small["requirements"].as_array().unwrap() {
+        assert!(requirements.contains(requirement));
+    }
+    let [small, large] = pair("protected");
+    for (name, text) in small["reference"].as_object().unwrap() {
+        assert_eq!(&large["reference"][name], text, "{name}");
+    }
+    // Past the import block, every top-level declaration appears verbatim in the larger oracle.
+    let (small, large) = (
+        small["oracle"].as_str().unwrap(),
+        large["oracle"].as_str().unwrap(),
+    );
+    let (_, declarations) = small.split_once("\n)\n").unwrap();
+    for declaration in declarations.split_inclusive("\n}\n") {
+        assert!(large.contains(declaration.trim()), "{declaration}");
+    }
 }
 
 #[test]
