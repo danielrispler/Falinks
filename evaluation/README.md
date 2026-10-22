@@ -270,8 +270,30 @@ it as `usage_limit`.
         pass, or all of them when none passed;
       - `safety_incidents`.
 
-      `retries` is not compared, because the Git arm fixes it at 0. `code_quality` is
-      reserved for #203's metrics, with one slot per arm.
+      `retries` is not compared, because the Git arm fixes it at 0.
+    - **`code_quality`** (#228, #230), from `quality --runs DIR [--runs DIR]...`, run over
+      the finished batch directories before `report`. It writes `quality.json` into each
+      batch directory, never into a run directory, and records its own commit and the
+      batch's (`batch.json` records each invocation's `commit` and `go`).
+      - Only runs whose final oracle passed are measured; every other repetition is
+        missing, with its outcome in `missing_reasons`.
+      - Each final snapshot is exported from its arm's own run storage: the Git arm's
+        `agents/repo`, or the Falinks arm's `controller/oracle/candidate-N` holding it.
+      - The pinned `gofmt` or `rustfmt` runs on copies of the initial tree, the final
+        snapshot and the reference; every metric uses those copies. Formatters, `go vet`
+        and `cargo clippy` run in the oracle's sandbox, environment and denied roots.
+      - Per arm: `production_lines_changed`, `test_lines_added`, `test_functions`, and
+        `vet_findings` (Go) or `clippy_findings` (Rust), each with the usual statistics, its
+        `labels` entry, and the per-lint breakdown in `lints`. Lint findings count only on
+        lines the formatted diff added or changed, de-duplicated by lint, file and line.
+        Test code is `_test.go`, `tests/*.rs` and Rust `#[cfg(test)]` items.
+      - `reference_production_lines_changed` is the formatted reference's figure, with no
+        ratio. `treatment_properties` states the Falinks arm's fixed file set and the
+        formatter-access gap (#228 decision 5).
+      - A tool failure makes that metric missing with the tool's error. Each run's
+        `versions` gives `go version`, `rustc -V`, `clippy-driver -V` and `rustfmt -V`, and
+        `go_note` says when the tools' Go is not the Go the batch's checks resolved.
+      - The differential properties and the judge are later #228 stage 2 tickets.
     - **Values and labels.** Each metric gives every repetition's value per arm, its
       `median`, `range`, `n` and `missing`. A repetition lacks a value when its run is
       absent, interrupted or lacks the metric; missing data is never imputed. The `label`
@@ -370,6 +392,7 @@ Or shard the scored batch across three sessions, then report over all shards:
 evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/s-rust --after-pilot /private/tmp/ev/pilot --fixtures rust-errors
 evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/s-page --after-pilot /private/tmp/ev/pilot --fixtures go-page
 evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/s-rel --after-pilot /private/tmp/ev/pilot --fixtures go-relationships
+evaluation/target/release/falinks-eval quality --runs /private/tmp/ev/s-rust --runs /private/tmp/ev/s-page --runs /private/tmp/ev/s-rel
 evaluation/target/release/falinks-eval report --runs /private/tmp/ev/s-rust --runs /private/tmp/ev/s-page --runs /private/tmp/ev/s-rel
 ```
 

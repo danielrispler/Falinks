@@ -1,6 +1,7 @@
 //! Frozen fixture checks and a one- or two-process communicating Git-worktree baseline.
 mod baseline;
 mod batch;
+mod quality;
 mod report;
 mod timing;
 mod tokens;
@@ -44,7 +45,7 @@ pub const FIXED_ENV: [(&str, &str); 10] = [
     ("GIT_NO_REPLACE_OBJECTS", "1"),
     ("GIT_ATTR_NOSYSTEM", "1"),
 ];
-const SCRATCH_DIRS: [&str; 5] = ["tmp", "cache", "home", "bin", "target"];
+pub const SCRATCH_DIRS: [&str; 5] = ["tmp", "cache", "home", "bin", "target"];
 
 pub fn root() -> PathBuf {
     PathBuf::from(ROOT)
@@ -530,7 +531,7 @@ fn all_passed(checks: &Value) -> bool {
         .all(|c| c["passed"] == true)
 }
 
-fn restore(work: &Path, source: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+pub fn restore(work: &Path, source: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     if work.exists() {
         fs::remove_dir_all(work)?;
     }
@@ -546,55 +547,9 @@ fn restore(work: &Path, source: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     Ok(())
 }
 
-/// Checks execute only in a host-owned copy, with protected tests and fixed build inputs.
-pub fn check(
-    candidate: &Path,
-    fixture: &Value,
-    private: &Path,
-    timeout: Duration,
-    denied_roots: &[PathBuf],
-) -> Result<Value> {
-    let deadline = Instant::now() + timeout;
-    let work = private.join("check");
-    // Raw tree blobs preserve exact committed bytes; archive export attributes do not.
-    let tree = git_raw(candidate, &["ls-tree", "-rz", "--full-tree", "HEAD"], None)?;
-    let mut source = BTreeMap::new();
-    for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
-        let tab = entry
-            .iter()
-            .position(|b| *b == b'\t')
-            .ok_or("Malformed tree entry")?;
-        let metadata = String::from_utf8_lossy(&entry[..tab]).into_owned();
-        let name = String::from_utf8(entry[tab + 1..].to_vec())?;
-        let fields: Vec<&str> = metadata.split_whitespace().collect();
-        let path = Path::new(&name);
-        if !matches!(fields[..], ["100644" | "100755", "blob", _])
-            || path.is_absolute()
-            || path.components().any(|c| c.as_os_str() == "..")
-        {
-            bail!("Candidate contains a non-regular or unsafe path");
-        }
-        let data = git_raw(candidate, &["cat-file", "blob", fields[2]], None)?;
-        if data.len() > 1_000_000 {
-            bail!("Fixture file exceeds 1 MB bound");
-        }
-        source.insert(name, data);
-    }
-    for name in ["Cargo.toml", "Cargo.lock", "go.mod"] {
-        if let Some(frozen) = fixture["files"][name].as_str()
-            && source.get(name).map(Vec::as_slice) != Some(frozen.as_bytes())
-        {
-            bail!("Fixture dependencies/build configuration must remain frozen");
-        }
-    }
-    if source
-        .keys()
-        .any(|name| name == "build.rs" || name.starts_with(".cargo/"))
-    {
-        bail!("Custom build configuration is outside the fixture contract");
-    }
-    restore(&work, &source)?;
-
+/// The environment of every check in `work`: the toolchain variables, and caches, home and
+/// temporary files inside its scratch, offline.
+pub fn check_env(work: &Path) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = env::vars()
         .filter(|(key, _)| {
             [
@@ -622,6 +577,11 @@ pub fn check(
         ("GOTOOLCHAIN".into(), "local".into()),
         ("CARGO_TARGET_DIR".into(), at("target")),
     ]);
+    env
+}
+
+/// The roots a check in `work` (beneath `private`) cannot read or write.
+pub fn check_denied(private: &Path, work: &Path, denied_roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let parent = private.parent().unwrap();
     let mut denied = protected_roots()?;
     denied.push(parent.join("agents"));
@@ -637,14 +597,72 @@ pub fn check(
         fs::read_dir(private)?
             .flatten()
             .map(|e| e.path())
-            .filter(|p| *p != work),
+            .filter(|p| p != work),
     );
+    Ok(denied)
+}
+
+/// The exact bytes of `rev`'s tree, from raw blobs: archive export attributes could change them.
+pub fn blobs(repo: &Path, rev: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+    let tree = git_raw(repo, &["ls-tree", "-rz", "--full-tree", rev], None)?;
+    let mut source = BTreeMap::new();
+    for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+        let tab = entry
+            .iter()
+            .position(|b| *b == b'\t')
+            .ok_or("Malformed tree entry")?;
+        let metadata = String::from_utf8_lossy(&entry[..tab]).into_owned();
+        let name = String::from_utf8(entry[tab + 1..].to_vec())?;
+        let fields: Vec<&str> = metadata.split_whitespace().collect();
+        let path = Path::new(&name);
+        if !matches!(fields[..], ["100644" | "100755", "blob", _])
+            || path.is_absolute()
+            || path.components().any(|c| c.as_os_str() == "..")
+        {
+            bail!("Candidate contains a non-regular or unsafe path");
+        }
+        let data = git_raw(repo, &["cat-file", "blob", fields[2]], None)?;
+        if data.len() > 1_000_000 {
+            bail!("Fixture file exceeds 1 MB bound");
+        }
+        source.insert(name, data);
+    }
+    Ok(source)
+}
+
+/// Checks execute only in a host-owned copy, with protected tests and fixed build inputs.
+pub fn check(
+    candidate: &Path,
+    fixture: &Value,
+    private: &Path,
+    timeout: Duration,
+    denied_roots: &[PathBuf],
+) -> Result<Value> {
+    let deadline = Instant::now() + timeout;
+    let work = private.join("check");
+    let source = blobs(candidate, "HEAD")?;
+    for name in ["Cargo.toml", "Cargo.lock", "go.mod"] {
+        if let Some(frozen) = fixture["files"][name].as_str()
+            && source.get(name).map(Vec::as_slice) != Some(frozen.as_bytes())
+        {
+            bail!("Fixture dependencies/build configuration must remain frozen");
+        }
+    }
+    if source
+        .keys()
+        .any(|name| name == "build.rs" || name.starts_with(".cargo/"))
+    {
+        bail!("Custom build configuration is outside the fixture contract");
+    }
+    restore(&work, &source)?;
     let sandbox = Sandbox {
         writable: SCRATCH_DIRS.map(|n| work.join(n)).to_vec(),
-        denied,
+        denied: check_denied(private, &work, denied_roots)?,
         reopened: Vec::new(),
         network: false,
     };
+    let env = check_env(&work);
+    let at = |name: &str| work.join(name).to_string_lossy().into_owned();
 
     let rust = fixture["language"] == "rust";
     let commands: Vec<Vec<String>> = if rust {
@@ -783,6 +801,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t] [--fixtures NAME[,NAME]]
+  quality --runs DIR [--runs DIR]...
   report --runs DIR [--runs DIR]... [--schedule track-t] [--show-code]
   timing RUN_DIR";
 
@@ -920,6 +939,11 @@ fn run() -> Result<i32> {
             };
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(0)
+        }
+        Some("quality") => {
+            args.required("runs")?;
+            let dirs: Vec<&Path> = args.all("runs").into_iter().map(Path::new).collect();
+            quality::quality(&dirs)
         }
         Some("timing") => {
             let run = args.positional.get(1).ok_or(USAGE)?;
