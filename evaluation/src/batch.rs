@@ -4,8 +4,9 @@
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
-    FIXTURES, Result, bail, read, report::report, schedule, sha256, timing, tokens, utc_now,
-    verify, write,
+    FIXTURES, Result, bail, read,
+    report::{report, track_t_report},
+    schedule, sha256, timing, tokens, utc_now, verify, write,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -83,12 +84,13 @@ pub fn slots(pilot: bool) -> Vec<Value> {
         .collect()
 }
 
-/// Track T's slots (#178 C1): Git arm only, each fixture three times at team sizes 1 and 2,
-/// alternating which size runs first. Unscored, and outside the scored schedule.
+/// Track T's slots (#178 C1): Git arm only, each fixture five times at team sizes 1 and 2
+/// (#182: five repetitions per cell upfront), alternating which size runs first. Unscored,
+/// and outside the scored schedule.
 pub fn track_t_slots() -> Vec<Value> {
     let mut slots = vec![];
     for (index, name) in FIXTURES.iter().enumerate() {
-        for repetition in 1..=3 {
+        for repetition in 1..=5 {
             let sizes = if (index + repetition) % 2 == 1 {
                 [1, 2]
             } else {
@@ -458,7 +460,12 @@ pub fn batch(
         }
     }
     write(&ledger_path, &ledger)?;
-    let summary = report(&results(&runs)?);
+    let results = results(&runs)?;
+    let summary = if track_t {
+        track_t_report(&results)
+    } else {
+        report(&results)
+    };
     write(runs.join("report.json"), &summary)?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
     Ok(0)
@@ -479,12 +486,40 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
         for key in ["run_id", "pair", "fixture", "arm", "scored", "concurrency"] {
             result[key] = entry[key].clone();
         }
-        if !entry["replaces"].is_null() {
-            result["replaces"] = entry["replaces"].clone();
+        // Track-T slots name their team size, which a run without a result lacks.
+        for key in ["replaces", "team_size"] {
+            if !entry[key].is_null() {
+                result[key] = entry[key].clone();
+            }
         }
+        result["developments"] = developments(run_dir);
         out.push(result);
     }
     Ok(out)
+}
+
+/// When the host's developments arrived, in seconds after the host started the run, and how
+/// many drafts were shared after the first (#178: development arrival and rework), from the
+/// run's events; null without them.
+fn developments(run_dir: &Path) -> Value {
+    let Ok(text) = fs::read_to_string(run_dir.join("controller/events.jsonl")) else {
+        return Value::Null;
+    };
+    let rows: Vec<Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let at = |kind: &str| -> Vec<f64> {
+        rows.iter()
+            .filter(|r| r["kind"] == kind)
+            .filter_map(|r| r["elapsed"].as_f64())
+            .collect()
+    };
+    let arrivals = at("development");
+    let after = arrivals
+        .first()
+        .map(|first| at("draft_shared").iter().filter(|s| *s > first).count());
+    json!({"arrival_seconds": arrivals, "drafts_shared_after_first": after})
 }
 
 /// Every run of one batch split across shard directories. The shards must share one

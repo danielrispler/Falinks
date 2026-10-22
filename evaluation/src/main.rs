@@ -782,7 +782,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t] [--fixtures NAME[,NAME]]
-  report --runs DIR [--runs DIR]...
+  report --runs DIR [--runs DIR]... [--schedule track-t]
   timing RUN_DIR";
 
 struct Args {
@@ -909,7 +909,12 @@ fn run() -> Result<i32> {
         Some("report") => {
             args.required("runs")?;
             let dirs: Vec<&Path> = args.all("runs").into_iter().map(Path::new).collect();
-            let summary = report::report(&batch::merged(&dirs)?);
+            let runs = batch::merged(&dirs)?;
+            let summary = match args.get("schedule") {
+                None => report::report(&runs),
+                Some("track-t") => report::track_t_report(&runs),
+                Some(_) => bail!("--schedule takes track-t\n{USAGE}"),
+            };
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(0)
         }

@@ -362,6 +362,27 @@ evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.j
 evaluation/target/release/falinks-eval report --runs /private/tmp/ev/s-rust --runs /private/tmp/ev/s-page --runs /private/tmp/ev/s-rel
 ```
 
+Track T (#178) compares one agent with two Git agents, unscored, in its own batch directory:
+
+```sh
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/track-t --schedule track-t
+evaluation/target/release/falinks-eval report --runs /private/tmp/ev/track-t --schedule track-t
+```
+
+- **Schedule**: every fixture, five repetitions per team size (#182), each repetition a
+  pair that alternates which size runs first. There is no pilot; every invocation renews
+  the gate.
+- **Report** (`report --schedule track-t`, also the batch's `report.json`): per fixture and
+  metric, each repetition's value per team size with the median, range, n and missing
+  count, the `consistent` / `mixed` / `incomplete` label, and the paired difference (two
+  agents minus one) per repetition. The metrics are the scored report's plus coordination
+  model seconds, tool seconds, output and changed bytes (summed over agents), load balance
+  (the busiest agent's busy seconds over the mean), the first development's arrival and the
+  drafts shared after it (from `controller/events.jsonl`). Completion time also gets its
+  sample coefficient of variation per team size (standard deviation with n − 1, over the
+  mean). Each pair lists the per-agent `timing` figures, the slowest agent, the usage status
+  and the developments; nested-agent hits are counted per team size. No winner is computed.
+
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and
 session state need more `runtime_writable` paths under the host sandbox. Record any such
