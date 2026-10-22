@@ -516,7 +516,7 @@ fn interrupted_transition_restores_both_roots_and_retries_after_restart() {
             Request {
                 id: "halted".into(),
                 expected: BTreeMap::from([("go.mod".into(), 0)]),
-                output: BTreeMap::from([("go.mod".into(), None)]),
+                output: BTreeMap::from([("go.mod".into(), Output::Delete)]),
                 note: "delete go.mod".into(),
                 reviews: Vec::new(),
             },

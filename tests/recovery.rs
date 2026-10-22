@@ -663,7 +663,7 @@ fn two_files(base: &Capture) -> Request {
         .insert("b.rs".into(), base.files["b.rs"].version);
     request.output.insert(
         "b.rs".into(),
-        Some(File {
+        Output::Whole(File {
             bytes: b"new b".to_vec(),
             executable: false,
         }),
