@@ -178,8 +178,9 @@ fn setup_ledger_totals_match_its_sessions() {
     assert_eq!(ledger["remaining_seconds"], limit - charged);
     assert!(limit >= charged, "setup ledger overdrawn: stop and ask");
 
-    // Track T's own budget (#178): each session's charge is its implementation, run (with the
-    // usage drain) and preparation time; usage comes from complete runs only.
+    // Track T's own budget (#178): each session's charge is its run (with the usage drain) and
+    // preparation time; implementation is recorded but not charged (Daniel, 2026-10-22, #180).
+    // Usage comes from complete runs only.
     let track = &ledger["team_size_research"];
     let sessions = track["sessions"].as_array().unwrap();
     let parts = [
@@ -188,7 +189,10 @@ fn setup_ledger_totals_match_its_sessions() {
         "preparation_seconds",
     ];
     for session in sessions {
-        let charged: i64 = parts.iter().map(|p| session[p].as_i64().unwrap()).sum();
+        let charged: i64 = parts[1..]
+            .iter()
+            .map(|p| session[p].as_i64().unwrap())
+            .sum();
         assert_eq!(session["charged_seconds"], charged, "{session}");
     }
     let totals = &track["totals"];
@@ -1053,7 +1057,7 @@ fn nested_agents_invalidate_the_run_are_counted_and_stop_the_batch() {
         let run = base.join("run");
         assert!(!baseline("go-relationships", &config, &run).status.success());
         let evidence = read(run.join("controller/result.json"));
-        assert_eq!(evidence["outcome"], "infrastructure_failure");
+        assert_eq!(evidence["outcome"], "run_invalid");
         assert_eq!(
             evidence["nested_agent"]["command"],
             format!("{program} -p 'help me'")
@@ -1110,6 +1114,13 @@ fn nested_agents_invalidate_the_run_are_counted_and_stop_the_batch() {
         assert_eq!(
             ledger["runs"].as_array().unwrap().last().unwrap()["run_id"],
             paused
+        );
+        // Never rerun in place: resuming is refused.
+        let resumed = command.output().unwrap();
+        assert!(
+            text(&resumed).contains("start a new batch directory"),
+            "{}",
+            text(&resumed)
         );
         let report = cli([OsStr::new("report"), OsStr::new("--runs"), runs.as_os_str()]);
         let report: Value = serde_json::from_slice(&report.stdout).unwrap();

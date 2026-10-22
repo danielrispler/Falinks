@@ -446,7 +446,7 @@ fn fake_arm(argv: &[String]) {
         "timing": {"elapsed_seconds": 10.0}, "transitions": 0});
     if let Ok(command) = env::var("FALINKS_FAKE_NESTED") {
         result["nested_agent"] = json!({"command": command});
-        result["outcome"] = "infrastructure_failure".into();
+        result["outcome"] = "run_invalid".into();
     }
     fs::write(output.join("controller/result.json"), result.to_string()).unwrap();
 }

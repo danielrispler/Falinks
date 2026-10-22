@@ -149,6 +149,10 @@ pub fn report(runs: &[Value]) -> Value {
         let id = run["run_id"].as_str().unwrap_or_default();
         inconclusive.push(format!("unreplaced interruption {id}: {outcome}"));
     }
+    for run in runs.iter().filter(|r| r["outcome"] == "run_invalid") {
+        let id = run["run_id"].as_str().unwrap_or_default();
+        inconclusive.push(format!("invalid run {id}: nested agent"));
+    }
     let unsafe_runs: Vec<&Value> = runs
         .iter()
         .filter(|r| r["outcome"] == "safety_failure")

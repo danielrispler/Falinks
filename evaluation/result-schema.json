@@ -15,7 +15,7 @@
     "pair": {"type": "string"},
     "scored": {"type": "boolean"},
     "team_size": {"enum": [1, 2], "description": "Agents in the team (#178 C1); the scored batch and the Falinks arm use 2"},
-    "outcome": {"enum": ["success", "task_failure", "timeout", "infrastructure_failure", "usage_limit", "safety_failure"]},
+    "outcome": {"enum": ["success", "task_failure", "timeout", "infrastructure_failure", "usage_limit", "safety_failure", "run_invalid"], "description": "run_invalid: a nested agent was detected (#178 C7); never replaced, the batch stops and asks"},
     "usage": {"type": "object", "required": ["status"], "properties": {
       "status": {"enum": ["complete", "partial", "unavailable"], "description": "complete: every agent's final turn result (its first after an accepted ready) arrived within the drain window"},
       "agents": {"type": "object", "description": "Per-agent turn result reports in arrival order; a late one carries late: true"},

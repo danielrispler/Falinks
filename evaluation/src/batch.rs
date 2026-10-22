@@ -210,14 +210,22 @@ pub fn batch(
         .unwrap_or_else(|_| json!({"runs": [], "gates": [], "pauses": [], "invocations": []}));
     one_platform(&ledger)?;
     // An unsafe outcome means a repaired engine: its results belong in a new batch.
-    if ledger["runs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["outcome"] == "safety_failure")
-    {
+    let recorded = |outcome: &str| {
+        ledger["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["outcome"] == outcome)
+    };
+    if recorded("safety_failure") {
         bail!(
             "This batch recorded a safety failure; after repair and renewed gates, start a new batch directory"
+        );
+    }
+    // A nested agent (#178 C7) is never rerun in place: decide what changed, then start anew.
+    if recorded("run_invalid") {
+        bail!(
+            "This batch recorded an invalid run (nested agent); after review, start a new batch directory"
         );
     }
     let config_sha = sha256(&fs::read(config_path)?);
@@ -398,7 +406,7 @@ pub fn batch(
         entry["concurrency"] = concurrency;
         ledger["runs"].as_array_mut().unwrap().push(entry);
         write(&ledger_path, &ledger)?;
-        if !result["nested_agent"].is_null() {
+        if outcome == "run_invalid" {
             return pause(
                 &mut ledger,
                 &ledger_path,

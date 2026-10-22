@@ -308,9 +308,10 @@ covers this preparation plus remaining pilot/evaluation setup, **not engine
 implementation**. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
 for safety gates, run interpretation and continuation criteria. Track T (#178) has
-its own `team_size_research` section with a 43,200 s limit; its sessions record
-implementation, run (including the usage drain) and preparation time and
-complete-only usage separately. The ledger test fails when either section is
+its own `team_size_research` section with a 43,200 s limit. It charges only
+run time (including the usage drain) and harness preparation time, with
+complete-only usage; implementation time is not charged (Daniel, 2026-10-22,
+on #180). A session may still note `implementation_seconds` for the record. The ledger test fails when either section is
 overdrawn: stop and ask before that happens. Each `limit_seconds` already
 includes its amendments, so the remaining balance is the limit minus the charged
 sessions. From `evaluation/`:

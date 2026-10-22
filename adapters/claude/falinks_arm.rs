@@ -426,6 +426,7 @@ fn run(options: Options) -> Result<i32> {
         .find_map(|r| r.session.nested_agents.first().cloned());
     if let Some(nested) = nested {
         run.evidence["nested_agent"] = nested;
+        run.evidence["outcome"] = "run_invalid".into();
     }
     let drained = if run.arm.borrow().outcome.is_some() {
         Some(drain(&mut run)?)

@@ -502,6 +502,7 @@ fn execute(
             // The worker saw its agent start a nested agent (#178 C7); it exits next.
             "nested_agent" => {
                 run.evidence["nested_agent"] = request["detail"].clone();
+                run.evidence["outcome"] = "run_invalid".into();
                 bail!("{agent} launched a nested agent; run invalid");
             }
             "ready" => {
