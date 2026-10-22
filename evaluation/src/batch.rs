@@ -255,8 +255,10 @@ pub fn batch(
     };
     // The code-quality measurement records both commits and checks it uses this Go (#228 decisions 26, 29a).
     let commit = git(&root(), &["rev-parse", "HEAD"], None).ok();
+    // As the checks resolve it: PATH's go, never a downloaded toolchain.
     let go = Command::new("go")
         .arg("version")
+        .env("GOTOOLCHAIN", "local")
         .output()
         .ok()
         .filter(|o| o.status.success())

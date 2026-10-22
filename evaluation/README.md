@@ -281,7 +281,7 @@ it as `usage_limit`.
         `agents/repo`, or the Falinks arm's `controller/oracle/candidate-N` holding it.
       - The pinned `gofmt` or `rustfmt` runs on copies of the initial tree, the final
         snapshot and the reference; every metric uses those copies. Formatters, `go vet`
-        and `cargo clippy` run through the oracle's contained check path.
+        and `cargo clippy` run in the oracle's sandbox, environment and denied roots.
       - Per arm: `production_lines_changed`, `test_lines_added`, `test_functions`, and
         `vet_findings` (Go) or `clippy_findings` (Rust), each with the usual statistics, its
         `labels` entry, and the per-lint breakdown in `lints`. Lint findings count only on

@@ -213,7 +213,8 @@ const TREATMENT: [&str; 2] = [
 /// usual statistics and labels. Each repetition that lacks a value names why in
 /// `missing_reasons`; each lint count gives its per-lint breakdown per repetition.
 fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
-    let lint = if fixture == "rust-errors" {
+    let rust = crate::fixture(fixture).is_ok_and(|f| f["language"] == "rust");
+    let lint = if rust {
         "clippy_findings"
     } else {
         "vet_findings"
