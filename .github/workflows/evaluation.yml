@@ -1,15 +1,18 @@
 name: Evaluation tests
 
-# The evaluation crate is standalone (see evaluation/Cargo.toml), so its slow
-# macOS and Linux tests run only when its inputs change. Lint and deny stay in checks.yml.
+# The evaluation crate is standalone (see evaluation/Cargo.toml). Lint and deny stay in checks.yml.
+# Pull requests that change its inputs run the light tests, about 2 min. Ten heavy
+# end-to-end tests take 6-8 min even in four shards (run 39778827225), so they run on
+# main four times a day and by hand (AGENTS.md, "Checks"). main does not repeat a PR's run.
 on:
   pull_request:
     paths: ["evaluation/**", "rust-toolchain.toml", ".cargo/**", ".github/workflows/evaluation.yml"]
-  push:
-    branches: [main]
-    paths: ["evaluation/**", "rust-toolchain.toml", ".cargo/**", ".github/workflows/evaluation.yml"]
+  # 09:00, 13:00, 17:00 and 21:00 at UTC+2.
+  schedule:
+    - cron: "0 7,11,15,19 * * *"
+  workflow_dispatch:
 
-# A new push cancels its pull request's older run; every main commit runs to completion.
+# A new push cancels its pull request's older run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
@@ -22,25 +25,50 @@ env:
   GO_VERSION: "1.27.2"
 
 jobs:
-  evaluation:
-    # Sandboxed Go/Cargo checks are slow and time out under contention, so each
-    # shard runs serially on its own runner. Shards are balanced by measured test
-    # time; the last shard takes every other test, so keep its skips in step.
-    # Four shards plus the checks.yml macos job fill the free plan's five
-    # concurrent macOS runners; a fifth shard would queue. Linux runners have their
-    # own quota, so the same shards run there on the Landlock backend (#56).
+  changes:
+    # A scheduled run goes ahead only when evaluation inputs changed since the last
+    # scheduled run that passed, so it holds the macOS runners only when it can find
+    # something new.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run: ${{ steps.inputs.outputs.run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The paths match the pull_request filter above.
+        run: |
+          last=$(gh run list --workflow evaluation.yml --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          if [[ -z $last ]] || ! git diff --quiet "$last" HEAD -- evaluation rust-toolchain.toml .cargo .github/workflows/evaluation.yml; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Evaluation inputs unchanged since the scheduled run at $last; skipping."
+          fi
+
+  light:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changes.outputs.run == 'true') }}
+    # Sandboxed Go/Cargo checks are slow and time out under contention, so every
+    # job runs its tests serially. Linux runners have their own quota, so the same
+    # tests run there on the Landlock backend (#56).
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
+        # Every test the heavy shards name is skipped, so keep the two lists in step.
         tests:
-          - batch_gates_pauses batch_tells_a_gate
-          - fixture_shard_runs oracles_reject_compiling
-          - frozen_oracles claude_bridge codex_bridge baseline_exchanges
-          - --skip batch_gates_pauses --skip batch_tells_a_gate --skip fixture_shard_runs --skip oracles_reject_compiling --skip frozen_oracles --skip claude_bridge --skip codex_bridge --skip baseline_exchanges
-    steps:
+          - --skip frozen_oracles --skip baseline_retains --skip fixture_shard_runs --skip nested_agents_invalidate --skip two_agent_runs --skip oracle_blocks --skip track_t_batch --skip usage_is_complete --skip batch_gates_pauses --skip oracles_reject_compiling
+    steps: &steps
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
@@ -60,3 +88,23 @@ jobs:
         run: grep -qw landlock /sys/kernel/security/lsm
       - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
       - run: cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1 ${{ matrix.tests }}
+
+  heavy:
+    # Each `batch` call re-verifies every fixture (about 115 s), and every check
+    # starts from an empty Go build cache. Shards are balanced by each test's time
+    # in runs 39766522074, 39764928341 and 39778827225. Four shards plus the light
+    # job fill the free plan's five concurrent macOS runners.
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (github.event_name != 'schedule' || needs.changes.outputs.run == 'true') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        tests:
+          - frozen_oracles baseline_retains fixture_shard_runs
+          - nested_agents_invalidate two_agent_runs
+          - oracle_blocks track_t_batch usage_is_complete
+          - batch_gates_pauses oracles_reject_compiling
+    steps: *steps

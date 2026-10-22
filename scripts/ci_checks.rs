@@ -1,6 +1,6 @@
 //! Run every CI check locally, cheapest first; stop at the first failure and name it.
-//! The evaluation tests and actionlint run only when their inputs changed since
-//! `origin/main`; pass `--all` to run them anyway.
+//! Actionlint runs only when a workflow changed since `origin/main`. The evaluation
+//! tests run in CI; pass `--all` to run both here anyway.
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -95,7 +95,9 @@ fn main() -> ExitCode {
     let changed = changed_files(&root);
     let run_for =
         |inputs: &[&str]| all || changed.as_ref().is_none_or(|c| changed_under(c, inputs));
-    let run_evaluation = run_for(check_list::EVALUATION_INPUTS);
+    // CI runs them on every PR that changes their inputs, and AGENTS.md says to merge
+    // such a PR only after they pass, so the local run is opt-in.
+    let run_evaluation = all;
     let run_actionlint = run_for(WORKFLOW_INPUTS);
     // actionlint skips shellcheck silently when it is missing; CI's image bundles it.
     if run_actionlint
@@ -123,9 +125,15 @@ fn main() -> ExitCode {
         })
         .collect();
     if !run_evaluation {
-        eprintln!(
-            "ci-checks: evaluation inputs unchanged since origin/main; skipping its tests (--all runs them)"
-        );
+        if run_for(check_list::EVALUATION_INPUTS) {
+            eprintln!(
+                "ci-checks: evaluation inputs may have changed; their tests run in CI. Merge only after they pass: gh pr checks <n> --watch --fail-fast (--all runs them here)"
+            );
+        } else {
+            eprintln!(
+                "ci-checks: evaluation inputs unchanged since origin/main; skipping its tests (--all runs them)"
+            );
+        }
     }
     if !run_actionlint {
         eprintln!(
@@ -163,7 +171,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_evaluation_inputs_trigger_the_evaluation_tests() {
+    fn only_evaluation_inputs_count_as_evaluation_changes() {
         let changed = |files: &[&str]| {
             changed_under(
                 &files.iter().map(|f| f.to_string()).collect::<Vec<_>>(),

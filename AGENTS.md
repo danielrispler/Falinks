@@ -12,13 +12,13 @@ The current list, per component, is `docs/platforms.md`. Do not infer support fr
 
 ## Checks
 
-Before handing off a change, run every CI check locally, cheapest first:
+Before handing off a change, run the local CI checks, cheapest first:
 
 ```sh
 cargo run --bin ci-checks
 ```
 
-It stops at the first failing step and names it. It skips the evaluation tests and actionlint unless their inputs changed since `origin/main`; pass `-- --all` to force them. Prerequisites: Go on PATH (evaluation tests, actionlint), `shellcheck` (when workflows change), `cargo-deny` (`cargo install cargo-deny --locked`) and `cargo-nextest` (`cargo install cargo-nextest --locked`). The list lives in `scripts/check_list.rs`; `tests/check_drift.rs` keeps it in step with `.github/workflows/`. The toolchain is pinned in `rust-toolchain.toml`.
+It stops at the first failing step and names it. It skips actionlint unless a workflow changed since `origin/main`, and skips the evaluation tests, which run in CI; pass `-- --all` to force both. When it reports that evaluation inputs may have changed, merge the PR only after its evaluation checks pass: `gh pr checks <n> --watch --fail-fast`. Those checks run the light evaluation tests; the heavy ones (the `heavy` job in `.github/workflows/evaluation.yml`) run on `main` four times a day. When a change can break a heavy test, because it changes how the harness runs, checks or verifies a run, or edits a heavy test, suggest that the user run them on the PR branch before merge, and say why: `gh workflow run evaluation.yml --ref <branch>`. The user decides. Prerequisites: Go on PATH, `shellcheck` (when workflows change), `cargo-deny` (`cargo install cargo-deny --locked`) and `cargo-nextest` (`cargo install cargo-nextest --locked`). The list lives in `scripts/check_list.rs`; `tests/check_drift.rs` keeps it in step with `.github/workflows/`. The toolchain is pinned in `rust-toolchain.toml`.
 
 ## Evaluation freeze
 

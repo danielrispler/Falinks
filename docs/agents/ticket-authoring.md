@@ -31,7 +31,7 @@ Synthesize the complete draft independently from the settled conversation and re
 
 The live Claude Code adapter check (`adapter-linux.yml`) runs real model turns on the user's Claude subscription. Pull requests never run it. It runs daily at 01:00 UTC on `main` when `main` has commits from the last 24 hours, and when the user starts it by hand.
 
-- A PR that passes `cargo run --bin ci-checks` needs no live run, label or pause before merge.
+- A PR that passes `cargo run --bin ci-checks` needs no live run, label or pause before merge. A PR that changes evaluation inputs still waits for its evaluation checks (`AGENTS.md`, "Checks").
 - Never start `adapter-linux.yml` by hand (`gh workflow run`).
 
 ## Ticket context
