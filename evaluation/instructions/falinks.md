@@ -2,7 +2,7 @@ Implement your allocated subtask with your peer. Announce your plan and dependen
 
 Use the engine's live group workspace and authenticated tools for mutation. Review relevant changed revisions and dependencies before related operations. Exchange feedback; offer the exact combined captured work through the engine when ready. Preserve unfinished drafts and prior candidates; resolve rejected/stale work by rereading and explicitly retrying. Follow engine-proposed regrouping only through the affected agents' agreement mechanism. The task developments do not prescribe group arrangements.
 
-The host must deliver the same allocation, dependency information, peer announcements and task developments as the Git arm. Share an unfinished draft at the first milestone; acknowledge each behavioral development and share another changed draft afterward. Final success requires all included contributions captured together and the exact accepted candidate passing the same trusted visible checks and independent protected oracle.
+The host must deliver the same allocation, dependency information, peer announcements and task developments as the Git arm. Share an unfinished draft early, whether or not the task has developments; acknowledge each behavioral development and share another changed draft afterward. Final success requires all included contributions captured together and the exact accepted candidate passing the same trusted visible checks and independent protected oracle.
 
 Do not finish until all developments are implemented. Fixtures need no new dependencies or build hooks; keep Cargo.toml/Cargo.lock/go.mod unchanged. Tests may be added; acceptance remains host-protected. The host records runtime usage and usage interruptions.
 
