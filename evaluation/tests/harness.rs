@@ -153,7 +153,13 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
     let fixtures = evidence["fixtures"].as_object().unwrap();
     assert_eq!(
         fixtures.keys().collect::<Vec<_>>(),
-        ["go-page", "go-relationships", "rust-errors"]
+        [
+            "go-indep-2",
+            "go-indep-4",
+            "go-page",
+            "go-relationships",
+            "rust-errors"
+        ]
     );
     for fixture in fixtures.values() {
         assert_eq!(fixture["initial"]["passed"], false);
@@ -214,6 +220,34 @@ fn setup_ledger_totals_match_its_sessions() {
     let limit = track["limit_seconds"].as_i64().unwrap();
     assert_eq!(track["remaining_seconds"], limit - charged);
     assert!(limit >= charged, "track T budget overdrawn: stop and ask");
+}
+
+/// go-indep-2 is go-indep-4's semver and textwrap units, copied; keep the copies in step (#181).
+#[test]
+fn go_indep_2_is_a_subset_of_go_indep_4() {
+    let pair =
+        |dir: &str| ["2", "4"].map(|n| read(root().join(format!("{dir}/go-indep-{n}.json"))));
+    let [small, large] = pair("fixtures");
+    for (name, text) in small["files"].as_object().unwrap() {
+        assert_eq!(&large["files"][name], text, "{name}");
+    }
+    let requirements = large["requirements"].as_array().unwrap();
+    for requirement in small["requirements"].as_array().unwrap() {
+        assert!(requirements.contains(requirement));
+    }
+    let [small, large] = pair("protected");
+    for (name, text) in small["reference"].as_object().unwrap() {
+        assert_eq!(&large["reference"][name], text, "{name}");
+    }
+    // Past the import block, every top-level declaration appears verbatim in the larger oracle.
+    let (small, large) = (
+        small["oracle"].as_str().unwrap(),
+        large["oracle"].as_str().unwrap(),
+    );
+    let (_, declarations) = small.split_once("\n)\n").unwrap();
+    for declaration in declarations.split_inclusive("\n}\n") {
+        assert!(large.contains(declaration.trim()), "{declaration}");
+    }
 }
 
 #[test]

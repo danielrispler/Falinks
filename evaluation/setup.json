@@ -225,6 +225,22 @@
         },
         "measurement": "Implementation is not charged (Daniel, 2026-10-22) and was not timed. No real runs, so no run or preparation time and no usage.",
         "work": "#180 (T1): team size 1|2 as a run parameter (Git arm), instructions/git-solo.md and the solo prompt, the solo allocation A then B, batch --schedule track-t, SCORED_FIXTURES for schedule(), team_size in result.json; C7 nested-agent detection in both arms with the run_invalid outcome, per-arm report counts and a batch that stops and refuses resume; this ledger rule change; re-freeze v15 -> v16 (merged over main's v14 -> v15)."
+      },
+      {
+        "issue": 189,
+        "implementation_seconds": 0,
+        "run_seconds": 0,
+        "preparation_seconds": 0,
+        "charged_seconds": 0,
+        "complete_usage": {
+          "runs": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "measurement": "Implementation is not charged (Daniel, 2026-10-22) and was not timed. No real runs, so no run or preparation time and no usage.",
+        "work": "#189 (T3): register #181's calibrated go-indep-2 and go-indep-4 (fixtures, protected oracles, initial commits) in FIXTURES, the result schema, the scripted worker and the verify key list, outside SCORED_FIXTURES; the go-indep-2 drift test; re-freeze v16 -> v17."
       }
     ],
     "totals": {

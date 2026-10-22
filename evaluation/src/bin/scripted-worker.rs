@@ -50,7 +50,9 @@ fn main() {
         Some("conflict") => conflict(),
         Some("exec") => fake_codex(&args),
         Some("-p") => fake_claude(&args),
-        Some("rust-errors" | "go-page" | "go-relationships") => fake_arm(&args),
+        Some("rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4") => {
+            fake_arm(&args)
+        }
         other => panic!("unknown mode {other:?}"),
     }
 }
