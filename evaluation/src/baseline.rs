@@ -1,4 +1,4 @@
-//! Two concurrent worker processes in Git worktrees, mediated by JSON lines on stdin/stdout.
+//! One or two concurrent worker processes in Git worktrees, mediated by JSON lines on stdin/stdout.
 use crate::{
     Result, Sandbox, bail, check, command, fixture, frozen, git, git_env, initial, kill_group,
     protected_roots, read, resolve, root, sha256, strings, unix_now, utc_now, write,
@@ -16,11 +16,14 @@ use std::{env, fs, thread};
 
 const AGENTS: [&str; 2] = ["A", "B"];
 
-fn peer(agent: &str) -> &'static str {
-    if agent == "A" { "B" } else { "A" }
+/// The other agent in a team of two; a team of one has no peer.
+fn peer(team: &[&'static str], agent: &str) -> Option<&'static str> {
+    team.iter().copied().find(|a| *a != agent)
 }
 
 struct Run {
+    /// `AGENTS` cut to the team size (#178 C1).
+    team: &'static [&'static str],
     started: Instant,
     deadline: Instant,
     events: PathBuf,
@@ -81,7 +84,8 @@ impl Run {
         if after_ready && usage["final_results"][agent].is_null() {
             usage["final_results"][agent] = arrival.into();
         }
-        let complete = AGENTS
+        let complete = self
+            .team
             .iter()
             .all(|a| usage["final_results"][a] == "received");
         usage["status"] = if complete { "complete" } else { "partial" }.into();
@@ -114,7 +118,11 @@ pub fn baseline(
     pair: &str,
     order: i64,
     scored: bool,
+    team_size: usize,
 ) -> Result<i32> {
+    if !(1..=2).contains(&team_size) {
+        bail!("team size must be 1 or 2");
+    }
     let (started, start_unix) = (Instant::now(), unix_now());
     let config = read(config_path)?;
     let fixture = fixture(name)?;
@@ -129,7 +137,7 @@ pub fn baseline(
     let evidence = json!({
         "schema_version": 1, "run_id": destination.file_name().unwrap().to_string_lossy(), "arm": "git",
         "fixture": name, "fixture_version": fixture["version"], "freeze": manifest, "configuration": config,
-        "order": order, "pair": pair, "scored": scored, "outcome": "infrastructure_failure",
+        "order": order, "pair": pair, "scored": scored, "team_size": team_size, "outcome": "infrastructure_failure",
         "usage": {"status": "unavailable", "agents": {}, "final_results": {},
             "format": "per-turn result reports; not cumulative totals or cost"},
         "usage_limit_interruptions": [], "rejected_operations": 0, "retries": 0,
@@ -140,6 +148,7 @@ pub fn baseline(
     });
     let timeout = config["timeout_seconds"].as_f64().unwrap_or(0.0);
     let mut run = Run {
+        team: &AGENTS[..team_size],
         started,
         deadline: started + Duration::from_secs_f64(timeout.clamp(0.0, 1800.0)),
         events: private.join("events.jsonl"),
@@ -228,7 +237,8 @@ fn execute(
     }
     run.evidence["initial_snapshot"] = sha.clone().into();
     let at = |p: &Path| p.to_string_lossy().into_owned();
-    for agent in AGENTS {
+    let team = run.team;
+    for &agent in team {
         git(
             &repo,
             &[
@@ -278,7 +288,7 @@ fn execute(
             .as_str()
             .ok_or("worker_script must be a path")?,
     ));
-    for agent in AGENTS {
+    for &agent in team {
         let scratch = public.join(agent).join("scratch");
         let mut env: Vec<(String, String)> = env::vars()
             .filter(|(k, _)| {
@@ -374,21 +384,37 @@ fn execute(
             .filter(|(k, _)| *k != "files" && *k != "milestones")
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        run.send(agent, json!({
+        // A team of one gets no peer workspace, the solo workflow and every allocation, A then B (C2, C3).
+        let peer_workspace = peer(team, agent).map(|p| public.join(p));
+        let (allocation, workflow) = match peer_workspace {
+            Some(_) => (fixture["allocation"][agent].clone(), "instructions/git.md"),
+            None => {
+                let parts: Vec<&str> = AGENTS
+                    .iter()
+                    .filter_map(|a| fixture["allocation"][a].as_str())
+                    .collect();
+                (parts.join("\n").into(), "instructions/git-solo.md")
+            }
+        };
+        let mut start = json!({
             "type": "start", "agent": agent, "workspace": public.join(agent),
-            "peer_workspace": public.join(peer(agent)), "integration_workspace": public.join("integration"),
-            "task": task, "development_count": milestones.len(), "allocation": fixture["allocation"][agent],
-            "workflow": fs::read_to_string(root().join("instructions/git.md"))?,
+            "peer_workspace": peer_workspace, "integration_workspace": public.join("integration"),
+            "task": task, "development_count": milestones.len(), "allocation": allocation,
+            "workflow": fs::read_to_string(root().join(workflow))?,
             "runtime_binary": config["runtime_binary"], "runtime_version": config["runtime_version"],
             "runtime_home": config["runtime_home"],
             "model": {"model": config["model"], "model_version": config["model_version"], "reasoning": config["reasoning"]},
-        }))?;
+        });
+        if start["peer_workspace"].is_null() {
+            start.as_object_mut().unwrap().remove("peer_workspace");
+        }
+        run.send(agent, start)?;
         run.event("agent_started", json!({"agent": agent}))?;
     }
     drop(tx);
 
-    let mut shares: BTreeMap<&str, Option<String>> = AGENTS.iter().map(|a| (*a, None)).collect();
-    let mut sequence: BTreeMap<&str, usize> = AGENTS.iter().map(|a| (*a, 0)).collect();
+    let mut shares: BTreeMap<&str, Option<String>> = team.iter().map(|a| (*a, None)).collect();
+    let mut sequence: BTreeMap<&str, usize> = team.iter().map(|a| (*a, 0)).collect();
     let mut milestone_floor = sequence.clone();
     let mut milestone_index: usize = 0;
     let mut awaiting_ack: BTreeSet<&str> = BTreeSet::new();
@@ -397,7 +423,7 @@ fn execute(
     let mut final_resolution: Option<String> = None;
     let public_git = |work: &Path, args: &[&str]| git(work, args, Some(&public_guard));
 
-    while ready.len() < 2 {
+    while ready.len() < team.len() {
         let remaining = run.remaining();
         if remaining.is_zero() {
             run.evidence["outcome"] = "timeout".into();
@@ -419,7 +445,7 @@ fn execute(
             json!({"agent": agent, "request": request}),
         )?;
         let action = request["action"].as_str().unwrap_or_default();
-        let peer = peer(agent);
+        let peer = peer(team, agent);
         // Agent protocol mistakes are refusals, as in the Falinks arm, never infrastructure failures.
         let refuse = |run: &mut Run, reason: &str| -> Result<()> {
             let count = run.evidence["rejected_operations"].as_u64().unwrap_or(0) + 1;
@@ -435,6 +461,10 @@ fn execute(
         };
         match action {
             "message" => {
+                let Some(peer) = peer else {
+                    refuse(run, "a team of one has no peer")?;
+                    continue;
+                };
                 run.send(
                     peer,
                     json!({"type": "peer_message", "sender": agent, "text": request["text"]}),
@@ -468,6 +498,11 @@ fn execute(
                     .push(json!({"agent": agent, "detail": request["detail"]}));
                 run.evidence["outcome"] = "usage_limit".into();
                 bail!("Subscription/usage interruption; batch paused, no provider switch");
+            }
+            // The worker saw its agent start a nested agent (#178 C7); it exits next.
+            "nested_agent" => {
+                run.evidence["nested_agent"] = request["detail"].clone();
+                bail!("{agent} launched a nested agent; run invalid");
             }
             "ready" => {
                 if milestone_index != milestones.len() || awaiting_ack.contains(agent) {
@@ -543,17 +578,20 @@ fn execute(
                     json!({"agent": agent, "commit": commit, "diff": patch}),
                 )?;
                 run.send(agent, json!({"type": "shared", "commit": commit}))?;
-                run.send(
-                    peer,
-                    json!({"type": "peer_diff", "sender": agent, "commit": commit, "diff": patch}),
-                )?;
+                if let Some(peer) = peer {
+                    run.send(
+                        peer,
+                        json!({"type": "peer_diff", "sender": agent, "commit": commit, "diff": patch}),
+                    )?;
+                }
+                // Every agent in the team has shared since the last development; alone, its own share.
                 if awaiting_ack.is_empty()
                     && milestone_index < milestones.len()
-                    && AGENTS.iter().all(|a| sequence[a] > milestone_floor[a])
+                    && team.iter().all(|a| sequence[a] > milestone_floor[a])
                 {
                     let milestone = milestones[milestone_index].clone();
                     milestone_index += 1;
-                    awaiting_ack = AGENTS.into();
+                    awaiting_ack = team.iter().copied().collect();
                     ready.clear();
                     run.event("development", json!({"milestone": milestone}))?;
                     let mut development = json!({"type": "development"});
@@ -561,7 +599,7 @@ fn execute(
                         .as_object_mut()
                         .unwrap()
                         .extend(milestone.as_object().unwrap().clone());
-                    for member in AGENTS {
+                    for member in team {
                         run.send(member, development.clone())?;
                     }
                 }
@@ -608,7 +646,8 @@ fn drain_usage(
     let finished =
         |run: &Run, agent: &str| !run.evidence["usage"]["final_results"][agent].is_null();
     let mut closed = BTreeSet::new();
-    while AGENTS
+    let team = run.team;
+    while team
         .iter()
         .any(|a| !finished(run, a) && !closed.contains(a))
     {
@@ -657,7 +696,7 @@ fn drain_usage(
         }
     }
     let usage = &mut run.evidence["usage"];
-    for agent in AGENTS {
+    for agent in team {
         if usage["final_results"][agent].is_null() {
             usage["final_results"][agent] = "missing".into();
         }
@@ -685,10 +724,17 @@ fn combine(
         reopened: Vec::new(),
         network: false,
     };
-    let (Some(a), Some(b)) = (&shares["A"], &shares["B"]) else {
-        return Ok(
-            json!({"candidate": null, "passed": false, "conflict": "Both drafts are needed"}),
-        );
+    let Some(drafts) = shares
+        .values()
+        .map(Option::as_ref)
+        .collect::<Option<Vec<_>>>()
+    else {
+        let needed = if shares.len() == 2 {
+            "Both drafts are needed"
+        } else {
+            "A shared draft is needed"
+        };
+        return Ok(json!({"candidate": null, "passed": false, "conflict": needed}));
     };
     // Agents may resolve conflicts with ordinary Git in the integration worktree.
     let candidate = match resolved.filter(|r| !r.is_empty()) {
@@ -697,7 +743,7 @@ fn combine(
             {
                 bail!("Resolved candidate must be an exact 40-character Git commit ID");
             }
-            for commit in [a, b] {
+            for commit in &drafts {
                 git(
                     &integration,
                     &["merge-base", "--is-ancestor", commit, resolved],
@@ -711,19 +757,23 @@ fn combine(
             )?
         }
         None => {
-            git(&integration, &["reset", "--hard", a], Some(&guard))?;
+            git(&integration, &["reset", "--hard", drafts[0]], Some(&guard))?;
             git(&integration, &["clean", "-fdx"], Some(&guard))?;
-            let argv = guard.wrap(strings(&[
-                "git",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "merge",
-                "--no-edit",
-                b,
-            ]))?;
-            let merged = command(&argv, &integration, &git_env(), Duration::from_secs(120))?;
-            if !merged.success {
-                return Ok(json!({"candidate": null, "passed": false, "conflict": merged.text()}));
+            for draft in &drafts[1..] {
+                let argv = guard.wrap(strings(&[
+                    "git",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "merge",
+                    "--no-edit",
+                    draft,
+                ]))?;
+                let merged = command(&argv, &integration, &git_env(), Duration::from_secs(120))?;
+                if !merged.success {
+                    return Ok(
+                        json!({"candidate": null, "passed": false, "conflict": merged.text()}),
+                    );
+                }
             }
             git(&integration, &["rev-parse", "HEAD"], Some(&guard))?
         }

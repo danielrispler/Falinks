@@ -3,10 +3,12 @@
 //!
 //! `scripted-worker relationships [received|late|never]|conflict` speaks the host JSON-line
 //! protocol; with a usage mode, `relationships` reports a turn at start and its final result
-//! after `ready` at once, only when the host stops it, or never;
+//! after `ready` at once, only when the host stops it, or never; alone, it writes both files;
 //! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
-//! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge;
-//! `scripted-worker <fixture> --output DIR ...` impersonates the Falinks-arm runner for batches.
+//! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge; copied
+//! as `launches-PROGRAM`, its first turn runs `PROGRAM` through Bash (a nested agent);
+//! `scripted-worker <fixture> --output DIR ...` impersonates the Falinks-arm runner for batches;
+//! `FALINKS_FAKE_NESTED=COMMAND` records that command as a nested agent.
 use serde_json::{Value, json};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -77,10 +79,10 @@ fn relationships(usage_mode: Option<&str>) {
     let mut events = lines();
     let start = events.next().unwrap();
     let agent = start["agent"].as_str().unwrap().to_string();
-    let file = if agent == "A" {
-        "producer.go"
-    } else {
-        "consumer.go"
+    let files = match (start["peer_workspace"].is_null(), agent.as_str()) {
+        (true, _) => vec!["producer.go", "consumer.go"],
+        (_, "A") => vec!["producer.go"],
+        _ => vec!["consumer.go"],
     };
     // Resolve controller relative to the public worktree; protected by sandbox-exec.
     let controller = Path::new(start["workspace"].as_str().unwrap())
@@ -95,7 +97,9 @@ fn relationships(usage_mode: Option<&str>) {
         }
         other => panic!("controller readable or unexpected: {other:?}"),
     }
-    append(file, &format!("\n// first unfinished draft {agent}\n"));
+    for file in &files {
+        append(file, &format!("\n// first unfinished draft {agent}\n"));
+    }
     send(json!({"action": "share"}));
     let (mut pending, mut last_final) = (Value::Null, false);
     for event in events {
@@ -105,16 +109,16 @@ fn relationships(usage_mode: Option<&str>) {
                 pending = event;
             }
             ("ok", Some("ack")) => {
-                if pending["id"] == "record-contract" {
-                    fs::write(
-                        file,
-                        reference("go-relationships", file) + "\n// unfinished contract draft\n",
-                    )
-                    .unwrap();
-                } else {
-                    fs::write(file, reference("go-relationships", file)).unwrap();
-                    last_final = true;
+                let contract = pending["id"] == "record-contract";
+                for file in &files {
+                    let draft = if contract {
+                        "\n// unfinished contract draft\n"
+                    } else {
+                        ""
+                    };
+                    fs::write(file, reference("go-relationships", file) + draft).unwrap();
                 }
+                last_final = !contract;
                 send(json!({"action": "share"}));
             }
             ("shared", _) if last_final => {
@@ -357,6 +361,19 @@ fn fake_claude(argv: &[String]) {
             "session_id": flag("--session-id")}),
         );
         let mut subtype = "success";
+        let program = env::args().next().unwrap();
+        if let Some(launched) = program
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .strip_prefix("launches-")
+        {
+            send(
+                json!({"type": "assistant", "message": {"model": "scripted", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": format!("{launched} -p 'help me'")}}]}}),
+            );
+        }
         if first {
             first = false;
             let (ok, reply) = host_command(&["ready"]);
@@ -424,8 +441,12 @@ fn fake_arm(argv: &[String]) {
     }
     fs::create_dir_all(output.join("controller")).unwrap();
     let outcome = env::var("FALINKS_FAKE_OUTCOME").unwrap_or("success".into());
-    let result = json!({"run_id": output.file_name().unwrap().to_string_lossy(), "arm": "falinks",
+    let mut result = json!({"run_id": output.file_name().unwrap().to_string_lossy(), "arm": "falinks",
         "fixture": argv[0], "pair": flag("--pair"), "scored": flag("--scored") == "true", "outcome": outcome,
         "timing": {"elapsed_seconds": 10.0}, "transitions": 0});
+    if let Ok(command) = env::var("FALINKS_FAKE_NESTED") {
+        result["nested_agent"] = json!({"command": command});
+        result["outcome"] = "infrastructure_failure".into();
+    }
     fs::write(output.join("controller/result.json"), result.to_string()).unwrap();
 }

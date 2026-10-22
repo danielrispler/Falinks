@@ -89,7 +89,8 @@ fn config(base: &Path, worker_script: &str, worker_command: Value, runtime: &str
         // The gate must name the same runtime binary as the runs.
         ("gate_command", json!(["/bin/cp", runtime, "{output}"])),
         ("denied_roots", json!([])),
-        ("timeout_seconds", json!(90)),
+        // Generous: batch tests run alongside and slow every check.
+        ("timeout_seconds", json!(300)),
         ("usage_drain_seconds", json!(1)),
     ] {
         config[key] = value;
@@ -962,4 +963,212 @@ fn baseline_exchanges_unfinished_work_and_freezes_exact_candidate() {
         ["A", "B"]
     );
     assert!(!baseline("go-relationships", &config, &run).status.success());
+}
+
+/// C6.4 (#178): the scored schedule is v11's (`tests/golden/schedule-v11.json`, recorded from
+/// the harness at `9564d45`), whatever `FIXTURES` gains.
+#[test]
+fn scored_schedule_equals_v11() {
+    let output = cli(["schedule"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let schedule: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        schedule,
+        read(root().join("tests/golden/schedule-v11.json"))
+    );
+}
+
+/// C6.2 (#178): a team of one gets no peer, the solo workflow and both allocations, completes,
+/// and developments fire on its own shares.
+#[test]
+fn a_team_of_one_completes_and_developments_fire_on_its_own_shares() {
+    let tmp = tmp("falinks-solo-test-");
+    let config = config(
+        tmp.path(),
+        SCRIPTED,
+        json!([
+            "/bin/sh",
+            "-c",
+            "/usr/bin/tee scratch/host.jsonl | \"$0\" relationships",
+            "{worker}"
+        ]),
+        SCRIPTED,
+    );
+    let run = tmp.path().join("run");
+    let mut args = vec![OsStr::new("baseline"), OsStr::new("go-relationships")];
+    args.extend([OsStr::new("--config"), config.as_os_str()]);
+    args.extend([OsStr::new("--output"), run.as_os_str()]);
+    args.extend([OsStr::new("--team-size"), OsStr::new("1")]);
+    let evidence = successful_evidence(&cli(args), &run);
+    assert_eq!(evidence["team_size"], 1);
+    assert!(!run.join("agents/B").exists());
+    assert_eq!(
+        triggers(&run),
+        json!([{"milestone": "record-contract", "shares": {"A": 1, "B": 0}},
+               {"milestone": "follow-ups", "shares": {"A": 2, "B": 0}}])
+    );
+    let host = host_messages(&run.join("agents/A/scratch/host.jsonl"));
+    let start = &host["start"];
+    assert!(start.get("peer_workspace").is_none(), "{start}");
+    assert_eq!(
+        start["workflow"].as_str().unwrap(),
+        fs::read_to_string(root().join("instructions/git-solo.md")).unwrap()
+    );
+    let allocation = &read(root().join("fixtures/go-relationships.json"))["allocation"];
+    assert_eq!(
+        start["allocation"].as_str().unwrap(),
+        format!(
+            "{}\n{}",
+            allocation["A"].as_str().unwrap(),
+            allocation["B"].as_str().unwrap()
+        )
+    );
+    let events: Vec<&str> = host["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(events, ["development", "development"]);
+    // Its one message has no peer to reach: refused, not delivered.
+    assert_eq!(evidence["rejected_operations"], 1);
+}
+
+/// C7 (#178), Git arm: a scripted `claude` or `node` launch through Bash invalidates the run.
+/// Both arms: hits are counted per arm and the batch stops at the first.
+#[test]
+fn nested_agents_invalidate_the_run_are_counted_and_stop_the_batch() {
+    let tmp = tmp("falinks-nested-test-");
+    for program in ["claude", "node"] {
+        let base = tmp.path().join(program);
+        fs::create_dir(&base).unwrap();
+        let runtime = base.join(format!("launches-{program}"));
+        fs::copy(SCRIPTED, &runtime).unwrap();
+        let config = config(
+            &base,
+            CLAUDE_WORKER,
+            json!(["{worker}"]),
+            runtime.to_str().unwrap(),
+        );
+        let run = base.join("run");
+        assert!(!baseline("go-relationships", &config, &run).status.success());
+        let evidence = read(run.join("controller/result.json"));
+        assert_eq!(evidence["outcome"], "infrastructure_failure");
+        assert_eq!(
+            evidence["nested_agent"]["command"],
+            format!("{program} -p 'help me'")
+        );
+        assert!(
+            evidence["failure_reason"]
+                .as_str()
+                .unwrap()
+                .contains("nested agent"),
+            "{evidence}"
+        );
+    }
+
+    // Batches: the Git arm's pilot run launches `node`; then the Falinks arm's one `claude`.
+    let runtime = tmp.path().join("launches-node");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let git = config(
+        tmp.path(),
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        runtime.to_str().unwrap(),
+    );
+    let falinks = tmp.path().join("falinks");
+    fs::create_dir(&falinks).unwrap();
+    let falinks = config(
+        &falinks,
+        SCRIPTED,
+        json!(["{worker}", "relationships"]),
+        SCRIPTED,
+    );
+    for (arm, config, nested, paused) in [
+        ("git", &git, None, "pilot-git"),
+        ("falinks", &falinks, Some("claude -p x"), "pilot-falinks"),
+    ] {
+        let runs = tmp.path().join(format!("runs-{arm}"));
+        let mut command = Command::new(CLI);
+        command
+            .args(["batch", "--config"])
+            .arg(config)
+            .arg("--runs")
+            .arg(&runs);
+        if let Some(nested) = nested {
+            command.env("FALINKS_FAKE_NESTED", nested);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+        let ledger = read(runs.join("batch.json"));
+        let reason = ledger["pauses"][0]["reason"].as_str().unwrap();
+        assert!(
+            reason.starts_with(&format!("{paused}: nested agent")),
+            "{reason}"
+        );
+        assert_eq!(
+            ledger["runs"].as_array().unwrap().last().unwrap()["run_id"],
+            paused
+        );
+        let report = cli([OsStr::new("report"), OsStr::new("--runs"), runs.as_os_str()]);
+        let report: Value = serde_json::from_slice(&report.stdout).unwrap();
+        let hits = json!({"git": (arm == "git") as u8, "falinks": (arm == "falinks") as u8});
+        assert_eq!(report["nested_agent_hits"], hits);
+    }
+}
+
+/// C1 (#178): the track-T schedule runs one fixture at both team sizes, each run isolated as
+/// in the scored batch, and records the size.
+#[test]
+fn track_t_batch_runs_both_team_sizes_with_run_isolation() {
+    let tmp = tmp("falinks-track-t-test-");
+    let config = config(
+        tmp.path(),
+        SCRIPTED,
+        json!(["{worker}", "relationships"]),
+        SCRIPTED,
+    );
+    let runs = tmp.path().join("runs");
+    let output = Command::new(CLI)
+        .args([
+            "batch",
+            "--schedule",
+            "track-t",
+            "--fixtures",
+            "go-relationships",
+            "--config",
+        ])
+        .arg(&config)
+        .arg("--runs")
+        .arg(&runs)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let ledger = read(runs.join("batch.json"));
+    let recorded = ledger["runs"].as_array().unwrap();
+    let mut sizes: Vec<(String, u64)> = vec![];
+    for (index, r) in recorded.iter().enumerate() {
+        assert_eq!(r["outcome"], "success", "{r}");
+        let result = read(Path::new(r["run_dir"].as_str().unwrap()).join("controller/result.json"));
+        assert_eq!(result["team_size"], r["team_size"]);
+        assert_eq!(result["scored"], false);
+        // Every earlier run is denied to this one.
+        let denied = result["configuration"]["denied_roots"].as_array().unwrap();
+        for earlier in &recorded[..index] {
+            assert!(
+                denied.contains(&earlier["run_dir"]),
+                "{}",
+                earlier["run_dir"]
+            );
+        }
+        sizes.push((
+            r["run_id"].as_str().unwrap().into(),
+            r["team_size"].as_u64().unwrap(),
+        ));
+    }
+    let expected: Vec<(String, u64)> = [(1, 1), (1, 2), (2, 2), (2, 1), (3, 1), (3, 2)]
+        .iter()
+        .map(|(rep, size)| (format!("go-relationships-{rep}-git-{size}"), *size))
+        .collect();
+    assert_eq!(sizes, expected);
 }

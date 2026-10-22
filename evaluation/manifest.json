@@ -2,24 +2,25 @@
   "hashes": {
     "Cargo.lock": "0454ca05e92d6fb25d47c4938537690e9c6365a6909355a1919bbf748a2d70fd",
     "Cargo.toml": "1c6bc262c1b4b81b4c7bd5ae291db2fc06de3578cd672c060337c0ebe5ae9ec0",
-    "config.json": "45964900e95782f8ea422f6fd9a2a1c7272c920f4166ecac30498de55cf6ea99",
+    "config.json": "b2eee8eaa89378bcf0bbbcfede9787ce114e760a971158da1e6a45dfff1d4452",
     "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
     "fixtures/go-relationships.json": "3f3cdd1d1b061b9dcee056ea77a9fec999326684309b1ece06785ffb346b764e",
     "fixtures/rust-errors.json": "c1ef8768913cd2e7278ae92bf64be61e6b25782814345d0e56d74bfe92002b0e",
     "instructions/falinks.md": "c925b90b2114c1fbcc5e21e51708114c7acdbb2ffb34e7cde2157573d10aff36",
+    "instructions/git-solo.md": "b535ddefe9edc94ac1d58063fc8f910bf5a2ecfd1524a86da3b6de5d375057fb",
     "instructions/git.md": "5324fe674118b8e5fcd0d0464a4c1e9e1f599adf1a493ae7257d950a0c72ec0e",
     "protected/go-page.json": "30c91a06e9c56e6449e77a029eaf05c89c84bd4b620b1f7bc9a3671a3bb658d2",
     "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
-    "result-schema.json": "09eb44d86f84033c6b8614ad190c2c1acfc49bfbfe04bcc2ec7f982432880f5c",
-    "src/baseline.rs": "6a277f35192581020c1874d6d141a7b0155d67abb89cec087f88523deaa129a7",
-    "src/batch.rs": "27b4dbf5525ea5fce453389eae56271771a5bd4c694dc3885adf8def3292e7fc",
-    "src/bin/claude-worker.rs": "d95b4dcf3dd37f6dbe2bfa19894675cbcaf09a1747ac256559f49e0da3bf9f2d",
+    "result-schema.json": "b48e262db507a963af585f3cb6cfdaa19dbf1e008aefd506a8a41d63de2c2fd0",
+    "src/baseline.rs": "9621daf7f9bfe345ff5b7c46dd96670df202654362fcd727976e6bef6c0671c8",
+    "src/batch.rs": "52b3afe6a34e6dc4bce3724aea82297ec233bf318a0c998c18387e0c95b17f48",
+    "src/bin/claude-worker.rs": "a5c020eb116e4afbe37d719ac7c3e8b5af62fc211f9a03408574184d15f88580",
     "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
     "src/bin/falinks-eval-contain.rs": "c5c53fad8087a3b8d6cf3f31f04b96ae2946dfa530093d9b902c307871513a10",
-    "src/bin/scripted-worker.rs": "3c2d0429fce4137b7c5d4daae9d38612c5a518c2429ea98987000e0107bf315f",
-    "src/main.rs": "311792ef1979458071e4a89b337b2ee5de1fd41ea011ef436f242d0c057a1d0b",
-    "src/report.rs": "c22b096fcd440fc5442f7c0555b2be3d271b6d3ce1dc78b2375662083b5bbf9a",
+    "src/bin/scripted-worker.rs": "52dc75dd6933f68ce0a7a9249efef51254ece0d03b5b3da7af739922401d2a18",
+    "src/main.rs": "bfbac434c73074559895052140ab9d18015ac772067cbcf2d9b11221ac51b5f3",
+    "src/report.rs": "4bcecd1ec7aa8b5a42b849efabbb54bdb7c228214e71b4543d575ab69683570a",
     "src/timing.rs": "3e162f9aee4ffaa4c15edd34bf64d313b9021e488c047332160ff813ed21b168"
   },
   "initial_commits": {
@@ -27,5 +28,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 13
+  "version": 14
 }

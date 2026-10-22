@@ -9,6 +9,7 @@
 use serde_json::{Value, json};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
@@ -93,6 +94,29 @@ fn emit(value: Value) -> Result<()> {
 }
 
 fn prompt(start: &Value) -> String {
+    // A team of one (#178 C1): no peer worktree, messages or diffs.
+    if start["peer_workspace"].is_null() {
+        return format!(
+            "You are agent {agent} in a one-agent software task using Git worktrees. Your worktree is {workspace}; \
+             your current directory is its scratch/ subdirectory. The integration worktree is {integration}.\n\
+             Talk to the host only by running these Bash commands, each of which prints the host's JSON reply:\n\
+             \"$FALINKS_HOST\" share | \"$FALINKS_HOST\" ack MILESTONE_ID | \
+             \"$FALINKS_HOST\" check [RESOLVED_MERGE_COMMIT] | \"$FALINKS_HOST\" ready\n\
+             These send the requests the workflow below describes; ready names your last shared commit for you and \
+             is accepted only after you have acknowledged all {developments} task development(s). Do not commit \
+             yourself: share asks the host to commit your draft. Task developments arrive as messages starting \
+             with \"Host event\". When you have nothing to do until the next host event, end your turn; the next \
+             event starts a new turn. Do not run long sleeps or polling loops.\n\n\
+             Task: {task}\nYour allocation: {allocation}\n\nWorkflow:\n{workflow}",
+            agent = start["agent"].as_str().unwrap_or("?"),
+            workspace = start["workspace"].as_str().unwrap_or("?"),
+            integration = start["integration_workspace"].as_str().unwrap_or("?"),
+            developments = start["development_count"],
+            task = start["task"],
+            allocation = start["allocation"],
+            workflow = start["workflow"].as_str().unwrap_or(""),
+        );
+    }
     format!(
         "You are agent {agent} in a two-agent software task using Git worktrees. Your worktree is {workspace}; \
          your current directory is its scratch/ subdirectory, which is never shared. Your peer's worktree \
@@ -117,8 +141,42 @@ fn prompt(start: &Value) -> String {
     )
 }
 
+/// Copy of `falinks_claude::nested_agent` (#178 C7); this crate is standalone from the adapter.
+/// shortcut: an obfuscated launch (`$(echo cl)aude`, an alias, a script) evades it, as #178 states.
+fn nested_agent(command: &str, runtime: &str) -> bool {
+    let runtime_name = Path::new(runtime).file_name();
+    command
+        .split(['\n', ';', '&', '|', '(', ')', '`', '{', '}'])
+        .filter_map(|part| {
+            part.split_whitespace()
+                .map(|w| w.trim_matches(['"', '\'']))
+                .find(|w| {
+                    !w.contains('=') && !["env", "exec", "nohup", "command", "time"].contains(w)
+                })
+        })
+        .any(|program| {
+            let name = Path::new(program).file_name();
+            ["claude", "codex", "node", "npx"]
+                .iter()
+                .any(|n| name == Some(n.as_ref()))
+                || (!runtime.is_empty() && (program == runtime || name == runtime_name))
+        })
+}
+
+/// Claude Code's `~/.claude/projects/` folder name for a working directory (as `batch.rs`).
+fn project_folder(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 struct Bridge {
     model: String,
+    runtime: String,
+    session: String,
+    /// The runtime home's session folder for scratch; a session there not ours is a nested agent.
+    project: Option<PathBuf>,
     version: String,
     input: ChildStdin,
     transcript: fs::File,
@@ -140,6 +198,12 @@ impl Bridge {
         self.busy = true;
         self.last = Instant::now();
         Ok(())
+    }
+
+    /// Reports a nested agent to the host, then fails the run (#178 C7).
+    fn nested(&self, detail: Value) -> Result<()> {
+        emit(json!({"action": "nested_agent", "detail": detail}))?;
+        Err(format!("nested agent {detail}; run invalid").into())
     }
 
     /// Fail closed on any runtime identity change, like the Falinks adapter's model control.
@@ -168,6 +232,17 @@ impl Bridge {
             {
                 return Err("model identity changed; run invalid".into());
             }
+            (Some("assistant"), _) => {
+                for block in event["message"]["content"].as_array().into_iter().flatten() {
+                    if let Some(command) = block["input"]["command"].as_str()
+                        && block["type"] == "tool_use"
+                        && block["name"] == "Bash"
+                        && nested_agent(command, &self.runtime)
+                    {
+                        return self.nested(json!({"command": command}));
+                    }
+                }
+            }
             (Some("rate_limit_event"), _) => {
                 self.rate_limit = event["rate_limit_info"].clone();
                 if self.rate_limit["status"] == "rejected" {
@@ -185,6 +260,16 @@ impl Bridge {
                     .unwrap_or_default();
                 if models.iter().any(|m| *m != model) {
                     return Err("model identity changed; run invalid".into());
+                }
+                let foreign = self
+                    .project
+                    .iter()
+                    .flat_map(|p| fs::read_dir(p).into_iter().flatten().flatten())
+                    .filter_map(|e| e.file_name().to_str().map(String::from))
+                    .filter_map(|n| n.strip_suffix(".jsonl").map(String::from))
+                    .find(|id| *id != self.session);
+                if let Some(session) = foreign {
+                    return self.nested(json!({"session": session}));
                 }
                 // Token counts only: they do not establish subscription cost.
                 emit(
@@ -256,6 +341,11 @@ fn run() -> Result<()> {
         .unwrap_or_default()
         .to_string();
     let worker = cwd.join("scratch/worker");
+    let session = uuid()?;
+    let runtime_binary = start["runtime_binary"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let settings = json!({
         "permissions": {"defaultMode": "dontAsk", "allow": TOOLS.split(',').collect::<Vec<_>>(),
             "deny": ["NotebookEdit", "WebSearch", "WebFetch", "Agent", "Task", "Skill"]},
@@ -292,7 +382,7 @@ fn run() -> Result<()> {
             "--settings",
             &settings.to_string(),
             "--session-id",
-            &uuid()?,
+            &session,
         ])
         .current_dir(&scratch)
         .env("DISABLE_AUTOUPDATER", "1")
@@ -320,8 +410,16 @@ fn run() -> Result<()> {
         let _ = runtime.send(Input::Claude(None));
     });
 
+    let project = start["runtime_home"].as_str().map(|home| {
+        Path::new(home)
+            .join(".claude/projects")
+            .join(project_folder(&scratch))
+    });
     let mut bridge = Bridge {
         model,
+        runtime: runtime_binary,
+        session,
+        project,
         version: start["runtime_version"].as_str().unwrap_or_default().into(),
         input: child.stdin.take().ok_or("claude stdin missing")?,
         transcript: fs::File::create(scratch.join("claude-events.jsonl"))?,
@@ -461,5 +559,27 @@ mod tests {
         assert!(init_matches(&init, "claude-opus-5-5", "2.1.287", &flag));
         assert!(!init_matches(&init, "claude-opus-5-5", "2.1.287", TOOLS));
         assert!(!init_matches(&init, "claude-sonnet-5-5", "2.1.287", &flag));
+    }
+
+    #[test]
+    fn nested_agent_launches_match_the_adapter_rule() {
+        for command in [
+            "claude -p hi",
+            "cd .. && node -e 1",
+            "FOO=1 npx tsx",
+            "/r/claude-x -p",
+        ] {
+            assert!(nested_agent(command, "/r/claude-x"), "{command}");
+        }
+        for command in ["go test ./...", "cat node_modules.txt", "echo claude"] {
+            assert!(!nested_agent(command, "/r/claude-x"), "{command}");
+        }
+        // The adapter's copy must stay identical (#178 C7).
+        let adapter = include_str!("../../../adapters/claude/lib.rs");
+        let body = |source: &str| {
+            let start = source.find("    let runtime_name").unwrap();
+            source[start..start + source[start..].find("\n}\n").unwrap()].to_string()
+        };
+        assert_eq!(body(adapter), body(include_str!("claude-worker.rs")));
     }
 }

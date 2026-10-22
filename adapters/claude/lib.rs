@@ -304,6 +304,30 @@ pub fn verify_init(init: &Value, scratch: &Path, session: &str, tools: &[String]
     )
 }
 
+/// Whether a Bash command starts a nested agent (#178 C7): a command's first word, after shell
+/// separators and `env`/`exec`-style prefixes, names `claude`, `codex`, `node`, `npx` or the
+/// configured runtime binary. The Git arm's `claude-worker` keeps a copy.
+/// shortcut: an obfuscated launch (`$(echo cl)aude`, an alias, a script) evades it, as #178 states.
+pub fn nested_agent(command: &str, runtime: &str) -> bool {
+    let runtime_name = Path::new(runtime).file_name();
+    command
+        .split(['\n', ';', '&', '|', '(', ')', '`', '{', '}'])
+        .filter_map(|part| {
+            part.split_whitespace()
+                .map(|w| w.trim_matches(['"', '\'']))
+                .find(|w| {
+                    !w.contains('=') && !["env", "exec", "nohup", "command", "time"].contains(w)
+                })
+        })
+        .any(|program| {
+            let name = Path::new(program).file_name();
+            ["claude", "codex", "node", "npx"]
+                .iter()
+                .any(|n| name == Some(n.as_ref()))
+                || (!runtime.is_empty() && (program == runtime || name == runtime_name))
+        })
+}
+
 /// `path` is `root` or beneath it once symlinks resolve; a missing path is not.
 fn beneath(path: &Path, root: &Path) -> bool {
     match (fs::canonicalize(path), fs::canonicalize(root)) {
@@ -339,6 +363,10 @@ pub struct Session {
     pub last_result: Value,
     /// `~/.claude/projects/<cwd>/` reported by the runtime for this worker.
     pub project: Option<PathBuf>,
+    /// The configured runtime binary, whose launch from Bash is a nested agent.
+    pub runtime: String,
+    /// Nested-agent detections (#178 C7); the first makes the run invalid.
+    pub nested_agents: Vec<Value>,
     connection: String,
     session: String,
     token: String,
@@ -388,6 +416,8 @@ impl Session {
             unpresented: vec![],
             hooks: BTreeMap::new(),
             ended: BTreeSet::new(),
+            runtime: String::new(),
+            nested_agents: vec![],
         })
     }
     pub fn connection(&self) -> &str {
@@ -468,6 +498,15 @@ impl Session {
                             .is_some_and(|n| self.tools.iter().any(|t| t == n)),
                         "disabled capability attempted",
                     )?;
+                    if let Some(command) = block["input"]["command"].as_str()
+                        && block["name"] == "Bash"
+                        && nested_agent(command, &self.runtime)
+                    {
+                        self.nested_agents.push(json!({"command": command}));
+                        return Err(
+                            format!("nested agent launched ({command}); run invalid").into()
+                        );
+                    }
                 }
                 Ok(())
             }
@@ -501,6 +540,19 @@ impl Session {
                 }
                 self.hooks.clear();
                 self.last_result = line.clone();
+                // Any other session in this worker's project folder was not launched by the host.
+                let foreign: Vec<String> = self
+                    .project
+                    .iter()
+                    .flat_map(|p| fs::read_dir(p).into_iter().flatten().flatten())
+                    .filter_map(|e| e.file_name().to_str().map(String::from))
+                    .filter_map(|n| n.strip_suffix(".jsonl").map(String::from))
+                    .filter(|id| *id != self.session)
+                    .collect();
+                if let Some(session) = foreign.first() {
+                    self.nested_agents.push(json!({"session": session}));
+                    return Err(format!("nested agent session {session}; run invalid").into());
+                }
                 self.denials.extend(
                     line["permission_denials"]
                         .as_array()
@@ -758,6 +810,7 @@ impl Runtime {
             None => session_id()?,
         };
         let mut session = Session::new(launch, agent, &id, &token, engine, resume.is_some())?;
+        session.runtime = binary.to_string_lossy().into_owned();
         session.gate.record("pin", true)?;
         let settings = settings(launch, &tool)?;
         fs::write(controller.join("settings.json"), settings.to_string())?;

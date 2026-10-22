@@ -82,6 +82,27 @@ pub fn slots(pilot: bool) -> Vec<Value> {
         .collect()
 }
 
+/// Track T's slots (#178 C1): Git arm only, each fixture three times at team sizes 1 and 2,
+/// alternating which size runs first. Unscored, and outside the scored schedule.
+pub fn track_t_slots() -> Vec<Value> {
+    let mut slots = vec![];
+    for (index, name) in FIXTURES.iter().enumerate() {
+        for repetition in 1..=3 {
+            let sizes = if (index + repetition) % 2 == 1 {
+                [1, 2]
+            } else {
+                [2, 1]
+            };
+            for (order, size) in sizes.into_iter().enumerate() {
+                slots.push(json!({"slot": format!("{name}-{repetition}-git-{size}"),
+                    "pair": format!("{name}-{repetition}"), "fixture": name, "arm": "git",
+                    "order": order, "scored": false, "team_size": size}));
+            }
+        }
+    }
+    slots
+}
+
 fn pause(ledger: &mut Value, path: &Path, reason: String) -> Result<i32> {
     ledger["pauses"]
         .as_array_mut()
@@ -148,12 +169,13 @@ fn gate_missing(argv: &[String]) -> Option<PathBuf> {
     needed.into_iter().find(|path| !path.is_file())
 }
 
-/// `after_pilot` names the completed pilot batch directory; without it this is the pilot.
-/// `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
+/// `after_pilot` names the completed pilot batch directory; without it this is the pilot,
+/// unless `track_t` runs the team-size schedule instead. `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
 pub fn batch(
     config_path: &Path,
     runs: &Path,
     after_pilot: Option<&Path>,
+    track_t: bool,
     fixtures: &[&str],
 ) -> Result<i32> {
     if let Some(name) = fixtures.iter().find(|f| !FIXTURES.contains(f)) {
@@ -167,7 +189,7 @@ pub fn batch(
     {
         bail!("gate_command must check the same runtime_binary as the runs");
     }
-    let pilot = after_pilot.is_none();
+    let pilot = after_pilot.is_none() && !track_t;
     if let Some(dir) = after_pilot {
         // Scoring follows a completed unscored pilot pair.
         let ledger = read(dir.join("batch.json"))?;
@@ -205,10 +227,14 @@ pub fn batch(
     {
         bail!("Run configuration changed inside this batch; record a new batch directory");
     }
-    let slots: Vec<Value> = slots(pilot)
-        .into_iter()
-        .filter(|s| fixtures.contains(&s["fixture"].as_str().unwrap()))
-        .collect();
+    let slots: Vec<Value> = if track_t {
+        track_t_slots()
+    } else {
+        slots(pilot)
+    }
+    .into_iter()
+    .filter(|s| fixtures.contains(&s["fixture"].as_str().unwrap()))
+    .collect();
     if slots.is_empty() {
         bail!("No slots for fixtures {fixtures:?} in this batch");
     }
@@ -216,7 +242,7 @@ pub fn batch(
         Some(dir) => Value::from(dir.canonicalize()?.to_string_lossy().into_owned()),
         None => Value::Null,
     };
-    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot,
+    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": track_t,
         "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config}));
     let mut gated = false;
     for slot in slots {
@@ -341,6 +367,9 @@ pub fn batch(
             .args(["--pair", slot["pair"].as_str().unwrap()])
             .args(["--order", &slot["order"].to_string()])
             .args(["--scored", &slot["scored"].to_string()]);
+        if let Some(size) = slot["team_size"].as_u64() {
+            command.args(["--team-size", &size.to_string()]);
+        }
         eprintln!("Running {run_id}");
         let status = command.status()?;
         let concurrency = json!({"start": concurrent_at_start, "stop": active_siblings(&runs)?});
@@ -369,6 +398,16 @@ pub fn batch(
         entry["concurrency"] = concurrency;
         ledger["runs"].as_array_mut().unwrap().push(entry);
         write(&ledger_path, &ledger)?;
+        if !result["nested_agent"].is_null() {
+            return pause(
+                &mut ledger,
+                &ledger_path,
+                format!(
+                    "{run_id}: nested agent launched ({}); run invalid. Stop and ask before resuming",
+                    result["nested_agent"]
+                ),
+            );
+        }
         match outcome.as_str() {
             "safety_failure" => {
                 return pause(
