@@ -1088,7 +1088,8 @@ fn nested_agents_invalidate_the_run_are_counted_and_stop_the_batch() {
         ("git", &git, None, "pilot-git"),
         ("falinks", &falinks, Some("claude -p x"), "pilot-falinks"),
     ] {
-        let runs = tmp.path().join(format!("runs-{arm}"));
+        // Apart from the runtime: a batch denies its runs directory's siblings to every run.
+        let runs = tmp.path().join("batches").join(format!("runs-{arm}"));
         let mut command = Command::new(CLI);
         command
             .args(["batch", "--config"])
