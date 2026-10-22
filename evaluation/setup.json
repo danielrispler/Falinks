@@ -187,7 +187,7 @@
   "team_size_research": {
     "source": "https://github.com/danielrispler/Falinks/issues/178",
     "limit_seconds": 43200,
-    "scope": "Track T steps 1-5 (#179, #180, #181, #189, #182, #183), Q17/Q22. It never draws on the setup budget above. Each session records implementation, run wall time (including the usage drain), harness preparation and complete-only usage separately. Hard stop: stop and ask before exceeding it; re-estimated at #182.",
+    "scope": "Track T steps 1-5 (#179, #180, #181, #189, #182, #183), Q17/Q22. It never draws on the setup budget above. Each session charges run wall time (including the usage drain) and harness preparation, with complete-only usage; implementation time is recorded but not charged (Daniel, 2026-10-22, on #180). Hard stop: stop and ask before exceeding it; re-estimated at #182.",
     "sessions": [
       {
         "issue": 179,
@@ -199,7 +199,7 @@
         "implementation_seconds": 3426,
         "run_seconds": 0,
         "preparation_seconds": 0,
-        "charged_seconds": 3426,
+        "charged_seconds": 0,
         "complete_usage": {
           "runs": 0,
           "input_tokens": 0,
@@ -209,13 +209,29 @@
         },
         "measurement": "Session wall time from claiming #179 (the GitHub assignment) through this entry, including both ci-checks runs and the two-axis review, plus allowances for reading before the claim and for the last ci-checks run and the PR. No real runs, so no run or preparation time and no usage.",
         "work": "#179 (T0): the two-agent golden recording (first commit, unchanged harness); the bounded usage drain in both arms; `timing RUN_DIR` with synthetic-transcript tests and the local #122 cross-check (34 round-trips and 204.735 s; 24 and 93.186 s); timing.start_unix; this ledger section; re-freeze v12 -> v13."
+      },
+      {
+        "issue": 180,
+        "implementation_seconds": 0,
+        "run_seconds": 0,
+        "preparation_seconds": 0,
+        "charged_seconds": 0,
+        "complete_usage": {
+          "runs": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "measurement": "Implementation is not charged (Daniel, 2026-10-22) and was not timed. No real runs, so no run or preparation time and no usage.",
+        "work": "#180 (T1): team size 1|2 as a run parameter (Git arm), instructions/git-solo.md and the solo prompt, the solo allocation A then B, batch --schedule track-t, SCORED_FIXTURES for schedule(), team_size in result.json; C7 nested-agent detection in both arms with the run_invalid outcome, per-arm report counts and a batch that stops and refuses resume; this ledger rule change; re-freeze v15 -> v16 (merged over main's v14 -> v15)."
       }
     ],
     "totals": {
       "implementation_seconds": 3426,
       "run_seconds": 0,
       "preparation_seconds": 0,
-      "charged_seconds": 3426,
+      "charged_seconds": 0,
       "complete_usage": {
         "runs": 0,
         "input_tokens": 0,
@@ -224,6 +240,6 @@
         "cache_creation_input_tokens": 0
       }
     },
-    "remaining_seconds": 39774
+    "remaining_seconds": 43200
   }
 }

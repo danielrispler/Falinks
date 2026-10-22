@@ -149,11 +149,21 @@ pub fn report(runs: &[Value]) -> Value {
         let id = run["run_id"].as_str().unwrap_or_default();
         inconclusive.push(format!("unreplaced interruption {id}: {outcome}"));
     }
+    for run in runs.iter().filter(|r| r["outcome"] == "run_invalid") {
+        let id = run["run_id"].as_str().unwrap_or_default();
+        inconclusive.push(format!("invalid run {id}: nested agent"));
+    }
     let unsafe_runs: Vec<&Value> = runs
         .iter()
         .filter(|r| r["outcome"] == "safety_failure")
         .map(|r| &r["run_id"])
         .collect();
+    // Runs a nested agent made invalid (#178 C7), per arm.
+    let nested = |arm: &str| {
+        runs.iter()
+            .filter(|r| r["arm"] == arm && !r["nested_agent"].is_null())
+            .count()
+    };
     let signal = counted >= 2 && successes["falinks"] >= successes["git"];
     let transitions: u64 = scored
         .iter()
@@ -175,7 +185,7 @@ pub fn report(runs: &[Value]) -> Value {
         "runs": runs.iter().map(|r| json!({"run_id": r["run_id"], "pair": r["pair"], "arm": r["arm"],
             "scored": r["scored"], "outcome": r["outcome"], "replaces": r.get("replaces"),
             "failure_reason": r.get("failure_reason"), "concurrency": r.get("concurrency"),
-            "tokens": r.get("tokens")})).collect::<Vec<_>>(),
+            "nested_agent": r.get("nested_agent"), "tokens": r.get("tokens")})).collect::<Vec<_>>(),
         "concurrent_runs": runs.iter().filter(|r| concurrent(r)).map(|r| &r["run_id"]).collect::<Vec<_>>(),
         "concurrency_note": "Times of concurrent_runs were measured while another shard's run was active.",
         "fixtures": fixtures,
@@ -184,6 +194,7 @@ pub fn report(runs: &[Value]) -> Value {
         "continuation_signal": signal,
         "inconclusive_reasons": inconclusive,
         "safety_failures": unsafe_runs,
+        "nested_agent_hits": {"git": nested("git"), "falinks": nested("falinks")},
         "falinks_transitions": transitions,
         "regrouping_benefit": if transitions == 0 { "unestablished: no transitions" } else { "observed transitions; benefit needs review" },
         "replaced_runs": replaced,

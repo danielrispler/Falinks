@@ -1,4 +1,4 @@
-//! Frozen fixture checks and a two-process communicating Git-worktree baseline.
+//! Frozen fixture checks and a one- or two-process communicating Git-worktree baseline.
 mod baseline;
 mod batch;
 mod report;
@@ -24,6 +24,8 @@ pub(crate) use bail;
 
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 pub const FIXTURES: [&str; 3] = ["rust-errors", "go-page", "go-relationships"];
+/// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
+pub const SCORED_FIXTURES: [&str; 3] = ["rust-errors", "go-page", "go-relationships"];
 pub const FIXED_ENV: [(&str, &str); 10] = [
     ("GIT_AUTHOR_NAME", "Fixture"),
     ("GIT_AUTHOR_EMAIL", "fixture@example.invalid"),
@@ -753,7 +755,7 @@ fn verify() -> Result<i32> {
 
 fn schedule() -> Value {
     let mut pairs = Vec::new();
-    for (index, name) in FIXTURES.iter().enumerate() {
+    for (index, name) in SCORED_FIXTURES.iter().enumerate() {
         for repetition in 0..3 {
             let arms = if (index + repetition) % 2 == 0 {
                 ["git", "falinks"]
@@ -772,8 +774,8 @@ const USAGE: &str = "usage: falinks-eval <command>
   schedule
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
-  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true]
-  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR] [--fixtures NAME[,NAME]]
+  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
+  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t] [--fixtures NAME[,NAME]]
   report --runs DIR [--runs DIR]...
   timing RUN_DIR";
 
@@ -882,11 +884,17 @@ fn run() -> Result<i32> {
             args.get("pair").unwrap_or("unscored"),
             args.get("order").unwrap_or("0").parse()?,
             args.get("scored") == Some("true"),
+            args.get("team-size").unwrap_or("2").parse()?,
         ),
         Some("batch") => batch::batch(
             Path::new(args.required("config")?),
             Path::new(args.required("runs")?),
             args.get("after-pilot").map(Path::new),
+            match args.get("schedule") {
+                None => false,
+                Some("track-t") if args.get("after-pilot").is_none() => true,
+                Some(_) => bail!("--schedule takes track-t, without --after-pilot\n{USAGE}"),
+            },
             &match args.get("fixtures") {
                 Some(list) => list.split(',').collect(),
                 None => FIXTURES.to_vec(),

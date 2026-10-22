@@ -356,7 +356,7 @@ fn run(options: Options) -> Result<i32> {
     let mut evidence = json!({
         "schema_version": 1, "run_id": dir.file_name().unwrap().to_string_lossy(), "arm": "falinks",
         "fixture": options.fixture, "configuration": config, "order": options.order, "pair": options.pair,
-        "scored": options.scored, "outcome": "infrastructure_failure",
+        "scored": options.scored, "team_size": 2 /* the engine supports two clients (#13) */, "outcome": "infrastructure_failure",
         "usage": {"status": "unavailable"}, "usage_limit_interruptions": [], "rejected_operations": 0,
         "retries": 0, "discarded_or_rewritten_work": {"status": "unavailable",
             "reason": "overwritten operations are retained in controller/history.json, not quantified"},
@@ -417,6 +417,16 @@ fn run(options: Options) -> Result<i32> {
     if let Some(reason) = &reason {
         run.event("failure", json!({"reason": reason}))?;
         run.evidence["failure_reason"] = reason.clone().into();
+    }
+    // A nested agent (#178 C7) failed the gate above: the run is invalid and the batch stops.
+    let nested = run
+        .workers
+        .iter()
+        .filter_map(|w| w.runtime.as_ref())
+        .find_map(|r| r.session.nested_agents.first().cloned());
+    if let Some(nested) = nested {
+        run.evidence["nested_agent"] = nested;
+        run.evidence["outcome"] = "run_invalid".into();
     }
     let drained = if run.arm.borrow().outcome.is_some() {
         Some(drain(&mut run)?)

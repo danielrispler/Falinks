@@ -1,0 +1,84 @@
+{
+  "pairs": [
+    {
+      "arms": [
+        "git",
+        "falinks"
+      ],
+      "fixture": "rust-errors",
+      "pair": "rust-errors-1"
+    },
+    {
+      "arms": [
+        "falinks",
+        "git"
+      ],
+      "fixture": "rust-errors",
+      "pair": "rust-errors-2"
+    },
+    {
+      "arms": [
+        "git",
+        "falinks"
+      ],
+      "fixture": "rust-errors",
+      "pair": "rust-errors-3"
+    },
+    {
+      "arms": [
+        "falinks",
+        "git"
+      ],
+      "fixture": "go-page",
+      "pair": "go-page-1"
+    },
+    {
+      "arms": [
+        "git",
+        "falinks"
+      ],
+      "fixture": "go-page",
+      "pair": "go-page-2"
+    },
+    {
+      "arms": [
+        "falinks",
+        "git"
+      ],
+      "fixture": "go-page",
+      "pair": "go-page-3"
+    },
+    {
+      "arms": [
+        "git",
+        "falinks"
+      ],
+      "fixture": "go-relationships",
+      "pair": "go-relationships-1"
+    },
+    {
+      "arms": [
+        "falinks",
+        "git"
+      ],
+      "fixture": "go-relationships",
+      "pair": "go-relationships-2"
+    },
+    {
+      "arms": [
+        "git",
+        "falinks"
+      ],
+      "fixture": "go-relationships",
+      "pair": "go-relationships-3"
+    }
+  ],
+  "pilot": {
+    "arms": [
+      "git",
+      "falinks"
+    ],
+    "fixture": "go-relationships",
+    "scored": false
+  }
+}

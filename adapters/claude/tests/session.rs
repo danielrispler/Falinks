@@ -256,6 +256,53 @@ fn runtime_mismatch_latches_failure_and_blocks_engine() {
     }
 }
 
+/// A nested agent started through Bash, or a session the host did not launch, makes the run
+/// invalid and is recorded (#178 C7).
+#[test]
+fn a_nested_agent_latches_failure_and_is_recorded() {
+    let bash = |command: &str| {
+        json!({"type":"assistant","message":{"model":MODEL,
+            "content":[{"type":"tool_use","name":"Bash","input":{"command":command}}]}})
+    };
+    for command in [
+        "claude -p hi",
+        "cd .. && node -e 1",
+        "FOO=1 npx tsx x.ts",
+        "/opt/pinned/claude-2.1.304 -p x",
+    ] {
+        let mut f = fixture();
+        f.session.runtime = "/opt/pinned/claude-2.1.304".into();
+        f.session.line(&init(&f.workspace)).unwrap();
+        let error = f.session.line(&bash(command)).unwrap_err().to_string();
+        assert!(error.contains("run invalid"), "{command}: {error}");
+        assert!(f.session.gate.failed, "{command}");
+        assert_eq!(f.session.nested_agents, [json!({"command": command})]);
+    }
+    for command in ["go test ./...", "cat node_modules.txt", "echo claude"] {
+        let mut f = fixture();
+        f.session.line(&init(&f.workspace)).unwrap();
+        f.session.line(&bash(command)).unwrap();
+        assert!(f.session.nested_agents.is_empty(), "{command}");
+    }
+
+    let mut f = fixture();
+    let project = f.workspace.with_file_name("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join(format!("{SESSION}.jsonl")), "").unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    // init sets `project` from memory_paths, absent here.
+    f.session.project = Some(project.clone());
+    f.session.line(&result()).unwrap();
+    std::fs::write(project.join("0000-foreign.jsonl"), "").unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    f.session.project = Some(project);
+    assert!(f.session.line(&result()).is_err());
+    assert_eq!(
+        f.session.nested_agents,
+        [json!({"session": "0000-foreign"})]
+    );
+}
+
 /// Bash keeps its cwd across turns while it stays beneath scratch (#110).
 #[test]
 fn a_later_turn_may_start_beneath_scratch() {
