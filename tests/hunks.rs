@@ -97,7 +97,11 @@ fn hunks_that_do_not_match_exactly_once_are_rejected() {
             &[("fn a() {}", "x"), ("fn z", "y")],
             "hunk 2: old text matches 0 places",
         ),
-        ("two", &[("{}\nfn", "x")], "hunk 1: old text matches 2 places"),
+        (
+            "two",
+            &[("{}\nfn", "x")],
+            "hunk 1: old text matches 2 places",
+        ),
         ("empty", &[("", "x")], "hunk 1: old text is empty"),
         (
             "overlap",
