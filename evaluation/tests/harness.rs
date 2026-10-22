@@ -222,6 +222,27 @@ fn setup_ledger_totals_match_its_sessions() {
     assert!(limit >= charged, "track T budget overdrawn: stop and ask");
 }
 
+/// The result schema's fixture enum names every fixture file, so registering one cannot skip it.
+#[test]
+fn result_schema_names_every_fixture() {
+    let schema = read(root().join("result-schema.json"));
+    let mut named: Vec<&str> = schema["properties"]["fixture"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    named.sort();
+    let mut files: Vec<String> = fs::read_dir(root().join("fixtures"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension() == Some(OsStr::new("json")))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(named, files);
+}
+
 /// go-indep-2 is go-indep-4's semver and textwrap units, copied; keep the copies in step (#181).
 #[test]
 fn go_indep_2_is_a_subset_of_go_indep_4() {
