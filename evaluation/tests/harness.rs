@@ -924,6 +924,7 @@ fn timing_reports_hand_computed_figures() {
             "round_trips": trips((2, 2.5), (1, 1.5), (1, 1.5), (1, 0.75)),
             // Recovery counts Falinks edits only.
             "refusal_recovery": recovery(&none),
+            "request_key_refusals": {},
             // t1 0.5, t2 0.25, t3 0.5, t4 0.5, t5 0.25, t6 0.5.
             "tool_seconds": 2.5,
             // 16 (here-document) + 35 (refused Write) + 22 (Edit's new string).
@@ -938,7 +939,7 @@ fn timing_reports_hand_computed_figures() {
         git["agents"]["B"],
         json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
-            "refusal_recovery": recovery(&none), "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
             "usage_reports": 1})
     );
 
@@ -947,6 +948,8 @@ fn timing_reports_hand_computed_figures() {
     let unresolved =
         json!({"refusals": 1, "unresolved": 1, "round_trips": 1, "model_seconds": 1.0});
     assert_eq!(falinks["refusal_recovery"], recovery(&unresolved));
+    // The Stale refusal is the engine's, not the adapter's key check.
+    assert_eq!(falinks["request_key_refusals"], json!({}));
     assert_eq!(falinks["start_precision"], "second");
     assert_eq!(falinks["slowest_agent"], "agent-0");
     assert_eq!(
@@ -967,6 +970,7 @@ fn timing_reports_hand_computed_figures() {
             // The Stale refusal is never followed by an accepted edit: falinks_ready (8.0-9.0)
             // still counts.
             "refusal_recovery": recovery(&unresolved),
+            "request_key_refusals": {},
             "tool_seconds": 1.75,
             // 23 + 2; the refused edit is output but changes nothing.
             "output_bytes": 25,
@@ -979,7 +983,7 @@ fn timing_reports_hand_computed_figures() {
         falinks["agents"]["agent-1"],
         json!({"busy_seconds": 3.0, "launch_seconds": 2.0, "waiting_on_peer_seconds": 5.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (1, 1.0), (0, 0.0)),
-            "refusal_recovery": recovery(&none), "tool_seconds": 1.0, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 1.0, "output_bytes": 0, "changed_bytes": 0, "results": 1,
             "usage_reports": 1})
     );
 }
