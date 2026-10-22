@@ -1,6 +1,7 @@
 //! Frozen fixture checks and a one- or two-process communicating Git-worktree baseline.
 mod baseline;
 mod batch;
+mod judge;
 mod quality;
 mod report;
 mod timing;
@@ -801,7 +802,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t] [--fixtures NAME[,NAME]]
-  quality --runs DIR [--runs DIR]...
+  quality --runs DIR [--runs DIR]... [--judge CONFIG]
   report --runs DIR [--runs DIR]... [--schedule track-t] [--show-code]
   timing RUN_DIR";
 
@@ -943,7 +944,7 @@ fn run() -> Result<i32> {
         Some("quality") => {
             args.required("runs")?;
             let dirs: Vec<&Path> = args.all("runs").into_iter().map(Path::new).collect();
-            quality::quality(&dirs)
+            quality::quality(&dirs, args.get("judge").map(Path::new))
         }
         Some("timing") => {
             let run = args.positional.get(1).ok_or(USAGE)?;

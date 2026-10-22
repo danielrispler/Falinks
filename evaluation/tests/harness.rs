@@ -1414,7 +1414,7 @@ fn snapshot(fixture: &str, repo: &Path, files: &[(&str, &str)]) -> String {
 
 /// #230, seam A: `quality` measures synthetic runs in both arms' storage layouts, and `report`
 /// reads the results into `code_quality`. Every value is computed by hand on the formatted
-/// trees.
+/// trees. #232, seam B: with `--judge`, the fake runtime rates each measured snapshot.
 #[test]
 fn quality_measures_both_arms_and_report_shows_code_quality() {
     let tmp = tmp("falinks-quality-");
@@ -1561,8 +1561,86 @@ func TestLabel(t *testing.T) {
     )
     .unwrap();
 
-    let measured = cli(["quality", "--runs", batch.to_str().unwrap()]);
+    // The judge's runtime: the scripted worker under the frozen pin. Calls run in ledger order,
+    // three ratings then one guess per formatted snapshot. rust-errors-1-git: one unparseable
+    // reply retried, and a correct guess. go-relationships-1-falinks: the first rating fails
+    // twice, so its ratings are missing, and its guess is unparseable.
+    let judge = tmp.path().join("judge");
+    fs::create_dir(&judge).unwrap();
+    let config = judge.join("config.json");
+    fs::write(
+        &config,
+        json!({"runtime_version": "2.1.308", "model": "claude-opus-5-5",
+            "runtime_binary": SCRIPTED, "runtime_sha256": hash(SCRIPTED)})
+        .to_string(),
+    )
+    .unwrap();
+    let rating = |r: [u64; 4]| {
+        json!({"maintainability": {"rating": r[0], "reason": "a."},
+            "duplication": {"rating": r[1], "reason": "b."},
+            "unnecessary_changes": {"rating": r[2], "reason": "c."},
+            "test_quality": {"rating": r[3], "reason": "d."}})
+        .to_string()
+    };
+    fs::write(
+        judge.join("replies.json"),
+        json!([
+            rating([4, 5, 3, 2]),
+            "not json",
+            rating([2, 5, 4, 2]),
+            rating([3, 5, 4, 1]),
+            "A",
+            null,
+            null,
+            rating([3; 4]),
+            rating([3; 4]),
+            "maybe"
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let measured = Command::new(CLI)
+        .args(["quality", "--runs", batch.to_str().unwrap(), "--judge"])
+        .arg(&config)
+        .env("FALINKS_FAKE_JUDGE", &judge)
+        .output()
+        .unwrap();
     assert!(measured.status.success(), "{}", text(&measured));
+    assert_eq!(read(judge.join("replies.json")), json!([]));
+    let prompts = read(judge.join("prompts.json"));
+    let prompts: Vec<&str> = prompts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    assert_eq!(prompts.len(), 10);
+    // The material: no file names, no reference, no arm-identifying words.
+    let render = reference("go-relationships")["consumer.go"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let render = render.lines().find(|l| l.contains("func Render")).unwrap();
+    for prompt in [prompts[0], prompts[5]] {
+        let lower = prompt.to_lowercase();
+        for word in [
+            ".go",
+            ".rs",
+            "falinks",
+            "worktree",
+            "git ",
+            "workspace",
+            render,
+        ] {
+            assert!(!lower.contains(&word.to_lowercase()), "{word} in {prompt}");
+        }
+    }
+    assert!(
+        prompts[5].contains("+func Label(n int) string {"),
+        "{}",
+        prompts[5]
+    );
+    assert!(prompts[5].contains("func TestLabel"));
     for run in [&rust_git, &rust_falinks, &go_falinks, &go_git] {
         assert!(!run.join("quality.json").exists());
     }
@@ -1588,6 +1666,37 @@ func TestLabel(t *testing.T) {
             "test_functions": {"value": 2}, "vet_findings": {"value": 1, "lints": {"printf": 1}}}),
         "{go}"
     );
+    let rated = &rust["judge"];
+    assert_eq!(
+        rated["ratings"]["maintainability"],
+        json!({"value": 3, "spread": [2, 4], "ratings": [4, 2, 3], "reasons": ["a.", "a.", "a."]})
+    );
+    assert_eq!(rated["guess"], json!({"arm": "git", "correct": true}));
+    assert_eq!(rated["calls"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        rated["calls"][0]["usage"],
+        json!({"input_tokens": 5, "output_tokens": 7})
+    );
+    assert!(
+        rated["calls"][1]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("unparseable")
+    );
+    let unrated = &go["judge"];
+    assert!(
+        unrated["ratings"]["missing"]
+            .as_str()
+            .unwrap()
+            .contains("after one retry")
+    );
+    assert!(
+        unrated["guess"]["missing"]
+            .as_str()
+            .unwrap()
+            .starts_with("unparseable guess")
+    );
+    assert!(quality["runs"]["rust-errors-1-falinks"]["judge"]["missing"].is_string());
     let broken = &quality["runs"]["rust-errors-1-falinks"]["metrics"];
     for metric in ["production_lines_changed", "clippy_findings"] {
         let reason = broken[metric]["missing"].as_str().unwrap();
@@ -1613,6 +1722,12 @@ func TestLabel(t *testing.T) {
     );
     assert_eq!(rel["labels"]["vet_findings"], "incomplete");
     assert!(rel["reference_production_lines_changed"]["value"].is_u64());
+    // No calibration record yet: every dimension prints "Not yet calibrated".
+    assert_eq!(rel["judge"]["git"]["test_quality"], "Not yet calibrated");
+    assert_eq!(rel["judge"]["blinding"]["arm_guessed"], "arm guessed 0/0");
+    assert_eq!(rel["judge"]["blinding"]["missing_guesses"], 1);
+    let blinding = &report["fixtures"]["rust-errors"]["code_quality"]["judge"]["blinding"];
+    assert_eq!(blinding["arm_guessed"], "arm guessed 1/1");
     let treatment = rel["treatment_properties"].to_string();
     assert!(treatment.contains("fixes the file set") && treatment.contains("rustfmt job"));
     let rust = &report["fixtures"]["rust-errors"]["code_quality"];
@@ -1622,5 +1737,13 @@ func TestLabel(t *testing.T) {
             .as_str()
             .unwrap()
             .starts_with("rustfmt failed")
+    );
+    // Measuring again without --judge keeps the recorded ratings.
+    let again = cli(["quality", "--runs", batch.to_str().unwrap()]);
+    assert!(again.status.success(), "{}", text(&again));
+    let kept = read(batch.join("quality.json"));
+    assert_eq!(
+        kept["runs"]["rust-errors-1-git"]["judge"],
+        quality["runs"]["rust-errors-1-git"]["judge"]
     );
 }
