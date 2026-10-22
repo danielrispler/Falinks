@@ -448,6 +448,8 @@ pub fn quality(dirs: &[&Path], judge: Option<&Path>) -> Result<i32> {
         let mut fixtures: BTreeMap<String, std::result::Result<(Files, bool, Value), String>> =
             BTreeMap::new();
         let mut runs = Map::new();
+        // Without --judge, a run keeps the paid ratings an earlier measurement recorded.
+        let previous = read(dir.join("quality.json")).unwrap_or(Value::Null);
         for entry in ledger["runs"].as_array().into_iter().flatten() {
             let id = entry["run_id"].as_str().unwrap_or_default();
             let recorded_dir = PathBuf::from(entry["run_dir"].as_str().unwrap_or_default());
@@ -507,6 +509,8 @@ pub fn quality(dirs: &[&Path], judge: Option<&Path>) -> Result<i32> {
                     }
                     None => json!({"missing": "not judged: the final snapshot was not formatted"}),
                 };
+            } else if let Some(judged) = previous["runs"][id].get("judge") {
+                record["judge"] = judged.clone();
             }
             runs.insert(id.into(), record);
         }

@@ -1738,4 +1738,12 @@ func TestLabel(t *testing.T) {
             .unwrap()
             .starts_with("rustfmt failed")
     );
+    // Measuring again without --judge keeps the recorded ratings.
+    let again = cli(["quality", "--runs", batch.to_str().unwrap()]);
+    assert!(again.status.success(), "{}", text(&again));
+    let kept = read(batch.join("quality.json"));
+    assert_eq!(
+        kept["runs"]["rust-errors-1-git"]["judge"],
+        quality["runs"]["rust-errors-1-git"]["judge"]
+    );
 }

@@ -75,6 +75,8 @@ impl Runtime {
             let argv = [
                 self.binary.to_str().unwrap_or_default(),
                 "-p",
+                // Before the flags: a variadic flag such as `--tools` would take a trailing prompt.
+                prompt,
                 "--output-format",
                 "json",
                 "--model",
@@ -87,7 +89,6 @@ impl Runtime {
                 "",
                 "--permission-mode",
                 "dontAsk",
-                prompt,
             ];
             let output = command(&crate::strings(&argv), cwd.path(), &env, TIMEOUT)?;
             let reply: Value = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
@@ -222,14 +223,30 @@ pub fn rating_prompt(definitions: &Value, requirements: &str, material: &Materia
             )
         })
         .join("\n\n");
-    judge["prompt"]
-        .as_str()
-        .unwrap_or_default()
-        .replace("{anchors}", &anchors)
-        .replace("{requirements}", requirements)
-        .replace("{initial}", &material.initial)
-        .replace("{change}", &material.change)
-        .replace("{tests}", &material.tests)
+    let values = [
+        ("{anchors}", anchors.as_str()),
+        ("{requirements}", requirements),
+        ("{initial}", &material.initial),
+        ("{change}", &material.change),
+        ("{tests}", &material.tests),
+    ];
+    // One pass, so a placeholder inside inserted code is never filled in turn.
+    let (mut out, mut rest) = (String::new(), judge["prompt"].as_str().unwrap_or_default());
+    while let Some(at) = rest.find('{') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        match values.iter().find(|(key, _)| rest.starts_with(key)) {
+            Some((key, value)) => {
+                out.push_str(value);
+                rest = &rest[key.len()..];
+            }
+            None => {
+                out.push('{');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out + rest
 }
 
 /// The frozen forced-choice question, on the same material.
@@ -377,7 +394,7 @@ mod tests {
         let definitions = definitions().unwrap();
         let material = Material {
             initial: "fn a() {}".into(),
-            change: "+fn b() {}".into(),
+            change: "+fn b() { format!(\"{tests}\"); }".into(),
             tests: "#[test]\nfn t() {}".into(),
         };
         let mut replies = replies.into_iter();
@@ -423,7 +440,10 @@ mod tests {
             .split("{anchors}")
             .next()
             .unwrap();
-        assert!(prompts[0].starts_with(head) && prompts[0].contains("+fn b() {}"));
+        assert!(
+            prompts[0].starts_with(head)
+                && prompts[0].contains("+fn b() { format!(\"{tests}\"); }")
+        );
         let anchor = definitions["judge"]["dimensions"]["duplication"]["3"]
             .as_str()
             .unwrap();

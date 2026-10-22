@@ -6,7 +6,7 @@
 //! after `ready` at once, only when the host stops it, or never; alone, it writes both files;
 //! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
 //! `scripted-worker -p --output-format json ...` impersonates the judge's `claude -p` call: it
-//! appends the prompt to `$FALINKS_FAKE_JUDGE/prompts.json` and replies with the next canned
+//! appends the prompt (after `-p`) to `$FALINKS_FAKE_JUDGE/prompts.json` and replies with the next canned
 //! text in `$FALINKS_FAKE_JUDGE/replies.json`, where `null` is a failed call;
 //! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge; copied
 //! as `launches-PROGRAM`, its first turn runs `PROGRAM` through Bash (a nested agent);
@@ -444,7 +444,7 @@ fn fake_judge(argv: &[String]) {
         serde_json::from_str(&fs::read_to_string(dir.join(name)).unwrap_or("[]".into())).unwrap()
     };
     let mut prompts = state("prompts.json");
-    prompts.push(argv.last().unwrap().as_str().into());
+    prompts.push(argv[1].as_str().into());
     fs::write(dir.join("prompts.json"), Value::from(prompts).to_string()).unwrap();
     let mut replies = state("replies.json");
     let reply = replies.remove(0);
