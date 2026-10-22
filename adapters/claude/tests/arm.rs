@@ -676,7 +676,7 @@ fn an_edit_answers_with_the_engine_stage_report_and_a_check_defers_its_oracle() 
     let envelope = |operation: &str, request: Value| json!({"identity": {"agent": agent_name(0), "workspace": root}, "operation": operation, "request": request});
     let edit = envelope(
         "edit",
-        json!({"id": "a1", "expected": {"producer.go": file["version"]},
+        json!({"id": "a1", "note": "n", "expected": {"producer.go": file["version"]},
             "output": {"producer.go": {"content": content}}}),
     );
     let Answer::Now { result, stages } = run.arm.answer(0, &edit).unwrap() else {

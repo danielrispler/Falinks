@@ -701,14 +701,14 @@ fn post_results_notices_and_edit_results_carry_no_unused_ids() {
     let applied = f.call(
         0,
         "edit",
-        json!({"id":"e","expected":{"label.go":before["files"]["label.go"]["version"]},
+        json!({"id":"e","note":"n","expected":{"label.go":before["files"]["label.go"]["version"]},
             "output":{"label.go":{"content":"package gate\n"}}}),
     );
     assert_eq!(applied["accepted"], true, "{applied}");
     let stale = f.call(
         1,
         "edit",
-        json!({"id":"s","expected":{"label.go":before["files"]["label.go"]["version"]},
+        json!({"id":"s","note":"n","expected":{"label.go":before["files"]["label.go"]["version"]},
             "output":{"label.go":null}}),
     );
     assert!(stale["outcome"]["Stale"].is_object(), "{stale}");
