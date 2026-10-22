@@ -153,7 +153,8 @@ observed starts, messages, drafts, developments, checks and failures with elapse
 timestamps. Retained Git objects identify exact candidates; `check-N.json`
 contains private visible/oracle command outputs. Preserve worker stderr and raw
 runtime events. Token usage is explicitly unavailable if not reported; it is
-not a subscription dollar-cost estimate. Rewrite/discard quantities are also
+not a subscription dollar-cost estimate. Tokens and cost come from the archived
+session JSONL instead (#202, below). Rewrite/discard quantities are also
 unavailable unless supplied by a runtime; do not invent them. Baseline engine
 recommendation/transition counts are zero by construction. Concurrent timeline
 intervals overlap and must not be summed into elapsed time.
@@ -166,7 +167,13 @@ is `complete` only when every final result arrived within that window;
 otherwise it is `partial` (a result flushed while the worker stopped is kept
 with `late: true`, a worker stopped before its result has none) or
 `unavailable` when no turn reported. `usage.final_results` says which. Partial
-usage is never used for cost comparisons. The Codex bridge reports its last turn
+usage is never used for cost comparisons: the report counts tokens from the
+archived Claude Code session JSONL (`controller/claude-projects`), one usage
+per `message.id`, so an agent's last turn counts even without its `result`.
+Cost is those tokens at the `prices` table frozen in `config.json`, an
+API-equivalent list price, not billed cost. Each run cross-checks against the
+drained `result` usage and Claude Code's `cost-state` total, and reports
+mismatches; a run without session JSONL has `missing` usage. The Codex bridge reports its last turn
 before `ready`, so its usage is never complete. Failures/timeouts/usage interruptions retain evidence and their
 reason; no automatic provider switch or silent replacement. The 30-minute
 budget includes preparation, communication, checks and integration. Every
@@ -238,7 +245,10 @@ it as `usage_limit`.
     runs active at its start and stop: any sibling directory's lock counts, the pilot's too. A
     shard killed mid-run leaves a stale lock: delete it, or the others over-report concurrency.
   - **Report**: `report --runs DIR [--runs DIR]...` lists every run's outcome, paired
-    successes, medians over jointly successful pairs and the continuation signal. Several
+    successes, medians over jointly successful pairs and the continuation signal. Each
+    run carries its `tokens`; each fixture's `cost` gives, per arm, tokens by class over
+    every scored run (failed and replaced runs included), runs `missing` usage, and the
+    API-equivalent cost per successful run, null when usage is missing. Several
     directories are merged as one batch: they must share one configuration and one pilot,
     and no run may appear twice. `concurrent_runs` lists the runs whose times overlapped
     a run in a sibling directory. An infrastructure failure or usage limit on a scored run
