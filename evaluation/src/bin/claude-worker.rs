@@ -209,11 +209,7 @@ impl Bridge {
     /// Fail closed on any runtime identity change, like the Falinks adapter's model control.
     fn line(&mut self, line: &str) -> Result<()> {
         let mut event: Value = serde_json::from_str(line)?;
-        if let Some(blocks) = event["message"]["content"].as_array_mut() {
-            // Evidence excludes model reasoning.
-            blocks
-                .retain(|b| !matches!(b["type"].as_str(), Some("thinking" | "redacted_thinking")));
-        }
+        drop_thinking(&mut event);
         writeln!(self.transcript, "{event}")?;
         let model = self.model.as_str();
         match (event["type"].as_str(), event["subtype"].as_str()) {
@@ -528,6 +524,18 @@ fn init_matches(event: &Value, model: &str, version: &str, tools: &str) -> bool 
         && listed == expected
 }
 
+/// Evidence excludes model reasoning. Touches only an object `message` with a `content` array:
+/// `IndexMut` panics on a string `message` and inserts a missing one (#253).
+fn drop_thinking(event: &mut Value) {
+    if let Some(blocks) = event
+        .get_mut("message")
+        .and_then(|m| m.get_mut("content"))
+        .and_then(Value::as_array_mut)
+    {
+        blocks.retain(|b| !matches!(b["type"].as_str(), Some("thinking" | "redacted_thinking")));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,6 +548,28 @@ mod tests {
         );
         let evidence: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         evidence["evidence"]["transcripts"][0][0]["events"][0].clone()
+    }
+
+    #[test]
+    fn drop_thinking_keeps_odd_events_and_strips_reasoning() {
+        for raw in [
+            json!({"type": "system", "message": "hello"}),
+            json!({"type": "result", "subtype": "success"}),
+        ] {
+            let mut event = raw.clone();
+            drop_thinking(&mut event);
+            assert_eq!(event, raw);
+        }
+        let mut event = json!({"type": "assistant", "message": {"content": [
+            {"type": "thinking", "thinking": "x"},
+            {"type": "redacted_thinking", "data": "y"},
+            {"type": "text", "text": "z"},
+        ]}});
+        drop_thinking(&mut event);
+        assert_eq!(
+            event["message"]["content"],
+            json!([{"type": "text", "text": "z"}])
+        );
     }
 
     #[test]
