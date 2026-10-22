@@ -2,7 +2,7 @@
   "hashes": {
     "Cargo.lock": "0454ca05e92d6fb25d47c4938537690e9c6365a6909355a1919bbf748a2d70fd",
     "Cargo.toml": "1c6bc262c1b4b81b4c7bd5ae291db2fc06de3578cd672c060337c0ebe5ae9ec0",
-    "config.json": "e4f4597ef65b4481548b733a46e70867e719e8bcc9acc35b2829a4aa803ec738",
+    "config.json": "515f41cfe9ac656f7947a309309a010f1d1f7a715c86cdf866a79ce1e182b0a8",
     "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
     "fixtures/go-relationships.json": "3f3cdd1d1b061b9dcee056ea77a9fec999326684309b1ece06785ffb346b764e",
     "fixtures/rust-errors.json": "c1ef8768913cd2e7278ae92bf64be61e6b25782814345d0e56d74bfe92002b0e",
@@ -28,5 +28,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 14
+  "version": 15
 }
