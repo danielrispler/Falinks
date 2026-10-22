@@ -28,8 +28,9 @@ pub const CHECKS: &[&str] = &[
 /// keeps the two equal. `ci-checks` runs it only when a workflow changed.
 pub const ACTIONLINT: &str = "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12";
 
-/// The evaluation test step: slow, so CI runs it only on PRs that change one of
-/// `EVALUATION_INPUTS`, and `ci-checks` only with `--all`.
+/// The evaluation test step: slow, so CI runs its light tests on PRs that change one
+/// of `EVALUATION_INPUTS` and the heavy ones on a schedule; `ci-checks` runs it only
+/// with `--all`.
 pub const EVALUATION_TESTS: &str =
     "cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1";
 
