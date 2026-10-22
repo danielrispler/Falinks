@@ -1,6 +1,7 @@
-//! Scored-batch interpretation: every outcome, paired successes, medians, API-equivalent cost
-//! per successful task and the agreed continuation signal. Exploratory evidence only; never a
-//! statistical claim, and the cost is list price, never billed cost.
+//! Scored-batch report (#204): every dimension for both arms side by side, per fixture. Each
+//! metric gives each repetition's value, the median, range and n, counts missing data and never
+//! imputes it, and carries an evidence label. No winner is computed (#5 amendment): the decision
+//! is written on the ticket. Exploratory evidence only; the cost is list price, never billed.
 use crate::{
     SCORED_FIXTURES,
     batch::replaceable,
@@ -9,8 +10,35 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// Continuation signal: at least this much lower median time on two of three fixtures.
-const REDUCTION: f64 = 0.2;
+const ARMS: [&str; 2] = ["git", "falinks"];
+/// Compared for both arms, followed by `tokens_<class>`. `retries` is not compared: the Git arm
+/// fixes it at 0.
+const METRICS: [&str; 8] = [
+    "completion_seconds",
+    "model_seconds",
+    "round_trips",
+    "cost_usd",
+    "success",
+    "refused_operations",
+    "failed_checks_before_pass",
+    "safety_incidents",
+];
+/// Falinks output forms with the counts `adapters/claude/arm.rs` records per form (its
+/// `tests/arm.rs` checks these copies agree), and the refusal recovery `timing` reads from the
+/// transcripts.
+const FORMS: [&str; 3] = ["content", "replace", "from"];
+const EDIT_COUNTS: [&str; 7] = [
+    "accepted",
+    "stale",
+    "unreviewed",
+    "rejected",
+    "interrupted",
+    "host_refused",
+    "resends",
+];
+const RECOVERY: [&str; 4] = ["refusals", "unresolved", "round_trips", "model_seconds"];
+/// Printed beside every fixture's labels (#5 amendment, decision 5).
+const LABEL_NOTE: &str = "consistent: every repetition of one arm is below every repetition of the other, with no data missing; mixed: the ranges overlap; incomplete: a repetition lacks the metric. Chance alone gives consistent 2/20 of the time per cell at n = 3, and it is not proof of a meaningful or generalizable advantage.";
 
 /// Tokens by class and API-equivalent cost of every scored run of one arm on one fixture,
 /// failed, interrupted and replaced runs included, and that cost per successful run. A run
@@ -49,16 +77,69 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     }
 }
 
-/// `runs` are every recorded result (pilot included) in batch order; all are listed. Scoring
-/// uses scored runs only. A record naming an earlier one in `replaces` supersedes it. A
-/// replaceable outcome is an interruption, not a task outcome: its pair stays incomplete and,
-/// until replaced, it is named as a reason the verdict is inconclusive.
+/// One run's value of a compared metric, or None when the run lacks it.
+fn value(run: &Value, metric: &str) -> Option<f64> {
+    let outcome = run["outcome"].as_str();
+    let is = |name: &str| outcome.map(|o| f64::from(u8::from(o == name)));
+    match metric {
+        // A failed run is reported as a failure and never timed as a success.
+        "completion_seconds" => run["timing"]["elapsed_seconds"]
+            .as_f64()
+            .filter(|_| outcome == Some("success")),
+        "model_seconds" => run["transcript"]["round_trips"]["model_seconds"].as_f64(),
+        "round_trips" => run["transcript"]["round_trips"]["count"].as_f64(),
+        "cost_usd" => run["tokens"]["cost_usd"].as_f64(),
+        "success" => is("success"),
+        "refused_operations" => run["rejected_operations"].as_f64(),
+        // Every check when none passed.
+        "failed_checks_before_pass" => run["validation_attempts"]
+            .as_array()
+            .map(|a| a.iter().take_while(|v| v["passed"] != true).count() as f64),
+        "safety_incidents" => is("safety_failure"),
+        class => run["tokens"]["tokens"][class.strip_prefix("tokens_")?].as_f64(),
+    }
+}
+
+/// Each repetition's value (null when missing), the median, range and n.
+fn stats(values: &[Option<f64>]) -> Value {
+    let present: Vec<f64> = values.iter().flatten().copied().collect();
+    let low = present.iter().copied().reduce(f64::min);
+    let high = present.iter().copied().reduce(f64::max);
+    json!({"values": values, "median": median(present.clone()),
+        "range": low.zip(high).map(|(low, high)| [low, high]),
+        "n": present.len(), "missing": values.len() - present.len()})
+}
+
+/// The evidence label of one metric on one fixture (#5 amendment, decision 5).
+fn label(git: &[Option<f64>], falinks: &[Option<f64>]) -> &'static str {
+    let complete = |values: &[Option<f64>]| {
+        values
+            .iter()
+            .copied()
+            .collect::<Option<Vec<f64>>>()
+            .filter(|v| !v.is_empty())
+    };
+    let (Some(git), Some(falinks)) = (complete(git), complete(falinks)) else {
+        return "incomplete";
+    };
+    let below = |a: &[f64], b: &[f64]| a.iter().all(|x| b.iter().all(|y| x < y));
+    if below(&git, &falinks) || below(&falinks, &git) {
+        "consistent"
+    } else {
+        "mixed"
+    }
+}
+
+/// `runs` are every recorded result (pilot included) in batch order; all are listed. The
+/// metrics use scored runs only. A record naming an earlier one in `replaces` supersedes it. A
+/// replaceable outcome is an interruption, not a task outcome: its repetition lacks every
+/// metric and, until replaced, it is named in `gaps`.
 pub fn report(runs: &[Value]) -> Value {
     let replaced: Vec<&Value> = runs.iter().filter_map(|r| r.get("replaces")).collect();
-    let (interrupted, scored): (Vec<&Value>, Vec<&Value>) = runs
+    let current: Vec<&Value> = runs
         .iter()
         .filter(|r| r["scored"] == true && !replaced.contains(&&r["run_id"]))
-        .partition(|r| replaceable(r));
+        .collect();
     let elapsed = |r: &Value| r["timing"]["elapsed_seconds"].as_f64();
     // A run overlapped another if it saw one active at its start or stop, or one saw it: a
     // run entirely inside another sees it at start without being seen.
@@ -70,48 +151,72 @@ pub fn report(runs: &[Value]) -> Value {
     let named: Vec<Value> = runs.iter().flat_map(seen).collect();
     let concurrent = |r: &Value| !seen(r).is_empty() || named.contains(&r["run_id"]);
     let mut fixtures = serde_json::Map::new();
-    let (mut counted, mut successes) = (0, BTreeMap::from([("git", 0), ("falinks", 0)]));
-    let mut inconclusive = Vec::new();
+    let mut successes = BTreeMap::from([("git", 0), ("falinks", 0)]);
+    let mut gaps = Vec::new();
     for fixture in SCORED_FIXTURES {
         let mut pairs: BTreeMap<&str, BTreeMap<&str, &Value>> = BTreeMap::new();
-        for run in scored.iter().filter(|r| r["fixture"] == fixture) {
+        for run in current.iter().filter(|r| r["fixture"] == fixture) {
             let (Some(pair), Some(arm)) = (run["pair"].as_str(), run["arm"].as_str()) else {
                 continue;
             };
             pairs.entry(pair).or_default().insert(arm, run);
         }
-        let mut arm_successes = BTreeMap::from([("git", 0), ("falinks", 0)]);
-        let mut times: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
-        let mut qualifying = 0;
-        for arms in pairs.values() {
-            for (arm, run) in arms {
-                if run["outcome"] == "success" {
-                    *arm_successes.get_mut(arm).unwrap() += 1;
-                }
-            }
-            let both = ["git", "falinks"].map(|a| {
-                arms.get(a)
-                    .filter(|r| r["outcome"] == "success")
-                    .and_then(|r| elapsed(r))
-            });
-            if let [Some(git), Some(falinks)] = both {
-                qualifying += 1;
-                times.entry("git").or_default().push(git);
-                times.entry("falinks").or_default().push(falinks);
+        // Each repetition's run per arm: None when it is absent or interrupted.
+        let slots: BTreeMap<&str, Vec<Option<&Value>>> = ARMS
+            .map(|arm| {
+                let slots = pairs
+                    .values()
+                    .map(|arms| arms.get(arm).copied().filter(|r| !replaceable(r)));
+                (arm, slots.collect())
+            })
+            .into();
+        let succeeded = |r: &Option<&Value>| r.is_some_and(|r| r["outcome"] == "success");
+        let arm_successes: BTreeMap<&str, u64> = ARMS
+            .map(|arm| {
+                (
+                    arm,
+                    slots[arm].iter().filter(|r| succeeded(r)).count() as u64,
+                )
+            })
+            .into();
+        let (mut complete, mut times) = (0, BTreeMap::<&str, Vec<f64>>::new());
+        for (git, falinks) in slots["git"].iter().zip(&slots["falinks"]) {
+            complete += usize::from(git.is_some() && falinks.is_some());
+            if let (Some(g), Some(f)) = (
+                git.filter(|_| succeeded(git)),
+                falinks.filter(|_| succeeded(falinks)),
+            ) {
+                times.entry("git").or_default().extend(elapsed(g));
+                times.entry("falinks").or_default().extend(elapsed(f));
             }
         }
+        let qualifying = times.get("git").map_or(0, Vec::len);
         let git = median(times.remove("git").unwrap_or_default());
         let falinks = median(times.remove("falinks").unwrap_or_default());
-        // No jointly successful pairs means no time comparison.
+        // The time difference over jointly successful pairs; none means no time comparison.
         let reduction = git.zip(falinks).map(|(g, f)| 1.0 - f / g);
-        // Tolerance: exactly 20% (800 s against 1000 s) must count despite float rounding.
-        let meets = reduction.is_some_and(|r| r >= REDUCTION - 1e-9)
-            && arm_successes["falinks"] >= arm_successes["git"];
-        counted += usize::from(meets);
         for (arm, n) in &arm_successes {
             *successes.get_mut(arm).unwrap() += n;
         }
-        let costs: serde_json::Map<String, Value> = ["git", "falinks"]
+        let names = METRICS
+            .iter()
+            .map(|m| m.to_string())
+            .chain(CLASSES.iter().map(|c| format!("tokens_{c}")));
+        let mut metrics = serde_json::Map::new();
+        for metric in names {
+            let values = |arm: &str| -> Vec<Option<f64>> {
+                slots[arm]
+                    .iter()
+                    .map(|r| r.and_then(|r| value(r, &metric)))
+                    .collect()
+            };
+            let (git, falinks) = (values("git"), values("falinks"));
+            metrics.insert(
+                metric.clone(),
+                json!({"git": stats(&git), "falinks": stats(&falinks), "label": label(&git, &falinks)}),
+            );
+        }
+        let costs: serde_json::Map<String, Value> = ARMS
             .iter()
             .map(|arm| {
                 let all: Vec<&Value> = runs
@@ -121,12 +226,63 @@ pub fn report(runs: &[Value]) -> Value {
                 (arm.to_string(), cost(&all, arm_successes[arm]))
             })
             .collect();
-        let complete = pairs.values().filter(|arms| arms.len() == 2).count();
+        let falinks_runs = &slots["falinks"];
+        let per_run = |f: &dyn Fn(&Value) -> Option<f64>| -> Value {
+            stats(
+                &falinks_runs
+                    .iter()
+                    .map(|r| r.and_then(f))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let edits: serde_json::Map<String, Value> = FORMS
+            .iter()
+            .map(|form| {
+                let mut entry = serde_json::Map::new();
+                for count in EDIT_COUNTS {
+                    entry.insert(
+                        count.into(),
+                        per_run(&|r| r["edits"]["forms"][form][count].as_f64()),
+                    );
+                }
+                for key in RECOVERY {
+                    let figure =
+                        per_run(&|r| r["transcript"]["refusal_recovery"][form][key].as_f64());
+                    entry.insert(format!("recovery_{key}"), figure);
+                }
+                let reasons: Vec<Value> = falinks_runs
+                    .iter()
+                    .flatten()
+                    .map(|r| {
+                        let form = &r["edits"]["forms"][form];
+                        json!({"run_id": r["run_id"], "rejected": form["rejected_reasons"],
+                            "host_refused": form["host_refused_reasons"]})
+                    })
+                    .filter(|r| {
+                        r["rejected"].as_array().is_some_and(|a| !a.is_empty())
+                            || r["host_refused"].as_array().is_some_and(|a| !a.is_empty())
+                    })
+                    .collect();
+                entry.insert("reasons".into(), json!(reasons));
+                (form.to_string(), Value::Object(entry))
+            })
+            .collect();
+        let reverted: Vec<Value> = falinks_runs
+            .iter()
+            .flatten()
+            .flat_map(|r| {
+                let entries = r["edits"]["reverted_peer_text"].as_array().cloned();
+                entries.into_iter().flatten().map(|mut entry| {
+                    entry["run_id"] = r["run_id"].clone();
+                    entry
+                })
+            })
+            .collect();
         if complete < 3 {
-            inconclusive.push(format!("{fixture}: {complete} of 3 complete pairs"));
+            gaps.push(format!("{fixture}: {complete} of 3 complete pairs"));
         }
         if qualifying == 0 {
-            inconclusive.push(format!("{fixture}: no jointly successful pairs"));
+            gaps.push(format!("{fixture}: no jointly successful pairs"));
         }
         fixtures.insert(
             fixture.into(),
@@ -136,22 +292,26 @@ pub fn report(runs: &[Value]) -> Value {
                         "outcome": r["outcome"], "elapsed_seconds": elapsed(r), "concurrent": concurrent(r)})))
                         .collect::<serde_json::Map<_, _>>()}))
                     .collect::<Vec<_>>(),
-                "successes": arm_successes, "qualifying_pairs": qualifying,
-                "median_seconds": {"git": git, "falinks": falinks},
-                "median_reduction": reduction, "meets_threshold": meets,
+                "complete_pairs": complete, "successes": arm_successes,
+                "qualifying_pairs": qualifying,
+                "median_seconds": {"git": git, "falinks": falinks}, "median_reduction": reduction,
+                "metrics": metrics, "label_note": LABEL_NOTE,
                 "cost": costs,
+                "code_quality": {"git": null, "falinks": null, "reserved_for": "#203's pre-registered metrics"},
+                "falinks_edits": edits,
+                "reverted_peer_text": reverted,
             }),
         );
     }
-    for run in interrupted {
+    for run in current.iter().filter(|r| replaceable(r)) {
         // As `replaceable` reads it: no outcome is an infrastructure failure.
         let outcome = run["outcome"].as_str().unwrap_or("infrastructure_failure");
         let id = run["run_id"].as_str().unwrap_or_default();
-        inconclusive.push(format!("unreplaced interruption {id}: {outcome}"));
+        gaps.push(format!("unreplaced interruption {id}: {outcome}"));
     }
     for run in runs.iter().filter(|r| r["outcome"] == "run_invalid") {
         let id = run["run_id"].as_str().unwrap_or_default();
-        inconclusive.push(format!("invalid run {id}: nested agent"));
+        gaps.push(format!("invalid run {id}: nested agent"));
     }
     let unsafe_runs: Vec<&Value> = runs
         .iter()
@@ -164,24 +324,13 @@ pub fn report(runs: &[Value]) -> Value {
             .filter(|r| r["arm"] == arm && !r["nested_agent"].is_null())
             .count()
     };
-    let signal = counted >= 2 && successes["falinks"] >= successes["git"];
-    let transitions: u64 = scored
+    let transitions: u64 = current
         .iter()
-        .filter(|r| r["arm"] == "falinks")
+        .filter(|r| r["arm"] == "falinks" && !replaceable(r))
         .filter_map(|r| r["transitions"].as_u64())
         .sum();
-    let verdict = if !unsafe_runs.is_empty() {
-        "paused_unsafe"
-    } else if !inconclusive.is_empty() {
-        "inconclusive"
-    } else if signal {
-        "continuation_signal"
-    } else {
-        "no_signal"
-    };
     json!({
-        "verdict": verdict,
-        "qualification": "Exploratory: three repetitions per fixture; not statistical proof, general superiority or billed cost.",
+        "qualification": "Exploratory: three repetitions per fixture and no p-values. No winner is computed; the decision is written on the ticket. Cost is API-equivalent list price, not billed cost.",
         "runs": runs.iter().map(|r| json!({"run_id": r["run_id"], "pair": r["pair"], "arm": r["arm"],
             "scored": r["scored"], "outcome": r["outcome"], "replaces": r.get("replaces"),
             "failure_reason": r.get("failure_reason"), "concurrency": r.get("concurrency"),
@@ -190,9 +339,7 @@ pub fn report(runs: &[Value]) -> Value {
         "concurrency_note": "Times of concurrent_runs were measured while another shard's run was active.",
         "fixtures": fixtures,
         "successes": successes,
-        "fixtures_meeting_threshold": counted,
-        "continuation_signal": signal,
-        "inconclusive_reasons": inconclusive,
+        "gaps": gaps,
         "safety_failures": unsafe_runs,
         "nested_agent_hits": {"git": nested("git"), "falinks": nested("falinks")},
         "falinks_transitions": transitions,
@@ -238,6 +385,14 @@ mod tests {
         runs
     }
 
+    fn uniform() -> Vec<Value> {
+        batch([[700.0; 3], [800.0; 3], [1100.0; 3]])
+    }
+
+    fn find<'a>(runs: &'a mut [Value], id: &str) -> &'a mut Value {
+        runs.iter_mut().find(|r| r["run_id"] == id).unwrap()
+    }
+
     #[test]
     fn medians_handle_odd_even_and_empty() {
         assert_eq!(median(vec![3.0, 1.0, 2.0]), Some(2.0));
@@ -246,40 +401,188 @@ mod tests {
     }
 
     #[test]
-    fn two_fixtures_twenty_percent_faster_is_a_signal() {
-        let out = report(&batch([[700.0; 3], [800.0; 3], [1100.0; 3]]));
-        assert_eq!(out["fixtures_meeting_threshold"], 2);
-        assert_eq!(out["verdict"], "continuation_signal");
-        assert_eq!(out["fixtures"]["go-page"]["qualifying_pairs"], 3);
+    fn failed_checks_count_until_the_first_pass() {
+        let attempts = |passed: &[bool]| {
+            let attempts: Vec<Value> = passed.iter().map(|p| json!({"passed": p})).collect();
+            value(
+                &json!({"validation_attempts": attempts}),
+                "failed_checks_before_pass",
+            )
+        };
+        assert_eq!(attempts(&[false, false, true, false]), Some(2.0));
+        assert_eq!(attempts(&[false]), Some(1.0));
+        assert_eq!(attempts(&[]), Some(0.0));
+        assert_eq!(value(&json!({}), "failed_checks_before_pass"), None);
+    }
+
+    #[test]
+    fn the_report_computes_no_winner() {
+        let out = report(&uniform());
+        for key in [
+            "verdict",
+            "continuation_signal",
+            "fixtures_meeting_threshold",
+        ] {
+            assert!(out.get(key).is_none(), "{key}");
+        }
+        let page = &out["fixtures"]["go-page"];
+        assert!(page.get("meets_threshold").is_none());
+        // The time difference stays as a number.
+        assert!((page["median_reduction"].as_f64().unwrap() - 0.2).abs() < 1e-9);
+        assert_eq!(out["gaps"], json!([]));
+        assert_eq!(
+            page["code_quality"]["reserved_for"],
+            "#203's pre-registered metrics"
+        );
         assert_eq!(out["regrouping_benefit"], "unestablished: no transitions");
     }
 
     #[test]
-    fn one_fast_fixture_is_no_signal() {
-        let out = report(&batch([[700.0; 3], [900.0; 3], [1100.0; 3]]));
-        assert_eq!(out["fixtures_meeting_threshold"], 1);
-        assert_eq!(out["verdict"], "no_signal");
+    fn non_overlapping_ranges_print_consistent_with_the_note() {
+        let out = report(&batch([[700.0, 800.0, 900.0], [800.0; 3], [1100.0; 3]]));
+        let rust = &out["fixtures"]["rust-errors"];
+        let time = &rust["metrics"]["completion_seconds"];
+        assert_eq!(time["label"], "consistent", "{time}");
+        assert_eq!(
+            time["falinks"],
+            json!({"values": [700.0, 800.0, 900.0], "median": 800.0, "range": [700.0, 900.0],
+                "n": 3, "missing": 0})
+        );
+        assert_eq!(
+            out["fixtures"]["go-relationships"]["metrics"]["completion_seconds"]["label"],
+            "consistent"
+        );
+        let note = rust["label_note"].as_str().unwrap();
+        assert!(
+            note.contains("2/20 of the time per cell at n = 3"),
+            "{note}"
+        );
+        assert!(note.contains("not proof of a meaningful or generalizable advantage"));
+        // Equal values overlap.
+        assert_eq!(rust["metrics"]["success"]["label"], "mixed");
+        assert_eq!(rust["metrics"]["refused_operations"]["label"], "incomplete");
     }
 
     #[test]
-    fn lower_success_rate_blocks_the_signal() {
-        let mut runs = batch([[700.0; 3], [700.0; 3], [700.0; 3]]);
-        // A Falinks failure on every fixture: faster medians cannot compensate.
-        for fixture in SCORED_FIXTURES {
-            let run = runs
-                .iter_mut()
-                .find(|r| r["fixture"] == fixture && r["arm"] == "falinks")
-                .unwrap();
-            run["outcome"] = "task_failure".into();
+    fn overlapping_ranges_print_mixed() {
+        let out = report(&batch([[900.0, 1000.0, 1100.0], [800.0; 3], [800.0; 3]]));
+        let time = &out["fixtures"]["rust-errors"]["metrics"]["completion_seconds"];
+        assert_eq!(time["label"], "mixed", "{time}");
+    }
+
+    #[test]
+    fn a_run_missing_usage_or_transcripts_prints_incomplete() {
+        let mut runs = uniform();
+        for run in runs.iter_mut() {
+            run["tokens"] = json!({"cost_usd": 1.0, "tokens": {"output": 10}});
+            run["transcript"] = json!({"round_trips": {"count": 20, "model_seconds": 50.0}});
         }
         let out = report(&runs);
-        assert_eq!(out["fixtures"]["go-page"]["qualifying_pairs"], 2);
-        assert_eq!(out["continuation_signal"], false);
+        let metrics = &out["fixtures"]["go-page"]["metrics"];
+        assert_eq!(metrics["cost_usd"]["label"], "mixed");
+        assert_eq!(metrics["round_trips"]["label"], "mixed");
+        let page = find(&mut runs, "go-page-1-f");
+        page["tokens"] = json!({"status": "missing", "cost_usd": null, "tokens": null});
+        page["transcript"] = Value::Null;
+        let out = report(&runs);
+        let metrics = &out["fixtures"]["go-page"]["metrics"];
+        for metric in ["cost_usd", "tokens_output", "model_seconds", "round_trips"] {
+            assert_eq!(metrics[metric]["label"], "incomplete", "{metric}");
+            // Shown as missing, never imputed.
+            assert_eq!(metrics[metric]["falinks"]["missing"], 1, "{metric}");
+            assert_eq!(metrics[metric]["falinks"]["n"], 2, "{metric}");
+            assert_eq!(
+                metrics[metric]["falinks"]["values"][1],
+                Value::Null,
+                "{metric}"
+            );
+        }
+        assert_eq!(metrics["cost_usd"]["git"]["missing"], 0);
     }
 
     #[test]
-    fn no_joint_successes_means_no_time_comparison() {
-        let mut runs = batch([[700.0; 3], [700.0; 3], [700.0; 3]]);
+    fn a_failed_run_counts_in_cost_per_successful_task() {
+        let mut runs = uniform();
+        for run in runs.iter_mut() {
+            run["tokens"] = json!({"cost_usd": 1.0, "tokens": {"output": 10}});
+        }
+        find(&mut runs, "go-page-0-f")["outcome"] = "task_failure".into();
+        let out = report(&runs);
+        let page = &out["fixtures"]["go-page"];
+        let falinks = &page["cost"]["falinks"];
+        // Three runs cost $3 and two succeeded.
+        assert_eq!(falinks["cost_per_success_usd"], 1.5);
+        assert_eq!(falinks["tokens"]["output"], 30);
+        assert_eq!(
+            page["metrics"]["success"]["falinks"]["values"],
+            json!([0.0, 1.0, 1.0])
+        );
+        // A failed run is never timed as a success.
+        assert_eq!(
+            page["metrics"]["completion_seconds"]["falinks"]["missing"],
+            1
+        );
+        assert_eq!(page["qualifying_pairs"], 2);
+        find(&mut runs, "go-page-0-f")["tokens"] = json!({"status": "missing", "cost_usd": null});
+        let falinks = &report(&runs)["fixtures"]["go-page"]["cost"]["falinks"];
+        assert_eq!(falinks["missing"], 1);
+        assert_eq!(falinks["cost_per_success_usd"], Value::Null);
+    }
+
+    #[test]
+    fn per_form_edit_counts_follow_each_recorded_ledger() {
+        let mut runs = uniform();
+        // Each Falinks run's edits as `adapters/claude/arm.rs` records them from its ledger.
+        for (rep, accepted) in [3, 5, 4].into_iter().enumerate() {
+            let mut content: serde_json::Map<String, Value> = EDIT_COUNTS
+                .iter()
+                .map(|c| (c.to_string(), json!(0)))
+                .collect();
+            content.insert("accepted".into(), json!(accepted));
+            content.insert("rejected".into(), json!(1));
+            content.insert(
+                "rejected_reasons".into(),
+                json!(["a.go: hunk 2: old text matches 0 places"]),
+            );
+            content.insert("host_refused_reasons".into(), json!([]));
+            let run = find(&mut runs, &format!("go-page-{rep}-f"));
+            run["edits"] = json!({"forms": {"content": content},
+                "reverted_peer_text": [{"agent": 1, "id": "b3", "path": "a.go", "peer_id": "a2", "lines": ["x"]}]});
+            run["transcript"] = json!({"refusal_recovery": {"content":
+                {"refusals": 1, "unresolved": 0, "round_trips": rep + 2, "model_seconds": 4.0}}});
+        }
+        find(&mut runs, "go-page-2-f")
+            .as_object_mut()
+            .unwrap()
+            .remove("edits");
+        let out = report(&runs);
+        let page = &out["fixtures"]["go-page"];
+        let content = &page["falinks_edits"]["content"];
+        assert_eq!(
+            content["accepted"],
+            json!({"values": [3.0, 5.0, null], "median": 4.0, "range": [3.0, 5.0], "n": 2, "missing": 1})
+        );
+        assert_eq!(content["rejected"]["values"], json!([1.0, 1.0, null]));
+        assert_eq!(
+            content["recovery_round_trips"]["values"],
+            json!([2.0, 3.0, 4.0])
+        );
+        assert_eq!(content["reasons"][1]["run_id"], "go-page-1-f");
+        assert_eq!(
+            content["reasons"][1]["rejected"][0],
+            "a.go: hunk 2: old text matches 0 places"
+        );
+        // A form the ledger never saw is missing, never zero.
+        assert_eq!(page["falinks_edits"]["replace"]["accepted"]["n"], 0);
+        let reverted = page["reverted_peer_text"].as_array().unwrap();
+        assert_eq!(reverted.len(), 2);
+        assert_eq!(reverted[0]["run_id"], "go-page-0-f");
+        assert_eq!(reverted[0]["peer_id"], "a2");
+    }
+
+    #[test]
+    fn no_joint_successes_means_no_time_difference() {
+        let mut runs = uniform();
         for run in runs
             .iter_mut()
             .filter(|r| r["fixture"] == "go-page" && r["arm"] == "git")
@@ -290,12 +593,14 @@ mod tests {
         let page = &out["fixtures"]["go-page"];
         assert_eq!(page["qualifying_pairs"], 0);
         assert_eq!(page["median_reduction"], Value::Null);
-        assert_eq!(out["verdict"], "inconclusive");
+        assert_eq!(page["metrics"]["completion_seconds"]["label"], "incomplete");
+        assert_eq!(page["metrics"]["success"]["label"], "consistent");
+        assert_eq!(out["gaps"], json!(["go-page: no jointly successful pairs"]));
     }
 
     #[test]
     fn replacements_supersede_infrastructure_failures_and_stay_listed() {
-        let mut runs = batch([[700.0; 3], [700.0; 3], [700.0; 3]]);
+        let mut runs = uniform();
         runs[0]["outcome"] = "infrastructure_failure".into();
         let mut replacement = runs[0].clone();
         replacement["run_id"] = "rust-errors-0-g-r1".into();
@@ -305,11 +610,12 @@ mod tests {
         let out = report(&runs);
         assert_eq!(out["fixtures"]["rust-errors"]["qualifying_pairs"], 3);
         assert_eq!(out["replaced_runs"], json!(["rust-errors-0-g"]));
+        assert_eq!(out["gaps"], json!([]));
     }
 
     #[test]
     fn runs_overlapping_a_sibling_shard_are_flagged_both_ways() {
-        let mut runs = batch([[700.0; 3], [700.0; 3], [700.0; 3]]);
+        let mut runs = uniform();
         // go-page-0-g started while rust-errors-0-g ran; rust-errors-0-g saw nothing itself.
         let page = runs
             .iter()
@@ -333,29 +639,26 @@ mod tests {
 
     #[test]
     fn missing_pairs_usage_exhaustion_and_unsafe_runs_are_reported() {
-        let mut runs = batch([[700.0; 3], [700.0; 3], [700.0; 3]]);
+        let mut runs = uniform();
         runs.truncate(16);
         runs[15]["outcome"] = "usage_limit".into();
         let out = report(&runs);
-        assert_eq!(out["verdict"], "inconclusive");
-        let reasons = out["inconclusive_reasons"].as_array().unwrap();
-        assert_eq!(reasons.len(), 2);
+        let gaps = out["gaps"].as_array().unwrap();
+        assert_eq!(gaps.len(), 2, "{gaps:?}");
         assert!(
-            reasons[1]
+            gaps[1]
                 .to_string()
                 .contains(runs[15]["run_id"].as_str().unwrap())
         );
         runs[3]["outcome"] = "safety_failure".into();
-        assert_eq!(report(&runs)["verdict"], "paused_unsafe");
-    }
-
-    /// Two fixtures meet the threshold: a continuation signal when nothing is interrupted.
-    fn signalling() -> Vec<Value> {
-        batch([[700.0; 3], [800.0; 3], [1100.0; 3]])
+        let out = report(&runs);
+        assert_eq!(out["safety_failures"], json!([runs[3]["run_id"]]));
+        let safety = &out["fixtures"]["rust-errors"]["metrics"]["safety_incidents"];
+        assert_eq!(safety["falinks"]["values"], json!([0.0, 1.0, 0.0]));
     }
 
     #[test]
-    fn unreplaced_interruptions_in_either_arm_are_inconclusive_and_named() {
+    fn unreplaced_interruptions_in_either_arm_are_named_gaps() {
         let f0 = SCORED_FIXTURES[0];
         // A result with no outcome reads as an infrastructure failure.
         for (id, outcome, named) in [
@@ -372,25 +675,25 @@ mod tests {
             (format!("{f0}-2-f"), json!("usage_limit"), "usage_limit"),
             (format!("{f0}-2-g"), Value::Null, "infrastructure_failure"),
         ] {
-            let mut runs = signalling();
-            runs.iter_mut().find(|r| r["run_id"] == *id).unwrap()["outcome"] = outcome;
+            let mut runs = uniform();
+            find(&mut runs, &id)["outcome"] = outcome;
             let out = report(&runs);
-            assert_eq!(out["verdict"], "inconclusive", "{id}: {out}");
-            assert_eq!(out["fixtures"][f0]["pairs"].as_array().unwrap().len(), 3);
+            let fixture = &out["fixtures"][f0];
+            assert_eq!(fixture["pairs"].as_array().unwrap().len(), 3);
+            assert_eq!(fixture["complete_pairs"], 2);
+            // An interruption is not a task outcome: its repetition lacks every metric.
+            assert_eq!(fixture["metrics"]["success"]["label"], "incomplete", "{id}");
             let reason = json!(format!("unreplaced interruption {id}: {named}"));
             assert!(
-                out["inconclusive_reasons"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&reason),
+                out["gaps"].as_array().unwrap().contains(&reason),
                 "{id}: {out}"
             );
         }
     }
 
     #[test]
-    fn replaced_interruptions_of_either_kind_leave_the_verdict_alone() {
-        let mut runs = signalling();
+    fn replaced_interruptions_of_either_kind_leave_no_gap() {
+        let mut runs = uniform();
         for (i, outcome) in [(0, "infrastructure_failure"), (3, "usage_limit")] {
             let mut replacement = runs[i].clone();
             replacement["run_id"] = format!("{}-r1", runs[i]["run_id"].as_str().unwrap()).into();
@@ -399,42 +702,19 @@ mod tests {
             runs.push(replacement);
         }
         let out = report(&runs);
-        assert_eq!(out["verdict"], "continuation_signal", "{out}");
+        assert_eq!(out["gaps"], json!([]), "{out}");
         assert_eq!(out["replaced_runs"].as_array().unwrap().len(), 2);
     }
 
     #[test]
-    fn a_usage_limited_pilot_run_does_not_affect_the_verdict() {
-        let mut runs = signalling();
+    fn a_usage_limited_pilot_run_leaves_no_gap() {
+        let mut runs = uniform();
         let mut pilot = runs[0].clone();
         pilot["run_id"] = "pilot-g".into();
         pilot["pair"] = "pilot".into();
         pilot["scored"] = false.into();
         pilot["outcome"] = "usage_limit".into();
         runs.insert(0, pilot);
-        assert_eq!(report(&runs)["verdict"], "continuation_signal");
-    }
-
-    #[test]
-    fn cost_per_success_counts_every_run_and_refuses_missing_usage() {
-        let mut runs = signalling();
-        let priced = |usd: f64| json!({"cost_usd": usd, "tokens": {"output": 10}});
-        for run in runs.iter_mut() {
-            run["tokens"] = priced(1.0);
-        }
-        let failed = runs
-            .iter()
-            .position(|r| r["run_id"] == "go-page-0-f")
-            .unwrap();
-        runs[failed]["outcome"] = "task_failure".into();
-        let out = report(&runs);
-        let falinks = &out["fixtures"]["go-page"]["cost"]["falinks"];
-        // Three runs cost $3 and two succeeded.
-        assert_eq!(falinks["cost_per_success_usd"], 1.5);
-        assert_eq!(falinks["tokens"]["output"], 30);
-        runs[failed]["tokens"] = json!({"status": "missing", "cost_usd": null});
-        let falinks = &report(&runs)["fixtures"]["go-page"]["cost"]["falinks"];
-        assert_eq!(falinks["missing"], 1);
-        assert_eq!(falinks["cost_per_success_usd"], Value::Null);
+        assert_eq!(report(&runs)["gaps"], json!([]));
     }
 }

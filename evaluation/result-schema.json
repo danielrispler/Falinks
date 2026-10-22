@@ -25,6 +25,8 @@
     "usage_limit_interruptions": {"type": "array"},
     "rejected_operations": {"type": ["integer", "object"]},
     "retries": {"type": ["integer", "object"]},
+    "edits": {"type": "object", "description": "Falinks arm (#204): per output form (content, replace, from), the ledger's accepted, stale, unreviewed, rejected and interrupted edits, host_refused (refused before reaching the ledger) and resends, with reasons; and reverted_peer_text, accepted edits that bring back lines a peer's earlier edit removed, for a manual check",
+      "properties": {"forms": {"type": "object"}, "reverted_peer_text": {"type": "array"}}},
     "discarded_or_rewritten_work": {"type": "object"},
     "validation_attempts": {"type": "array", "items": {"type": "object", "required": ["number", "candidate", "passed", "conflict"]}},
     "recommendations": {"type": "integer", "minimum": 0},

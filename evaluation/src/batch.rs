@@ -4,7 +4,8 @@
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
-    FIXTURES, Result, bail, read, report::report, schedule, sha256, tokens, utc_now, verify, write,
+    FIXTURES, Result, bail, read, report::report, schedule, sha256, timing, tokens, utc_now,
+    verify, write,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -473,6 +474,8 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
         let mut result = read(run_dir.join("controller/result.json"))
             .unwrap_or_else(|_| json!({"outcome": "infrastructure_failure"}));
         result["tokens"] = tokens::tokens(run_dir, &result, &prices)?;
+        // A run without readable transcripts has no model time: missing, never zero.
+        result["transcript"] = timing::timing(run_dir).unwrap_or(Value::Null);
         for key in ["run_id", "pair", "fixture", "arm", "scored", "concurrency"] {
             result[key] = entry[key].clone();
         }
@@ -615,13 +618,8 @@ mod tests {
         }
         let dirs: Vec<&Path> = shards.iter().map(PathBuf::as_path).collect();
         let split = report(&merged(&dirs).unwrap());
-        assert_eq!(one["verdict"], "continuation_signal");
-        for key in [
-            "verdict",
-            "fixtures",
-            "successes",
-            "fixtures_meeting_threshold",
-        ] {
+        assert_eq!(one["gaps"], json!([]));
+        for key in ["fixtures", "successes", "gaps"] {
             assert_eq!(split[key], one[key], "{key}");
         }
         assert_eq!(

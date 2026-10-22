@@ -481,6 +481,7 @@ fn run(options: Options) -> Result<i32> {
     }
     evidence["rejected_operations"] = arm.rejected.into();
     evidence["retries"] = arm.retries.into();
+    evidence["edits"] = arm.edits()?;
     evidence["validation_attempts"] = json!(arm.validation_attempts);
     evidence["recommendations"] = recommendations.into();
     evidence["transitions"] = transitions.into();

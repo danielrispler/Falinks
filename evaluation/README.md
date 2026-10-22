@@ -244,25 +244,68 @@ it as `usage_limit`.
     active, its directory holds `active.json`. Each run records in `concurrency` the sibling
     runs active at its start and stop: any sibling directory's lock counts, the pilot's too. A
     shard killed mid-run leaves a stale lock: delete it, or the others over-report concurrency.
-  - **Report**: `report --runs DIR [--runs DIR]...` lists every run's outcome, paired
-    successes, medians over jointly successful pairs and the continuation signal. Each
-    run carries its `tokens`; each fixture's `cost` gives, per arm, tokens by class over
-    every scored run (failed and replaced runs included), runs `missing` usage, and the
-    API-equivalent cost per successful run, null when usage is missing. Several
-    directories are merged as one batch: they must share one configuration and one pilot,
-    and no run may appear twice. `concurrent_runs` lists the runs whose times overlapped
-    a run in a sibling directory. An infrastructure failure or usage limit on a scored run
-    is an interruption, not a task outcome: until replaced, its pair stays incomplete and
-    the verdict is `inconclusive`, naming the run. A recorded run without a result reads
-    as an infrastructure failure. A run still in progress is not recorded yet: its pair
-    is only incomplete, so the verdict is `inconclusive` without naming it. An
-    interrupted pilot run never affects the verdict.
+  - **Report** (#204): `report --runs DIR [--runs DIR]...` puts every dimension of both
+    arms side by side, per fixture. **It computes no winner**: the decision is written on
+    the ticket once the evidence is in ([#5 amendment](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6322468250)).
+    - **Runs and pairs.** Every run's outcome is listed. Each fixture also gives its
+      successes per arm and its complete pairs. Its `median_seconds` and
+      `median_reduction` cover the jointly successful pairs: the time difference, as a
+      number only.
+    - **`metrics`**, for both arms:
+      - completion time (`completion_seconds`), which a failed run lacks;
+      - `model_seconds` and `round_trips` from `timing`;
+      - `cost_usd` and `tokens_<class>` per run;
+      - `success`;
+      - `refused_operations` (`rejected_operations`);
+      - `failed_checks_before_pass`, the checks in `validation_attempts` before the first
+        pass, or all of them when none passed;
+      - `safety_incidents`.
+
+      `retries` is not compared, because the Git arm fixes it at 0. `code_quality` is
+      reserved for #203's metrics, with one slot per arm.
+    - **Values and labels.** Each metric gives every repetition's value per arm, its
+      `median`, `range`, `n` and `missing`. A repetition lacks a value when its run is
+      absent, interrupted or lacks the metric; missing data is never imputed. The `label`
+      beside it is `consistent` (every repetition of one arm below every repetition of the
+      other, no data missing), `mixed` (the ranges overlap) or `incomplete` (a repetition
+      lacks the metric). `label_note` states that chance alone gives `consistent` 2/20 of
+      the time per cell at n = 3, and that it is not proof of a meaningful or
+      generalizable advantage.
+    - **Cost.** Each fixture's `cost` gives, per arm, tokens by class over every scored
+      run (failed and replaced runs included) and runs `missing` usage. It also gives the
+      API-equivalent cost per successful run, which is null when usage is missing.
+    - **`falinks_edits`**, per output form (`content`, `replace`, `from`), with the same
+      statistics per repetition:
+      - accepted, `stale`, `unreviewed`, `rejected` and `interrupted` edits, from the
+        run's ledger;
+      - `host_refused`: calls refused before they reached the ledger, such as a scratch
+        reference the host refused;
+      - `resends`: edits sent after the same agent's previous edit was refused;
+      - `recovery_refusals`, `recovery_unresolved`, `recovery_round_trips` and
+        `recovery_model_seconds`, from `timing`'s `refusal_recovery`;
+      - the `reasons` of each refusal, such as hunk mismatches.
+
+      `falinks-arm` records these counts in `result.json` as `edits`.
+      `reverted_peer_text` lists accepted edits that bring back lines a peer's earlier
+      edit removed, for a manual check.
+    - **Merging and gaps.** Several directories are merged as one batch: they must share
+      one configuration and one pilot, and no run may appear twice. `concurrent_runs`
+      lists the runs whose times overlapped a run in a sibling directory. `gaps` names
+      the fixtures with fewer than three complete pairs or no jointly successful pair,
+      and every unreplaced interruption and invalid run.
+    - **Interruptions.** An infrastructure failure or usage limit on a scored run is an
+      interruption, not a task outcome: until replaced, its repetition lacks every metric.
+      A recorded run without a result reads as an infrastructure failure. A run still in
+      progress is not recorded yet, so its pair is only incomplete. An interrupted pilot
+      run never enters the report's metrics.
   - **Agent mistakes** in either arm are refusals counted in `rejected_operations`. They
     are never infrastructure failures.
   - **Timing**: `timing RUN_DIR` reports, per agent of one run of either arm, busy, model,
     tool, launch and waiting-on-peer seconds, round-trips and their model seconds by
     category (edit, refused edit, native, coordination), output bytes against changed bytes,
-    and the slowest agent, by #116's method. The definitions and heuristics are in
+    and the slowest agent, by #116's method. Its `refusal_recovery` gives, per Falinks
+    output form, the refusals, the round-trips and model seconds from a refused edit to the
+    agent's next accepted one, and the refusals never followed by one (`unresolved`). The definitions and heuristics are in
     `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
     Runs before #179 record their start to the second only (`start_precision`), so their
     launch and waiting times are good to about a second. Its `results` and `usage_reports`
@@ -307,7 +350,8 @@ the setup ledger is `setup.json`. The shared setup ceiling is eight hours and
 covers this preparation plus remaining pilot/evaluation setup, **not engine
 implementation**. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
-for safety gates, run interpretation and continuation criteria. Track T (#178) has
+for safety gates and run interpretation. The [#5 amendment](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6322468250)
+replaced its continuation criteria with the report above, which computes no winner. Track T (#178) has
 its own `team_size_research` section with a 43,200 s limit. It charges only
 run time (including the usage drain) and harness preparation time, with
 complete-only usage; implementation time is not charged (Daniel, 2026-10-22,
