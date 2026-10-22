@@ -236,86 +236,116 @@ impl EngineHost {
     }
 }
 
-/// Agent-facing operations and their request shapes. Host-only calls (checks, validation,
-/// workspaces, reconsideration, disconnect, run retry, space-0 capture, `pending`, `events`)
-/// are never tools.
-pub const OPERATIONS: &[(&str, &str)] = &[
+/// The JSON type of each key of an edit, retry or incorporation.
+const EDIT_TYPES: &str =
+    r#"{"id":"string","expected":"object","output":"object","reviews":"array"}"#;
+/// Agent-facing operations, the JSON type of each request key, and their request shapes.
+/// Host-only calls (checks, validation, workspaces, reconsideration, disconnect, run retry,
+/// space-0 capture, `pending`, `events`) are never tools.
+pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "capture",
+        r#"{"paths":"array"}"#,
         "{paths?: [path]} -> your workspace's last completed revision, every file's version, and the text of the named paths. Native Read can show a partial installation; capture never does.",
     ),
     (
         "edit",
+        EDIT_TYPES,
         "{id, expected: {path: version}, output: {path: {content, executable?} | null}, reviews?: [{scope, revision, decision: Keep|Revise|Drop, note}]} -> applies all outputs or nothing. expected names every input and output. Stale returns current versions; reread and use a new id. Unreviewed names the obligations that need a review. reviews are review requests sent inline: each is checked first, any invalid one refuses the whole call, and valid ones are recorded before the edit is gated, so they stand even if it comes back Stale.",
     ),
     (
         "retry",
+        EDIT_TYPES,
         "Same shape as edit, same id: explicitly retry an interrupted request after restart.",
     ),
     (
         "incorporate",
+        EDIT_TYPES,
         "Same shape as edit: install the published state with your resolution of every file a Behind event names.",
     ),
     (
         "request",
+        r#"{"id":"string"}"#,
         "{id} -> your retained request, attempts and outcome.",
     ),
     (
         "register",
+        r#"{"id":"string","task":"string","nodes":"array","depends":"array"}"#,
         "{id, task, nodes: [path | path#Symbol], depends?: [node]} -> declare intended work before editing.",
     ),
     (
         "obligations",
+        "{}",
         "{} -> your registered scopes with required and reviewed revisions.",
     ),
     (
         "review",
+        r#"{"scope":"string","revision":"integer","decision":"string","note":"string"}"#,
         "{scope, revision, decision: Keep|Revise|Drop, note} -> after rereading a revision that was captured for you: by your capture call, or the capture in a host notice. The only way to clear an obligation; edit and offer take the same reviews inline.",
     ),
     (
         "post",
+        r#"{"task":"string","scope":"array","work":["string","object"],"text":"string","reply_to":["object","null"]}"#,
         "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to?: null | {event: seq, work}} -> advisory plan message to your peer; returns its seq. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
     ),
     (
         "offer",
+        r#"{"id":"string","task":"string","revision":"integer","scope":"array","text":"string","supersedes":"string","reviews":"array"}"#,
         "{id, task, revision, scope: [scope id], text, supersedes?: offer id, reviews?: [{scope, revision, decision, note}]} -> offer an exact captured revision for publication. Refused while any obligation is pending. reviews are checked and recorded first, as in edit.",
     ),
-    ("withdraw", "{offer} -> withdraw your offer."),
+    (
+        "withdraw",
+        r#"{"offer":"string"}"#,
+        "{offer} -> withdraw your offer.",
+    ),
     (
         "checkpoint",
+        r#"{"id":"string"}"#,
         "{id: \"agent/offer-id\"} -> an offer's state (Available, Withdrawn, Superseded, Accepted).",
     ),
     (
         "candidate",
+        r#"{"revision":"integer"}"#,
         "{revision} -> the exact candidate binding and members still missing an offer.",
     ),
     (
         "feedback",
+        r#"{"id":"string","revision":"integer"}"#,
         "{id, revision} -> queue required checks on a captured revision early; never publishes.",
     ),
-    ("run", "{id} -> a check run with its results and outcome."),
+    (
+        "run",
+        r#"{"id":"string"}"#,
+        "{id} -> a check run with its results and outcome.",
+    ),
     (
         "handle",
+        r#"{"through":"integer","deferred":"object","processed":"array"}"#,
         "{through?: seq, deferred?: {seq: note}, processed?: [seq]} -> one atomic call. through handles every event in your stream after your cursor, up to that seq, as processed unless deferred lists it, and moves your cursor there; at or below the cursor it does nothing. It may be your own post's seq. The engine does not track what you were shown, so through also covers events no notice gave you. deferred keeps a note for an event at or below the new cursor; processed clears earlier deferrals. Never clears obligations.",
     ),
     (
         "recommend",
+        "{}",
         "{} -> ask the engine whether to join, split or keep the current arrangement.",
     ),
     (
         "propose",
+        r#"{"action":"string","text":"string","failing":"boolean"}"#,
         "{action: Join|Split|Keep, text, failing: bool} -> propose a regrouping with your reasons.",
     ),
     (
         "respond",
+        r#"{"id":"string","context":"string","response":["string","object"]}"#,
         "{id, context, response: \"Agree\" | {Decline: {reason}}} -> answer a regrouping proposal; repeat its exact context.",
     ),
     (
         "job",
+        r#"{"id":"string","revision":"integer","paths":"array"}"#,
         "{id, revision, paths: [path]} -> run the host-enrolled gofmt over captured paths in isolation.",
     ),
     (
         "apply_job",
+        r#"{"id":"string"}"#,
         "{id} -> apply a finished job's output through the normal freshness gate.",
     ),
 ];
@@ -324,7 +354,11 @@ pub fn tools() -> Value {
     json!(
         OPERATIONS
             .iter()
-            .map(|(operation, help)| tool(operation, format!("Falinks {operation}: {help}")))
+            .map(|(operation, types, help)| tool(
+                operation,
+                types,
+                format!("Falinks {operation}: {help}")
+            ))
             .collect::<Vec<_>>()
     )
 }

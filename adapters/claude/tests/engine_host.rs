@@ -646,28 +646,39 @@ fn post_results_notices_and_edit_results_carry_no_unused_ids() {
 }
 
 /// Each tool's input is the request itself: no definition names the run path, and no input
-/// schema has the old `{workspace, request}` wrapper.
+/// schema has the old `{workspace, request}` wrapper or requires a key, which the adapter
+/// checks instead.
 #[test]
 fn tool_inputs_are_the_request_and_never_name_the_run_path() {
     let f = fixture();
     let tools = falinks_claude::arm::tools();
     for tool in tools.as_array().unwrap() {
-        assert_eq!(tool["inputSchema"], json!({"type":"object"}), "{tool}");
+        let schema = tool["inputSchema"].as_object().unwrap();
+        assert_eq!(schema["type"], "object", "{tool}");
+        assert_eq!(
+            schema.keys().collect::<Vec<_>>(),
+            ["properties", "type"],
+            "{tool}"
+        );
+        for key in ["workspace", "request"] {
+            assert!(schema["properties"].get(key).is_none(), "{tool}");
+        }
         let text = tool.to_string();
         assert!(!text.contains(f.live.to_str().unwrap()), "{text}");
         assert!(!text.contains("Call with"), "{text}");
     }
 }
 
-/// The top-level keys of the leading `{...}` in `text`, optional ones marked `?`.
-fn signature(text: &str) -> std::collections::BTreeSet<String> {
-    let (mut depth, mut keys, mut key) = (0, std::collections::BTreeSet::new(), String::new());
+/// The top-level keys of the leading `{...}` in `text`, optional ones marked `?`, each with
+/// the shape given after its `:` (empty when none).
+fn signature(text: &str) -> std::collections::BTreeMap<String, String> {
+    let (mut depth, mut entries, mut entry) = (0, vec![], String::new());
     for c in text.chars() {
         match c {
             '{' | '[' => depth += 1,
             '}' | ']' => depth -= 1,
             ',' if depth == 1 => {
-                keys.insert(std::mem::take(&mut key));
+                entries.push(std::mem::take(&mut entry));
                 continue;
             }
             _ => {}
@@ -675,15 +686,76 @@ fn signature(text: &str) -> std::collections::BTreeSet<String> {
         if depth == 0 {
             break;
         }
-        if depth == 1 && c != '{' {
-            key.push(c);
+        if depth > 1 || c != '{' {
+            entry.push(c);
         }
     }
-    keys.insert(key);
-    keys.into_iter()
-        .map(|k| k.split(':').next().unwrap().trim().to_string())
-        .filter(|k| !k.is_empty())
+    entries.push(entry);
+    entries
+        .iter()
+        .map(|e| e.split_once(':').unwrap_or((e, "")))
+        .filter(|(key, _)| !key.trim().is_empty())
+        .map(|(key, shape)| (key.trim().to_string(), shape.trim().to_string()))
         .collect()
+}
+
+/// The help that gives an operation's request shape: edit's, for operations of the same shape.
+fn request_shape(help: &'static str) -> &'static str {
+    use falinks_claude::engine_host::OPERATIONS;
+    if help.starts_with("Same shape as edit") {
+        OPERATIONS.iter().find(|(o, ..)| *o == "edit").unwrap().2
+    } else {
+        help
+    }
+}
+
+/// Each tool's input schema types every key its help names, so the runtime sends arrays and
+/// objects as JSON rather than encoded strings (#239). The help is tied to each parser by
+/// `each_description_names_the_keys_its_operation_takes`, and for host tools by
+/// `host_tools_refuse_unknown_or_missing_request_keys`.
+#[test]
+fn each_tool_types_the_keys_its_help_names() {
+    use falinks_claude::{arm::HOST_TOOLS, engine_host::OPERATIONS};
+    let tools = falinks_claude::arm::tools();
+    for (operation, _, help) in OPERATIONS.iter().chain(HOST_TOOLS) {
+        let help = request_shape(help);
+        let tool = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == format!("falinks_{operation}"))
+            .unwrap();
+        let properties = tool["inputSchema"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{tool}"));
+        let keys = signature(help);
+        assert_eq!(
+            properties
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            keys.keys().map(|k| k.trim_end_matches('?')).collect(),
+            "{operation}"
+        );
+        for (key, shape) in &keys {
+            let types = match &properties[key.trim_end_matches('?')]["type"] {
+                Value::String(one) => vec![one.as_str()],
+                Value::Array(many) => many.iter().filter_map(Value::as_str).collect(),
+                other => panic!("{operation}.{key} has type {other}"),
+            };
+            let needs = [
+                (shape.starts_with('['), "array"),
+                (shape.starts_with('{') || shape.contains("| {"), "object"),
+                (shape == "bool", "boolean"),
+            ];
+            for (_, kind) in needs.iter().filter(|(needed, _)| *needed) {
+                assert!(
+                    types.contains(kind),
+                    "{operation}.{key}: {shape} needs {kind}"
+                );
+            }
+        }
+    }
 }
 
 /// Each tool description names exactly the keys its operation's parser takes, so the two
@@ -692,18 +764,17 @@ fn signature(text: &str) -> std::collections::BTreeSet<String> {
 fn each_description_names_the_keys_its_operation_takes() {
     use falinks_claude::engine_host::OPERATIONS;
     let f = fixture();
-    let edit = OPERATIONS.iter().find(|(o, _)| *o == "edit").unwrap().1;
-    for (operation, help) in OPERATIONS {
-        let help = if help.starts_with("Same shape as edit") {
-            edit
-        } else {
-            help
-        };
+    for (operation, _, help) in OPERATIONS {
+        let help = request_shape(help);
         let reply = f.call(0, operation, json!({"unknown":true}));
         let reason = reply["reason"].as_str().unwrap_or_default();
         let takes = reason
             .strip_prefix(&format!("request keys: {operation} takes "))
             .unwrap_or_else(|| panic!("{operation}: {reply}"));
-        assert_eq!(signature(takes), signature(help), "{operation}: {reason}");
+        assert_eq!(
+            signature(takes).keys().collect::<Vec<_>>(),
+            signature(help).keys().collect::<Vec<_>>(),
+            "{operation}: {reason}"
+        );
     }
 }
