@@ -172,6 +172,31 @@ fn gate_missing(argv: &[String]) -> Option<PathBuf> {
     needed.into_iter().find(|path| !path.is_file())
 }
 
+/// Names the first variable that would bypass the subscription login or switch off
+/// Claude Code's global prompt-cache scope (#206 decision 10).
+fn credential_refusal<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> Option<String> {
+    const EXACT: [&str; 4] = [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+    ];
+    names
+        .into_iter()
+        .map(|n| n.as_ref().to_string())
+        .find(|n| EXACT.contains(&n.as_str()) || n.starts_with("DISABLE_PROMPT_CACHING"))
+}
+
+/// Refuses a checkout with other worktrees (#206 decision 5): `list` is `git worktree list`.
+fn one_worktree(list: &str) -> Result<()> {
+    if list.lines().filter(|l| !l.trim().is_empty()).count() > 1 {
+        bail!(
+            "Run the batch from a checkout with no other worktrees; git worktree list shows:\n{list}"
+        );
+    }
+    Ok(())
+}
+
 /// `after_pilot` names the completed pilot batch directory; without it this is the pilot,
 /// unless `track_t` runs the team-size schedule instead. `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
 pub fn batch(
@@ -184,6 +209,17 @@ pub fn batch(
     if let Some(name) = fixtures.iter().find(|f| !FIXTURES.contains(f)) {
         bail!("Unknown fixture {name}; expected some of {FIXTURES:?}");
     }
+    if let Some(name) =
+        credential_refusal(env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()))
+    {
+        bail!(
+            "Unset {name}: every run uses the subscription login and Claude Code's global prompt-cache scope"
+        );
+    }
+    // The harness tests point this at a scratch repository; real batches use this checkout.
+    let checkout = env::var_os("FALINKS_FAKE_CHECKOUT").map_or_else(root, PathBuf::from);
+    let worktrees = git(&checkout, &["worktree", "list"], None)?;
+    one_worktree(&worktrees)?;
     let config = read(config_path)?;
     let runtime = &config["runtime_binary"];
     if !config["gate_command"]
@@ -265,7 +301,7 @@ pub fn batch(
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": track_t,
         "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config,
-        "commit": commit, "go": go}));
+        "commit": commit, "go": go, "worktrees": worktrees}));
     let mut gated = false;
     for slot in slots {
         let id = slot["slot"].as_str().unwrap().to_string();
@@ -591,6 +627,37 @@ fn archive(config: &Value, run_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_guard_names_each_refused_variable() {
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+            "DISABLE_PROMPT_CACHING",
+            "DISABLE_PROMPT_CACHING_SONNET",
+        ] {
+            assert_eq!(credential_refusal(["HOME", name]).as_deref(), Some(name));
+        }
+        assert_eq!(
+            credential_refusal(["HOME", "PATH", "ANTHROPIC_MODEL"]),
+            None
+        );
+        assert_eq!(credential_refusal(Vec::<String>::new()), None);
+    }
+
+    #[test]
+    fn batch_refuses_other_worktrees() {
+        assert!(one_worktree("/w/Falinks  72e8eaa [main]\n").is_ok());
+        let two = "/w/Falinks  72e8eaa [main]\n/w/Falinks/.claude/worktrees/x  1234567 [x]\n";
+        assert!(
+            one_worktree(two)
+                .unwrap_err()
+                .to_string()
+                .contains("worktrees/x")
+        );
+    }
 
     #[test]
     fn project_folders_follow_claude_code_naming() {

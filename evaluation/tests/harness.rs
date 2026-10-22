@@ -69,6 +69,22 @@ fn hash(path: &str) -> String {
 }
 
 /// Writes a scripted run configuration based on the checked-in template.
+/// A one-worktree repository for the batch's clean-checkout check.
+fn checkout(base: &Path) -> PathBuf {
+    let dir = base.join("checkout");
+    fs::create_dir_all(&dir).unwrap();
+    assert!(
+        Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
+    dir
+}
+
 fn config(base: &Path, worker_script: &str, worker_command: Value, runtime: &str) -> PathBuf {
     let mut config = read(root().join("config.json"));
     for (key, value) in [
@@ -458,6 +474,7 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
     let batch = |outcome: &str| {
         Command::new(CLI)
             .args(["batch", "--config"])
+            .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
             .arg(&config_path)
             .arg("--runs")
             .arg(&runs)
@@ -474,6 +491,7 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
     assert_eq!(ledger["invocations"][0]["verification"]["passed"], true);
     let early = Command::new(CLI)
         .args(["batch", "--config"])
+        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
         .arg(&config_path)
         .arg("--runs")
         .arg(tmp.path().join("scored"))
@@ -523,6 +541,7 @@ fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
         let runs = tmp.path().join(name);
         let output = Command::new(CLI)
             .args(["batch", "--config"])
+            .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
             .arg(&path)
             .arg("--runs")
             .arg(&runs)
@@ -581,6 +600,7 @@ fn fixture_shard_runs_only_its_slots_denies_siblings_and_records_concurrency() {
     let shard = base.join("shard-relationships");
     let result = Command::new(CLI)
         .args(["batch", "--config"])
+        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
         .arg(&config_path)
         .arg("--runs")
         .arg(&shard)
@@ -1191,6 +1211,7 @@ fn nested_agents_invalidate_the_run_are_counted_and_stop_the_batch() {
         let mut command = Command::new(CLI);
         command
             .args(["batch", "--config"])
+            .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
             .arg(config)
             .arg("--runs")
             .arg(&runs);
@@ -1247,6 +1268,7 @@ fn track_t_batch_runs_both_team_sizes_with_run_isolation() {
         .arg(&config)
         .arg("--runs")
         .arg(&runs)
+        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", text(&output));
