@@ -254,7 +254,7 @@ it as `usage_limit`.
     - **`metrics`**, for both arms:
       - completion time (`completion_seconds`), which a failed run lacks;
       - `model_seconds` and `round_trips` from `timing`;
-      - `cost_usd` and `tokens_<class>` per run;
+      - `cost_usd`, `cold_start_cost_usd` (see **Cost**) and `tokens_<class>` per run;
       - `success`;
       - `refused_operations` (`rejected_operations`);
       - `failed_checks_before_pass`, the checks in `validation_attempts` before the first
@@ -272,8 +272,37 @@ it as `usage_limit`.
       the time per cell at n = 3, and that it is not proof of a meaningful or
       generalizable advantage.
     - **Cost.** Each fixture's `cost` gives, per arm, tokens by class over every scored
-      run (failed and replaced runs included) and runs `missing` usage. It also gives the
-      API-equivalent cost per successful run, which is null when usage is missing.
+      run (failed and replaced runs included) and runs `missing` usage. Its cost lines say
+      "API-equivalent list price, not billed cost" (`label`). They follow the
+      [#5 amendment of 2026-10-22](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6341068066):
+      - **Measured**: the cost per successful run, which is null when usage is missing.
+      - **Cold-start**, beside it, for both arms: the measured cost with the cache read of
+        each agent session's first API call repriced at the 1-hour cache-write price.
+        - A process resumed later in the same session, after a regrouping transition, is
+          not repriced: its read is the session's own context.
+        - Why: Git's first call reads a prefix that other Claude Code users keep warm, while
+          Falinks's prefix is warm only after our own runs within the hour. Measured cost
+          would otherwise depend on run order in one arm only.
+        - Its per-run values are also the metric `cold_start_cost_usd`, with the same
+          statistics and label as `cost_usd`.
+      - **`first_calls`**: each agent session's first-call `cache_read` and `cache_write`,
+        per run.
+      - **Without `sandbox_instructions`** (`sandbox_excluded`), Falinks arm only, labelled
+        "estimate ±15%".
+        - Why: Claude Code adds that attachment, about 3.1k tokens per call, because the
+          Falinks arm runs its sandbox. The Git arm is confined at host level and gets none.
+        - Its tokens are its characters in the session JSONL divided by the first request's
+          characters per token. Those are the characters of that request's tools, CLI
+          prefix, system text, first message and attachments, over its input, cache-write
+          and cache-read tokens.
+        - Their cache write, and their reads on every later call of the session, are
+          removed.
+        - A run with a session that lacks the attachment, or a prompt snapshot listing its
+          tools, has no value: missing, never zero.
+    - **`falinks_request_key_refusals`**: per op and in `total`, with the same statistics
+      per repetition, the Falinks requests the adapter refused because of unknown or missing
+      request keys (reasons starting `request keys:`, #220). `timing` counts them from the
+      transcripts; a run without transcripts is missing.
     - **`falinks_edits`**, per output form (`content`, `replace`, `from`), with the same
       statistics per repetition:
       - accepted, `stale`, `unreviewed`, `rejected` and `interrupted` edits, from the
@@ -305,7 +334,9 @@ it as `usage_limit`.
     category (edit, refused edit, native, coordination), output bytes against changed bytes,
     and the slowest agent, by #116's method. Its `refusal_recovery` gives, per Falinks
     output form, the refusals, the round-trips and model seconds from a refused edit to the
-    agent's next accepted one, and the refusals never followed by one (`unresolved`). The definitions and heuristics are in
+    agent's next accepted one, and the refusals never followed by one (`unresolved`). Its
+    `request_key_refusals` counts, per Falinks op, the results refused with `request keys:`.
+    The definitions and heuristics are in
     `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
     Runs before #179 record their start to the second only (`start_precision`), so their
     launch and waiting times are good to about a second. Its `results` and `usage_reports`

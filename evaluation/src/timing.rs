@@ -21,6 +21,8 @@
 //!   including the agent's next accepted one. Refusals inside an open recovery belong to it, so
 //!   a resend in another form is charged to the first; a refused deletion opens none. A
 //!   recovery the transcript ends in is `unresolved`; its round-trips still count.
+//! - **Request-key refusals** (#206 decision 2), per Falinks op: results whose reason starts
+//!   `request keys:`, the adapter's refusal of unknown or missing request keys.
 use crate::{Result, bail, fixture, read};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -70,10 +72,10 @@ struct Message {
     calls: Vec<usize>,
 }
 
-/// A tool result is refused when it is an error or a Falinks result with `accepted: false`.
-fn refused(block: &Value) -> bool {
+/// A tool result's text; a Falinks result's is its JSON.
+fn text(block: &Value) -> String {
     let content = &block["content"];
-    let text: String = match content.as_str() {
+    match content.as_str() {
         Some(text) => text.into(),
         None => content
             .as_array()
@@ -81,9 +83,22 @@ fn refused(block: &Value) -> bool {
             .flatten()
             .filter_map(|b| b["text"].as_str())
             .collect(),
-    };
+    }
+}
+
+/// A tool result is refused when it is an error or a Falinks result with `accepted: false`.
+fn refused(block: &Value) -> bool {
     block["is_error"] == true
-        || serde_json::from_str::<Value>(&text).is_ok_and(|v| v["accepted"] == false)
+        || serde_json::from_str::<Value>(&text(block)).is_ok_and(|v| v["accepted"] == false)
+}
+
+/// A Falinks request refused by the adapter's key check (#206 decision 2).
+fn key_refused(block: &Value) -> bool {
+    serde_json::from_str::<Value>(&text(block)).is_ok_and(|v| {
+        v["reason"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("request keys:"))
+    })
 }
 
 /// File writes in a `Bash` command made by here-documents redirected to a file. Other shell
@@ -257,6 +272,7 @@ fn agent(
 ) -> Value {
     let (mut turns, mut messages, mut calls) = (Vec::<(Option<f64>, f64)>::new(), vec![], vec![]);
     let (mut ids, mut tool_ids) = (BTreeMap::new(), BTreeMap::new());
+    let mut key_refusals = BTreeMap::<String, u64>::new();
     let mut input: Option<f64> = None;
     for event in events {
         let at = event["timestamp"].as_str().and_then(unix);
@@ -272,6 +288,11 @@ fn agent(
                     if let Some(&call) = tool_ids.get(block["tool_use_id"].as_str().unwrap_or("")) {
                         let call: &mut Call = &mut calls[call];
                         call.result = Some((at, refused(block)));
+                        if let Some(op) = call.name.strip_prefix(FALINKS)
+                            && key_refused(block)
+                        {
+                            *key_refusals.entry(op.to_string()).or_insert(0) += 1;
+                        }
                     }
                 }
             }
@@ -436,6 +457,7 @@ fn agent(
         "waiting_on_peer_seconds": stop.zip(first).map(|(stop, first)| rounded((stop - first - busy).max(0.0))),
         "round_trips": round_trips,
         "refusal_recovery": recovery,
+        "request_key_refusals": key_refusals,
         "output_bytes": output,
         "changed_bytes": changed,
         "results": events.iter().filter(|e| e["type"] == "result").count(),
@@ -530,12 +552,22 @@ pub fn timing(run: &Path) -> Result<Value> {
             (form.to_string(), entry)
         })
         .collect();
+    let mut key_refusals = BTreeMap::<String, u64>::new();
+    for (op, n) in figures.values().flat_map(|f| {
+        f["request_key_refusals"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+    }) {
+        *key_refusals.entry(op).or_insert(0) += n.as_u64().unwrap_or(0);
+    }
     Ok(json!({
         "run": result["run_id"], "arm": arm, "fixture": result["fixture"],
         "elapsed_seconds": timing["elapsed_seconds"], "start_precision": precision,
         "slowest_agent": slowest,
         "round_trips": {"count": count as u64, "model_seconds": rounded(seconds)},
         "refusal_recovery": recovery,
+        "request_key_refusals": key_refusals,
         "agents": figures,
     }))
 }
@@ -600,6 +632,36 @@ mod tests {
             json!({"refusals": 1, "unresolved": 1, "round_trips": 0, "model_seconds": 0.0})
         );
         assert_eq!(recovery["from"]["refusals"], 0);
+    }
+
+    #[test]
+    fn request_key_refusals_are_counted_per_op() {
+        let at = json!("2026-10-21T10:00:00.000Z");
+        let call = |id: &str, op: &str| {
+            json!({"type": "assistant", "timestamp": at, "message": {"id": id, "content": [
+                {"type": "tool_use", "id": id, "name": format!("{FALINKS}{op}"), "input": {}}]}})
+        };
+        // As the MCP tool returns a refusal: an error whose text is the JSON result.
+        let result = |id: &str, reason: &str| {
+            let text = json!({"accepted": false, "reason": reason}).to_string();
+            json!({"type": "user", "timestamp": at, "message": {"content": [{"type": "tool_result",
+                "tool_use_id": id, "is_error": true, "content": [{"type": "text", "text": text}]}]}})
+        };
+        let events = [
+            call("m1", "handle"),
+            result("m1", "request keys: handle takes through"),
+            call("m2", "handle"),
+            result("m2", "request keys: handle takes through"),
+            call("m3", "ack"),
+            result("m3", "request keys: ack needs milestone"),
+            call("m4", "edit"),
+            result("m4", "a.go: hunk 1: old text matches 0 places"),
+        ];
+        let figures = agent(&events, &Map::new(), false, (None, None));
+        assert_eq!(
+            figures["request_key_refusals"],
+            json!({"ack": 1, "handle": 2})
+        );
     }
 
     #[test]

@@ -8,16 +8,17 @@ use crate::{
     tokens::{CLASSES, usd},
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const ARMS: [&str; 2] = ["git", "falinks"];
 /// Compared for both arms, followed by `tokens_<class>`. `retries` is not compared: the Git arm
 /// fixes it at 0.
-const METRICS: [&str; 8] = [
+const METRICS: [&str; 9] = [
     "completion_seconds",
     "model_seconds",
     "round_trips",
     "cost_usd",
+    "cold_start_cost_usd",
     "success",
     "refused_operations",
     "failed_checks_before_pass",
@@ -39,15 +40,25 @@ const EDIT_COUNTS: [&str; 7] = [
 const RECOVERY: [&str; 4] = ["refusals", "unresolved", "round_trips", "model_seconds"];
 /// Printed beside every fixture's labels (#5 amendment, decision 5).
 const LABEL_NOTE: &str = "consistent: every repetition of one arm is below every repetition of the other, with no data missing; mixed: the ranges overlap; incomplete: a repetition lacks the metric. Chance alone gives consistent 2/20 of the time per cell at n = 3, and it is not proof of a meaningful or generalizable advantage.";
+/// Printed with the cost lines (#5 amendments, decision 3).
+const COST_LABEL: &str = "API-equivalent list price, not billed cost";
+const SANDBOX_LABEL: &str = "API-equivalent list price, not billed cost; estimate ±15%";
 
-/// Tokens by class and API-equivalent cost of every scored run of one arm on one fixture,
-/// failed, interrupted and replaced runs included, and that cost per successful run. A run
-/// without session JSONL is counted as missing, and the cost per success is then unknown.
+/// The sum of one per-run cost line (a `tokens` key) over `runs`, how many runs lack it, and
+/// the sum per successful run, which is unknown when a run lacks it.
+fn cost_line(runs: &[&Value], successes: u64, key: &str) -> (usize, f64, Option<Value>) {
+    let values: Vec<Option<f64>> = runs.iter().map(|r| r["tokens"][key].as_f64()).collect();
+    let missing = values.iter().filter(|v| v.is_none()).count();
+    let dollars: f64 = values.iter().flatten().sum();
+    let per_success = (missing == 0 && successes > 0).then(|| usd(dollars / successes as f64));
+    (missing, dollars, per_success)
+}
+
+/// Tokens by class and API-equivalent cost, measured and cold-start, of every scored run of
+/// one arm on one fixture, failed, interrupted and replaced runs included, and that cost per
+/// successful run. A run without session JSONL is counted as missing, and the cost per success
+/// is then unknown. `first_calls` gives each agent session's first-call cache figures.
 fn cost(runs: &[&Value], successes: u64) -> Value {
-    let missing = runs
-        .iter()
-        .filter(|r| r["tokens"]["cost_usd"].is_null())
-        .count();
     let tokens: serde_json::Map<String, Value> = CLASSES
         .iter()
         .map(|c| {
@@ -58,13 +69,25 @@ fn cost(runs: &[&Value], successes: u64) -> Value {
             (c.to_string(), json!(sum))
         })
         .collect();
-    let dollars: f64 = runs
+    let (missing, dollars, per_success) = cost_line(runs, successes, "cost_usd");
+    let (_, cold_start, cold_start_per_success) = cost_line(runs, successes, "cold_start_cost_usd");
+    let first_calls: Vec<Value> = runs
         .iter()
-        .filter_map(|r| r["tokens"]["cost_usd"].as_f64())
-        .sum();
-    let per_success = (missing == 0 && successes > 0).then(|| usd(dollars / successes as f64));
-    json!({"runs": runs.len(), "missing": missing, "tokens": tokens,
-        "cost_usd": usd(dollars), "cost_per_success_usd": per_success})
+        .flat_map(|r| {
+            let agents = r["tokens"]["agents"].as_object().into_iter().flatten();
+            agents.flat_map(move |(agent, figures)| {
+                let sessions = figures["sessions"].as_array().into_iter().flatten();
+                sessions.map(move |s| {
+                    json!({"run_id": r["run_id"], "agent": agent,
+                        "cache_read": s["first_call"]["cache_read"], "cache_write": s["first_call"]["cache_write"]})
+                })
+            })
+        })
+        .collect();
+    json!({"runs": runs.len(), "missing": missing, "tokens": tokens, "label": COST_LABEL,
+        "cost_usd": usd(dollars), "cost_per_success_usd": per_success,
+        "cold_start_cost_usd": usd(cold_start), "cold_start_cost_per_success_usd": cold_start_per_success,
+        "first_calls": first_calls})
 }
 
 fn median(mut values: Vec<f64>) -> Option<f64> {
@@ -88,7 +111,7 @@ fn value(run: &Value, metric: &str) -> Option<f64> {
             .filter(|_| outcome == Some("success")),
         "model_seconds" => run["transcript"]["round_trips"]["model_seconds"].as_f64(),
         "round_trips" => run["transcript"]["round_trips"]["count"].as_f64(),
-        "cost_usd" => run["tokens"]["cost_usd"].as_f64(),
+        "cost_usd" | "cold_start_cost_usd" => run["tokens"][metric].as_f64(),
         "success" => is("success"),
         "refused_operations" => run["rejected_operations"].as_f64(),
         // Every check when none passed.
@@ -216,15 +239,14 @@ pub fn report(runs: &[Value]) -> Value {
                 json!({"git": stats(&git), "falinks": stats(&falinks), "label": label(&git, &falinks)}),
             );
         }
-        let costs: serde_json::Map<String, Value> = ARMS
+        let scored = |arm: &str| -> Vec<&Value> {
+            runs.iter()
+                .filter(|r| r["scored"] == true && r["fixture"] == fixture && r["arm"] == arm)
+                .collect()
+        };
+        let mut costs: serde_json::Map<String, Value> = ARMS
             .iter()
-            .map(|arm| {
-                let all: Vec<&Value> = runs
-                    .iter()
-                    .filter(|r| r["scored"] == true && r["fixture"] == fixture && r["arm"] == *arm)
-                    .collect();
-                (arm.to_string(), cost(&all, arm_successes[arm]))
-            })
+            .map(|arm| (arm.to_string(), cost(&scored(arm), arm_successes[arm])))
             .collect();
         let falinks_runs = &slots["falinks"];
         let per_run = |f: &dyn Fn(&Value) -> Option<f64>| -> Value {
@@ -235,6 +257,28 @@ pub fn report(runs: &[Value]) -> Value {
                     .collect::<Vec<_>>(),
             )
         };
+        // Falinks only: the Git arm has no `sandbox_instructions` (#206 decision 5).
+        let key = "sandbox_excluded_cost_usd";
+        let (missing, dollars, per_success) =
+            cost_line(&scored("falinks"), arm_successes["falinks"], key);
+        costs["falinks"]["sandbox_excluded"] = json!({"label": SANDBOX_LABEL,
+            "per_run": per_run(&|r| r["tokens"][key].as_f64()), "missing": missing,
+            "cost_usd": usd(dollars), "cost_per_success_usd": per_success});
+        // A run with a transcript and no refusal of an op counts 0 for it.
+        let key_refusals = |r: &Value| r["transcript"]["request_key_refusals"].as_object().cloned();
+        let ops: BTreeSet<String> = falinks_runs
+            .iter()
+            .flatten()
+            .filter_map(|r| key_refusals(r))
+            .flat_map(|refusals| refusals.into_iter().map(|(op, _)| op))
+            .collect();
+        let refusals = json!({
+            "total": per_run(&|r| key_refusals(r).map(|m| m.values().filter_map(Value::as_f64).sum())),
+            "ops": ops.iter().map(|op| {
+                let count = per_run(&|r| key_refusals(r).map(|m| m.get(op).and_then(Value::as_f64).unwrap_or(0.0)));
+                (op.clone(), count)
+            }).collect::<serde_json::Map<_, _>>(),
+        });
         let edits: serde_json::Map<String, Value> = FORMS
             .iter()
             .map(|form| {
@@ -299,6 +343,7 @@ pub fn report(runs: &[Value]) -> Value {
                 "cost": costs,
                 "code_quality": {"git": null, "falinks": null, "reserved_for": "#203's pre-registered metrics"},
                 "falinks_edits": edits,
+                "falinks_request_key_refusals": refusals,
                 "reverted_peer_text": reverted,
             }),
         );
@@ -578,6 +623,92 @@ mod tests {
         assert_eq!(reverted.len(), 2);
         assert_eq!(reverted[0]["run_id"], "go-page-0-f");
         assert_eq!(reverted[0]["peer_id"], "a2");
+    }
+
+    /// Usage as `tokens` gives it: one session per agent, with its first call's cache figures.
+    fn usage(arm: &str, measured: f64, cold_start: f64, sandbox_excluded: Option<f64>) -> Value {
+        let (read, sandbox) = if arm == "git" {
+            (4777, Value::Null)
+        } else {
+            (0, json!(3100.0))
+        };
+        let session = json!([{"first_call": {"cache_read": read, "cache_write": 4000}, "sandbox_tokens": sandbox}]);
+        json!({"cost_usd": measured, "cold_start_cost_usd": cold_start,
+            "sandbox_excluded_cost_usd": sandbox_excluded, "tokens": {"output": 10},
+            "agents": {"A": {"sessions": session}, "B": {"sessions": session}}})
+    }
+
+    #[test]
+    fn cold_start_cost_is_printed_beside_the_measured_cost_with_first_call_figures() {
+        let mut runs = uniform();
+        for run in runs.iter_mut() {
+            run["tokens"] = match run["arm"].as_str() {
+                Some("git") => usage("git", 1.0, 1.1, None),
+                _ => usage("falinks", 3.0, 3.0, Some(2.9)),
+            };
+        }
+        find(&mut runs, "go-page-1-g")["tokens"]["cold_start_cost_usd"] = json!(1.2);
+        let out = report(&runs);
+        let page = &out["fixtures"]["go-page"];
+        let cold = &page["metrics"]["cold_start_cost_usd"];
+        assert_eq!(
+            cold["git"],
+            json!({"values": [1.1, 1.2, 1.1], "median": 1.1, "range": [1.1, 1.2], "n": 3, "missing": 0})
+        );
+        assert_eq!(cold["label"], "consistent");
+        let git = &page["cost"]["git"];
+        assert_eq!(git["cost_per_success_usd"], 1.0);
+        // $3.40 over three successes.
+        assert_eq!(git["cold_start_cost_per_success_usd"], 1.1333);
+        assert_eq!(git["label"], "API-equivalent list price, not billed cost");
+        // Each agent's first call, per run.
+        assert_eq!(git["first_calls"].as_array().unwrap().len(), 6);
+        assert_eq!(
+            git["first_calls"][0],
+            json!({"run_id": "go-page-0-g", "agent": "A", "cache_read": 4777, "cache_write": 4000})
+        );
+        assert_eq!(page["cost"]["falinks"]["first_calls"][1]["cache_read"], 0);
+        // The sandbox line is the Falinks arm's only.
+        assert!(git.get("sandbox_excluded").is_none());
+    }
+
+    #[test]
+    fn the_sandbox_line_carries_its_label_and_shows_a_session_without_the_attachment_as_missing() {
+        let mut runs = uniform();
+        for run in runs.iter_mut() {
+            run["tokens"] = usage("falinks", 3.0, 3.0, Some(2.9));
+        }
+        let sandbox = |runs: &[Value]| {
+            report(runs)["fixtures"]["go-page"]["cost"]["falinks"]["sandbox_excluded"].clone()
+        };
+        let line = sandbox(&runs);
+        assert_eq!(
+            line["label"],
+            "API-equivalent list price, not billed cost; estimate ±15%"
+        );
+        assert_eq!(line["per_run"]["values"], json!([2.9, 2.9, 2.9]));
+        assert_eq!(line["cost_per_success_usd"], 2.9);
+        // A session without the attachment leaves its run's value missing, never zero.
+        find(&mut runs, "go-page-2-f")["tokens"]["sandbox_excluded_cost_usd"] = Value::Null;
+        let line = sandbox(&runs);
+        assert_eq!(line["per_run"]["values"], json!([2.9, 2.9, null]));
+        assert_eq!(line["per_run"]["missing"], 1);
+        assert_eq!(line["missing"], 1);
+        assert_eq!(line["cost_per_success_usd"], Value::Null);
+    }
+
+    #[test]
+    fn request_key_refusals_are_counted_per_op() {
+        let mut runs = uniform();
+        find(&mut runs, "go-page-0-f")["transcript"] =
+            json!({"request_key_refusals": {"handle": 2, "ack": 1}});
+        find(&mut runs, "go-page-1-f")["transcript"] = json!({"request_key_refusals": {}});
+        let refusals = &report(&runs)["fixtures"]["go-page"]["falinks_request_key_refusals"];
+        // The third run has no transcript: missing, never zero.
+        assert_eq!(refusals["ops"]["handle"]["values"], json!([2.0, 0.0, null]));
+        assert_eq!(refusals["ops"]["ack"]["values"], json!([1.0, 0.0, null]));
+        assert_eq!(refusals["total"]["values"], json!([3.0, 0.0, null]));
+        assert_eq!(refusals["ops"].as_object().unwrap().len(), 2, "{refusals}");
     }
 
     #[test]

@@ -24,9 +24,9 @@
     "src/bin/falinks-eval-contain.rs": "c5c53fad8087a3b8d6cf3f31f04b96ae2946dfa530093d9b902c307871513a10",
     "src/bin/scripted-worker.rs": "3f2880258291e4a73cb5dda92f486c3df2f35da3b24b65501cbd1aae413e014a",
     "src/main.rs": "0a31587764ce120f237d02a50585fb41f211af2c2bf0680de424cd2acda2ecd9",
-    "src/report.rs": "748a6463b673de382d9b1c9333b8c6fc0051a0958fb30a6ef8d41a82ee0072a0",
-    "src/timing.rs": "297d23d0fb5c09af6dc996122e9c5b500a2a7d687cd2b6ba86dc5c5acbf9577d",
-    "src/tokens.rs": "0953ba2954c677eb38fda0c61b584ae1d506e9f31373a83051a21f6bb2d3fd23"
+    "src/report.rs": "df74befb7fd8cbc9e5fb5456fa6b21d8e5212a19117094bb3f9862d844e39885",
+    "src/timing.rs": "28a06589e276caa82079db51f88337317ac355a7cc3556fda46bf477e6ff88bd",
+    "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
   },
   "initial_commits": {
     "go-indep-2": "5d12ee62675dcf2e2914885bee4814f851d4272f",
@@ -35,5 +35,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 18
+  "version": 19
 }
