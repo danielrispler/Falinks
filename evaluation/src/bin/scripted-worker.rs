@@ -5,6 +5,9 @@
 //! protocol; with a usage mode, `relationships` reports a turn at start and its final result
 //! after `ready` at once, only when the host stops it, or never; alone, it writes both files;
 //! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
+//! `scripted-worker -p --output-format json ...` impersonates the judge's `claude -p` call: it
+//! appends the prompt to `$FALINKS_FAKE_JUDGE/prompts.json` and replies with the next canned
+//! text in `$FALINKS_FAKE_JUDGE/replies.json`, where `null` is a failed call;
 //! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge; copied
 //! as `launches-PROGRAM`, its first turn runs `PROGRAM` through Bash (a nested agent);
 //! `scripted-worker <fixture> --output DIR ...` impersonates the Falinks-arm runner for batches;
@@ -49,6 +52,9 @@ fn main() {
         Some("relationships") => relationships(args.get(1).map(String::as_str)),
         Some("conflict") => conflict(),
         Some("exec") => fake_codex(&args),
+        Some("-p") if args.windows(2).any(|w| w == ["--output-format", "json"]) => {
+            fake_judge(&args)
+        }
         Some("-p") => fake_claude(&args),
         Some("rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4") => {
             fake_arm(&args)
@@ -422,6 +428,35 @@ fn fake_claude(argv: &[String]) {
         send(json!({"type": "result", "subtype": subtype, "num_turns": 1,
             "usage": {"input_tokens": 2, "output_tokens": 3}, "modelUsage": {"scripted": {}}}));
     }
+}
+
+fn fake_judge(argv: &[String]) {
+    // The judge runs with no tools and the workers' isolation flags.
+    for flags in [
+        &["--tools", ""][..],
+        &["--setting-sources", ""],
+        &["--strict-mcp-config", "--disable-slash-commands"],
+    ] {
+        assert!(argv.windows(flags.len()).any(|w| w == flags), "{argv:?}");
+    }
+    let dir = PathBuf::from(env::var("FALINKS_FAKE_JUDGE").unwrap());
+    let state = |name: &str| -> Vec<Value> {
+        serde_json::from_str(&fs::read_to_string(dir.join(name)).unwrap_or("[]".into())).unwrap()
+    };
+    let mut prompts = state("prompts.json");
+    prompts.push(argv.last().unwrap().as_str().into());
+    fs::write(dir.join("prompts.json"), Value::from(prompts).to_string()).unwrap();
+    let mut replies = state("replies.json");
+    let reply = replies.remove(0);
+    fs::write(dir.join("replies.json"), Value::from(replies).to_string()).unwrap();
+    let Some(text) = reply.as_str() else {
+        eprintln!("scripted judge failure");
+        std::process::exit(1);
+    };
+    send(
+        json!({"type": "result", "subtype": "success", "is_error": false, "result": text,
+        "usage": {"input_tokens": 5, "output_tokens": 7}, "modelUsage": {"claude-opus-5-5": {}}}),
+    );
 }
 
 /// Writes Falinks-arm evidence with `FALINKS_FAKE_OUTCOME` (default success), after checking
