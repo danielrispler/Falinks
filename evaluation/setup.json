@@ -183,7 +183,7 @@
   ],
   "charged_total_seconds": 36917,
   "remaining_seconds": 3600,
-  "status": "manifest v19: #223's cold-start cost (each agent session's first-call cache read repriced at the 1-hour cache-write price, both arms), each agent's first-call cache read and write, the Falinks cost without sandbox_instructions (estimate ±15%) and request keys: refusals per op; v18 was #204's side-by-side report for both arms with no automatic winner (each repetition's value, median, range, n and missing count per metric, consistent/mixed/incomplete labels with the chance note, Falinks per-form edit counts and refusal recovery); the 20% continuation signal and verdict are removed; v17 was #189's go-indep-2 and go-indep-4 registration; v16 was #180's team size, solo Git variant and run_invalid nested-agent outcome; v15 was the Claude Code 2.1.308 pin, so runs before v15 are not comparable with later ones; v14 was #202's tokens and API-equivalent cost from the archived session JSONL (one usage per message.id) and the frozen price table in config.json, reported per arm and fixture; v13 was #179's bounded usage drain in both arms (usage_drain_seconds), timing.start_unix and the timing subcommand; v12 was the Claude Code 2.1.304 pin, so runs before v12 are not comparable with later ones; #123 decision 10's amendment is recorded; no scored batch until #123 is implemented",
+  "status": "manifest v20: #182's track-T schedule at five repetitions per cell, the track-T report (`report --schedule track-t`: per fixture and team size, each repetition's value, median, range, n, label, paired difference and the sample coefficient of variation of completion time; load balance, coordination model seconds, output against changed bytes and development arrival) and `timing` for a team of one (it read agent B unconditionally and failed on every solo run); the scored schedule and report are unchanged; v19 was #223's cold-start cost (each agent session's first-call cache read repriced at the 1-hour cache-write price, both arms), each agent's first-call cache read and write, the Falinks cost without sandbox_instructions (estimate ±15%) and request keys: refusals per op; v18 was #204's side-by-side report for both arms with no automatic winner (each repetition's value, median, range, n and missing count per metric, consistent/mixed/incomplete labels with the chance note, Falinks per-form edit counts and refusal recovery); the 20% continuation signal and verdict are removed; v17 was #189's go-indep-2 and go-indep-4 registration; v16 was #180's team size, solo Git variant and run_invalid nested-agent outcome; v15 was the Claude Code 2.1.308 pin, so runs before v15 are not comparable with later ones; v14 was #202's tokens and API-equivalent cost from the archived session JSONL (one usage per message.id) and the frozen price table in config.json, reported per arm and fixture; v13 was #179's bounded usage drain in both arms (usage_drain_seconds), timing.start_unix and the timing subcommand; v12 was the Claude Code 2.1.304 pin, so runs before v12 are not comparable with later ones; #123 decision 10's amendment is recorded; no scored batch until #123 is implemented",
   "team_size_research": {
     "source": "https://github.com/danielrispler/Falinks/issues/178",
     "limit_seconds": 43200,
@@ -209,6 +209,29 @@
         },
         "measurement": "Session wall time from claiming #179 (the GitHub assignment) through this entry, including both ci-checks runs and the two-axis review, plus allowances for reading before the claim and for the last ci-checks run and the PR. No real runs, so no run or preparation time and no usage.",
         "work": "#179 (T0): the two-agent golden recording (first commit, unchanged harness); the bounded usage drain in both arms; `timing RUN_DIR` with synthetic-transcript tests and the local #122 cross-check (34 round-trips and 204.735 s; 24 and 93.186 s); timing.start_unix; this ledger section; re-freeze v12 -> v13."
+      },
+      {
+        "issue": 181,
+        "source": "https://github.com/danielrispler/Falinks/issues/181#issuecomment-6323167343",
+        "start_utc": "2026-10-21T14:34:47Z",
+        "stop_utc": "2026-10-21T18:12:41Z",
+        "measured_seconds": 13074,
+        "implementation_seconds": 10370,
+        "run_seconds": 2104,
+        "preparation_seconds": 600,
+        "charged_seconds": 2704,
+        "estimated": {
+          "preparation_seconds": "Allowance, not measured: four throwaway `verify` runs that #181 calls harness preparation but did not time, at 150 s each (an in-batch verify of three fixtures took 24 s at #122, /private/tmp/ev/p122/batch.json; a throwaway clone also builds the harness)."
+        },
+        "complete_usage": {
+          "runs": 10,
+          "input_tokens": 158,
+          "output_tokens": 229188,
+          "cache_read_input_tokens": 1844929,
+          "cache_creation_input_tokens": 315479
+        },
+        "measurement": "Entered by #182 at Daniel's request (2026-10-22) to record the calibration and the untimed verify runs, measured time apart from estimates; both are charged, as #182 recommended. run_seconds is measured: the wall time of #181's ten calibration sessions, plain `claude -p` outside the harness with no drain, so they are charged as run time although they are not evidence. preparation_seconds is the estimate above. implementation_seconds is the rest of the measured session (13,074 s from the claim to the resolution), so it absorbs the estimate's error and any inactive pause. Usage is complete in all ten sessions (every result event arrived).",
+        "work": "#181 (T3a): go-indep-2 and go-indep-4 written and calibrated (go-indep-4 median W 248 s), the go-indep-2 drift test, four throwaway verify runs; no freeze."
       },
       {
         "issue": 180,
@@ -241,21 +264,52 @@
         },
         "measurement": "Implementation is not charged (Daniel, 2026-10-22) and was not timed. No real runs, so no run or preparation time and no usage.",
         "work": "#189 (T3): register #181's calibrated go-indep-2 and go-indep-4 (fixtures, protected oracles, initial commits) in FIXTURES, the result schema, the scripted worker and the verify key list, outside SCORED_FIXTURES; the go-indep-2 drift test; re-freeze v16 -> v17."
+      },
+      {
+        "issue": 182,
+        "implementation_seconds": 0,
+        "run_seconds": 0,
+        "preparation_seconds": 0,
+        "charged_seconds": 0,
+        "complete_usage": {
+          "runs": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "measurement": "Implementation is not charged (Daniel, 2026-10-22) and was not timed. No real runs and no run preparation: building the v11 harness and the ci-checks runs were verification. No usage.",
+        "work": "#182 (T4): cumulative verification of track T's freezes against v11 (manifest paths, hash-identical v11 fixtures and oracles, C6.1, C6.4 against a rebuilt 9564d45, ci-checks); the budget re-estimate below; five track-T repetitions per cell upfront; `timing` for a team of one; the track-T report (`report --schedule track-t`, written by the track-T batch); #181's entry; re-freeze v19 -> v20."
       }
     ],
+    "re_estimate": {
+      "issue": 182,
+      "date": "2026-10-22",
+      "source": "https://github.com/danielrispler/Falinks/issues/182#issuecomment-6341557502",
+      "decision": "Five repetitions per cell upfront: 5 fixtures x 2 team sizes x 5 = 50 runs (Daniel, 2026-10-22, on #182, option A). No cut: go-indep-2 stays.",
+      "charged_before_183_seconds": 2704,
+      "forecast_183_seconds": {
+        "low": 5325,
+        "high": 14332,
+        "contingency": 3072
+      },
+      "worst_case_total_seconds": 20108,
+      "headroom_seconds": 23092,
+      "basis": "Estimates, not measurements. Two-agent Git times from #27 (Claude Code 2.1.287): 36.8-39.3 s rust-errors, 96.0-106.0 s go-page, 61.3-79.6 s go-relationships. One agent: up to twice the two-agent maximum on those three; #181's calibration wall time up to 1.5x on go-indep (124-186 s go-indep-2, 244-396 s go-indep-4); two agents on go-indep from half of one agent up to no gain. Per run, up to a 60 s drain and a 27 s gap (#27 ledgers). Per invocation, 159 s preparation (#110), a 425-590 s gate (#122, #27 ledgers) and about 40 s verify. Contingency: one 1,800 s timeout with its replacement, and one re-invocation."
+    },
     "totals": {
-      "implementation_seconds": 3426,
-      "run_seconds": 0,
-      "preparation_seconds": 0,
-      "charged_seconds": 0,
+      "implementation_seconds": 13796,
+      "run_seconds": 2104,
+      "preparation_seconds": 600,
+      "charged_seconds": 2704,
       "complete_usage": {
-        "runs": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0
+        "runs": 10,
+        "input_tokens": 158,
+        "output_tokens": 229188,
+        "cache_read_input_tokens": 1844929,
+        "cache_creation_input_tokens": 315479
       }
     },
-    "remaining_seconds": 43200
+    "remaining_seconds": 40496
   }
 }

@@ -988,6 +988,31 @@ fn timing_reports_hand_computed_figures() {
     );
 }
 
+/// A team of one (#178 C1) has no agent B: `timing` reads agent A alone.
+#[test]
+fn timing_reads_only_the_agents_of_a_team_of_one() {
+    let tmp = tmp("falinks-timing-solo-");
+    let run = tmp.path().join("git");
+    let a = run.join("agents/A/scratch");
+    fs::create_dir_all(&a).unwrap();
+    fs::create_dir_all(run.join("controller")).unwrap();
+    let events = "agents/A/scratch/claude-events.jsonl";
+    fs::copy(
+        root().join("tests/timing/git").join(events),
+        run.join(events),
+    )
+    .unwrap();
+    let mut result = read(root().join("tests/timing/git/controller/result.json"));
+    result["team_size"] = json!(1);
+    fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+    let output = cli([OsStr::new("timing"), run.as_os_str()]);
+    assert!(output.status.success(), "{}", text(&output));
+    let figures: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let agents: Vec<&String> = figures["agents"].as_object().unwrap().keys().collect();
+    assert_eq!(agents, ["A"]);
+    assert_eq!(figures["slowest_agent"], "A");
+}
+
 #[test]
 fn baseline_exchanges_unfinished_work_and_freezes_exact_candidate() {
     let tmp = tmp("falinks-baseline-test-");
@@ -1247,9 +1272,26 @@ fn track_t_batch_runs_both_team_sizes_with_run_isolation() {
             r["team_size"].as_u64().unwrap(),
         ));
     }
-    let expected: Vec<(String, u64)> = [(1, 1), (1, 2), (2, 2), (2, 1), (3, 1), (3, 2)]
-        .iter()
-        .map(|(rep, size)| (format!("go-relationships-{rep}-git-{size}"), *size))
-        .collect();
+    let expected: Vec<(String, u64)> = [
+        (1, 1),
+        (1, 2),
+        (2, 2),
+        (2, 1),
+        (3, 1),
+        (3, 2),
+        (4, 2),
+        (4, 1),
+        (5, 1),
+        (5, 2),
+    ]
+    .iter()
+    .map(|(rep, size)| (format!("go-relationships-{rep}-git-{size}"), *size))
+    .collect();
     assert_eq!(sizes, expected);
+    // The batch writes the track-T report: five repetitions per team size, labelled.
+    let report = read(runs.join("report.json"));
+    let time = &report["fixtures"]["go-relationships"]["metrics"]["completion_seconds"];
+    assert_eq!((&time["1"]["n"], &time["2"]["n"]), (&json!(5), &json!(5)));
+    assert!(time["label"].is_string());
+    assert_eq!(report["gaps"], json!([]));
 }

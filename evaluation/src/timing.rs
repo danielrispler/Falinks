@@ -478,8 +478,10 @@ pub fn timing(run: &Path) -> Result<Value> {
     let result = read(run.join("controller/result.json"))?;
     let arm = result["arm"].as_str().unwrap_or_default();
     let agents: Vec<(String, Vec<Value>)> = match arm {
+        // A team of one has no agent B (#178 C1); runs before it record no team size.
         "git" => ["A", "B"]
             .iter()
+            .take(result["team_size"].as_u64().unwrap_or(2) as usize)
             .map(|a| {
                 let path = run
                     .join("agents")
