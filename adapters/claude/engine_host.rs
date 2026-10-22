@@ -581,13 +581,7 @@ fn edit(request: &Value, scratch: &Path) -> Result<Request> {
                 require_keys(file, &what, &[form], &["executable"])
                     .map_err(|e| format!("{e}; {ONE_FORM}"))?;
                 let executable = file["executable"].as_bool();
-                let text = |key: &str| -> Result<Vec<u8>> {
-                    Ok(file[key]
-                        .as_str()
-                        .ok_or(format!("{what}.{key} must be text"))?
-                        .as_bytes()
-                        .to_vec())
-                };
+                let text = |key: &str| text_bytes(file, &what, key);
                 match form {
                     "content" => Output::Whole(File {
                         bytes: text("content")?,
@@ -600,27 +594,21 @@ fn edit(request: &Value, scratch: &Path) -> Result<Request> {
                             .iter()
                             .map(|hunk| {
                                 require_keys(hunk, "replace[]", &["old", "new"], &[])?;
-                                let text = |key: &str| -> Result<Vec<u8>> {
-                                    Ok(hunk[key]
-                                        .as_str()
-                                        .ok_or(format!("replace[].{key} must be text"))?
-                                        .as_bytes()
-                                        .to_vec())
-                                };
                                 Ok(Hunk {
-                                    old: text("old")?,
-                                    new: text("new")?,
+                                    old: text_bytes(hunk, "replace[]", "old")?,
+                                    new: text_bytes(hunk, "replace[]", "new")?,
                                 })
                             })
                             .collect::<Result<_>>()?,
                         executable,
                     },
-                    _ => Output::Whole(File {
+                    "from" => Output::Whole(File {
                         bytes: scratch_file(scratch, &String::from_utf8(text("from")?)?)
                             .map_err(|e| format!("{what}.from refused: {e}"))?,
                         // Never the scratch file's mode.
                         executable: executable.unwrap_or(false),
                     }),
+                    _ => unreachable!("FORMS has only these forms"),
                 }
             }
         };
@@ -635,6 +623,14 @@ fn edit(request: &Value, scratch: &Path) -> Result<Request> {
         note: field(request, "note")?.into(),
         reviews: reviews.unwrap_or_default(),
     })
+}
+/// `value[key]` as bytes, refused unless it is text.
+fn text_bytes(value: &Value, what: &str, key: &str) -> Result<Vec<u8>> {
+    Ok(value[key]
+        .as_str()
+        .ok_or(format!("{what}.{key} must be text"))?
+        .as_bytes()
+        .to_vec())
 }
 /// The edit output forms; a value takes exactly one.
 const FORMS: [&str; 3] = ["content", "replace", "from"];
@@ -685,7 +681,7 @@ fn scratch_file(scratch: &Path, path: &str) -> Result<Vec<u8>> {
         .take(SCRATCH_LIMIT + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > SCRATCH_LIMIT {
-        return Err(format!("{path:?} is over 1 MiB").into());
+        return Err(format!("{path:?} is over {SCRATCH_LIMIT} bytes (1 MiB)").into());
     }
     String::from_utf8(bytes)
         .map_err(|_| format!("{path:?} is not valid UTF-8").into())
