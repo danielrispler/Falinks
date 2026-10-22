@@ -120,7 +120,7 @@ The result follows `evaluation/result-schema.json`. Retained evidence includes:
 
 - the timeline (`events.jsonl`)
 - engine history, runs, proposals and validator log
-- transcripts without reasoning (`transcripts.json`). Each `host_call` record also holds `received` (the socket thread got the request), `started` (the driver began serving it) and `finished` (its answer was ready), in seconds on the run-start clock that `events.jsonl` `elapsed` uses. An `edit`, `retry` or `incorporate` record that reached the engine also holds `stages`, the engine's stage report: `{stage, seconds}` in the order the edit reached them. Agents see none of these fields.
+- transcripts without reasoning (`transcripts.json`). Each `host_call` record also holds `received` (the socket thread got the request), `started` (the driver began serving it) and `finished` (its answer was ready), in seconds since `Session::clock`; `falinks-arm` sets it to the run-start clock that `events.jsonl` `elapsed` uses. An `edit`, `retry` or `incorporate` record that reached the engine also holds `stages`, the engine's stage report: `{stage, seconds}` in the order the edit reached them. Agents see none of these fields.
 - oracle evidence for every candidate (`controller/oracle/`)
 - per-turn usage with the last `rate_limit_event`, drained after the clock stops: every call is refused while the host waits up to `usage_drain_seconds` for each worker to end its turn (#179)
 

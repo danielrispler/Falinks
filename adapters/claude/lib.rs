@@ -933,9 +933,8 @@ impl Runtime {
         let mut child = command.spawn()?;
         let input = child.stdin.take();
         let stdout = child.stdout.take().ok_or("claude stdout missing")?;
-        let lines = sender.clone();
+        let done = sender.clone();
         thread::spawn(move || {
-            let sender = lines;
             for line in BufReader::new(stdout).lines() {
                 let value = line
                     .map_err(|e| e.into())
@@ -956,7 +955,7 @@ impl Runtime {
             child,
             input,
             inputs,
-            done: sender,
+            done,
             replies: BTreeMap::new(),
             listener,
             closed: false,
@@ -1016,7 +1015,13 @@ impl Runtime {
                         Served::Later(key, work) => {
                             self.replies.insert(key, reply);
                             let done = self.done.clone();
-                            thread::spawn(move || done.send(Input::Done(key, work())));
+                            thread::spawn(move || {
+                                // A panic still answers the caller and latches the gate.
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                                        .unwrap_or_else(|_| Err("deferred work panicked".into()));
+                                done.send(Input::Done(key, result))
+                            });
                             return Ok(true);
                         }
                     },
