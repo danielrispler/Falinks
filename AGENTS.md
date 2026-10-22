@@ -33,6 +33,10 @@ Until #228's stage 2 freezes (the calibration ticket lifts this rule):
 
 The rules are frozen in `evaluation/code-quality.json`; the batch steps are in `evaluation/README.md`, "Paired evaluation (#27)".
 
+## Local evidence
+
+Raw evidence from finished real batches (run directories, gate reports, timing, terminal output) lives on Daniel's machine in `local-evidence/` at the root of the main checkout, `/Users/danielrispler/work/Falinks/local-evidence/`. It is gitignored, so clones and CI lack it. Before looking for a past batch's files, read its index, `local-evidence/README.md`. When a real batch finishes, move its directory there and add a row to the index.
+
 ## Agent skills
 
 ### Learning
