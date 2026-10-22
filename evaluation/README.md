@@ -301,7 +301,16 @@ for safety gates, run interpretation and continuation criteria. Track T (#178) h
 its own `team_size_research` section with a 43,200 s limit; its sessions record
 implementation, run (including the usage drain) and preparation time and
 complete-only usage separately. The ledger test fails when either section is
-overdrawn: stop and ask before that happens.
+overdrawn: stop and ask before that happens. Each `limit_seconds` already
+includes its amendments, so the remaining balance is the limit minus the charged
+sessions. From `evaluation/`:
+
+```sh
+jq -c '{shared: (.limit_seconds - ([.sessions[].charged_seconds] | add)), team_size_research: (.team_size_research | .limit_seconds - ([.sessions[].charged_seconds] | add))}' setup.json
+```
+
+For the time to charge, `report --runs` gives each run's outcome and paired
+timings, and `timing RUN_DIR` gives per-agent figures (see "Paired evaluation (#27)" above).
 `freeze` lists each changed frozen path and refuses unstaged changes to them, so
 stage your repair first. Re-freeze before observing a red harness test, or the
 freeze guard fails first and masks the real failure.
