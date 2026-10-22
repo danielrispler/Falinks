@@ -590,3 +590,52 @@ fn tool_inputs_are_the_request_and_never_name_the_run_path() {
         assert!(!text.contains("Call with"), "{text}");
     }
 }
+
+/// The top-level keys of the leading `{...}` in `text`, optional ones marked `?`.
+fn signature(text: &str) -> std::collections::BTreeSet<String> {
+    let (mut depth, mut keys, mut key) = (0, std::collections::BTreeSet::new(), String::new());
+    for c in text.chars() {
+        match c {
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            ',' if depth == 1 => {
+                keys.insert(std::mem::take(&mut key));
+                continue;
+            }
+            _ => {}
+        }
+        if depth == 0 {
+            break;
+        }
+        if depth == 1 && c != '{' {
+            key.push(c);
+        }
+    }
+    keys.insert(key);
+    keys.into_iter()
+        .map(|k| k.split(':').next().unwrap().trim().to_string())
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+/// Each tool description names exactly the keys its operation's parser takes, so the two
+/// hand-written lists cannot drift.
+#[test]
+fn each_description_names_the_keys_its_operation_takes() {
+    use falinks_claude::engine_host::OPERATIONS;
+    let f = fixture();
+    let edit = OPERATIONS.iter().find(|(o, _)| *o == "edit").unwrap().1;
+    for (operation, help) in OPERATIONS {
+        let help = if help.starts_with("Same shape as edit") {
+            edit
+        } else {
+            help
+        };
+        let reply = f.call(0, operation, json!({"unknown":true}));
+        let reason = reply["reason"].as_str().unwrap_or_default();
+        let takes = reason
+            .strip_prefix(&format!("request keys: {operation} takes "))
+            .unwrap_or_else(|| panic!("{operation}: {reply}"));
+        assert_eq!(signature(takes), signature(help), "{operation}: {reason}");
+    }
+}

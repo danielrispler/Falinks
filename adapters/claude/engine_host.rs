@@ -56,8 +56,9 @@ impl EngineHost {
     /// Each operation's parser checks its request keys before the engine sees the request.
     fn dispatch(&self, operation: &str, request: &Value) -> Result<Value> {
         let (engine, client) = (&self.engine, &self.client);
-        let takes =
-            |required: &[&str], optional: &[&str]| keys(request, operation, required, optional);
+        let takes = |required: &[&str], optional: &[&str]| {
+            require_keys(request, operation, required, optional)
+        };
         Ok(match operation {
             "capture" => {
                 takes(&[], &["paths"])?;
@@ -76,6 +77,7 @@ impl EngineHost {
             }
             "edit" | "retry" | "incorporate" => {
                 takes(&["id", "expected", "output"], &["reviews"])?;
+                require_review_keys(request)?;
                 let request = edit(request)?;
                 let outcome = match operation {
                     "edit" => engine.apply(client, request)?,
@@ -106,7 +108,7 @@ impl EngineHost {
                     &["id", "task", "revision", "scope", "text"],
                     &["supersedes", "reviews"],
                 )?;
-                reviews(request)?;
+                require_review_keys(request)?;
                 let offered = engine.offer(client, parse(request)?)?;
                 let coverage = offered.coverage;
                 json!({"accepted":true,"checkpoint":offered.checkpoint,"missing":coverage.missing,
@@ -128,7 +130,7 @@ impl EngineHost {
                 takes(&["task", "scope", "work", "text"], &["reply_to"])?;
                 let reply_to = &request["reply_to"];
                 if !reply_to.is_null() {
-                    keys(reply_to, "reply_to", &["event", "work"], &[])?;
+                    require_keys(reply_to, "reply_to", &["event", "work"], &[])?;
                 }
                 json!({"accepted":true,"event":engine.post(client, parse(request)?)?})
             }
@@ -170,8 +172,8 @@ impl EngineHost {
                 // `"Agree"` or `{Decline: {reason}}`; serde ignores unknown keys in the latter.
                 let response = &request["response"];
                 if response.is_object() {
-                    keys(response, "response", &["Decline"], &[])?;
-                    keys(&response["Decline"], "response.Decline", &["reason"], &[])?;
+                    require_keys(response, "response", &["Decline"], &[])?;
+                    require_keys(&response["Decline"], "response.Decline", &["reason"], &[])?;
                 }
                 let proposal = engine.respond(
                     client,
@@ -250,7 +252,7 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "post",
-        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to: null | {event: seq, work}} -> advisory plan message to your peer. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
+        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to?: null | {event: seq, work}} -> advisory plan message to your peer. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
     ),
     (
         "offer",
@@ -404,7 +406,12 @@ pub fn validator(
 /// Refuses `value` unless it is an object with every `required` key and no key beyond
 /// `required` and `optional`. Parsers run it before the engine sees a request, so a refusal
 /// uses up no request ID.
-pub(crate) fn keys(value: &Value, what: &str, required: &[&str], optional: &[&str]) -> Result<()> {
+pub(crate) fn require_keys(
+    value: &Value,
+    what: &str,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<()> {
     let given: Vec<&str> = value
         .as_object()
         .into_iter()
@@ -436,9 +443,9 @@ pub(crate) fn keys(value: &Value, what: &str, required: &[&str], optional: &[&st
 }
 /// The keys of a review: the `review` request and each inline review.
 const REVIEW: &[&str] = &["scope", "revision", "decision", "note"];
-fn reviews(request: &Value) -> Result<()> {
+fn require_review_keys(request: &Value) -> Result<()> {
     for review in request["reviews"].as_array().into_iter().flatten() {
-        keys(review, "reviews[]", REVIEW, &[])?;
+        require_keys(review, "reviews[]", REVIEW, &[])?;
     }
     Ok(())
 }
@@ -466,7 +473,7 @@ fn edit(request: &Value) -> Result<Request> {
         let file = match file {
             Value::Null => Output::Delete,
             file => {
-                keys(
+                require_keys(
                     file,
                     &format!("output {path:?}"),
                     &["content"],
@@ -484,7 +491,6 @@ fn edit(request: &Value) -> Result<Request> {
         };
         output.insert(path.clone(), file);
     }
-    reviews(request)?;
     let reviews: Option<Vec<Review>> = parse(&request["reviews"])?;
     let id = field(request, "id")?;
     Ok(Request {

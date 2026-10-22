@@ -1030,7 +1030,7 @@ fn accepted_recovery(gate: &mut Gate) -> Result<()> {
         gate.start(agent)?;
         let probe = gate.probe(agent)?;
         let steps = format!(
-            "The host restarted. 1. Bash: run exactly `{probe}` (do not change it).\n2. falinks_checkpoint with input {{\"id\": \"{agent}/team\"}}.\n3. falinks_offer with exactly the same request as your earlier team offer: {{\"id\": \"team\", \"task\": \"gate\", \"revision\": {revision}, \"scope\": [\"{scope}\"], \"text\": \"team candidate\"}}."
+            "The host restarted. 1. Bash: run exactly `{probe}` (do not change it).\n2. falinks_checkpoint with input {{\"id\": \"{agent}/team\"}}.\n3. falinks_offer with exactly the same input as your earlier team offer: {{\"id\": \"team\", \"task\": \"gate\", \"revision\": {revision}, \"scope\": [\"{scope}\"], \"text\": \"team candidate\"}}."
         );
         gate.prompt(agent, &steps)?;
         probes.push(probe);

@@ -461,7 +461,7 @@ impl Arm {
                 };
                 match (
                     operation,
-                    engine_host::keys(request, operation, required, &[]),
+                    engine_host::require_keys(request, operation, required, &[]),
                 ) {
                     (_, Err(error)) => refuse(&error.to_string()),
                     ("ack", _) => self.ack(agent, request),

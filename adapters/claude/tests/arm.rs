@@ -644,17 +644,17 @@ fn evaluation_copies_of_the_edit_forms_and_counts_agree() {
 )]
 fn host_tools_refuse_unknown_or_missing_request_keys() {
     let mut run = setup("go-relationships");
-    for (operation, request, takes) in [
-        ("ack", json!({"id": "x"}), "ack takes {milestone}"),
-        ("check", json!({"request": {}}), "check takes {}"),
-        ("ready", json!({"request": {}}), "ready takes {}"),
-    ] {
-        let reply = run.call(0, operation, request.clone());
-        let reason = reply["reason"].as_str().unwrap_or_default();
-        assert!(
-            reason.starts_with(&format!("request keys: {takes}")),
-            "{operation} {request}: {reply}"
-        );
+    // Each refusal names the keys its description gives: `ack` takes `{milestone}`.
+    for (operation, help) in HOST_TOOLS {
+        let takes = help.split(" -> ").next().unwrap();
+        for request in [json!({"id": "x"}), json!({"request": {}})] {
+            let reply = run.call(0, operation, request.clone());
+            let reason = reply["reason"].as_str().unwrap_or_default();
+            assert!(
+                reason.starts_with(&format!("request keys: {operation} takes {takes}")),
+                "{operation} {request}: {reply}"
+            );
+        }
     }
     assert!(run.arm.log.is_empty(), "{:?}", run.arm.log);
 }
