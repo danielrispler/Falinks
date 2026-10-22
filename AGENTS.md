@@ -44,4 +44,4 @@ Use the five default triage labels. Before triaging issues, read `docs/agents/tr
 
 ### Domain docs
 
-Use a single-context layout: root `CONTEXT.md` and `docs/adr/`. Before exploring the codebase, read `docs/agents/domain.md`. Settled decisions are indexed in the current map's Decisions-so-far; read the relevant linked resolution before proposing a design change.
+Use a single-context layout: root `CONTEXT.md` and `docs/adr/`. Before exploring the codebase, read `docs/agents/domain.md`. Settled decisions are indexed in a `wayfinder:map`'s Decisions-so-far or a spec's Implementation Decisions; read the linked resolution comment before proposing a design change.
