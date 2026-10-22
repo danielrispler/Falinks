@@ -570,11 +570,79 @@ fn wrapped_unknown_or_missing_request_keys_are_refused_by_name() {
         json!({"task":"t","scope":[],"work":"None","text":"hi"}),
     );
     assert_eq!(post["accepted"], true, "{post}");
+    let event = f.engine.events(&f.clients[1], 0).unwrap().pop().unwrap();
+    assert_eq!(post["seq"], event.seq, "{post}");
+    let falinks::Body::Message(message) = event.body else {
+        panic!("{event:?}")
+    };
+    assert_eq!(message.reply_to, None);
+}
+
+/// Whether `text` holds a run of exactly `len` hex digits.
+fn has_hex(text: &str, len: usize) -> bool {
+    text.split(|c: char| !c.is_ascii_hexdigit())
+        .any(|run| run.len() == len)
+}
+
+/// `post` returns only its seq, notices show seqs with the workspace once in the header,
+/// and edit and capture results carry no Git IDs (#221). The engine keeps its IDs.
+#[test]
+fn post_results_notices_and_edit_results_carry_no_unused_ids() {
+    use falinks_claude::engine_host::{notice_events, notice_header};
+    let f = fixture();
+    let post = json!({"task":"t","scope":[],"work":"None","text":"plan"});
+    let posted = f.call(0, "post", post);
     assert_eq!(
-        post["event"]["body"]["Message"]["reply_to"],
-        Value::Null,
-        "{post}"
+        posted,
+        json!({"accepted":true,"seq":posted["seq"]}),
+        "{posted}"
     );
+    let seq = posted["seq"].as_u64().unwrap();
+    // The agent handles through its own post's seq.
+    let handled = f.call(0, "handle", json!({"through":seq}));
+    assert_eq!(handled["accepted"], true, "{handled}");
+    let reply = json!({"task":"t","scope":[],"work":"None","text":"ok",
+        "reply_to":{"event":seq,"work":"None"}});
+    let replied = f.call(1, "post", reply);
+    assert_eq!(replied["accepted"], true, "{replied}");
+
+    let events = f.engine.events(&f.clients[1], 0).unwrap();
+    // Stored events keep `nonce:seq` IDs and the workspace.
+    let nonce = events[0].id.split_once(':').unwrap().0.to_string();
+    assert!(has_hex(&nonce, 64), "{nonce}");
+    let falinks::Body::Message(message) = &events[0].body else {
+        panic!("{events:?}")
+    };
+    assert_eq!(message.workspace, nonce);
+    let shown = notice_events(&events).unwrap();
+    assert_eq!(shown[0]["seq"], seq, "{shown}");
+    assert!(shown[0].get("id").is_none(), "{shown}");
+    assert!(!has_hex(&shown.to_string(), 64), "{shown}");
+    let header = notice_header(&events).unwrap();
+    assert_eq!(
+        header,
+        format!("{} (workspace {nonce})", events.last().unwrap().seq)
+    );
+
+    let before = f.call(0, "capture", json!({"paths":["label.go"]}));
+    let applied = f.call(
+        0,
+        "edit",
+        json!({"id":"e","expected":{"label.go":before["files"]["label.go"]["version"]},
+            "output":{"label.go":{"content":"package gate\n"}}}),
+    );
+    assert_eq!(applied["accepted"], true, "{applied}");
+    let stale = f.call(
+        1,
+        "edit",
+        json!({"id":"s","expected":{"label.go":before["files"]["label.go"]["version"]},
+            "output":{"label.go":null}}),
+    );
+    assert!(stale["outcome"]["Stale"].is_object(), "{stale}");
+    let after = f.call(0, "capture", json!({"paths":["label.go"]}));
+    for result in [&before, &applied, &stale, &after] {
+        assert!(!has_hex(&result.to_string(), 40), "{result}");
+    }
 }
 
 /// Each tool's input is the request itself: no definition names the run path, and no input
