@@ -181,6 +181,10 @@ impl ControlledHost {
         let result = json!({"accepted":accepted,"reason":reason});
         self.records
             .push(json!({"envelope":envelope,"result":result}));
-        Ok(EngineOutcome { result, notice })
+        Ok(EngineOutcome {
+            result,
+            notice,
+            ..Default::default()
+        })
     }
 }

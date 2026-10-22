@@ -28,6 +28,7 @@ fn mediation_refuses_after_a_failure_and_latches_engine_errors() -> falinks_host
             _ => Ok(EngineOutcome {
                 result: json!({"accepted":true}),
                 notice: None,
+                ..Default::default()
             }),
         }
     });

@@ -251,6 +251,7 @@ impl Gate {
                 Ok(EngineOutcome {
                     result: host.call(envelope)?,
                     notice: None,
+                    ..Default::default()
                 })
             }),
             true,
