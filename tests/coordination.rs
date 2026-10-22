@@ -466,7 +466,8 @@ fn a_host_internal_capture_authorizes_an_offer_but_no_review() {
                 reviews: Vec::new(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .checkpoint;
     assert_eq!(offered.capture, host);
 }
 
@@ -560,12 +561,19 @@ fn an_offer_with_an_inline_review_clears_the_obligation_and_offers() {
                 ..offer
             },
         )
-        .unwrap();
+        .unwrap()
+        .checkpoint;
     assert_eq!(offered.state, Availability::Available);
     assert!(pending(&engine, &bob).is_empty());
     // A replayed offer reviews nothing again.
     let before = engine.events(&alice, 0).unwrap().len();
-    assert_eq!(engine.offer(&bob, offered.offer.clone()).unwrap(), offered);
+    assert_eq!(
+        engine
+            .offer(&bob, offered.offer.clone())
+            .unwrap()
+            .checkpoint,
+        offered
+    );
     assert_eq!(engine.events(&alice, 0).unwrap().len(), before);
 }
 
@@ -831,7 +839,8 @@ fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding(
     };
     let c1 = engine
         .offer(&bob, offer("c1", base.revision, None))
-        .unwrap();
+        .unwrap()
+        .checkpoint;
     engine
         .apply(&bob, edit("draft", &base, "b.rs", "later live draft\n"))
         .unwrap();
@@ -924,7 +933,8 @@ fn checkpoint_offers_survive_live_editing_and_end_exact_waits_without_rebinding(
     );
     let c3 = engine
         .offer(&bob, offer("c3", current.revision, None))
-        .unwrap();
+        .unwrap()
+        .checkpoint;
     engine.disconnect(&bob).unwrap();
     assert_eq!(
         engine

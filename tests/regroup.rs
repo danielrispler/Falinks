@@ -96,6 +96,7 @@ fn offer(engine: &Engine, client: &Client, id: &str) -> Checkpoint {
             },
         )
         .unwrap()
+        .checkpoint
 }
 fn read(root: &Path, path: &str) -> String {
     fs::read_to_string(root.join(path)).unwrap()
@@ -786,7 +787,8 @@ fn retained_candidate_keeps_its_membership_across_a_split() {
                 reviews: Vec::new(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .checkpoint;
     assert_eq!(bobs.members, agents(&[0, 1]));
     let run = engine.validate().unwrap().unwrap();
     assert!(
