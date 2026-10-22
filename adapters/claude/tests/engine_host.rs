@@ -372,7 +372,7 @@ fn foreign_identity_and_unknown_source_changes_are_host_errors() {
 #[test]
 fn every_advertised_tool_maps_to_an_engine_operation() {
     let f = fixture();
-    let tools = falinks_claude::engine_host::tools(&f.live);
+    let tools = falinks_claude::engine_host::tools();
     for tool in tools.as_array().unwrap() {
         let operation = tool["name"]
             .as_str()
@@ -392,7 +392,7 @@ fn every_advertised_tool_maps_to_an_engine_operation() {
 #[test]
 fn agents_get_no_pending_or_events_tool() {
     let f = fixture();
-    let tools = falinks_claude::engine_host::tools(&f.live);
+    let tools = falinks_claude::engine_host::tools();
     let names: Vec<&str> = tools
         .as_array()
         .unwrap()
@@ -461,4 +461,181 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
                 "decision":"Keep","note":"reread Discount in the notice"}]}),
     );
     assert_eq!(inline["accepted"], true, "{inline}");
+}
+
+/// An edit output value is `{content, executable?}` or null. A mixed or unknown form is refused
+/// before the engine sees it, so the file is untouched and the request ID stays free.
+#[test]
+fn edit_output_values_are_whole_text_or_null_and_other_forms_are_refused() {
+    let f = fixture();
+    let edit = |id: &str, value: Value| {
+        let version = f.call(0, "capture", json!({}))["files"]["label.go"]["version"].clone();
+        f.call(
+            0,
+            "edit",
+            json!({"id":id,"expected":{"label.go":version},"output":{"label.go":value}}),
+        )
+    };
+    for value in [
+        json!({"content":"package gate\n","replace":[{"old":"gate","new":"other"}]}),
+        json!({"content":"package gate\n","from":"label.go"}),
+        json!({"content":"package gate\n","mode":"0755"}),
+    ] {
+        let refused = edit("x", value.clone());
+        assert_eq!(refused["accepted"], false, "{value}: {refused}");
+        let reason = refused["reason"].as_str().unwrap();
+        assert!(reason.starts_with("request keys:"), "{reason}");
+        assert!(reason.contains("content, executable?"), "{reason}");
+        assert_eq!(
+            fs::read_to_string(f.live.join("label.go")).unwrap(),
+            GO[2].1
+        );
+    }
+    let whole = edit("x", json!({"content":"package gate\n"}));
+    assert_eq!(whole["accepted"], true, "{whole}");
+    assert_eq!(
+        fs::read_to_string(f.live.join("label.go")).unwrap(),
+        "package gate\n"
+    );
+    let deleted = edit("y", Value::Null);
+    assert_eq!(deleted["accepted"], true, "{deleted}");
+    assert!(!f.live.join("label.go").exists());
+}
+
+/// Every operation checks its request keys, top level and nested, before the engine sees them,
+/// naming the keys it takes. A request wrapped in `request` is refused rather than read as empty.
+#[test]
+fn wrapped_unknown_or_missing_request_keys_are_refused_by_name() {
+    let f = fixture();
+    let version = f.call(0, "capture", json!({}))["files"]["label.go"]["version"].clone();
+    let output = json!({"label.go":{"content":"package gate\n"}});
+    for (operation, request, takes) in [
+        (
+            "handle",
+            json!({"request":{"through":5}}),
+            "handle takes {through?, deferred?, processed?}",
+        ),
+        ("capture", json!({"request":{}}), "capture takes {paths?}"),
+        ("obligations", json!({"all":true}), "obligations takes {}"),
+        (
+            "edit",
+            json!({"id":"e","expected":{"label.go":version},"output":output,"request":{}}),
+            "edit takes {id, expected, output, reviews?}",
+        ),
+        (
+            "edit",
+            json!({"id":"e","expected":{"label.go":version},"output":output,
+            "reviews":[{"scope":"s","revision":0,"decision":"Keep"}]}),
+            "reviews[] takes {scope, revision, decision, note}",
+        ),
+        (
+            "register",
+            json!({"id":"r","task":"t"}),
+            "register takes {id, task, nodes, depends?}",
+        ),
+        (
+            "post",
+            json!({"task":"t","scope":[],"work":"None","text":"hi","reply_to":{"event":1}}),
+            "reply_to takes {event, work}",
+        ),
+        (
+            "respond",
+            json!({"id":"p","context":"c","response":{"Decline":{"reason":"no","why":"x"}}}),
+            "response.Decline takes {reason}",
+        ),
+        (
+            "job",
+            json!({"id":"j","revision":0}),
+            "job takes {id, revision, paths}",
+        ),
+    ] {
+        let reply = f.call(0, operation, request.clone());
+        let reason = reply["reason"].as_str().unwrap_or_default();
+        assert!(
+            reason.starts_with(&format!("request keys: {takes}")),
+            "{operation} {request}: {reply}"
+        );
+    }
+    // The refused edits used up no request ID.
+    let edit = f.call(
+        0,
+        "edit",
+        json!({"id":"e","expected":{"label.go":version},"output":output}),
+    );
+    assert_eq!(edit["accepted"], true, "{edit}");
+    // An optional key keeps its default.
+    let post = f.call(
+        0,
+        "post",
+        json!({"task":"t","scope":[],"work":"None","text":"hi"}),
+    );
+    assert_eq!(post["accepted"], true, "{post}");
+    assert_eq!(
+        post["event"]["body"]["Message"]["reply_to"],
+        Value::Null,
+        "{post}"
+    );
+}
+
+/// Each tool's input is the request itself: no definition names the run path, and no input
+/// schema has the old `{workspace, request}` wrapper.
+#[test]
+fn tool_inputs_are_the_request_and_never_name_the_run_path() {
+    let f = fixture();
+    let tools = falinks_claude::arm::tools();
+    for tool in tools.as_array().unwrap() {
+        assert_eq!(tool["inputSchema"], json!({"type":"object"}), "{tool}");
+        let text = tool.to_string();
+        assert!(!text.contains(f.live.to_str().unwrap()), "{text}");
+        assert!(!text.contains("Call with"), "{text}");
+    }
+}
+
+/// The top-level keys of the leading `{...}` in `text`, optional ones marked `?`.
+fn signature(text: &str) -> std::collections::BTreeSet<String> {
+    let (mut depth, mut keys, mut key) = (0, std::collections::BTreeSet::new(), String::new());
+    for c in text.chars() {
+        match c {
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            ',' if depth == 1 => {
+                keys.insert(std::mem::take(&mut key));
+                continue;
+            }
+            _ => {}
+        }
+        if depth == 0 {
+            break;
+        }
+        if depth == 1 && c != '{' {
+            key.push(c);
+        }
+    }
+    keys.insert(key);
+    keys.into_iter()
+        .map(|k| k.split(':').next().unwrap().trim().to_string())
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+/// Each tool description names exactly the keys its operation's parser takes, so the two
+/// hand-written lists cannot drift.
+#[test]
+fn each_description_names_the_keys_its_operation_takes() {
+    use falinks_claude::engine_host::OPERATIONS;
+    let f = fixture();
+    let edit = OPERATIONS.iter().find(|(o, _)| *o == "edit").unwrap().1;
+    for (operation, help) in OPERATIONS {
+        let help = if help.starts_with("Same shape as edit") {
+            edit
+        } else {
+            help
+        };
+        let reply = f.call(0, operation, json!({"unknown":true}));
+        let reason = reply["reason"].as_str().unwrap_or_default();
+        let takes = reason
+            .strip_prefix(&format!("request keys: {operation} takes "))
+            .unwrap_or_else(|| panic!("{operation}: {reply}"));
+        assert_eq!(signature(takes), signature(help), "{operation}: {reason}");
+    }
 }

@@ -634,3 +634,27 @@ fn evaluation_copies_of_the_edit_forms_and_counts_agree() {
         assert!(report.contains(&format!("[\"{key}\"]")), "{key}");
     }
 }
+
+/// Host tools check their request keys like engine operations, before any milestone or check
+/// state is consulted.
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn host_tools_refuse_unknown_or_missing_request_keys() {
+    let mut run = setup("go-relationships");
+    // Each refusal names the keys its description gives: `ack` takes `{milestone}`.
+    for (operation, help) in HOST_TOOLS {
+        let takes = help.split(" -> ").next().unwrap();
+        for request in [json!({"id": "x"}), json!({"request": {}})] {
+            let reply = run.call(0, operation, request.clone());
+            let reason = reply["reason"].as_str().unwrap_or_default();
+            assert!(
+                reason.starts_with(&format!("request keys: {operation} takes {takes}")),
+                "{operation} {request}: {reply}"
+            );
+        }
+    }
+    assert!(run.arm.log.is_empty(), "{:?}", run.arm.log);
+}

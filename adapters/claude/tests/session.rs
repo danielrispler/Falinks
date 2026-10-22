@@ -71,14 +71,14 @@ fn fixture_with(notice: Option<&'static str>) -> Fixture {
         session,
     }
 }
-fn edit(workspace: &Path) -> Value {
-    json!({"workspace":workspace,"request":{"request_id":"edit-1","content":"new"}})
+fn edit() -> Value {
+    json!({"request_id":"edit-1","content":"new"})
 }
 
 #[test]
 fn stamped_call_in_a_verified_turn_reaches_engine_with_host_identity() {
     let mut f = fixture();
-    let input = edit(&f.workspace);
+    let input = edit();
     f.session.line(&init(&f.workspace)).unwrap();
     assert_eq!(
         f.session
@@ -100,7 +100,7 @@ fn stamped_call_in_a_verified_turn_reaches_engine_with_host_identity() {
 #[test]
 fn unstamped_forged_or_foreign_calls_never_reach_engine() {
     let mut f = fixture();
-    let input = edit(&f.workspace);
+    let input = edit();
     let rejected = |reply: Value| reply["accepted"] == false || reply["allow"] == false;
     // Outside a verified turn, even a stamp is refused.
     assert!(rejected(
@@ -125,7 +125,7 @@ fn unstamped_forged_or_foreign_calls_never_reach_engine() {
     f.session
         .host(&hook("P1", "toolu_4", "falinks_edit", &input));
     let mut changed = input.clone();
-    changed["request"]["content"] = json!("swapped");
+    changed["content"] = json!("swapped");
     assert!(rejected(
         f.session.host(&call("toolu_4", "falinks_edit", &changed)).0
     ));
@@ -134,11 +134,11 @@ fn unstamped_forged_or_foreign_calls_never_reach_engine() {
     assert!(rejected(
         f.session.host(&call("toolu_5", "falinks_offer", &input)).0
     ));
-    // Caller-supplied identity and another workspace.
+    // Caller-supplied identity, a workspace included.
     for (index, arguments) in [
-        json!({"workspace":f.workspace,"request":{"author":"agent-b"}}),
-        json!({"workspace":"/unauthorized","request":{"content":"x"}}),
-        json!({"workspace":f.workspace,"request":{"content":"x"},"session":"forged"}),
+        json!({"author":"agent-b"}),
+        json!({"workspace":"/unauthorized","content":"x"}),
+        json!({"content":"x","session":"forged"}),
     ]
     .iter()
     .enumerate()
@@ -244,7 +244,7 @@ fn runtime_mismatch_latches_failure_and_blocks_engine() {
         let outcomes: Vec<_> = lines.iter().map(|line| f.session.line(line)).collect();
         let failed = outcomes.iter().any(Result::is_err);
         assert!(failed && f.session.gate.failed, "case {index}");
-        let input = edit(&f.workspace);
+        let input = edit();
         f.session
             .host(&hook("P1", "toolu_1", "falinks_edit", &input));
         assert_eq!(
@@ -314,7 +314,7 @@ fn a_later_turn_may_start_beneath_scratch() {
     let mut line = init(&f.workspace);
     line["cwd"] = json!(moved);
     f.session.line(&line).unwrap();
-    let input = edit(&f.workspace);
+    let input = edit();
     assert_eq!(
         f.session
             .host(&hook("P2", "toolu_1", "falinks_edit", &input))
@@ -335,7 +335,7 @@ fn replay(text: &str) -> Value {
 #[test]
 fn delivery_is_presentation_only_and_records_its_turn() {
     let mut f = fixture_with(Some("E1"));
-    let input = edit(&f.workspace);
+    let input = edit();
     f.session.sent("prompt", None);
     assert!(!f.session.idle());
     f.session.line(&init(&f.workspace)).unwrap();
@@ -467,7 +467,7 @@ fn the_launch_tool_profile_sets_init_and_registered_operations() {
     let mut line = init(&f.workspace);
     line["tools"] = json!(launch.allowed());
     f.session.line(&line).unwrap();
-    let input = json!({"workspace":f.workspace,"request":{}});
+    let input = json!({});
     f.session
         .host(&hook("P1", "toolu_1", "falinks_capture", &input));
     assert_eq!(

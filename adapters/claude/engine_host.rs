@@ -53,10 +53,15 @@ impl EngineHost {
             Err(error) => json!({"accepted":false,"reason":error.to_string()}),
         })
     }
+    /// Each operation's parser checks its request keys before the engine sees the request.
     fn dispatch(&self, operation: &str, request: &Value) -> Result<Value> {
         let (engine, client) = (&self.engine, &self.client);
+        let takes = |required: &[&str], optional: &[&str]| {
+            require_keys(request, operation, required, optional)
+        };
         Ok(match operation {
             "capture" => {
+                takes(&[], &["paths"])?;
                 let capture = engine.capture_for(client)?;
                 let wanted: Vec<&str> = request["paths"]
                     .as_array()
@@ -71,6 +76,8 @@ impl EngineHost {
                 reply
             }
             "edit" | "retry" | "incorporate" => {
+                takes(&["id", "expected", "output"], &["reviews"])?;
+                require_review_keys(request)?;
                 let request = edit(request)?;
                 let outcome = match operation {
                     "edit" => engine.apply(client, request)?,
@@ -80,23 +87,35 @@ impl EngineHost {
                 json!({"accepted":matches!(outcome, Outcome::Applied{..}),"outcome":outcome})
             }
             "request" => {
+                takes(&["id"], &[])?;
                 let record = engine.request(client, field(request, "id")?)?;
                 json!({"accepted":record.is_some(),"record":record})
             }
             "register" => {
+                takes(&["id", "task", "nodes"], &["depends"])?;
                 json!({"accepted":true,"obligation":engine.register(client, parse(request)?)?})
             }
-            "obligations" => json!({"accepted":true,"obligations":engine.obligations(client)?}),
+            "obligations" => {
+                takes(&[], &[])?;
+                json!({"accepted":true,"obligations":engine.obligations(client)?})
+            }
             "review" => {
+                takes(REVIEW, &[])?;
                 json!({"accepted":true,"obligation":engine.review(client, parse(request)?)?})
             }
             "offer" => {
+                takes(
+                    &["id", "task", "revision", "scope", "text"],
+                    &["supersedes", "reviews"],
+                )?;
+                require_review_keys(request)?;
                 let offered = engine.offer(client, parse(request)?)?;
                 let coverage = offered.coverage;
                 json!({"accepted":true,"checkpoint":offered.checkpoint,"missing":coverage.missing,
                     "queued":coverage.queued,"reason":coverage.reason})
             }
             "handle" => {
+                takes(&[], &["through", "deferred", "processed"])?;
                 let deferred: Option<BTreeMap<u64, String>> = parse(&request["deferred"])?;
                 let processed: Option<Vec<u64>> = parse(&request["processed"])?;
                 engine.handle(
@@ -107,44 +126,65 @@ impl EngineHost {
                 )?;
                 json!({"accepted":true})
             }
-            "post" => json!({"accepted":true,"event":engine.post(client, parse(request)?)?}),
+            "post" => {
+                takes(&["task", "scope", "work", "text"], &["reply_to"])?;
+                let reply_to = &request["reply_to"];
+                if !reply_to.is_null() {
+                    require_keys(reply_to, "reply_to", &["event", "work"], &[])?;
+                }
+                json!({"accepted":true,"event":engine.post(client, parse(request)?)?})
+            }
             "withdraw" => {
+                takes(&["offer"], &[])?;
                 json!({"accepted":true,"checkpoint":engine.withdraw(client, field(request, "offer")?)?})
             }
             "checkpoint" => {
+                takes(&["id"], &[])?;
                 let checkpoint = engine.checkpoint(field(request, "id")?)?;
                 json!({"accepted":checkpoint.is_some(),"checkpoint":checkpoint})
             }
             "candidate" => {
+                takes(&["revision"], &[])?;
                 let candidate = engine.candidate(number(request, "revision")?)?;
                 json!({"accepted":true,"binding":candidate.binding,"missing":candidate.missing})
             }
             "feedback" => {
+                takes(&["id", "revision"], &[])?;
                 let run =
                     engine.feedback(client, field(request, "id")?, number(request, "revision")?)?;
                 json!({"accepted":true,"run":run})
             }
             "run" => {
+                takes(&["id"], &[])?;
                 let run = engine.run(field(request, "id")?)?;
                 json!({"accepted":run.is_some(),"run":run})
             }
-            "recommend" => json!({"accepted":true,"proposal":engine.recommend(client)?}),
+            "recommend" => {
+                takes(&[], &[])?;
+                json!({"accepted":true,"proposal":engine.recommend(client)?})
+            }
             "propose" => {
+                takes(&["action", "text", "failing"], &[])?;
                 json!({"accepted":true,"proposal":engine.propose(client, parse(request)?)?})
             }
             "respond" => {
-                let response = parse(&request["response"])?;
+                takes(&["id", "context", "response"], &[])?;
+                // `"Agree"` or `{Decline: {reason}}`; serde ignores unknown keys in the latter.
+                let response = &request["response"];
+                if response.is_object() {
+                    require_keys(response, "response", &["Decline"], &[])?;
+                    require_keys(&response["Decline"], "response.Decline", &["reason"], &[])?;
+                }
                 let proposal = engine.respond(
                     client,
                     field(request, "id")?,
                     field(request, "context")?,
-                    response,
+                    parse(response)?,
                 )?;
                 json!({"accepted":true,"proposal":proposal})
             }
             "job" => {
-                let keys = request.as_object().map(|r| r.keys().count());
-                require(keys == Some(3), "job takes exactly id, revision and paths")?;
+                takes(&["id", "revision", "paths"], &[])?;
                 let paths: Vec<String> = parse(&request["paths"])?;
                 // gofmt creates `$HOME/Library` (undeclared output) unless HOME is unwritable.
                 let mut args = ["HOME=/var/empty", &self.formatter.to_string_lossy(), "-w"]
@@ -165,6 +205,7 @@ impl EngineHost {
                 json!({"accepted":job.error.is_none(),"job":job})
             }
             "apply_job" => {
+                takes(&["id"], &[])?;
                 let outcome = engine.apply_job(client, field(request, "id")?)?;
                 json!({"accepted":matches!(outcome, Outcome::Applied{..}),"outcome":outcome})
             }
@@ -211,7 +252,7 @@ pub const OPERATIONS: &[(&str, &str)] = &[
     ),
     (
         "post",
-        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to: null | {event: seq, work}} -> advisory plan message to your peer. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
+        "{task, scope: [scope id], work: \"None\" | {Revision: n} | {Checkpoint: id}, text, reply_to?: null | {event: seq, work}} -> advisory plan message to your peer. Only messages can be replied to: plans, live edits and checkpoint offers (Message events), never Reviewed, Obligation or other events. reply_to.work is the original message's work.",
     ),
     (
         "offer",
@@ -256,11 +297,14 @@ pub const OPERATIONS: &[(&str, &str)] = &[
         "{id} -> apply a finished job's output through the normal freshness gate.",
     ),
 ];
-/// MCP definitions for every agent-facing operation, bound to the worker's workspace.
-pub fn tools(workspace: &std::path::Path) -> Value {
-    json!(OPERATIONS.iter().map(|(operation, help)| tool(operation,
-        format!("Falinks {operation}: {help} Call with {{\"workspace\": \"{}\", \"request\": {{...}}}}.", workspace.display())
-    )).collect::<Vec<_>>())
+/// MCP definitions for every agent-facing operation; each takes its request as its input.
+pub fn tools() -> Value {
+    json!(
+        OPERATIONS
+            .iter()
+            .map(|(operation, help)| tool(operation, format!("Falinks {operation}: {help}")))
+            .collect::<Vec<_>>()
+    )
 }
 
 /// A capture as agents see it: the revision, every file's version, and the text of the
@@ -359,6 +403,52 @@ pub fn validator(
     })
 }
 
+/// Refuses `value` unless it is an object with every `required` key and no key beyond
+/// `required` and `optional`. Parsers run it before the engine sees a request, so a refusal
+/// uses up no request ID.
+pub(crate) fn require_keys(
+    value: &Value,
+    what: &str,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<()> {
+    let given: Vec<&str> = value
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.keys().map(String::as_str))
+        .collect();
+    let missing: Vec<&str> = required
+        .iter()
+        .copied()
+        .filter(|k| !given.contains(k))
+        .collect();
+    let unknown: Vec<&str> = given
+        .iter()
+        .copied()
+        .filter(|k| !required.contains(k) && !optional.contains(k))
+        .collect();
+    if value.is_object() && missing.is_empty() && unknown.is_empty() {
+        return Ok(());
+    }
+    let expected: Vec<String> = required
+        .iter()
+        .map(|k| k.to_string())
+        .chain(optional.iter().map(|k| format!("{k}?")))
+        .collect();
+    Err(format!(
+        "request keys: {what} takes {{{}}}; missing {missing:?}, unknown {unknown:?}",
+        expected.join(", ")
+    )
+    .into())
+}
+/// The keys of a review: the `review` request and each inline review.
+const REVIEW: &[&str] = &["scope", "revision", "decision", "note"];
+fn require_review_keys(request: &Value) -> Result<()> {
+    for review in request["reviews"].as_array().into_iter().flatten() {
+        require_keys(review, "reviews[]", REVIEW, &[])?;
+    }
+    Ok(())
+}
 fn parse<T: serde::de::DeserializeOwned>(request: &Value) -> Result<T> {
     Ok(serde_json::from_value(request.clone())?)
 }
@@ -382,14 +472,22 @@ fn edit(request: &Value) -> Result<Request> {
     {
         let file = match file {
             Value::Null => Output::Delete,
-            file => Output::Whole(File {
-                bytes: file["content"]
-                    .as_str()
-                    .ok_or("output content must be text")?
-                    .as_bytes()
-                    .to_vec(),
-                executable: file["executable"].as_bool().unwrap_or(false),
-            }),
+            file => {
+                require_keys(
+                    file,
+                    &format!("output {path:?}"),
+                    &["content"],
+                    &["executable"],
+                )?;
+                Output::Whole(File {
+                    bytes: file["content"]
+                        .as_str()
+                        .ok_or("output content must be text")?
+                        .as_bytes()
+                        .to_vec(),
+                    executable: file["executable"].as_bool().unwrap_or(false),
+                })
+            }
         };
         output.insert(path.clone(), file);
     }

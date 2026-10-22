@@ -34,7 +34,7 @@ fn mediation_refuses_after_a_failure_and_latches_engine_errors() -> falinks_host
     let mut gate = ControlGate::new(&["pin"]);
     let call = |action: &str| {
         json!({"threadId":"thread-a","turnId":"turn-a","callId":"call-a","tool":"falinks_review",
-            "arguments":{"workspace":root,"request":{"event":"E1","action":action}}})
+            "arguments":{"event":"E1","action":action}})
     };
 
     let (envelope, outcome) = mediate(&mut gate, &boundary, &mut engine, &call("defer"))?;

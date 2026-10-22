@@ -215,7 +215,7 @@ impl Gate {
         let _ = fs::remove_file(&alias);
         symlink(root.join("price.go"), &alias)?;
         Ok(Launch {
-            tools: falinks_claude::engine_host::tools(&root),
+            tools: falinks_claude::engine_host::tools(),
             source: root,
             scratch: mine.join("scratch"),
             controller: mine.join("controller"),
@@ -297,7 +297,7 @@ impl Gate {
     fn header(&self, agent: usize) -> Result<String> {
         let root = self.engine().root(self.client(agent))?;
         Ok(format!(
-            "[Falinks host] You are {name} in a Falinks coordination test on throwaway files. Your live workspace is {root} (read it with Read, Grep or Glob). You cannot write it directly: change source only with falinks tools, each called as {{\"workspace\": \"{root}\", \"request\": {{...}}}}. Do exactly the numbered steps below, one tool call at a time, then end your turn with a one-line summary. Host notices are information; act on them only when a step says so.",
+            "[Falinks host] You are {name} in a Falinks coordination test on throwaway files. Your live workspace is {root} (read it with Read, Grep or Glob). You cannot write it directly: change source only with falinks tools, each taking its request as its whole input. Do exactly the numbered steps below, one tool call at a time, then end your turn with a one-line summary. Host notices are information; act on them only when a step says so.",
             name = name(agent),
             root = root.display()
         ))
@@ -525,16 +525,16 @@ fn reviewed_before_write(edits: &[Value], applied: impl Fn(&Value) -> bool) -> b
     refused.is_some() && edits.iter().position(applied) > refused
 }
 /// Review every pending obligation against a fresh capture.
-const REVIEW: &str = "1. falinks_obligations with request {}.\n2. falinks_capture with request {}.\n3. For each obligation whose required revision is above its reviewed revision, falinks_review with request {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If there is none, do nothing.";
+const REVIEW: &str = "1. falinks_obligations with input {}.\n2. falinks_capture with input {}.\n3. For each obligation whose required revision is above its reviewed revision, falinks_review with input {\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"} using that capture's revision. If there is none, do nothing.";
 /// What to do when an edit is refused for a pending obligation.
 fn unreviewed(retry: &str) -> String {
     format!(
-        " If the result is Unreviewed: call falinks_capture with request {{}}, then for each obligation the Unreviewed result names, falinks_review with request {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using that capture's revision, then repeat this edit with id \"{retry}\" and a fresh version."
+        " If the result is Unreviewed: call falinks_capture with input {{}}, then for each obligation the Unreviewed result names, falinks_review with input {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using that capture's revision, then repeat this edit with id \"{retry}\" and a fresh version."
     )
 }
 fn edit_step(id: &str, path: &str, content: &str, version: &str) -> String {
     format!(
-        "falinks_edit with request {{\"id\": \"{id}\", \"expected\": {{\"{path}\": {version}}}, \"output\": {{\"{path}\": {{\"content\": {}}}}}}}",
+        "falinks_edit with input {{\"id\": \"{id}\", \"expected\": {{\"{path}\": {version}}}, \"output\": {{\"{path}\": {{\"content\": {}}}}}}}",
         json!(content)
     )
 }
@@ -571,7 +571,7 @@ fn controls(gate: &mut Gate) -> Result<()> {
         let probe = gate.probe(agent)?;
         gate.start(agent)?;
         let steps = format!(
-            "1. Bash: run exactly `{probe}` (do not change it) and keep its FALINKS_CONTROLS line.\n2. Call the Read tool on {ledger} even if you expect it to fail, and report the tool result.\n3. falinks_register with request {scope}.\n4. falinks_capture with request {{}}.",
+            "1. Bash: run exactly `{probe}` (do not change it) and keep its FALINKS_CONTROLS line.\n2. Call the Read tool on {ledger} even if you expect it to fail, and report the tool result.\n3. falinks_register with input {scope}.\n4. falinks_capture with input {{}}.",
             ledger = gate.dir.join("state/ledger.sqlite").display()
         );
         gate.prompt(agent, &steps)?;
@@ -606,12 +606,12 @@ fn controls(gate: &mut Gate) -> Result<()> {
 /// Phase 2: unfinished but compiling drafts in different files of the shared workspace.
 fn drafts(gate: &mut Gate) -> Result<()> {
     let steps = format!(
-        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned instead of VERSION.",
+        "1. falinks_capture with input {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned instead of VERSION.",
         edit_step("discount-draft", "price.go", DISCOUNT_DRAFT, "VERSION")
     );
     gate.run(&[(0, steps)])?;
     let steps = format!(
-        "1. falinks_capture with request {{\"paths\": [\"label.go\"]}}.\n2. {} — use the label.go version step 1 returned instead of VERSION.\n3. falinks_capture with request {{}}.\n4. falinks_offer with request {{\"id\": \"label-early\", \"task\": \"label\", \"revision\": REVISION, \"scope\": [\"label\"], \"text\": \"unfinished label draft\"}} — REVISION is the revision step 3 returned.",
+        "1. falinks_capture with input {{\"paths\": [\"label.go\"]}}.\n2. {} — use the label.go version step 1 returned instead of VERSION.\n3. falinks_capture with input {{}}.\n4. falinks_offer with input {{\"id\": \"label-early\", \"task\": \"label\", \"revision\": REVISION, \"scope\": [\"label\"], \"text\": \"unfinished label draft\"}} — REVISION is the revision step 3 returned.",
         edit_step("label-draft", "label.go", LABEL_DRAFT, "VERSION")
     );
     gate.run(&[(1, steps)])?;
@@ -649,7 +649,7 @@ fn split(gate: &mut Gate) -> Result<()> {
         &format!("expected a split: {}", proposal.reasoning),
     )?;
     let respond = format!(
-        "1. falinks_respond with request {{\"id\": \"{}\", \"context\": \"{}\", \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your host notice.",
+        "1. falinks_respond with input {{\"id\": \"{}\", \"context\": \"{}\", \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your host notice.",
         proposal.id, proposal.context
     );
     gate.run(&[(0, respond.clone()), (1, respond)])?;
@@ -688,7 +688,7 @@ fn checks_while_drafting(gate: &mut Gate) -> Result<()> {
     gate.pause.store(true, Ordering::SeqCst);
     let probe = gate.probe(1)?;
     let steps = format!(
-        "1. Bash: run exactly `{probe}` (do not change it).\n2. falinks_capture with request {{\"paths\": [\"label.go\"]}}.\n3. {} — use the label.go version step 2 returned.\n4. falinks_capture with request {{}}.\n5. falinks_offer with request {{\"id\": \"label\", \"task\": \"label\", \"revision\": REVISION, \"scope\": [\"label\"], \"text\": \"label finished\"}} — REVISION from step 4.",
+        "1. Bash: run exactly `{probe}` (do not change it).\n2. falinks_capture with input {{\"paths\": [\"label.go\"]}}.\n3. {} — use the label.go version step 2 returned.\n4. falinks_capture with input {{}}.\n5. falinks_offer with input {{\"id\": \"label\", \"task\": \"label\", \"revision\": REVISION, \"scope\": [\"label\"], \"text\": \"label finished\"}} — REVISION from step 4.",
         edit_step("label-final", "label.go", LABEL_FINAL, "VERSION")
     );
     gate.run(&[(1, steps)])?;
@@ -696,7 +696,7 @@ fn checks_while_drafting(gate: &mut Gate) -> Result<()> {
     let held = gate.engine().runs()?;
     require(held.len() == 1, "complete coverage did not queue one run")?;
     let steps = format!(
-        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned.",
+        "1. falinks_capture with input {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned.",
         edit_step("discount-final", "price.go", DISCOUNT_FINAL, "VERSION")
     );
     gate.run(&[(0, steps)])?;
@@ -724,7 +724,7 @@ fn checks_while_drafting(gate: &mut Gate) -> Result<()> {
 /// Phase 5: agent 1's next task uses agent 0's work: it registers, proposes a join,
 /// and both agree. Agent 1 resumes in the shared workspace.
 fn join(gate: &mut Gate) -> Result<()> {
-    let steps = "1. falinks_register with request {\"id\": \"summary\", \"task\": \"summary\", \"nodes\": [\"summary.go\"], \"depends\": [\"price.go#Net\", \"label.go#Label\"]}.\n2. falinks_propose with request {\"action\": \"Join\", \"text\": \"Summary uses Net from agent-0's discount work\", \"failing\": false}.";
+    let steps = "1. falinks_register with input {\"id\": \"summary\", \"task\": \"summary\", \"nodes\": [\"summary.go\"], \"depends\": [\"price.go#Net\", \"label.go#Label\"]}.\n2. falinks_propose with input {\"action\": \"Join\", \"text\": \"Summary uses Net from agent-0's discount work\", \"failing\": false}.";
     gate.run(&[(1, steps.into())])?;
     let proposal = gate
         .accepted(1, "propose")
@@ -736,7 +736,7 @@ fn join(gate: &mut Gate) -> Result<()> {
         &format!("expected a join: {proposal}"),
     )?;
     let respond = format!(
-        "1. falinks_respond with request {{\"id\": {}, \"context\": {}, \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your host notice.",
+        "1. falinks_respond with input {{\"id\": {}, \"context\": {}, \"response\": \"Agree\"}} — this agrees to the Regrouping proposal in your host notice.",
         proposal["id"], proposal["context"]
     );
     gate.run(&[(0, respond.clone()), (1, respond)])?;
@@ -757,7 +757,7 @@ fn steering(gate: &mut Gate) -> Result<()> {
     gate.run(&[(0, REVIEW.into()), (1, REVIEW.into())])?;
     let summary_version = gate.version("summary.go")?;
     let steps = format!(
-        "1. {}\n2. falinks_capture with request {{\"paths\": [\"price.go\"]}} and quote the body of Discount from its price.go content.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with request {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned. Attempt this edit before any falinks_review.{}",
+        "1. {}\n2. falinks_capture with input {{\"paths\": [\"price.go\"]}} and quote the body of Discount from its price.go content.\n3. Read {root}/price.go and quote the body of Discount exactly as it is now.\n4. falinks_capture with input {{\"paths\": [\"summary.go\"]}}.\n5. {} — use the summary.go version step 4 returned. Attempt this edit before any falinks_review.{}",
         edit_step(
             "summary-draft",
             "summary.go",
@@ -777,7 +777,7 @@ fn steering(gate: &mut Gate) -> Result<()> {
         Ok(gate.accepted(1, "edit").len() > before)
     })?;
     let broken = format!(
-        "1. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n2. {} — this is an intentionally unfinished draft that does not compile yet; use the price.go version step 1 returned.{}",
+        "1. falinks_capture with input {{\"paths\": [\"price.go\"]}}.\n2. {} — this is an intentionally unfinished draft that does not compile yet; use the price.go version step 1 returned.{}",
         edit_step("discount-broken", "price.go", DISCOUNT_BROKEN, "VERSION"),
         unreviewed("discount-broken-2")
     );
@@ -852,7 +852,7 @@ fn stale(gate: &mut Gate) -> Result<()> {
 /// holds it at its edit call, and agent 1's Summary change reaches it inside that turn.
 fn steering_agent0(gate: &mut Gate) -> Result<()> {
     let steps = format!(
-        "1. falinks_register with request {{\"id\": \"summary-check\", \"task\": \"discount\", \"nodes\": [\"price.go#Net\"], \"depends\": [\"summary.go#Summary\"]}}.\n2. falinks_obligations with request {{}}.\n3. falinks_capture with request {{}}.\n4. For each obligation whose required revision is above its reviewed revision, falinks_review with request {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using step 3's revision. If there is none, do nothing.\n5. falinks_capture with request {{\"paths\": [\"price.go\"]}}.\n6. {} — use the price.go version step 5 returned.{}",
+        "1. falinks_register with input {{\"id\": \"summary-check\", \"task\": \"discount\", \"nodes\": [\"price.go#Net\"], \"depends\": [\"summary.go#Summary\"]}}.\n2. falinks_obligations with input {{}}.\n3. falinks_capture with input {{}}.\n4. For each obligation whose required revision is above its reviewed revision, falinks_review with input {{\"scope\": SCOPE, \"revision\": REVISION, \"decision\": \"Keep\", \"note\": \"reread the current workspace\"}} using step 3's revision. If there is none, do nothing.\n5. falinks_capture with input {{\"paths\": [\"price.go\"]}}.\n6. {} — use the price.go version step 5 returned.{}",
         edit_step("discount-done", "price.go", DISCOUNT_FINAL, "VERSION"),
         unreviewed("discount-done-2")
     );
@@ -915,7 +915,7 @@ fn team_checks_while_drafting(gate: &mut Gate) -> Result<()> {
     gate.run(&[(
         0,
         format!(
-            "1. falinks_capture with request {{}}.\n2. falinks_feedback with request {{\"id\": \"team-early\", \"revision\": {}}}.",
+            "1. falinks_capture with input {{}}.\n2. falinks_feedback with input {{\"id\": \"team-early\", \"revision\": {}}}.",
             team.revision
         ),
     )])?;
@@ -971,7 +971,7 @@ fn accepted_recovery(gate: &mut Gate) -> Result<()> {
     let revision = gate.engine().capture()?.revision;
     let offer = |scope: &str| {
         format!(
-            "1. falinks_capture with request {{}}.\n2. falinks_offer with request {{\"id\": \"team\", \"task\": \"gate\", \"revision\": {revision}, \"scope\": [\"{scope}\"], \"text\": \"team candidate\"}}."
+            "1. falinks_capture with input {{}}.\n2. falinks_offer with input {{\"id\": \"team\", \"task\": \"gate\", \"revision\": {revision}, \"scope\": [\"{scope}\"], \"text\": \"team candidate\"}}."
         )
     };
     gate.run(&[(0, offer("discount")), (1, offer("summary"))])?;
@@ -1030,7 +1030,7 @@ fn accepted_recovery(gate: &mut Gate) -> Result<()> {
         gate.start(agent)?;
         let probe = gate.probe(agent)?;
         let steps = format!(
-            "The host restarted. 1. Bash: run exactly `{probe}` (do not change it).\n2. falinks_checkpoint with request {{\"id\": \"{agent}/team\"}}.\n3. falinks_offer with exactly the same request as your earlier team offer: {{\"id\": \"team\", \"task\": \"gate\", \"revision\": {revision}, \"scope\": [\"{scope}\"], \"text\": \"team candidate\"}}."
+            "The host restarted. 1. Bash: run exactly `{probe}` (do not change it).\n2. falinks_checkpoint with input {{\"id\": \"{agent}/team\"}}.\n3. falinks_offer with exactly the same input as your earlier team offer: {{\"id\": \"team\", \"task\": \"gate\", \"revision\": {revision}, \"scope\": [\"{scope}\"], \"text\": \"team candidate\"}}."
         );
         gate.prompt(agent, &steps)?;
         probes.push(probe);
@@ -1084,7 +1084,7 @@ fn deferral_and_jobs(gate: &mut Gate) -> Result<()> {
         .seq;
     gate.run(&[(
         1,
-        format!("1. falinks_handle with request {{\"through\": {first}, \"deferred\": {{\"{first}\": \"revisit after restart\"}}}}."),
+        format!("1. falinks_handle with input {{\"through\": {first}, \"deferred\": {{\"{first}\": \"revisit after restart\"}}}}."),
     )])?;
     let before_restart = gate.engine().pending(gate.client(1))?;
     require(
@@ -1115,7 +1115,7 @@ fn deferral_and_jobs(gate: &mut Gate) -> Result<()> {
     gate.run(&[(
         1,
         format!(
-            "1. falinks_capture with request {{}}.\n2. falinks_job with request {{\"id\": \"fmt\", \"revision\": {revision}, \"paths\": [\"summary.go\"]}}.\n3. falinks_apply_job with request {{\"id\": \"fmt\"}}."
+            "1. falinks_capture with input {{}}.\n2. falinks_job with input {{\"id\": \"fmt\", \"revision\": {revision}, \"paths\": [\"summary.go\"]}}.\n3. falinks_apply_job with input {{\"id\": \"fmt\"}}."
         ),
     )])?;
     let job = gate
@@ -1140,7 +1140,7 @@ fn deferral_and_jobs(gate: &mut Gate) -> Result<()> {
 fn completion_race(gate: &mut Gate) -> Result<()> {
     let post = |text: &str| {
         format!(
-            "1. falinks_post with request {{\"task\": \"gate\", \"scope\": [], \"work\": \"None\", \"text\": \"{text}\", \"reply_to\": null}}."
+            "1. falinks_post with input {{\"task\": \"gate\", \"scope\": [], \"work\": \"None\", \"text\": \"{text}\", \"reply_to\": null}}."
         )
     };
     // One pair at a time: a post reaches the idle peer only as the race notice; a prompt
@@ -1203,7 +1203,7 @@ fn unknown_change(gate: &mut Gate) -> Result<()> {
     )])?;
     let incident = gate.engine().incident()?.ok_or("injection not detected")?;
     // The halt reaches agent 1's next mediated call too.
-    gate.run(&[(1, "1. falinks_capture with request {}.".into())])?;
+    gate.run(&[(1, "1. falinks_capture with input {}.".into())])?;
     let published = gate.engine().published()?;
     // No publication follows the halt. The halt's publication gate itself is covered by
     // tests/publication.rs `unexplained_source_writes_stop_publication_and_keep_evidence`.

@@ -73,13 +73,15 @@ fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()>
     )?;
     boundary.bind("thread-a", "agent-a", false)?;
     boundary.begin("turn-a")?;
+    // The tool input is the request itself; identity comes from host state.
     let call = json!({"threadId":"thread-a","turnId":"turn-a","callId":"call-a","tool":"falinks_edit",
-        "arguments":{"workspace":root,"request":{"request_id":"edit-a","content":"new"}}});
+        "arguments":{"request_id":"edit-a","content":"new"}});
     let envelope = boundary.authenticate(&call)?;
     assert_eq!(
         envelope["identity"],
         json!({"agent":"agent-a","session":"session-a","thread":"thread-a","turn":"turn-a","workspace":root})
     );
+    assert_eq!(envelope["request"], call["arguments"]);
     for (key, value, reason) in [
         ("threadId", "forged", "inactive runtime identity"),
         ("turnId", "old-turn", "inactive runtime identity"),
@@ -89,17 +91,26 @@ fn only_registered_runtime_identity_reaches_engine() -> falinks_host::Result<()>
         forged[key] = json!(value);
         fails_with(boundary.authenticate(&forged), reason);
     }
-    for request in [
-        json!({"author":"agent-b"}),
-        json!({"identity":{"agent":"agent-b"}}),
+    for key in [
+        "author",
+        "identity",
+        "agent",
+        "session",
+        "thread",
+        "turn",
+        "workspace",
     ] {
         let mut forged = call.clone();
-        forged["arguments"]["request"] = request;
+        forged["arguments"][key] = json!("agent-b");
         fails_with(boundary.authenticate(&forged), "caller-supplied identity");
     }
+    // Even the bound workspace is identity the caller may not supply.
     let mut forged = call.clone();
-    forged["arguments"]["workspace"] = json!("/unauthorized");
-    fails_with(boundary.authenticate(&forged), "unauthorized workspace");
+    forged["arguments"]["workspace"] = json!(root);
+    fails_with(boundary.authenticate(&forged), "caller-supplied identity");
+    let mut forged = call.clone();
+    forged["arguments"] = json!("edit-a");
+    fails_with(boundary.authenticate(&forged), "expected request object");
     boundary.end("turn-a");
     fails_with(boundary.authenticate(&call), "inactive runtime identity");
     Ok(())
@@ -119,10 +130,10 @@ fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<(
     boundary.enqueue("E1", &json!({"revision":"R1","text":"reread source"}))?;
     boundary.enqueue("E1", &json!({"revision":"R1","text":"reread source"}))?;
     boundary.begin("turn-a")?;
-    let mut call = json!({"threadId":"thread-a","turnId":"turn-a","callId":"call-a","tool":"falinks_review","arguments":{"workspace":root,"request":{"event":"E1","action":"acknowledge"}}});
+    let mut call = json!({"threadId":"thread-a","turnId":"turn-a","callId":"call-a","tool":"falinks_review","arguments":{"event":"E1","action":"acknowledge"}});
     boundary.record_result(&boundary.authenticate(&call)?, &json!({"accepted":true}))?;
     assert_eq!(boundary.pending()?[0]["status"], "pending");
-    call["arguments"]["request"]["action"] = json!("defer");
+    call["arguments"]["action"] = json!("defer");
     boundary.record_result(&boundary.authenticate(&call)?, &json!({"accepted":true}))?;
     drop(boundary);
     let mut resumed = Boundary::new(
@@ -142,7 +153,7 @@ fn context_survives_presentation_deferral_and_resume() -> falinks_host::Result<(
     );
     resumed.begin("turn-b")?;
     call["turnId"] = json!("turn-b");
-    call["arguments"]["request"]["action"] = json!("keep");
+    call["arguments"]["action"] = json!("keep");
     resumed.record_result(&resumed.authenticate(&call)?, &json!({"accepted":true}))?;
     assert_eq!(resumed.pending()?, json!([]));
     resumed.enqueue("E2", &json!({"revision":"R2"}))?;
@@ -176,7 +187,7 @@ fn unknown_change_preserves_work_and_stops_even_when_old_bytes_return() -> falin
     boundary.bind("thread", "agent", false)?;
     boundary.begin("turn")?;
     std::fs::write(&target, b"external work\n")?;
-    let call = json!({"threadId":"thread","turnId":"turn","callId":"call","tool":"falinks_offer","arguments":{"workspace":root.join("source"),"request":{"expected_hash":"anything"}}});
+    let call = json!({"threadId":"thread","turnId":"turn","callId":"call","tool":"falinks_offer","arguments":{"expected_hash":"anything"}});
     fails_with(
         host.execute(&boundary.authenticate(&call)?),
         "unknown source change",
