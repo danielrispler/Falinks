@@ -240,16 +240,86 @@ fn exact_offers_publish_the_checked_candidate_and_feedback_never_publishes() {
     );
     assert_eq!(offered["accepted"], true, "{offered}");
     assert!(f.engine.validate().unwrap().is_some());
+    let keys = |reply: &Value| {
+        reply
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let coverage = [
+        "accepted", "id", "missing", "queued", "reason", "revision", "scope", "state",
+    ];
+    assert_eq!(keys(&offered), coverage, "{offered}");
+    assert_eq!(offered["queued"], true, "{offered}");
     let checkpoint = f.call(1, "checkpoint", json!({"id":"0/o1"}));
-    assert!(
-        checkpoint["checkpoint"]["state"]["Accepted"].is_object(),
-        "{checkpoint}"
+    assert_eq!(
+        keys(&checkpoint),
+        ["accepted", "id", "revision", "scope", "state"]
     );
+    assert!(checkpoint["state"]["Accepted"].is_object(), "{checkpoint}");
+    assert_eq!(checkpoint["revision"], revision, "{checkpoint}");
     let withdrawn = f.call(0, "withdraw", json!({"offer":"o1"}));
     assert_eq!(
         withdrawn["accepted"], false,
         "accepted work cannot be withdrawn: {withdrawn}"
     );
+    assert_eq!(
+        keys(&withdrawn),
+        ["accepted", "reason"],
+        "a refusal is unchanged"
+    );
+}
+
+#[test]
+fn an_offer_that_queues_nothing_shows_its_state_and_why() {
+    let f = fixture();
+    let capture = f.call(0, "capture", json!({}));
+    let version = |c: &Value, path: &str| c["files"][path]["version"].clone();
+    let applied = |agent, id: &str, path: &str, version: Value, content: &str| {
+        let reply = f.call(
+            agent,
+            "edit",
+            json!({"id":id,"expected":{path:version},
+            "output":{path:{"content":content}}}),
+        );
+        assert_eq!(reply["accepted"], true, "{reply}");
+        reply["outcome"]["Applied"]["revision"].clone()
+    };
+    applied(0, "d1", "price.go", version(&capture, "price.go"), DISCOUNT);
+    let label = version(&f.call(1, "capture", json!({})), "label.go");
+    let revision = applied(
+        1,
+        "l1",
+        "label.go",
+        label,
+        "package gate\n\nfunc Label(name string) string {\n\treturn \"x\" + name\n}\n",
+    );
+    let offer =
+        json!({"id":"o1","task":"discount","revision":revision,"scope":[],"text":"discount"});
+    assert_eq!(f.call(0, "capture", json!({}))["revision"], revision);
+    let offered = f.call(0, "offer", offer);
+    let keys: Vec<_> = offered.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys,
+        [
+            "accepted", "id", "missing", "queued", "reason", "revision", "scope", "state"
+        ]
+    );
+    assert_eq!(offered["missing"], json!([1]), "{offered}");
+    assert_eq!(offered["queued"], false, "{offered}");
+    assert!(!offered["reason"].is_null(), "{offered}");
+    assert_eq!(offered["state"], "Available", "{offered}");
+
+    let withdrawn = f.call(0, "withdraw", json!({"offer":"o1"}));
+    let keys: Vec<_> = withdrawn.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(
+        keys,
+        ["accepted", "id", "revision", "scope", "state"],
+        "{withdrawn}"
+    );
+    assert_eq!(withdrawn["state"], "Withdrawn", "{withdrawn}");
 }
 
 #[test]
