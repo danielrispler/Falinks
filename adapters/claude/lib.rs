@@ -1,7 +1,8 @@
 //! Pinned Claude Code worker adapter: the #23 boundary ported to stream-json.
 //! Runtime-independent pieces (`Boundary`, `ControlGate`, `ControlledHost`) come from `falinks-host`.
 use falinks_host::{
-    Boundary, ControlGate, Engine, Notice, PinMap, Result, platform_pin, random_hex, require,
+    Boundary, ControlGate, Deferred, Engine, Notice, PinMap, Result, platform_pin, random_hex,
+    require,
 };
 use serde_json::{Value, json};
 use std::{
@@ -367,6 +368,10 @@ pub struct Session {
     pub runtime: String,
     /// Nested-agent detections (#178 C7); the first makes the run invalid.
     pub nested_agents: Vec<Value>,
+    /// Zero of the `received`, `started` and `finished` seconds in `host_call` records.
+    pub clock: Instant,
+    /// Deferred calls by key: envelope, `finish`, received and started.
+    waiting: BTreeMap<u64, Waiting>,
     connection: String,
     session: String,
     token: String,
@@ -418,6 +423,8 @@ impl Session {
             ended: BTreeSet::new(),
             runtime: String::new(),
             nested_agents: vec![],
+            clock: Instant::now(),
+            waiting: BTreeMap::new(),
         })
     }
     pub fn connection(&self) -> &str {
@@ -573,16 +580,66 @@ impl Session {
             _ => Err(format!("unrecorded stream-json shape {kind}/{subtype}").into()),
         }
     }
-    /// A request from the host-launched hook or MCP server over the authenticated host channel.
+    /// `serve`, with deferred work run inline.
     pub fn host(&mut self, request: &Value) -> (Value, Option<Notice>) {
-        let hook = request["kind"] == "hook";
-        match self.mediate(request) {
-            Ok(outcome) => outcome,
-            Err(error) if hook => (json!({"allow":false,"reason":error.to_string()}), None),
-            Err(error) => (json!({"accepted":false,"reason":error.to_string()}), None),
+        match self.serve(request, Instant::now()) {
+            Served::Now(value, notice) => (value, notice),
+            Served::Later(key, work) => (self.finish(key, work()), None),
         }
     }
-    fn mediate(&mut self, request: &Value) -> Result<(Value, Option<Notice>)> {
+    /// A request from the host-launched hook or MCP server over the authenticated host channel,
+    /// `received` by its socket thread. A deferred call's `work` may run on any thread; pass its
+    /// result to `finish` with the key.
+    pub fn serve(&mut self, request: &Value, received: Instant) -> Served {
+        let started = Instant::now();
+        let hook = request["kind"] == "hook";
+        match self.mediate(request) {
+            Ok(Mediated::Now(value, notice, record)) => {
+                if let Some(mut record) = record {
+                    self.stamp(&mut record, received, started);
+                    self.events.push(record);
+                }
+                Served::Now(value, notice)
+            }
+            Ok(Mediated::Later(envelope, deferred)) => {
+                let key = self.waiting.last_key_value().map_or(0, |(k, _)| k + 1);
+                let waiting = Waiting {
+                    envelope,
+                    finish: deferred.finish,
+                    received,
+                    started,
+                };
+                self.waiting.insert(key, waiting);
+                Served::Later(key, deferred.work)
+            }
+            Err(error) if hook => {
+                Served::Now(json!({"allow":false,"reason":error.to_string()}), None)
+            }
+            Err(error) => Served::Now(json!({"accepted":false,"reason":error.to_string()}), None),
+        }
+    }
+    /// Answers a deferred call with its work's result. An error latches the gate, as an engine
+    /// error does, and still answers the caller.
+    pub fn finish(&mut self, key: u64, work: Result<Value>) -> Value {
+        let Some(waiting) = self.waiting.remove(&key) else {
+            return json!({"accepted":false,"reason":"unknown deferred call"});
+        };
+        let result = (waiting.finish)(work).unwrap_or_else(|error| {
+            self.gate.failed = true;
+            json!({"accepted":false,"reason":error.to_string()})
+        });
+        let mut record = json!({"host_call":waiting.envelope,"result":result});
+        self.stamp(&mut record, waiting.received, waiting.started);
+        self.events.push(record);
+        result
+    }
+    fn stamp(&self, record: &mut Value, received: Instant, started: Instant) {
+        let at = |t: Instant| t.saturating_duration_since(self.clock).as_secs_f64();
+        record["received"] = at(received).into();
+        record["started"] = at(started).into();
+        record["finished"] = at(Instant::now()).into();
+    }
+    fn mediate(&mut self, request: &Value) -> Result<Mediated> {
         require(
             request["token"].as_str() == Some(&self.token),
             "unauthenticated host channel",
@@ -607,7 +664,7 @@ impl Session {
                 "unexpected hook stamp",
             )?;
             self.hooks.insert(id.into(), request.clone());
-            return Ok((json!({"allow":true}), None));
+            return Ok(Mediated::Now(json!({"allow":true}), None, None));
         }
         require(request["kind"] == "call", "unknown host request")?;
         let stamp = self.hooks.remove(id).ok_or("unstamped tool call")?;
@@ -629,10 +686,32 @@ impl Session {
             &json!({"threadId":self.session,"turnId":prompt,"callId":id,"tool":tool,
                 "arguments":request["arguments"]}),
         )?;
-        self.events
-            .push(json!({"host_call":envelope,"result":outcome.result}));
-        Ok((outcome.result, outcome.notice))
+        if let Some(deferred) = outcome.deferred {
+            return Ok(Mediated::Later(envelope, deferred));
+        }
+        let mut record = json!({"host_call":envelope,"result":outcome.result});
+        if let Some(stages) = outcome.stages {
+            record["stages"] = stages;
+        }
+        Ok(Mediated::Now(outcome.result, outcome.notice, Some(record)))
     }
+}
+
+/// `Session::serve`'s answer: now, or after the keyed `work` runs.
+pub enum Served {
+    Now(Value, Option<Notice>),
+    Later(u64, Box<dyn FnOnce() -> Result<Value> + Send>),
+}
+/// A mediated request: answered now (with the engine call's record), or deferred.
+enum Mediated {
+    Now(Value, Option<Notice>, Option<Value>),
+    Later(Value, Deferred),
+}
+struct Waiting {
+    envelope: Value,
+    finish: Box<dyn FnOnce(Result<Value>) -> Result<Value>>,
+    received: Instant,
+    started: Instant,
 }
 
 pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
@@ -713,7 +792,10 @@ pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String
 
 enum Input {
     Line(Result<Value>),
-    Host(Value, Sender<Value>),
+    /// A host request, with when its socket thread received it.
+    Host(Value, Sender<Value>, Instant),
+    /// A deferred call's work finished.
+    Done(u64, Result<Value>),
 }
 
 /// The host channel's accept loop. `stop` ends it and releases its descriptor.
@@ -767,6 +849,9 @@ pub struct Runtime {
     child: Child,
     input: Option<ChildStdin>,
     inputs: Receiver<Input>,
+    /// Deferred work reports here; replies wait by key.
+    done: Sender<Input>,
+    replies: BTreeMap<u64, Sender<Value>>,
     listener: Listener,
     closed: bool,
 }
@@ -848,6 +933,7 @@ impl Runtime {
         let mut child = command.spawn()?;
         let input = child.stdin.take();
         let stdout = child.stdout.take().ok_or("claude stdout missing")?;
+        let done = sender.clone();
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let value = line
@@ -869,6 +955,8 @@ impl Runtime {
             child,
             input,
             inputs,
+            done,
+            replies: BTreeMap::new(),
             listener,
             closed: false,
         })
@@ -916,19 +1004,40 @@ impl Runtime {
                 }
                 observed.map(|()| true)
             }
-            Ok(Input::Host(request, reply)) => {
+            Ok(Input::Host(request, reply, received)) => {
                 let blocked = (request["kind"] == "call" && !self.control_host)
                     .then(|| self.require_supported().err())
                     .flatten();
                 let (value, notice) = match blocked {
                     Some(error) => (json!({"accepted":false,"reason":error.to_string()}), None),
-                    None => self.session.host(&request),
+                    None => match self.session.serve(&request, received) {
+                        Served::Now(value, notice) => (value, notice),
+                        Served::Later(key, work) => {
+                            self.replies.insert(key, reply);
+                            let done = self.done.clone();
+                            thread::spawn(move || {
+                                // A panic still answers the caller and latches the gate.
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                                        .unwrap_or_else(|_| Err("deferred work panicked".into()));
+                                done.send(Input::Done(key, result))
+                            });
+                            return Ok(true);
+                        }
+                    },
                 };
                 // Persist and send before the tool result returns: presentation follows later.
                 if let Some(notice) = notice {
                     self.attention(&notice.event, &notice.context)?;
                 }
                 let _ = reply.send(value);
+                Ok(true)
+            }
+            Ok(Input::Done(key, work)) => {
+                let value = self.session.finish(key, work);
+                if let Some(reply) = self.replies.remove(&key) {
+                    let _ = reply.send(value);
+                }
                 Ok(true)
             }
         }
@@ -1025,7 +1134,10 @@ fn serve(stream: UnixStream, host: &Sender<Input>) {
         return;
     };
     let (reply, answer) = mpsc::channel();
-    if host.send(Input::Host(request, reply)).is_err() {
+    if host
+        .send(Input::Host(request, reply, Instant::now()))
+        .is_err()
+    {
         return;
     }
     if let Ok(value) = answer.recv_timeout(Duration::from_secs(600)) {

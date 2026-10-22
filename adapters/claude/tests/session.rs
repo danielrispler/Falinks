@@ -53,6 +53,7 @@ fn fixture_with(notice: Option<&'static str>) -> Fixture {
                 event: event.into(),
                 context: json!({"revision":"R1"}),
             }),
+            ..Default::default()
         })
     });
     let session = Session::new(
@@ -439,6 +440,7 @@ fn the_launch_tool_profile_sets_init_and_registered_operations() {
         Ok(EngineOutcome {
             result: json!({"accepted":true}),
             notice: None,
+            ..Default::default()
         })
     });
     f.session = Session::new(&launch, "agent-a", SESSION, TOKEN, engine, false).unwrap();
@@ -459,6 +461,7 @@ fn the_launch_tool_profile_sets_init_and_registered_operations() {
             Ok(EngineOutcome {
                 result: json!({"accepted":true}),
                 notice: None,
+                ..Default::default()
             })
         }),
         false,
@@ -684,4 +687,141 @@ fn a_probe_that_never_ran_is_failed() {
         falinks_claude::WorkerSandboxOutcome::Failed(_)
     ));
     assert!(!falinks_claude::refused(&events));
+}
+
+/// A session whose engine defers `check` to `slow` work and answers `edit` and `post` now,
+/// with a stage report for `edit`.
+fn deferring(slow: fn() -> falinks_host::Result<Value>) -> Fixture {
+    let mut f = fixture();
+    let mut launch = Launch::fixture(f.workspace.parent().unwrap());
+    launch.tools =
+        json!([{"name":"falinks_check"},{"name":"falinks_edit"},{"name":"falinks_post"}]);
+    let engine = Box::new(move |envelope: &Value| {
+        Ok(match envelope["operation"].as_str() {
+            Some("check") => EngineOutcome {
+                deferred: Some(falinks_host::Deferred {
+                    work: Box::new(slow),
+                    finish: Box::new(|checks| {
+                        let checks = checks?;
+                        falinks_host::require(checks["passed"].is_boolean(), "bad oracle line")?;
+                        Ok(json!({"accepted":true,"passed":checks["passed"]}))
+                    }),
+                }),
+                ..Default::default()
+            },
+            Some("edit") => EngineOutcome {
+                result: json!({"accepted":true}),
+                stages: Some(json!([{"stage":"LockWait","seconds":0.0}])),
+                ..Default::default()
+            },
+            _ => EngineOutcome {
+                result: json!({"accepted":true}),
+                ..Default::default()
+            },
+        })
+    });
+    f.session = Session::new(&launch, "agent-a", SESSION, TOKEN, engine, false).unwrap();
+    let mut line = init(&f.workspace);
+    line["tools"] = json!(launch.allowed());
+    f.session.line(&line).unwrap();
+    f
+}
+fn serve(f: &mut Fixture, id: &str, tool: &str) -> falinks_claude::Served {
+    let input = json!({});
+    f.session.host(&hook("P1", id, tool, &input));
+    f.session
+        .serve(&call(id, tool, &input), std::time::Instant::now())
+}
+fn timed(record: &Value) -> bool {
+    let at = |k: &str| record[k].as_f64().unwrap();
+    at("received") <= at("started") && at("started") <= at("finished")
+}
+
+#[test]
+fn a_slow_check_runs_off_the_driver_and_the_peer_posts_meanwhile() {
+    use falinks_claude::Served;
+    use std::{sync::mpsc, thread, time::Duration, time::Instant};
+    let slow = || {
+        thread::sleep(Duration::from_millis(500));
+        Ok(json!({"passed":true}))
+    };
+    let (mut mine, mut peer) = (deferring(slow), deferring(slow));
+    let started = Instant::now();
+    let Served::Later(key, work) = serve(&mut mine, "toolu_1", "falinks_check") else {
+        panic!("check answered on the driver");
+    };
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(work()));
+    let Served::Now(reply, _) = serve(&mut peer, "toolu_2", "falinks_post") else {
+        panic!("post deferred");
+    };
+    assert_eq!(reply["accepted"], true);
+    assert!(started.elapsed() < Duration::from_millis(400));
+    assert!(
+        finished.try_recv().is_err(),
+        "the check finished before the peer's post"
+    );
+    let answer = mine.session.finish(key, finished.recv().unwrap());
+    assert_eq!(answer, json!({"accepted":true,"passed":true}));
+    for f in [&mine, &peer] {
+        let record = f.session.events.last().unwrap();
+        assert!(record["host_call"].is_object() && timed(record), "{record}");
+    }
+    assert!(
+        mine.session.events.last().unwrap()["finished"]
+            .as_f64()
+            .unwrap()
+            >= 0.5
+    );
+    assert!(!mine.session.gate.failed);
+}
+
+#[test]
+fn every_host_call_record_is_timed_and_an_edit_holds_its_stage_report() {
+    let mut f = deferring(|| Ok(json!({"passed":false})));
+    let input = json!({});
+    for (id, tool) in [
+        ("toolu_1", "falinks_edit"),
+        ("toolu_2", "falinks_post"),
+        ("toolu_3", "falinks_check"),
+    ] {
+        f.session.host(&hook("P1", id, tool, &input));
+        let reply = f.session.host(&call(id, tool, &input)).0;
+        // Agents never see the stage report or the times.
+        assert!(reply.get("stages").is_none() && reply.get("received").is_none());
+    }
+    let records: Vec<&Value> = f
+        .session
+        .events
+        .iter()
+        .filter(|e| e["host_call"].is_object())
+        .collect();
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|r| timed(r)));
+    assert_eq!(
+        records[0]["stages"],
+        json!([{"stage":"LockWait","seconds":0.0}])
+    );
+    assert!(records[1].get("stages").is_none());
+    assert_eq!(
+        records[2]["result"],
+        json!({"accepted":true,"passed":false})
+    );
+}
+
+#[test]
+fn a_check_that_errors_still_answers_its_caller_and_latches_the_gate() {
+    for slow in [
+        (|| Err("oracle failed: boom".into())) as fn() -> falinks_host::Result<Value>,
+        || Ok(json!({"garbled":true})),
+    ] {
+        let mut f = deferring(slow);
+        let input = json!({});
+        f.session
+            .host(&hook("P1", "toolu_1", "falinks_check", &input));
+        let reply = f.session.host(&call("toolu_1", "falinks_check", &input)).0;
+        assert_eq!(reply["accepted"], false, "{reply}");
+        assert!(f.session.gate.failed);
+        assert!(timed(f.session.events.last().unwrap()));
+    }
 }

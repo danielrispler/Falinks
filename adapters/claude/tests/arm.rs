@@ -3,7 +3,7 @@
 use falinks::Language;
 use falinks::{Check, Engine};
 use falinks_claude::arm::{
-    Arm, EDIT_COUNTS, EDITS, FORMS, HOST_TOOLS, MUTATIONS, Tools, agent_name, denied_roots,
+    Answer, Arm, EDIT_COUNTS, EDITS, FORMS, HOST_TOOLS, MUTATIONS, Tools, agent_name, denied_roots,
     deny_check_reads, enrollment, language, prompt, worker_protected,
 };
 use falinks_claude::engine_host::OPERATIONS;
@@ -657,4 +657,46 @@ fn host_tools_refuse_unknown_or_missing_request_keys() {
         }
     }
     assert!(run.arm.log.is_empty(), "{:?}", run.arm.log);
+}
+
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn an_edit_answers_with_the_engine_stage_report_and_a_check_defers_its_oracle() {
+    let mut run = setup("go-relationships");
+    let capture = run.call(0, "capture", json!({"paths": ["producer.go"]}));
+    let file = &capture["files"]["producer.go"];
+    let content = format!("{}\n// a1\n", file["content"].as_str().unwrap());
+    let root = run.arm.engine.root(run.arm.client(0)).unwrap();
+    let envelope = |operation: &str, request: Value| json!({"identity": {"agent": agent_name(0), "workspace": root}, "operation": operation, "request": request});
+    let edit = envelope(
+        "edit",
+        json!({"id": "a1", "expected": {"producer.go": file["version"]},
+            "output": {"producer.go": {"content": content}}}),
+    );
+    let Answer::Now { result, stages } = run.arm.answer(0, &edit).unwrap() else {
+        panic!("edit deferred");
+    };
+    assert_eq!(result["accepted"], true, "{result}");
+    assert!(result.get("stages").is_none());
+    let stages = stages.unwrap();
+    assert_eq!(stages[0]["stage"], "LockWait", "{stages}");
+    assert!(
+        stages
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["seconds"].is_f64())
+    );
+    let Answer::Check(oracle) = run.arm.answer(0, &envelope("check", json!({}))).unwrap() else {
+        panic!("check answered inline");
+    };
+    // Nothing is recorded until the oracle's run is passed back.
+    assert!(run.arm.validation_attempts.is_empty());
+    let answer = run.arm.checked(0, oracle.run()).unwrap();
+    assert_eq!(answer["accepted"], true);
+    assert_eq!(run.arm.validation_attempts.len(), 1);
+    assert!(run.arm.checked(0, Err("oracle failed".into())).is_err());
 }

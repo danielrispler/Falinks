@@ -5,10 +5,10 @@
 use falinks::{Action, Engine, ProposalState};
 use falinks_claude::{
     Launch, MODEL, Runtime, VERSION,
-    arm::{self, Arm, Tools, agent_name, prompt},
+    arm::{self, Answer, Arm, Tools, agent_name, prompt},
     engine_host, go_tools, verify_binary,
 };
-use falinks_host::{Boundary, EngineOutcome, Result, file_hash, require};
+use falinks_host::{Boundary, Deferred, EngineOutcome, Result, file_hash, require};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
@@ -159,20 +159,39 @@ impl Run {
             .relocate(session, &agent_name(agent))?;
         }
         let arm = Rc::clone(&self.arm);
-        let runtime = Runtime::new(
+        let mut runtime = Runtime::new(
             &self.binary,
             &launch,
             &agent_name(agent),
             resume.as_deref(),
             Box::new(move |envelope| {
-                Ok(EngineOutcome {
-                    result: arm.borrow_mut().call(agent, envelope)?,
-                    notice: None,
+                let answer = arm.borrow_mut().answer(agent, envelope)?;
+                Ok(match answer {
+                    Answer::Now { result, stages } => EngineOutcome {
+                        result,
+                        stages,
+                        ..Default::default()
+                    },
+                    // The oracle runs off the driver thread, so the peer's calls go on (#200).
+                    Answer::Check(oracle) => {
+                        let arm = Rc::clone(&arm);
+                        EngineOutcome {
+                            deferred: Some(Deferred {
+                                work: Box::new(move || oracle.run()),
+                                finish: Box::new(move |checks| {
+                                    arm.borrow_mut().checked(agent, checks)
+                                }),
+                            }),
+                            ..Default::default()
+                        }
+                    }
                 })
             }),
             // Controls were verified by the batch's fresh gate; calls still latch on failure.
             true,
         )?;
+        // `host_call` times share the `events.jsonl` clock.
+        runtime.session.clock = self.started;
         let session = runtime.session.session().to_owned();
         let record = json!({"agent": agent, "resume": resume.is_some(), "source": launch.source,
             "protected": launch.protected, "settings": runtime.settings, "args": runtime.args});
