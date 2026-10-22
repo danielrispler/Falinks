@@ -432,11 +432,22 @@ impl Arm {
         &self.clients[agent]
     }
 
-    /// One authenticated tool envelope from `agent`. Agent mistakes are refusals; an
-    /// engine error or incident is an error that latches the worker's gate.
+    /// `answer`, with a check's oracle run inline.
     pub fn call(&mut self, agent: usize, envelope: &Value) -> Result<Value> {
+        match self.answer(agent, envelope)? {
+            Answer::Now { result, .. } => Ok(result),
+            Answer::Check(oracle) => self.checked(agent, oracle.run()),
+        }
+    }
+
+    /// One authenticated tool envelope from `agent`. Agent mistakes are refusals; an
+    /// engine error or incident is an error that latches the worker's gate. A `check` returns
+    /// its oracle run, which the caller may run on another thread and then pass to `checked`.
+    pub fn answer(&mut self, agent: usize, envelope: &Value) -> Result<Answer> {
         if self.draining {
-            return Ok(refuse("the run is finished; no further requests"));
+            return Ok(Answer::now(refuse(
+                "the run is finished; no further requests",
+            )));
         }
         self.calls += 1;
         let operation = envelope["operation"].as_str().unwrap_or_default();
@@ -445,13 +456,14 @@ impl Arm {
         if envelope["identity"]["workspace"].as_str() != root.to_str() {
             // An applied split/join moved this agent; the runner resumes it in its new root.
             self.relocated.insert(agent);
-            return Ok(refuse(
+            return Ok(Answer::now(refuse(
                 "your workspace moved after an agreed regrouping; the host is restarting you there",
-            ));
+            )));
         }
         if self.ready[agent] && MUTATIONS.contains(&operation) {
-            return Ok(refuse("you declared ready; no further edits"));
+            return Ok(Answer::now(refuse("you declared ready; no further edits")));
         }
+        let mut stages = None;
         let result = match operation {
             "ack" | "ready" | "check" => {
                 let required: &[&str] = if operation == "ack" {
@@ -466,10 +478,14 @@ impl Arm {
                     (_, Err(error)) => refuse(&error.to_string()),
                     ("ack", _) => self.ack(agent, request),
                     ("ready", _) => self.ready(agent)?,
-                    _ => self.check(agent)?,
+                    _ => return Ok(Answer::Check(self.check(agent)?)),
                 }
             }
-            _ => self.hosts[agent].call(envelope)?,
+            _ => {
+                let (result, report) = self.hosts[agent].call_timed(envelope)?;
+                stages = report;
+                result
+            }
         };
         if result["accepted"] == false {
             self.rejected += 1;
@@ -499,7 +515,7 @@ impl Arm {
             self.drafts[agent] += 1;
             self.trigger();
         }
-        Ok(result)
+        Ok(Answer::Now { result, stages })
     }
 
     /// Same observable triggers as the Git arm: a new nonempty draft from each agent
@@ -644,7 +660,8 @@ impl Arm {
         self.ready[agent] = true;
         self.log.push(json!({"kind": "ready", "agent": agent}));
         if self.ready == [true; 2] {
-            let checks = self.oracle(&published, "final")?;
+            let checks = self.oracle(&published, "final")?.run()?;
+            self.validation_attempts.push(checks["attempt"].clone());
             let passed = checks["passed"] == true;
             self.log.push(json!({"kind": "final_validation", "revision": published.revision, "passed": passed}));
             self.outcome = Some(
@@ -656,16 +673,22 @@ impl Arm {
         Ok(json!({"accepted": true}))
     }
 
-    fn check(&mut self, agent: usize) -> Result<Value> {
+    fn check(&mut self, agent: usize) -> Result<Oracle> {
         let capture = self.engine.host_capture(&self.clients[agent])?;
-        let checks = self.oracle(&capture, &agent_name(agent))?;
-        self.log.push(json!({"kind": "validation", "agent": agent, "revision": capture.revision, "passed": checks["passed"]}));
-        Ok(json!({"accepted": true, "revision": capture.revision, "passed": checks["passed"]}))
+        self.oracle(&capture, &agent_name(agent))
     }
 
-    /// Commit the capture's exact bytes and run the shared oracle seam on them. Details stay
-    /// host-only; agents get pass/fail, as in the Git arm.
-    fn oracle(&mut self, capture: &falinks::Capture, label: &str) -> Result<Value> {
+    /// Records a `check`'s oracle run and returns the agent's answer. A failed run is an error.
+    pub fn checked(&mut self, agent: usize, checks: Result<Value>) -> Result<Value> {
+        let checks = checks?;
+        let attempt = &checks["attempt"];
+        self.validation_attempts.push(attempt.clone());
+        self.log.push(json!({"kind": "validation", "agent": agent, "revision": attempt["revision"], "passed": checks["passed"]}));
+        Ok(json!({"accepted": true, "revision": attempt["revision"], "passed": checks["passed"]}))
+    }
+
+    /// Commit the capture's exact bytes and prepare the shared oracle seam on them.
+    fn oracle(&mut self, capture: &falinks::Capture, label: &str) -> Result<Oracle> {
         self.checks += 1;
         let number = self.checks;
         let repo = self.private.join(format!("candidate-{number}"));
@@ -724,16 +747,52 @@ impl Arm {
                 command.arg("--deny-root").arg(root);
             }
         }
-        let output = command.output()?;
+        let attempt = json!({"number": number, "conflict": null, "revision": capture.revision,
+            "space": capture.space, "requested_by": label});
+        Ok(Oracle {
+            command,
+            evidence,
+            attempt,
+        })
+    }
+}
+
+/// `Arm::answer`'s reply: a result now, with an edit's stage report, or a check to run.
+pub enum Answer {
+    Now {
+        result: Value,
+        stages: Option<Value>,
+    },
+    Check(Oracle),
+}
+impl Answer {
+    fn now(result: Value) -> Self {
+        Self::Now {
+            result,
+            stages: None,
+        }
+    }
+}
+
+/// A prepared run of the shared oracle seam; `run` needs no arm state, so any thread may run it.
+pub struct Oracle {
+    command: Command,
+    evidence: PathBuf,
+    attempt: Value,
+}
+impl Oracle {
+    /// Details stay host-only; agents get pass/fail, as in the Git arm.
+    pub fn run(mut self) -> Result<Value> {
+        let output = self.command.output()?;
         let line: Value = serde_json::from_slice(&output.stdout)
             .map_err(|_| format!("oracle failed: {}", String::from_utf8_lossy(&output.stderr)))?;
         let details: Value =
-            serde_json::from_str(&fs::read_to_string(evidence.join("checks.json"))?)?;
-        let attempt = json!({"number": number, "candidate": line["candidate"], "passed": line["passed"],
-            "conflict": null, "revision": capture.revision, "space": capture.space, "requested_by": label});
-        self.validation_attempts.push(attempt);
+            serde_json::from_str(&fs::read_to_string(self.evidence.join("checks.json"))?)?;
+        self.attempt["candidate"] = line["candidate"].clone();
+        self.attempt["passed"] = line["passed"].clone();
         Ok(
-            json!({"candidate": line["candidate"], "passed": line["passed"], "oracle": details["oracle"]}),
+            json!({"candidate": line["candidate"], "passed": line["passed"],
+            "oracle": details["oracle"], "attempt": self.attempt}),
         )
     }
 }

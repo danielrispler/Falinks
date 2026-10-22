@@ -17,9 +17,20 @@ pub struct Notice {
     pub event: String,
     pub context: Value,
 }
+#[derive(Default)]
 pub struct EngineOutcome {
     pub result: Value,
     pub notice: Option<Notice>,
+    /// An edit's engine stage report: host-only, recorded with the call, never returned.
+    pub stages: Option<Value>,
+    /// Set when the answer is computed off the driver thread; `result` is then unused.
+    pub deferred: Option<Deferred>,
+}
+/// `work` runs on a worker thread; `finish` then turns its result into the call's result on
+/// the driver, which keeps serving other calls meanwhile.
+pub struct Deferred {
+    pub work: Box<dyn FnOnce() -> Result<Value> + Send>,
+    pub finish: Box<dyn FnOnce(Result<Value>) -> Result<Value>>,
 }
 pub type Engine = Box<dyn FnMut(&Value) -> Result<EngineOutcome>>;
 /// Verified pins keyed by `std::env::consts::{OS, ARCH}`. A platform is declared only after

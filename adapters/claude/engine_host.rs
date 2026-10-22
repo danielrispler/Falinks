@@ -3,7 +3,8 @@
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
 use falinks::{
-    Body, Capture, Client, Engine, Event, File, JobSpec, Outcome, Output, Pending, Request, Review,
+    Body, Capture, Client, Engine, Event, File, JobSpec, Mode, Outcome, Output, Pending, Request,
+    Review,
 };
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
@@ -35,6 +36,10 @@ impl EngineHost {
         }
     }
     pub fn call(&self, envelope: &Value) -> Result<Value> {
+        Ok(self.call_timed(envelope)?.0)
+    }
+    /// `call`, plus an edit's engine stage report (host-only) when the call reached the engine.
+    pub fn call_timed(&self, envelope: &Value) -> Result<(Value, Option<Value>)> {
         let identity = &envelope["identity"];
         let root = self.engine.root(&self.client)?;
         require(
@@ -43,18 +48,29 @@ impl EngineHost {
             "envelope identity is not this agent's current workspace",
         )?;
         let request = &envelope["request"];
-        let outcome = self.dispatch(envelope["operation"].as_str().unwrap_or(""), request);
+        let mut stages = None;
+        let outcome = self.dispatch(
+            envelope["operation"].as_str().unwrap_or(""),
+            request,
+            &mut stages,
+        );
         // An unknown change halts the engine: stop this worker's capability too.
         if let Some(incident) = self.engine.incident()? {
             return Err(format!("engine incident: {}", incident.reason).into());
         }
-        Ok(match outcome {
+        let result = match outcome {
             Ok(value) => text(value),
             Err(error) => json!({"accepted":false,"reason":error.to_string()}),
-        })
+        };
+        Ok((result, stages))
     }
     /// Each operation's parser checks its request keys before the engine sees the request.
-    fn dispatch(&self, operation: &str, request: &Value) -> Result<Value> {
+    fn dispatch(
+        &self,
+        operation: &str,
+        request: &Value,
+        stages: &mut Option<Value>,
+    ) -> Result<Value> {
         let (engine, client) = (&self.engine, &self.client);
         let takes = |required: &[&str], optional: &[&str]| {
             require_keys(request, operation, required, optional)
@@ -79,11 +95,17 @@ impl EngineHost {
                 takes(&["id", "expected", "output"], &["reviews"])?;
                 require_review_keys(request)?;
                 let request = edit(request)?;
-                let outcome = match operation {
-                    "edit" => engine.apply(client, request)?,
-                    "retry" => engine.retry(client, request)?,
-                    _ => engine.incorporate(client, request)?,
+                let mode = match operation {
+                    "edit" => Mode::Apply,
+                    "retry" => Mode::Retry,
+                    _ => Mode::Incorporate,
                 };
+                let (outcome, report) = engine.apply_timed(client, request, mode);
+                *stages = Some(json!(report
+                    .iter()
+                    .map(|(stage, took)| json!({"stage": format!("{stage:?}"), "seconds": took.as_secs_f64()}))
+                    .collect::<Vec<_>>()));
+                let outcome = outcome?;
                 json!({"accepted":matches!(outcome, Outcome::Applied{..}),"outcome":outcome})
             }
             "request" => {
