@@ -127,6 +127,10 @@ _Avoid_: Sandbox (alone), containment
 **Freeze**:
 The hash pinning of evaluation materials in `evaluation/manifest.json`. Changing frozen material needs a versioned re-freeze; the procedure is in `evaluation/README.md`, "Freeze and setup budget".
 
+**Final snapshot**:
+The exact candidate a run's final oracle checked. Code-quality metrics measure the change from the frozen initial commit to it.
+_Avoid_: Publication, published state (the Git arm never publishes through the engine)
+
 **Supported platform**:
 An operating system on which a Falinks component upholds its guarantees and CI or recorded evidence proves it. Support is claimed per component: the engine and each worker-runtime adapter separately.
 _Avoid_: Development platform (the OS Falinks is built on, currently macOS)

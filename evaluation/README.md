@@ -244,6 +244,15 @@ it as `usage_limit`.
     active, its directory holds `active.json`. Each run records in `concurrency` the sibling
     runs active at its start and stop: any sibling directory's lock counts, the pilot's too. A
     shard killed mid-run leaves a stale lock: delete it, or the others over-report concurrency.
+  - **Batch checkout** (#228 decision 29a): every invocation of the scored batch,
+    including resumes and shards, runs from a checkout of #188's freeze commit.
+  - **Inspection rule** (#228 decisions 30–31), until #228's stage 2 freezes; the
+    calibration ticket lifts it. Nobody opens a scored run's final tree, diffs,
+    transcripts, `events.jsonl` or session JSONL, and nobody runs `report --show-code`
+    on a scored batch. A session diagnosing an infrastructure or safety failure may open
+    any file in the failed run's own directory, plus code-free batch files, but no other
+    run's directory. Its ticket comment lists the run and every file opened. A failed run
+    is never measured, and its replacement runs in a new directory.
   - **Report** (#204): `report --runs DIR [--runs DIR]...` puts every dimension of both
     arms side by side, per fixture. **It computes no winner**: the decision is written on
     the ticket once the evidence is in ([#5 amendment](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6322468250)).
@@ -316,7 +325,9 @@ it as `usage_limit`.
 
       `falinks-arm` records these counts in `result.json` as `edits`.
       `reverted_peer_text` lists accepted edits that bring back lines a peer's earlier
-      edit removed, for a manual check.
+      edit removed, for a manual check: each entry's agent, id, path, peer id and
+      `line_count`. No report field prints source text by default; `--show-code` adds
+      the lines (see the inspection rule above).
     - **Merging and gaps.** Several directories are merged as one batch: they must share
       one configuration and one pilot, and no run may appear twice. `concurrent_runs`
       lists the runs whose times overlapped a run in a sibling directory. `gaps` names
@@ -418,6 +429,15 @@ jq -c '{shared: (.limit_seconds - ([.sessions[].charged_seconds] | add)), team_s
 
 For the time to charge, `report --runs` gives each run's outcome and paired
 timings, and `timing RUN_DIR` gives per-agent figures (see "Paired evaluation (#27)" above).
+`code-quality.json` holds #228's frozen code-quality definitions (stage 1): the
+normalization and deterministic metric rules, the thirteen differential properties
+with their requirement sentences, generator domains, seed and input count, the judge
+pin, prompt, anchors and rules, and the inspection and diagnosis rules.
+`code_quality_definitions_trace_to_fixture_requirements` fails when a quoted sentence
+no longer appears verbatim in its fixture. Stage 2 changes the file only by a versioned
+amendment: bump its `version` and add an `amendments` entry with the reason, then
+re-freeze.
+
 `freeze` lists each changed frozen path and refuses unstaged changes to them, so
 stage your repair first. Re-freeze before observing a red harness test, or the
 freeze guard fails first and masks the real failure.

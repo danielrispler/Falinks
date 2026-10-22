@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "source": "https://github.com/danielrispler/Falinks/issues/228",
+  "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4).",
+  "amendments": [],
+  "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
+  "deterministic": {
+    "test_code": "Go _test.go files, Rust files under tests/, and Rust #[cfg(test)] items. Everything else is production code. (#228 decision 2)",
+    "vet_findings": "go vet ./... at default analyzers. Only findings on lines the formatted diff added or changed count, de-duplicated by lint, file and line, with a per-lint breakdown. (#228 decision 7)",
+    "clippy_findings": "cargo clippy --all-targets at default lints. Only findings on lines the formatted diff added or changed count, de-duplicated by lint, file and line, with a per-lint breakdown. (#228 decision 7)",
+    "production_lines_changed": "Production lines added plus removed in the formatted diff. The formatted reference's own figure is printed beside it, with no ratio. (#228 decision 8)",
+    "test_lines_added": "Test lines added in the formatted diff. (#228 decision 9)",
+    "test_functions": "The count of Go func Test* and Rust #[test] functions added. (#228 decision 9)"
+  },
+  "properties": {
+    "seed": 228,
+    "inputs_per_property": 500,
+    "comparison": "Each property compares the final snapshot's output with the frozen reference's output on the same seeded generated inputs. A suite uses only the API the oracle imports. The value is the number of failing properties per run; a suite that does not compile is a harness bug, recorded as missing. (#228 decisions 10 and 12)",
+    "exclusions": [
+      "a + sign or leading zeros in offset or limit",
+      "repeated query parameters",
+      "whitespace other than ASCII space and tab",
+      "error bodies",
+      "sums that overflow u32"
+    ],
+    "gates": "Enforced by the measuring command before it computes any property value: the reference passes every property, and each property fails on at least one deliberately broken copy of the reference. If either gate fails on a fixture, every run's property value for that fixture is missing, and the reason names the property and the gate it failed. The gates are not part of verify. (#228 decision 13)",
+    "containment": "Suites compile and run agent code, so they run through the same contained check path as the oracle. (#228 decision 14)",
+    "list": [
+      {
+        "id": "R1",
+        "fixture": "rust-errors",
+        "checks": "lookup results",
+        "requirement": {"at": "/requirements/0", "text": "Keep lookup successes apple=3 and pear=7; offline is retryable unavailable; every other key is missing with the original key."},
+        "domain": "keys drawn from apple, pear, offline and generated strings of ASCII letters, digits, space, tab and '=' (length 0-12)",
+        "excluded": ["whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "R2",
+        "fixture": "rust-errors",
+        "checks": "total sums and the empty case",
+        "requirement": {"at": "/requirements/1", "text": "consumer::total returns the same structured error, stops at the first error, and preserves sums/empty behavior."},
+        "domain": "key lists of length 0-8 drawn from apple and pear only",
+        "excluded": ["sums that overflow u32"]
+      },
+      {
+        "id": "R3",
+        "fixture": "rust-errors",
+        "checks": "total returns the first error",
+        "requirement": {"at": "/requirements/1", "text": "consumer::total returns the same structured error, stops at the first error, and preserves sums/empty behavior."},
+        "domain": "key lists of length 1-8 drawn from apple, pear, offline and generated missing keys, with at least one error key",
+        "excluded": ["sums that overflow u32"]
+      },
+      {
+        "id": "R4",
+        "fixture": "rust-errors",
+        "checks": "describe formats",
+        "requirement": {"at": "/requirements/1", "text": "describe returns key=value, missing:key, or unavailable:retryable=true."},
+        "domain": "the same keys as R1",
+        "excluded": ["whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "G1",
+        "fixture": "go-page",
+        "checks": "exact kind filter; missing or empty kind selects all",
+        "requirement": {"at": "/requirements/0", "text": "optional kind filters by exact Kind; empty/missing kind selects all."},
+        "domain": "item lists of length 0-20 with kinds from a pool of 4 short ASCII strings differing in case and suffix; kind absent, empty, in the pool or not",
+        "excluded": ["repeated query parameters", "whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "G2",
+        "fixture": "go-page",
+        "checks": "input order kept; caller data unchanged",
+        "requirement": {"at": "/requirements/0", "text": "Preserve input ordering and never mutate caller data."},
+        "domain": "the G1 domain, with the caller's slice compared before and after each request",
+        "excluded": ["repeated query parameters"]
+      },
+      {
+        "id": "G3",
+        "fixture": "go-page",
+        "checks": "valid offset and limit applied after filtering; offset at or past the end and limit=0 give []",
+        "requirement": {"at": "/requirements/1", "text": "Filter BEFORE pagination; offset at/beyond end and limit=0 yield []."},
+        "domain": "the G1 domain with offset and limit absent or canonical decimal integers 0-25",
+        "excluded": ["a + sign or leading zeros in offset or limit", "repeated query parameters"]
+      },
+      {
+        "id": "G4",
+        "fixture": "go-page",
+        "checks": "invalid, empty, negative or overflowing values give 400",
+        "requirement": {"at": "/requirements/1", "text": "Invalid, empty, negative or overflowing numbers return HTTP 400."},
+        "domain": "offset or limit set to empty, a negative integer, a non-digit string, or a decimal above the platform int maximum; only the status code is compared",
+        "excluded": ["a + sign or leading zeros in offset or limit", "repeated query parameters", "error bodies"]
+      },
+      {
+        "id": "G5",
+        "fixture": "go-page",
+        "checks": "JSON content type; unknown parameters ignored; nil items give []",
+        "requirement": {"at": "/requirements/1", "text": "Successful results use application/json; unknown parameters are ignored; nil input yields []."},
+        "domain": "the G1 domain plus nil items, with 0-3 extra parameters whose names are not kind, offset or limit",
+        "excluded": ["repeated query parameters"]
+      },
+      {
+        "id": "L1",
+        "fixture": "go-relationships",
+        "checks": "Produce IDs, trimming, blank dropping and input preservation",
+        "requirement": {"at": "/milestones/0/requirements/0", "text": "Produce(lines []string) []Record uses the original 1-based line number for ID, trims Text and drops blanks without renumbering."},
+        "domain": "line lists of length 0-12; each line is blank or ASCII words, with ASCII spaces and tabs around and between them",
+        "excluded": ["whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "L2",
+        "fixture": "go-relationships",
+        "checks": "Consume format, order and input preservation",
+        "requirement": {"at": "/milestones/0/requirements/0", "text": "Consume(records []Record) []string formats ID:Text, retaining order and inputs."},
+        "domain": "record lists of length 0-12 with IDs 1-100 and the L1 text domain",
+        "excluded": ["whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "L3",
+        "fixture": "go-relationships",
+        "checks": "Render joining",
+        "requirement": {"at": "/milestones/1/requirements/1", "text": "B: add Render(records []Record) string joining Consume output with newline, with no trailing newline; empty is empty string."},
+        "domain": "the L2 domain",
+        "excluded": ["whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "L4",
+        "fixture": "go-relationships",
+        "checks": "Stats counts",
+        "requirement": {"at": "/milestones/1/requirements/0", "text": "A: add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy."},
+        "domain": "the L1 domain",
+        "excluded": ["whitespace other than ASCII space and tab"]
+      }
+    ]
+  },
+  "judge": {
+    "runtime": "the run configuration's runtime_version, runtime_sha256 and model (evaluation/config.json)",
+    "runtime_version": "2.1.308",
+    "model": "claude-opus-5-5",
+    "session": "No tools and a fresh session per call. (#228 decision 15)",
+    "k": 3,
+    "value": "The median of the k calls per dimension; the spread is shown. (#228 decision 18)",
+    "retry": "A failed or unparseable call is retried once. If any rating is still missing, the run's judge value is missing. (#228 decision 18)",
+    "material": "The requirement text, the formatted initial code and the formatted change. File names are removed; Rust inline test modules are moved out; all test code is shown as one block. The reference is not shown. (#228 decision 16)",
+    "prompt": "You are reviewing a code change made to a small project. Below are the task's requirements, the initial code, and the change. Correctness is checked elsewhere: do not rate it, and do not guess whether the code passes its tests. Rate the change on each of the four dimensions below with an integer from 1 to 5, using the anchors given for 1, 3 and 5; use 2 and 4 for changes between anchors. Rate the change on its own; do not compare it with any other solution. Give one sentence of reason per dimension. Reply with only a JSON object of this form: {\"maintainability\": {\"rating\": N, \"reason\": \"...\"}, \"duplication\": {\"rating\": N, \"reason\": \"...\"}, \"unnecessary_changes\": {\"rating\": N, \"reason\": \"...\"}, \"test_quality\": {\"rating\": N, \"reason\": \"...\"}}\n\n{anchors}\n\nRequirements:\n{requirements}\n\nInitial code:\n{initial}\n\nChange:\n{change}\n\nTest code after the change:\n{tests}",
+    "dimensions": {
+      "maintainability": {
+        "1": "Control flow is needlessly convoluted or hard to follow; names mislead; a reader must trace the code by hand to see what it does.",
+        "3": "Readable with effort: some needless indirection, nesting or unclear names, but the intent can be recovered.",
+        "5": "Straightforward: each function does one clear thing, names say what values are, and control flow is as direct as the task allows."
+      },
+      "duplication": {
+        "1": "Logic is copied rather than shared: the same rule is written out in two or more places, so a fix would have to be made twice.",
+        "3": "Some repeated logic that could reasonably have been shared, but each rule is mostly written once.",
+        "5": "Each rule is written once and reused where it is needed; no copied-in logic."
+      },
+      "unnecessary_changes": {
+        "1": "The change rewrites or reshapes code the requirements did not ask to change, or adds behaviour nobody asked for.",
+        "3": "Mostly on task, with some edits to code the requirements did not touch.",
+        "5": "Every edit serves a requirement; untouched code is left as it was."
+      },
+      "test_quality": {
+        "1": "Tests cover only the happy path, or assert little; the edge cases the requirements name are untested.",
+        "3": "Tests cover the main behaviour and some named edge cases, but miss others.",
+        "5": "Tests are focused and cover the behaviour and the edge cases the requirements name, with clear assertions."
+      }
+    },
+    "blinding": {
+      "question": "This change was written by two AI agents working on the same task. Which is more likely? Answer with exactly one letter. A: they worked in separate Git worktrees, and their work was then merged. B: they worked in one shared workspace.",
+      "answers": {"A": "git", "B": "falinks"},
+      "calls": "A separate fresh call per final snapshot, on the same material. Each fixture's judge cells print `arm guessed k/n`, with no label and no cutoff. (#228 decision 19)",
+      "note": "Chance is about n/2. A count far from n/2 in either direction means the arm can be guessed from the material, so treat the judge ratings for this fixture as possibly unblinded."
+    },
+    "known_answer_set": "Per fixture, the formatted reference plus four degraded copies, one per dimension: copied-in logic (duplication), an untouched function rewritten (unnecessary_changes), happy-path-only tests (test_quality), needlessly convoluted control flow (maintainability). (#228 decision 20)",
+    "subtlety_rule": "Each copy changes one declaration, changed or added, aimed at one dimension. It passes the oracle, all properties, vet and clippy with no findings on changed lines, and the formatter. No comment names or hints at the defect. It must be code a competent agent could write under the 30-minute limit. Daniel signs off each copy as plausible before it freezes. (#228 decision 21)",
+    "calibration_criterion": "On every fixture, the targeted copy's median over three calls is lower than the reference's on that dimension. The #27 runs are rated for information only. (#228 decision 22)",
+    "amendment_rule": "A failing dimension gets at most one versioned amendment to its prompt and anchors, checked against the same frozen copies, before any scored code is opened. The copies are never changed after the first calibration call. A dimension that fails twice is dropped. (#228 decision 23)",
+    "wording": {
+      "flat": "No difference detected at the sensitivity of the known-answer set: per fixture, the reference and one oracle-passing copy per dimension, each changing one declaration",
+      "dropped": "Failed calibration; not reported."
+    }
+  },
+  "missing": {
+    "tool_failures": "A formatter error, a crashing tool or a suite that does not compile makes that metric missing for that run, with the tool's error as the reason. It is never retried, never imputed and never counted as a quality failure. (#228 decision 25)",
+    "versions": "Each run's metrics record go version, rustc -V, clippy-driver -V and rustfmt -V. The pins are rust-toolchain.toml and the evaluation's recorded Go version. (#228 decision 26)"
+  },
+  "rules": {
+    "lasts": "Until #228's stage 2 freezes. The calibration ticket lifts it.",
+    "inspection": "Nobody opens a scored run's final tree, diffs, transcripts, events.jsonl or session JSONL, and nobody runs report --show-code on a scored batch. (#228 decision 30)",
+    "diagnosis": "A session diagnosing an infrastructure or safety failure may open any file in the failed run's own directory, plus code-free batch files. It must not open other runs' directories. The ticket comment lists the run and every file opened. A failed run is never measured, and its replacement runs in a new directory. (#228 decision 31)",
+    "batch_checkout": "Every invocation of the scored batch, including resumes and shards, runs from a checkout of #188's freeze commit. (#228 decision 29a)"
+  }
+}
