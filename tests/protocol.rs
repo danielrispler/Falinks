@@ -23,7 +23,7 @@ fn two_clients_preserve_independent_drafts_and_reject_stale_output_in_full() {
         .insert("b.rs".into(), base.files["b.rs"].version);
     stale.output.insert(
         "b.rs".into(),
-        Some(File {
+        Output::Whole(File {
             bytes: b"lost peer".to_vec(),
             executable: false,
         }),
@@ -65,7 +65,7 @@ fn capture_during_installation_keeps_the_previous_completed_revision() {
     request.expected.insert("b.rs".into(), 0);
     request.output.insert(
         "b.rs".into(),
-        Some(File {
+        Output::Whole(File {
             bytes: b"new b".to_vec(),
             executable: false,
         }),
@@ -233,7 +233,7 @@ fn interrupted_installation_retains_evidence_and_requires_explicit_retry() {
     request.expected.insert("b.rs".into(), 0);
     request.output.insert(
         "b.rs".into(),
-        Some(File {
+        Output::Whole(File {
             bytes: b"draft b".to_vec(),
             executable: false,
         }),
@@ -387,11 +387,11 @@ fn stale_captured_job_retains_all_output_and_rejects_the_whole_application() {
             .unwrap()
             .unwrap()
             .request
-            .output["b.rs"]
-            .as_ref()
-            .unwrap()
-            .bytes,
-        b"generated"
+            .output["b.rs"],
+        Output::Whole(File {
+            bytes: b"generated".to_vec(),
+            executable: false,
+        })
     );
     assert_eq!(
         engine.run_job(&alice, spec).unwrap().directory,
@@ -441,7 +441,7 @@ fn ownership_authentication_path_aliases_and_modes_fail_closed() {
     let base = engine.capture().unwrap();
     let mut bad = edit("traversal", &base, "a.rs", "bad");
     bad.expected.insert("../outside".into(), 0);
-    bad.output.insert("../outside".into(), None);
+    bad.output.insert("../outside".into(), Output::Delete);
     assert!(matches!(
         engine.apply(&alice, bad).unwrap(),
         Outcome::Rejected { .. }
@@ -768,7 +768,7 @@ fn two_files(id: &str, base: &Capture) -> Request {
     request.expected.insert("b.rs".into(), 0);
     request.output.insert(
         "b.rs".into(),
-        Some(File {
+        Output::Whole(File {
             bytes: b"new b".to_vec(),
             executable: false,
         }),
@@ -1082,11 +1082,11 @@ fn different_functions_in_one_file_both_survive_an_explicit_reread_and_rebuild()
     );
     // The rejected attempt stays retained beside the applied rebuild.
     assert_eq!(
-        engine.request(&bob, "bob").unwrap().unwrap().request.output["a.rs"]
-            .as_ref()
-            .unwrap()
-            .bytes,
-        two.as_bytes()
+        engine.request(&bob, "bob").unwrap().unwrap().request.output["a.rs"],
+        Output::Whole(File {
+            bytes: two.as_bytes().to_vec(),
+            executable: false,
+        })
     );
 }
 

@@ -83,8 +83,8 @@ pub struct Request {
     pub id: String,
     /// All file/package inputs, including every output path. Versions are occurrences.
     pub expected: BTreeMap<String, u64>,
-    /// Complete file replacements; None deletes an enrolled file.
-    pub output: BTreeMap<String, Option<File>>,
+    /// New content per output path: whole, replacement hunks or a deletion.
+    pub output: BTreeMap<String, Output>,
     /// The editing agent's short explanation, sent as the live-edit message text.
     /// Records written before notes existed read with an empty one.
     #[serde(default)]
@@ -92,6 +92,78 @@ pub struct Request {
     /// Inline reviews, recorded before the gate and kept whatever the outcome.
     #[serde(default)]
     pub reviews: Vec<Review>,
+}
+/// One output path's new content. Records written before hunks existed hold
+/// `null` or a whole file, which read as `Delete` and `Whole`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Output {
+    Delete,
+    Whole(File),
+    /// Exact-string replacements, all applied together to the expected version's bytes.
+    /// The file keeps its mode unless `executable` is given.
+    Replace {
+        replace: Vec<Hunk>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        executable: Option<bool>,
+    },
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hunk {
+    pub old: Vec<u8>,
+    pub new: Vec<u8>,
+}
+impl Output {
+    /// The file this output proposes over `current`, the expected version's file.
+    /// Err is the rejection reason, naming the hunk that does not apply.
+    fn resolve(&self, current: Option<&File>) -> std::result::Result<Option<File>, String> {
+        let (hunks, executable) = match self {
+            Output::Delete => return Ok(None),
+            Output::Whole(file) => return Ok(Some(file.clone())),
+            Output::Replace {
+                replace,
+                executable,
+            } => (replace, executable),
+        };
+        let current = current.ok_or("hunks need a file at the expected version")?;
+        let mut spans = Vec::new();
+        for (index, hunk) in hunks.iter().enumerate() {
+            let n = index + 1;
+            if hunk.old.is_empty() {
+                return Err(format!("hunk {n}: old text is empty"));
+            }
+            let starts: Vec<usize> = current
+                .bytes
+                .windows(hunk.old.len())
+                .enumerate()
+                .filter(|(_, w)| *w == hunk.old.as_slice())
+                .map(|(start, _)| start)
+                .collect();
+            if starts.len() != 1 {
+                return Err(format!(
+                    "hunk {n}: old text matches {} places",
+                    starts.len()
+                ));
+            }
+            spans.push((starts[0], starts[0] + hunk.old.len(), n, &hunk.new));
+        }
+        spans.sort();
+        if let Some(w) = spans.windows(2).find(|w| w[0].1 > w[1].0) {
+            return Err(format!("hunk {} overlaps hunk {}", w[0].2, w[1].2));
+        }
+        let mut bytes = Vec::new();
+        let mut at = 0;
+        for (start, end, _, new) in spans {
+            bytes.extend_from_slice(&current.bytes[at..start]);
+            bytes.extend_from_slice(new);
+            at = end;
+        }
+        bytes.extend_from_slice(&current.bytes[at..]);
+        Ok(Some(File {
+            bytes,
+            executable: executable.unwrap_or(current.executable),
+        }))
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
@@ -1097,6 +1169,18 @@ impl Engine {
         if !conflicts.is_empty() {
             return self.finish(&db, &mut record, Outcome::Stale { conflicts });
         }
+        // Fresh, so the current bytes are the expected version's; an incorporation's too,
+        // since they are the client's own space.
+        let mut outputs = BTreeMap::new();
+        for (path, output) in &request.output {
+            match output.resolve(before.files[path].file.as_ref()) {
+                Ok(file) => outputs.insert(path.clone(), file),
+                Err(reason) => {
+                    let reason = format!("{path}: {reason}");
+                    return self.finish(&db, &mut record, Outcome::Rejected { reason });
+                }
+            };
+        }
         let interrupted =
             |db: &Connection,
              record: &mut Record,
@@ -1149,7 +1233,7 @@ impl Engine {
             proposed.revision = next_revision(&db)?;
             proposed.included.insert(record.operation);
             proposed.group = group;
-            for (path, file) in &request.output {
+            for (path, file) in &outputs {
                 let blob = file
                     .as_ref()
                     .map(|f| object(&self.state, &["hash-object", "-w", "--stdin"], &f.bytes))
@@ -1551,9 +1635,13 @@ impl Engine {
                 return fail("job wrote undeclared output");
             }
             for path in &spec.outputs {
-                job.request
-                    .output
-                    .insert(path.clone(), read_file(&directory.join("output"), path)?);
+                job.request.output.insert(
+                    path.clone(),
+                    match read_file(&directory.join("output"), path)? {
+                        Some(file) => Output::Whole(file),
+                        None => Output::Delete,
+                    },
+                );
             }
             Ok(())
         })();
@@ -1913,7 +2001,7 @@ mod tests {
             expected: BTreeMap::from([("a.rs".into(), base.files["a.rs"].version)]),
             output: BTreeMap::from([(
                 "a.rs".into(),
-                Some(File {
+                Output::Whole(File {
                     bytes: b"fn a() { 1; }\n".to_vec(),
                     executable: false,
                 }),

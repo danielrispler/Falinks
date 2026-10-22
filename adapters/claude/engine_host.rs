@@ -3,7 +3,7 @@
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
 use falinks::{
-    Body, Capture, Client, Engine, Event, File, JobSpec, Outcome, Pending, Request, Review,
+    Body, Capture, Client, Engine, Event, File, JobSpec, Outcome, Output, Pending, Request, Review,
 };
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
@@ -381,8 +381,8 @@ fn edit(request: &Value) -> Result<Request> {
         .ok_or("request.output must map paths to {content} or null")?
     {
         let file = match file {
-            Value::Null => None,
-            file => Some(File {
+            Value::Null => Output::Delete,
+            file => Output::Whole(File {
                 bytes: file["content"]
                     .as_str()
                     .ok_or("output content must be text")?
