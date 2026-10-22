@@ -820,8 +820,7 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
 mod tests {
     #[test]
     fn the_idle_nudge_says_check_then_offer() {
-        let check = super::IDLE_NUDGE.find("check").unwrap();
-        assert!(check < super::IDLE_NUDGE.find("offer again").unwrap());
+        assert!(super::IDLE_NUDGE.contains("check, then offer again"));
         assert!(super::IDLE_NUDGE.contains("falinks_ready"));
     }
 }

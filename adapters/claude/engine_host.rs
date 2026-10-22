@@ -542,7 +542,7 @@ fn field<'a>(request: &'a Value, name: &str) -> Result<&'a str> {
         .as_str()
         .ok_or(format!("request.{name} must be a string"))?)
 }
-/// `{id, expected: {path: version}, output: {path: {content, executable?} | null}, reviews?}`.
+/// `{id, expected: {path: version}, output: {path: {content, executable?} | null}, note, reviews?}`.
 fn edit(request: &Value) -> Result<Request> {
     let expected: BTreeMap<String, u64> = serde_json::from_value(request["expected"].clone())?;
     let mut output = BTreeMap::new();

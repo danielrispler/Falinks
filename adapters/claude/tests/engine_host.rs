@@ -869,6 +869,7 @@ fn the_edit_note_is_required_and_is_the_peers_live_edit_text() {
         "edit",
         json!({"id":"d1","note":" ","expected":{"price.go":version},"output":{"price.go":{"content":DISCOUNT}}}),
     );
+    // The engine refuses a blank note ("edit note required"); the adapter checks only the key.
     assert_eq!(blank["accepted"], false, "{blank}");
     let note = "Discount takes a tenth of gross";
     let applied = f.call(
