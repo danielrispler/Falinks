@@ -61,7 +61,7 @@ pub fn cost(tokens: &Value, prices: &Value) -> Option<f64> {
 }
 
 /// Rounded to a hundredth of a cent.
-fn usd(dollars: f64) -> Value {
+pub fn usd(dollars: f64) -> Value {
     json!((dollars * 1e4).round() / 1e4)
 }
 
@@ -71,6 +71,7 @@ pub fn tokens(run_dir: &Path, result: &Value, prices: &Value) -> Result<Value> {
     let projects = run_dir.join("controller/claude-projects");
     let prefix = crate::batch::project_folder(run_dir) + "-";
     let (mut agents, mut total, mut cost_state, mut models) = (Map::new(), [0; 5], 0.0, vec![]);
+    let mut unreadable = 0;
     let mut folders: Vec<_> = fs::read_dir(&projects)
         .into_iter()
         .flatten()
@@ -91,7 +92,11 @@ pub fn tokens(run_dir: &Path, result: &Value, prices: &Value) -> Result<Value> {
                 .lines()
                 .filter(|l| !l.trim().is_empty())
             {
-                let event: Value = serde_json::from_str(line)?;
+                // A worker stopped mid-write can leave a truncated last line.
+                let Ok(event) = serde_json::from_str::<Value>(line) else {
+                    unreadable += 1;
+                    continue;
+                };
                 let message = &event["message"];
                 match (event["type"].as_str(), message["id"].as_str()) {
                     (Some("assistant"), Some(id)) if message["usage"].is_object() => {
@@ -147,7 +152,7 @@ pub fn tokens(run_dir: &Path, result: &Value, prices: &Value) -> Result<Value> {
     Ok(json!({
         "status": "available", "agents": agents, "tokens": tokens, "models": models,
         "cost_usd": cost.map(usd),
-        "cost_label": "API-equivalent list price, not billed cost",
+        "cost_label": prices["label"], "unreadable_lines": unreadable,
         "cross_checks": {
             "result_usage": named(reported), "result_mismatched_classes": mismatched,
             "cost_state_usd": usd(cost_state),
@@ -195,6 +200,7 @@ mod tests {
                 line("m2", 50),
                 line("m2", 50),
                 state,
+                r#"{"type":"assi"#.into(),
             ],
         );
         let result = json!({"usage": {"agents": {"A": [{"usage": {"input_tokens": 2,
@@ -203,6 +209,7 @@ mod tests {
         let out = tokens(run, &result, &serde_json::from_str(PRICES).unwrap()).unwrap();
         assert_eq!(out["status"], "available");
         assert_eq!(out["agents"]["A"]["messages"], 2);
+        assert_eq!(out["unreadable_lines"], 1);
         assert_eq!(
             out["tokens"],
             json!({"input": 4, "output": 150, "cache_write_5m": 200, "cache_write_1h": 400, "cache_read": 2000})

@@ -1,6 +1,11 @@
-//! Scored-batch interpretation: every outcome, paired successes, medians and the agreed
-//! continuation signal. Exploratory evidence only; never a statistical or cost claim.
-use crate::{FIXTURES, batch::replaceable, tokens::CLASSES};
+//! Scored-batch interpretation: every outcome, paired successes, medians, API-equivalent cost
+//! per successful task and the agreed continuation signal. Exploratory evidence only; never a
+//! statistical claim, and the cost is list price, never billed cost.
+use crate::{
+    FIXTURES,
+    batch::replaceable,
+    tokens::{CLASSES, usd},
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -25,14 +30,13 @@ fn cost(runs: &[&Value], successes: u64) -> Value {
             (c.to_string(), json!(sum))
         })
         .collect();
-    let usd: f64 = runs
+    let dollars: f64 = runs
         .iter()
         .filter_map(|r| r["tokens"]["cost_usd"].as_f64())
         .sum();
-    let per_success =
-        (missing == 0 && successes > 0).then(|| (usd / successes as f64 * 1e4).round() / 1e4);
+    let per_success = (missing == 0 && successes > 0).then(|| usd(dollars / successes as f64));
     json!({"runs": runs.len(), "missing": missing, "tokens": tokens,
-        "cost_usd": (usd * 1e4).round() / 1e4, "cost_per_success_usd": per_success})
+        "cost_usd": usd(dollars), "cost_per_success_usd": per_success})
 }
 
 fn median(mut values: Vec<f64>) -> Option<f64> {
@@ -167,12 +171,11 @@ pub fn report(runs: &[Value]) -> Value {
     };
     json!({
         "verdict": verdict,
-        "qualification": "Exploratory: three repetitions per fixture; not statistical proof, general superiority or a cost claim.",
+        "qualification": "Exploratory: three repetitions per fixture; not statistical proof, general superiority or billed cost.",
         "runs": runs.iter().map(|r| json!({"run_id": r["run_id"], "pair": r["pair"], "arm": r["arm"],
             "scored": r["scored"], "outcome": r["outcome"], "replaces": r.get("replaces"),
             "failure_reason": r.get("failure_reason"), "concurrency": r.get("concurrency"),
             "tokens": r.get("tokens")})).collect::<Vec<_>>(),
-        "cost_label": "API-equivalent list price, not billed cost: the runs use a subscription login.",
         "concurrent_runs": runs.iter().filter(|r| concurrent(r)).map(|r| &r["run_id"]).collect::<Vec<_>>(),
         "concurrency_note": "Times of concurrent_runs were measured while another shard's run was active.",
         "fixtures": fixtures,
