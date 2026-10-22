@@ -3,14 +3,21 @@
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
 use falinks::{
-    Body, Capture, Checkpoint, Client, Engine, Event, File, JobSpec, Mode, Outcome, Output,
-    Pending, Request, Review,
+    Body, Capture, Checkpoint, Client, Engine, Event, File, Hunk, JobSpec, Mode, Outcome, Output,
+    Pending, Request, Review, valid_path,
 };
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
+    ffi::CString,
+    fs,
+    io::Read,
+    os::{
+        fd::{FromRawFd, OwnedFd},
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -25,14 +32,23 @@ pub struct EngineHost {
     agent: String,
     /// The one host-enrolled job program (`gofmt -w`); agents name paths only.
     formatter: PathBuf,
+    /// The agent's own scratch, where `{from}` references resolve.
+    scratch: PathBuf,
 }
 impl EngineHost {
-    pub fn new(engine: Arc<Engine>, client: Client, agent: &str, formatter: PathBuf) -> Self {
+    pub fn new(
+        engine: Arc<Engine>,
+        client: Client,
+        agent: &str,
+        formatter: PathBuf,
+        scratch: PathBuf,
+    ) -> Self {
         Self {
             engine,
             client,
             agent: agent.into(),
             formatter,
+            scratch,
         }
     }
     pub fn call(&self, envelope: &Value) -> Result<Value> {
@@ -92,7 +108,7 @@ impl EngineHost {
             "edit" | "retry" | "incorporate" => {
                 takes(&["id", "expected", "output", "note"], &["reviews"])?;
                 require_review_keys(request)?;
-                let request = edit(request)?;
+                let request = edit(request, &self.scratch)?;
                 let mode = match operation {
                     "edit" => Mode::Apply,
                     "retry" => Mode::Retry,
@@ -253,7 +269,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "edit",
         EDIT_TYPES,
-        "{id, expected: {path: version}, output: {path: {content, executable?} | null}, note, reviews?: [{scope, revision, decision: Keep|Revise|Drop, note}]} -> applies all outputs or nothing. note is required and non-empty: a short explanation your peer sees as the live edit's text, so do not post it again. expected names every input and output. Stale returns current versions; reread and use a new id. Unreviewed names the obligations that need a review. reviews are review requests sent inline: each is checked first, any invalid one refuses the whole call, and valid ones are recorded before the edit is gated, so they stand even if it comes back Stale.",
+        "{id, expected: {path: version}, output: {path: {content, executable?} | {replace: [{old, new}], executable?} | {from, executable?} | null}, note, reviews?: [{scope, revision, decision: Keep|Revise|Drop, note}]} -> applies all outputs or nothing. Each output takes exactly one form. content is the whole new file. replace edits an existing file: each old is non-empty and matches the expected version's text exactly once, hunks do not overlap, and all apply together. replace keeps the file's mode unless executable is given. from is a path relative to your own scratch directory, read as the whole new file: a regular file, not a symlink, hard link or under a symlinked directory, at most 1 MiB of UTF-8 text, with no hidden or .. parts. executable comes only from the request, never the scratch file's mode. A refused from reference uses no id. Do not JSON-encode files for edit. note is required and non-empty: a short explanation your peer sees as the live edit's text, so do not post it again. expected names every input and output. Stale returns current versions; reread and use a new id. Unreviewed names the obligations that need a review. reviews are review requests sent inline: each is checked first, any invalid one refuses the whole call, and valid ones are recorded before the edit is gated, so they stand even if it comes back Stale.",
     ),
     (
         "retry",
@@ -542,31 +558,58 @@ fn field<'a>(request: &'a Value, name: &str) -> Result<&'a str> {
         .as_str()
         .ok_or(format!("request.{name} must be a string"))?)
 }
-/// `{id, expected: {path: version}, output: {path: {content, executable?} | null}, note, reviews?}`.
-fn edit(request: &Value) -> Result<Request> {
+/// `{id, expected: {path: version}, output: {path: {content | replace | from, executable?} | null},
+/// note, reviews?}`. A `from` reference is resolved here, so a refused one uses up no request ID.
+fn edit(request: &Value, scratch: &Path) -> Result<Request> {
     let expected: BTreeMap<String, u64> = serde_json::from_value(request["expected"].clone())?;
     let mut output = BTreeMap::new();
     for (path, file) in request["output"]
         .as_object()
-        .ok_or("request.output must map paths to {content} or null")?
+        .ok_or("request.output must map paths to {content}, {replace}, {from} or null")?
     {
         let file = match file {
             Value::Null => Output::Delete,
             file => {
-                require_keys(
-                    file,
-                    &format!("output {path:?}"),
-                    &["content"],
-                    &["executable"],
-                )?;
-                Output::Whole(File {
-                    bytes: file["content"]
-                        .as_str()
-                        .ok_or("output content must be text")?
-                        .as_bytes()
-                        .to_vec(),
-                    executable: file["executable"].as_bool().unwrap_or(false),
-                })
+                let what = format!("output {path:?}");
+                let forms: Vec<&str> = FORMS
+                    .into_iter()
+                    .filter(|form| file.get(form).is_some())
+                    .collect();
+                let [form] = forms[..] else {
+                    return Err(format!("request keys: {what} has {forms:?}; {ONE_FORM}").into());
+                };
+                require_keys(file, &what, &[form], &["executable"])
+                    .map_err(|e| format!("{e}; {ONE_FORM}"))?;
+                let executable = file["executable"].as_bool();
+                let text = |key: &str| text_bytes(file, &what, key);
+                match form {
+                    "content" => Output::Whole(File {
+                        bytes: text("content")?,
+                        executable: executable.unwrap_or(false),
+                    }),
+                    "replace" => Output::Replace {
+                        replace: file["replace"]
+                            .as_array()
+                            .ok_or(format!("{what}.replace must be an array"))?
+                            .iter()
+                            .map(|hunk| {
+                                require_keys(hunk, "replace[]", &["old", "new"], &[])?;
+                                Ok(Hunk {
+                                    old: text_bytes(hunk, "replace[]", "old")?,
+                                    new: text_bytes(hunk, "replace[]", "new")?,
+                                })
+                            })
+                            .collect::<Result<_>>()?,
+                        executable,
+                    },
+                    "from" => Output::Whole(File {
+                        bytes: scratch_file(scratch, &String::from_utf8(text("from")?)?)
+                            .map_err(|e| format!("{what}.from refused: {e}"))?,
+                        // Never the scratch file's mode.
+                        executable: executable.unwrap_or(false),
+                    }),
+                    _ => unreachable!("FORMS has only these forms"),
+                }
             }
         };
         output.insert(path.clone(), file);
@@ -580,6 +623,69 @@ fn edit(request: &Value) -> Result<Request> {
         note: field(request, "note")?.into(),
         reviews: reviews.unwrap_or_default(),
     })
+}
+/// `value[key]` as bytes, refused unless it is text.
+fn text_bytes(value: &Value, what: &str, key: &str) -> Result<Vec<u8>> {
+    Ok(value[key]
+        .as_str()
+        .ok_or(format!("{what}.{key} must be text"))?
+        .as_bytes()
+        .to_vec())
+}
+/// The edit output forms; a value takes exactly one.
+const FORMS: [&str; 3] = ["content", "replace", "from"];
+const ONE_FORM: &str = "an output takes exactly one of {content, executable?}, \
+    {replace: [{old, new}], executable?} or {from, executable?}";
+/// The largest file a scratch reference may name.
+const SCRATCH_LIMIT: u64 = 1 << 20;
+/// Reads `path` beneath `scratch` for a `{from}` reference. The host runs unsandboxed, so a
+/// link in scratch must not let it copy protected files into the live workspace (#193): each
+/// component opens without following symlinks, and every check runs on the opened file.
+fn scratch_file(scratch: &Path, path: &str) -> Result<Vec<u8>> {
+    valid_path(path).map_err(|e| format!("{e} (a path relative to your scratch)"))?;
+    let open = |dir: Option<&OwnedFd>, name: &[u8], flags: libc::c_int| -> Result<OwnedFd> {
+        let name = CString::new(name)?;
+        let flags = flags | libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        let at = dir.map_or(libc::AT_FDCWD, std::os::fd::AsRawFd::as_raw_fd);
+        // SAFETY: `name` is a valid C string and `at` is open or AT_FDCWD.
+        let fd = unsafe { libc::openat(at, name.as_ptr(), flags) };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            return Err(match error.raw_os_error() {
+                Some(libc::ELOOP | libc::ENOTDIR | libc::EMLINK) => {
+                    format!("symlink or non-directory in {path:?}").into()
+                }
+                _ => format!("cannot open {path:?}: {error}").into(),
+            });
+        }
+        // SAFETY: `fd` was just opened and is owned by nothing else.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    };
+    let mut dir = open(None, scratch.as_os_str().as_bytes(), libc::O_DIRECTORY)?;
+    let parts: Vec<&str> = path.split('/').collect();
+    let (name, parents) = parts.split_last().ok_or("empty path")?;
+    for part in parents {
+        dir = open(Some(&dir), part.as_bytes(), libc::O_DIRECTORY)?;
+    }
+    // O_NONBLOCK: opening a FIFO must not wait for a writer.
+    let mut file = fs::File::from(open(Some(&dir), name.as_bytes(), libc::O_NONBLOCK)?);
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(format!("{path:?} is not a regular file").into());
+    }
+    if metadata.nlink() != 1 {
+        return Err(format!("{path:?} is a hard link").into());
+    }
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(SCRATCH_LIMIT + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > SCRATCH_LIMIT {
+        return Err(format!("{path:?} is over {SCRATCH_LIMIT} bytes (1 MiB)").into());
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| format!("{path:?} is not valid UTF-8").into())
+        .map(String::into_bytes)
 }
 /// Results drop the engine's Git tree and blob IDs, which agents never use (#221). Only
 /// string or null values go, so a file named `tree` or `blob` stays.
