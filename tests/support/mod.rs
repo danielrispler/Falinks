@@ -69,7 +69,7 @@ pub fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
         expected: BTreeMap::from([(path.into(), capture.files[path].version)]),
         output: BTreeMap::from([(
             path.into(),
-            Some(File {
+            Output::Whole(File {
                 bytes: bytes.as_bytes().to_vec(),
                 executable: false,
             }),
