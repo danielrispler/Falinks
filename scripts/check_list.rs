@@ -28,13 +28,13 @@ pub const CHECKS: &[&str] = &[
 /// keeps the two equal. `ci-checks` runs it only when a workflow changed.
 pub const ACTIONLINT: &str = "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12";
 
-/// The evaluation test step: slow, so `ci-checks` runs it only when one of
-/// `EVALUATION_INPUTS` changed, as the `paths:` filter in `evaluation.yml` does.
+/// The evaluation test step: slow, so CI runs it only on PRs that change one of
+/// `EVALUATION_INPUTS`, and `ci-checks` only with `--all`.
 pub const EVALUATION_TESTS: &str =
     "cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1";
 
-/// Path prefixes that trigger the evaluation tests; `tests/check_drift.rs` keeps
-/// them equal to the `paths:` filter in `evaluation.yml`.
+/// Path prefixes that trigger the evaluation tests in CI; `tests/check_drift.rs`
+/// keeps them equal to the `paths:` filter in `evaluation.yml`.
 pub const EVALUATION_INPUTS: &[&str] = &[
     "evaluation/",
     "rust-toolchain.toml",

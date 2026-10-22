@@ -32,7 +32,7 @@ Run every CI check locally, cheapest first, before you open a pull request:
 cargo run --bin ci-checks
 ```
 
-It stops at the first failing step and names it. The slow evaluation tests run only when `evaluation/`, `rust-toolchain.toml` or `.cargo/` changed since `origin/main`, as in CI; `cargo run --bin ci-checks -- --all` runs them anyway. The list lives in `scripts/check_list.rs`, and `tests/check_drift.rs` keeps it in step with `.github/workflows/`. If you add a workflow step, add it to the list too.
+It stops at the first failing step and names it. The slow evaluation tests run in CI, on pull requests that change their inputs (`EVALUATION_INPUTS` in `scripts/check_list.rs`); `cargo run --bin ci-checks -- --all` runs them locally. Merge such a pull request only after its evaluation checks pass (`gh pr checks <n> --watch --fail-fast`); no required check enforces this. The list lives in `scripts/check_list.rs`, and `tests/check_drift.rs` keeps it in step with `.github/workflows/`. If you add a workflow step, add it to the list too.
 
 To rerun one engine test, filter by name: `cargo nextest run <name>`. For one evaluation test: `cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1 <name>`.
 
