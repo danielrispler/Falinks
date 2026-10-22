@@ -42,6 +42,7 @@ fn an_accepted_edit_reports_every_stage() {
         [
             EditStage::LockWait,
             EditStage::Reviews,
+            EditStage::Request,
             EditStage::Audit,
             EditStage::Freshness,
             EditStage::Hunks,
@@ -74,6 +75,7 @@ fn a_stale_refusal_reports_stages_up_to_freshness() {
         [
             EditStage::LockWait,
             EditStage::Reviews,
+            EditStage::Request,
             EditStage::Audit,
             EditStage::Freshness,
             EditStage::Boundary,
@@ -89,5 +91,13 @@ fn a_replayed_id_reports_no_gate_stage() {
     let applied = engine.apply(&alice, request.clone()).unwrap();
     let (outcome, reached) = stages(&engine, &alice, request, Mode::Apply);
     assert_eq!(outcome.unwrap(), applied);
-    assert_eq!(reached, [EditStage::LockWait, EditStage::Boundary]);
+    assert_eq!(
+        reached,
+        [
+            EditStage::LockWait,
+            EditStage::Reviews,
+            EditStage::Request,
+            EditStage::Boundary,
+        ]
+    );
 }

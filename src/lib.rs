@@ -1069,18 +1069,17 @@ impl Engine {
         }
         timing.start(EditStage::LockWait);
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        timing.stop();
+        timing.start(EditStage::Reviews);
         // Inline reviews stand even if the edit is then refused, as separate reviews would.
         // A known ID already recorded them on its first call.
         if request_record(&db, client.agent, &request.id)?.is_none() {
-            timing.start(EditStage::Reviews);
             // A known ID is held to its recorded note instead, which may be empty.
             if request.note.trim().is_empty() {
                 return fail("edit note required");
             }
             self.record_reviews(&db, client, &request.reviews)?;
-            timing.stop();
         }
+        timing.start(EditStage::Request);
         // Copied out: no layout guard is held while host observers run.
         let (space, live, before, group) = {
             let layout = self.layout()?;
@@ -1496,6 +1495,7 @@ impl Engine {
     }
 }
 
+/// Which edit operation `apply_timed` runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Apply,
@@ -1514,13 +1514,17 @@ pub enum Phase {
     BeforeCommit,
     Committed,
 }
-/// A stage of an edit in `apply_timed`'s report, in the order an edit reaches them.
+/// A stage of an edit in `apply_timed`'s report, in the order an edit reaches them. From
+/// the writer-lock request on, each stage ends where the next starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditStage {
     /// Waiting for the writer lock.
     LockWait,
-    /// Inline reviews; only a new request ID records them.
+    /// Inline reviews; a known request ID records none, it only finds itself recorded.
     Reviews,
+    /// Recording a new request ID, or a retry's attempt; a replay returns here.
+    Request,
+    /// Checking the halt and the live root before the edit.
     Audit,
     Freshness,
     /// Resolving each output's replacement hunks.
@@ -1529,13 +1533,15 @@ pub enum EditStage {
     /// The coordination gate's analysis.
     Gate,
     Retention,
+    /// Installing the outputs, then auditing the live root.
     Install,
+    /// Waiting for the layout lock, then the commit transaction.
     Commit,
-    /// The boundary that follows a returned outcome.
+    /// The regrouping boundary that follows a returned outcome.
     Boundary,
 }
 /// Each stage runs until the next starts or `stop`, so an early return keeps the stage it
-/// left; time outside any stage is not reported.
+/// left, including the cost of recording that return.
 #[derive(Default)]
 struct Timing {
     stages: Vec<(EditStage, Duration)>,
