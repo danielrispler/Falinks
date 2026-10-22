@@ -28,6 +28,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, OnceLock, RwLock, RwLockReadGuard},
+    time::{Duration, Instant},
 };
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -1018,15 +1019,28 @@ impl Engine {
         request_record(&connect(&self.state)?, client.agent, id)
     }
     pub fn apply(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, Mode::Apply, &mut |_| Ok(()))
+        self.apply_timed(client, request, Mode::Apply).0
     }
     pub fn retry(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, Mode::Retry, &mut |_| Ok(()))
+        self.apply_timed(client, request, Mode::Retry).0
     }
     /// Brings the published state into the client's split workspace when its own
     /// unpublished drafts overlap the publication. `output` must resolve every overlap.
     pub fn incorporate(&self, client: &Client, request: Request) -> Result<Outcome> {
-        self.apply_inner(client, request, Mode::Incorporate, &mut |_| Ok(()))
+        self.apply_timed(client, request, Mode::Incorporate).0
+    }
+    /// `apply`, `retry` or `incorporate`, with how long each stage it reached took, in
+    /// order. Host-only: the report is not recorded.
+    pub fn apply_timed(
+        &self,
+        client: &Client,
+        request: Request,
+        mode: Mode,
+    ) -> (Result<Outcome>, Vec<(EditStage, Duration)>) {
+        let mut timing = Timing::default();
+        let outcome = self.apply_inner(client, request, mode, &mut |_| Ok(()), &mut timing);
+        timing.stop();
+        (outcome, timing.stages)
     }
     fn apply_inner(
         &self,
@@ -1034,8 +1048,10 @@ impl Engine {
         request: Request,
         mode: Mode,
         observer: &mut dyn FnMut(Phase) -> Result<()>,
+        timing: &mut Timing,
     ) -> Result<Outcome> {
-        let outcome = self.apply_locked(client, request, mode, observer)?;
+        let outcome = self.apply_locked(client, request, mode, observer, timing)?;
+        timing.start(EditStage::Boundary);
         self.boundary();
         Ok(outcome)
     }
@@ -1045,12 +1061,15 @@ impl Engine {
         request: Request,
         mode: Mode,
         observer: &mut dyn FnMut(Phase) -> Result<()>,
+        timing: &mut Timing,
     ) -> Result<Outcome> {
         self.authorize(client)?;
         if request.id.is_empty() {
             return fail("request ID required");
         }
+        timing.start(EditStage::LockWait);
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
+        timing.start(EditStage::Reviews);
         // Inline reviews stand even if the edit is then refused, as separate reviews would.
         // A known ID already recorded them on its first call.
         if request_record(&db, client.agent, &request.id)?.is_none() {
@@ -1060,6 +1079,7 @@ impl Engine {
             }
             self.record_reviews(&db, client, &request.reviews)?;
         }
+        timing.start(EditStage::Request);
         // Copied out: no layout guard is held while host observers run.
         let (space, live, before, group) = {
             let layout = self.layout()?;
@@ -1123,6 +1143,7 @@ impl Engine {
             save_record(&tx, &record)?;
             tx.commit()?;
         }
+        timing.start(EditStage::Audit);
         if let Some(halt) = halted(&db)? {
             let reason = halt.to_string();
             return self.finish(&db, &mut record, Outcome::Rejected { reason });
@@ -1132,6 +1153,7 @@ impl Engine {
             self.save_incident(&db, &self.layout()?.roots, &reason)?;
             return self.finish(&db, &mut record, Outcome::Rejected { reason });
         }
+        timing.start(EditStage::Freshness);
         let invalid = request.output.is_empty()
             || request
                 .expected
@@ -1171,6 +1193,7 @@ impl Engine {
         }
         // Fresh, so the current bytes are the expected version's; an incorporation's too,
         // since they are the client's own space.
+        timing.start(EditStage::Hunks);
         let mut outputs = BTreeMap::new();
         for (path, output) in &request.output {
             match output.resolve(before.files[path].file.as_ref()) {
@@ -1196,6 +1219,7 @@ impl Engine {
                 )?;
                 self.finish(db, record, Outcome::Interrupted { reason })
             };
+        timing.start(EditStage::Proposal);
         let base = if mode == Mode::Incorporate {
             let published = publication::published(&db)?;
             let (merged, overlaps) = regroup::merge(&db, &before, &revision(&db, published)?)?;
@@ -1265,6 +1289,7 @@ impl Engine {
             Err(error) => return interrupted(&db, &mut record, error),
         };
         let changed: BTreeSet<String> = installs.keys().cloned().collect();
+        timing.start(EditStage::Gate);
         let change = match self.gate(&db, client, &before, &proposed, &changed) {
             Ok(Ok(change)) => change,
             Ok(Err(outcome)) => return self.finish(&db, &mut record, outcome),
@@ -1275,12 +1300,14 @@ impl Engine {
             }
         };
         let result = (|| -> Result<Capture> {
+            timing.start(EditStage::Retention);
             observer(Phase::BeforeRetention)?;
             retain(&self.state, &proposed)?;
             record.proposed = Some(proposed.clone());
             record.installation_pending = true;
             save_record(&db, &record)?;
             observer(Phase::Retained)?;
+            timing.start(EditStage::Install);
             for (path, file) in &installs {
                 install(&live, path, file)?;
                 observer(Phase::Installed(path.clone()))?;
@@ -1304,6 +1331,7 @@ impl Engine {
             .into_iter()
             .filter(|p| !request.output.contains_key(p))
             .collect();
+        timing.start(EditStage::Commit);
         let mut layout_guard = self.layout.write().map_err(|_| "layout lock poisoned")?;
         let committed = (|| -> Result<()> {
             let tx = db.unchecked_transaction()?;
@@ -1467,8 +1495,9 @@ impl Engine {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
+/// Which edit operation `apply_timed` runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
     Apply,
     /// Explicit retry of an interrupted request.
     Retry,
@@ -1484,6 +1513,50 @@ pub enum Phase {
     Installed(String),
     BeforeCommit,
     Committed,
+}
+/// A stage of an edit in `apply_timed`'s report, in the order an edit reaches them. From
+/// the writer-lock request on, each stage ends where the next starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditStage {
+    /// Waiting for the writer lock.
+    LockWait,
+    /// Inline reviews; a known request ID records none, it only finds itself recorded.
+    Reviews,
+    /// Recording a new request ID, or a retry's attempt; a replay returns here.
+    Request,
+    /// Checking the halt and the live root before the edit.
+    Audit,
+    Freshness,
+    /// Resolving each output's replacement hunks.
+    Hunks,
+    Proposal,
+    /// The coordination gate's analysis.
+    Gate,
+    Retention,
+    /// Installing the outputs, then auditing the live root.
+    Install,
+    /// Waiting for the layout lock, then the commit transaction.
+    Commit,
+    /// The regrouping boundary that follows a returned outcome.
+    Boundary,
+}
+/// Each stage runs until the next starts or `stop`, so an early return keeps the stage it
+/// left, including the cost of recording that return.
+#[derive(Default)]
+struct Timing {
+    stages: Vec<(EditStage, Duration)>,
+    open: Option<(EditStage, Instant)>,
+}
+impl Timing {
+    fn start(&mut self, stage: EditStage) {
+        self.stop();
+        self.open = Some((stage, Instant::now()));
+    }
+    fn stop(&mut self) {
+        if let Some((stage, started)) = self.open.take() {
+            self.stages.push((stage, started.elapsed()));
+        }
+    }
 }
 /// A durable step of a transition, a synchronization or restart recovery, for the host
 /// fault hook; never exposed to untrusted clients. `space` names a live root.
@@ -1526,7 +1599,13 @@ impl Engine {
         request: Request,
         mut observer: impl FnMut(Phase) -> Result<()>,
     ) -> Result<Outcome> {
-        self.apply_inner(client, request, Mode::Apply, &mut observer)
+        self.apply_inner(
+            client,
+            request,
+            Mode::Apply,
+            &mut observer,
+            &mut Timing::default(),
+        )
     }
 }
 
