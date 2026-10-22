@@ -482,6 +482,109 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     assert_eq!(run.arm.rejected, rejected);
 }
 
+/// An assistant stream-json event: one content block of model message `id`.
+fn block(id: &str, tool: &str) -> Value {
+    json!({"type": "assistant", "message": {"id": id,
+        "content": [{"type": "tool_use", "name": format!("mcp__falinks__falinks_{tool}")}]}})
+}
+
+/// The result counts of a run that splits and then joins (#134 "Measurement").
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn a_split_and_a_join_produce_the_regrouping_result_counts() {
+    let mut run = setup("go-relationships");
+    let space1 = run.dir.path().join("space1");
+    fs::create_dir(&space1).unwrap();
+    run.arm.engine.add_workspace(&space1).unwrap();
+    run.call(
+        0,
+        "register",
+        json!({"id": "producer", "task": "producer", "nodes": ["producer.go"]}),
+    );
+    run.call(
+        1,
+        "register",
+        json!({"id": "consumer", "task": "consumer", "nodes": ["consumer.go"]}),
+    );
+    let respond = |run: &mut Run, proposal: &Value| {
+        for agent in [0, 1] {
+            let agreed = run.call(
+                agent,
+                "respond",
+                json!({"id": proposal["id"], "context": proposal["context"], "response": "Agree"}),
+            );
+            assert_eq!(agreed["accepted"], true, "{agreed}");
+        }
+    };
+
+    let split = run.call(1, "recommend", json!({}))["proposal"].clone();
+    assert_eq!(split["action"], "Split", "{split}");
+    respond(&mut run, &split);
+    assert_eq!(run.arm.engine.placement().unwrap(), [0, 1]);
+    // Handling through the split's events counts; a handle at the cursor covers nothing.
+    let last = |run: &Run, agent: usize| {
+        let client = run.arm.client(agent);
+        run.arm
+            .engine
+            .events(client, 0)
+            .unwrap()
+            .last()
+            .unwrap()
+            .seq
+    };
+    let through = last(&run, 0);
+    assert_eq!(
+        run.call(0, "handle", json!({"through": through}))["accepted"],
+        true
+    );
+    run.call(0, "handle", json!({"through": through}));
+
+    run.call(
+        1,
+        "register",
+        json!({"id": "consumer", "task": "consumer", "nodes": ["consumer.go"], "depends": ["producer.go#Produce"]}),
+    );
+    let join = run.call(
+        1,
+        "propose",
+        json!({"action": "Join", "text": "Consume now takes Produce's output", "failing": false}),
+    )["proposal"]
+        .clone();
+    assert_eq!(join["action"], "Join", "{join}");
+    respond(&mut run, &join);
+    assert_eq!(run.arm.engine.placement().unwrap(), [0, 0]);
+    let through = last(&run, 1);
+    run.call(1, "handle", json!({"through": through}));
+
+    // Agent 0: one model message split over two stream-json events, then a capture-only one.
+    // Agent 1: recommend, then propose with register.
+    let transcripts = [
+        json!({"events": [block("m1", "respond"), block("m1", "handle"), block("m2", "capture")]}),
+        json!({"events": [block("m3", "recommend"), block("m4", "register"), block("m4", "propose")]}),
+    ];
+    let counts = run.arm.regrouping(&transcripts).unwrap();
+    let none = json!({"engine": 0, "agent-0": 0, "agent-1": 0});
+    assert_eq!(
+        counts,
+        json!({
+            "proposals": {
+                "Join": {"engine": 0, "agent-0": 0, "agent-1": 1},
+                "Split": {"engine": 1, "agent-0": 0, "agent-1": 0},
+                "Keep": none,
+            },
+            "agreements": 4,
+            "declines": 0,
+            "blocked": [],
+            "transitions": 2,
+            "regrouping_handles": 2,
+            "regrouping_round_trips": 3,
+        })
+    );
+}
+
 /// The opening prompt carries the initial protocol state from a capture given to the agent,
 /// and no file contents: the Git arm's prompt has none either (#5).
 #[test]

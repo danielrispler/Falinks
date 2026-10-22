@@ -2,7 +2,7 @@
 //! engine with natural timing. Task information, milestone triggers, the 30-minute bound,
 //! the oracle seam and the result schema match the Git arm (`falinks-eval baseline`).
 //! Safety controls come from a fresh `check-integration` gate that the batch runs first.
-use falinks::{Action, Engine, ProposalState};
+use falinks::{Action, Engine};
 use falinks_claude::{
     Launch, MODEL, Runtime, VERSION,
     arm::{self, Answer, Arm, Tools, agent_name, prompt},
@@ -466,11 +466,12 @@ fn run(options: Options) -> Result<i32> {
         .filter(changes)
         .filter(|p| p.proposer.is_none())
         .count();
-    let transitions = proposals
+    let transcripts: Vec<Value> = run
+        .workers
         .iter()
-        .filter(changes)
-        .filter(|p| matches!(p.state, ProposalState::Applied { .. }))
-        .count();
+        .flat_map(|w| w.transcripts.clone())
+        .collect();
+    let regrouping = arm.regrouping(&transcripts)?;
     let usage: serde_json::Map<String, Value> = (0..2)
         .map(|a| (agent_name(a), json!(run.workers[a].usage)))
         .collect();
@@ -506,7 +507,8 @@ fn run(options: Options) -> Result<i32> {
     evidence["edits"] = arm.edits()?;
     evidence["validation_attempts"] = json!(arm.validation_attempts);
     evidence["recommendations"] = recommendations.into();
-    evidence["transitions"] = transitions.into();
+    evidence["transitions"] = regrouping["transitions"].clone();
+    evidence["regrouping"] = regrouping;
     evidence["proposals"] = json!(proposals);
     evidence["engine_runs"] = json!(run.engine.runs()?);
     evidence["validator"] = json!(validations);
