@@ -9,7 +9,7 @@ use falinks::{
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::CString,
     fs,
     io::Read,
@@ -19,8 +19,8 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -34,6 +34,115 @@ pub struct EngineHost {
     formatter: PathBuf,
     /// The agent's own scratch, where `{from}` references resolve.
     scratch: PathBuf,
+    hidden: Hidden,
+}
+
+/// Enrolled files a milestone introduces, hidden from both agents until it is delivered (#250).
+/// Every agent-facing reply passes `conceal`, and a request naming one is answered as for a
+/// path that was never enrolled: it reaches the engine under an unguessable unenrolled
+/// substitute, and the substitute is put back in the reply.
+#[derive(Clone, Default)]
+pub struct Hidden {
+    paths: Arc<Mutex<BTreeSet<String>>>,
+    prefix: Arc<String>,
+    /// Requests that named a hidden path (host evidence).
+    pub refusals: Arc<AtomicU64>,
+}
+impl Hidden {
+    pub fn new(paths: impl IntoIterator<Item = String>) -> Self {
+        use std::hash::{BuildHasher, Hasher};
+        let random = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        Self {
+            paths: Arc::new(Mutex::new(paths.into_iter().collect())),
+            prefix: Arc::new(format!("unenrolled-{random:016x}")),
+            refusals: Arc::default(),
+        }
+    }
+    pub fn reveal(&self, paths: &[String]) {
+        let mut hidden = self.paths.lock().unwrap();
+        for path in paths {
+            hidden.remove(path);
+        }
+    }
+    /// Whether `path`, or the file of a `path#symbol` node, is hidden.
+    pub fn is_hidden(&self, path: &str) -> bool {
+        let file = path.split_once('#').map_or(path, |(p, _)| p);
+        self.paths.lock().unwrap().contains(file)
+    }
+    /// Removes every hidden path used as an object key: file maps in captures and records.
+    pub fn conceal(&self, value: Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .filter(|(key, _)| !self.is_hidden(key))
+                    .map(|(key, value)| (key, self.conceal(value)))
+                    .collect(),
+            ),
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(|v| self.conceal(v)).collect())
+            }
+            other => other,
+        }
+    }
+    /// `request` with each hidden path (as a key, a value or a `path#symbol` node) replaced
+    /// by its substitute, or None when it names none. Free text is left as written.
+    fn substitute(&self, request: &Value) -> Option<Value> {
+        let swap = |text: &str| {
+            self.is_hidden(text)
+                .then(|| format!("{}/{text}", self.prefix))
+        };
+        fn walk(value: &Value, swap: &dyn Fn(&str) -> Option<String>, hit: &mut bool) -> Value {
+            match value {
+                Value::Object(map) => Value::Object(
+                    map.iter()
+                        .map(|(key, value)| {
+                            let value = if matches!(key.as_str(), "text" | "note" | "reason") {
+                                value.clone()
+                            } else {
+                                walk(value, swap, hit)
+                            };
+                            let key = swap(key).inspect(|_| *hit = true).unwrap_or(key.clone());
+                            (key, value)
+                        })
+                        .collect(),
+                ),
+                Value::Array(items) => {
+                    Value::Array(items.iter().map(|v| walk(v, swap, hit)).collect())
+                }
+                Value::String(text) => match swap(text) {
+                    Some(substitute) => {
+                        *hit = true;
+                        Value::String(substitute)
+                    }
+                    None => value.clone(),
+                },
+                other => other.clone(),
+            }
+        }
+        let mut hit = false;
+        let substituted = walk(request, &swap, &mut hit);
+        hit.then_some(substituted)
+    }
+    /// `reply` with every substitute put back as the path the agent wrote.
+    fn restore(&self, reply: Value) -> Value {
+        let text = reply.to_string();
+        let restored = self.restore_text(&text);
+        if restored == text {
+            return reply;
+        }
+        serde_json::from_str(&restored).unwrap_or(reply)
+    }
+    /// `text` with every substitute put back. A peer's notice carries what another agent
+    /// posted, so it is restored too: it reads as a never-enrolled path, never the prefix.
+    pub fn restore_text(&self, text: &str) -> String {
+        // A default `Hidden` hides nothing and has no prefix to strip.
+        if self.prefix.is_empty() {
+            return text.into();
+        }
+        text.replace(&format!("{}/", self.prefix), "")
+    }
 }
 impl EngineHost {
     pub fn new(
@@ -42,6 +151,7 @@ impl EngineHost {
         agent: &str,
         formatter: PathBuf,
         scratch: PathBuf,
+        hidden: Hidden,
     ) -> Self {
         Self {
             engine,
@@ -49,6 +159,7 @@ impl EngineHost {
             agent: agent.into(),
             formatter,
             scratch,
+            hidden,
         }
     }
     pub fn call(&self, envelope: &Value) -> Result<Value> {
@@ -68,6 +179,11 @@ impl EngineHost {
             &envelope["request"],
         );
         let mut stages = None;
+        let substituted = self.hidden.substitute(request);
+        if substituted.is_some() {
+            self.hidden.refusals.fetch_add(1, Ordering::Relaxed);
+        }
+        let request = substituted.as_ref().unwrap_or(request);
         let outcome = self.dispatch(operation, request, &mut stages);
         // An unknown change halts the engine: stop this worker's capability too.
         if let Some(incident) = self.engine.incident()? {
@@ -77,7 +193,12 @@ impl EngineHost {
             Ok(value) => text(lean(value)),
             Err(error) => json!({"accepted":false,"reason":error.to_string()}),
         };
-        Ok((result, stages))
+        let result = if substituted.is_some() {
+            self.hidden.restore(result)
+        } else {
+            result
+        };
+        Ok((self.hidden.conceal(result), stages))
     }
     /// Each operation's parser checks its request keys before the engine sees the request.
     fn dispatch(
@@ -404,13 +525,17 @@ fn view(capture: &Capture, content: impl Fn(&str) -> bool) -> Value {
 /// The opening protocol state from a capture given to the agent: the revision, file
 /// versions and pending state. No file contents, so both arms get the same task
 /// information (#5). Also returns the file versions given.
-pub fn opening(engine: &Engine, client: &Client) -> Result<(Value, BTreeMap<String, u64>)> {
+pub fn opening(
+    engine: &Engine,
+    client: &Client,
+    hidden: &Hidden,
+) -> Result<(Value, BTreeMap<String, u64>)> {
     let capture = engine.capture_for(client)?;
     let pending = engine.pending(client)?;
     let mut state = view(&capture, |_| false);
     state["pending"] = json!({"handled":pending.handled,"unhandled":pending.unhandled,
         "deferred":deferred(&pending),"obligations":pending.obligations});
-    Ok((state, versions(&capture)))
+    Ok((hidden.conceal(state), versions(&capture)))
 }
 
 /// When `events` renewed the client's obligation, a capture given to it with the text of
@@ -421,6 +546,7 @@ pub fn notice_capture(
     client: &Client,
     events: &[Event],
     given: &mut BTreeMap<String, u64>,
+    hidden: &Hidden,
 ) -> Result<Option<Value>> {
     // Obligation events go only to the agent whose obligation they renew.
     if !events
@@ -434,7 +560,7 @@ pub fn notice_capture(
         given.get(path) != capture.files.get(path).map(|f| &f.version)
     });
     *given = versions(&capture);
-    Ok(Some(state))
+    Ok(Some(hidden.conceal(state)))
 }
 
 fn versions(capture: &Capture) -> BTreeMap<String, u64> {

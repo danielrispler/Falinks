@@ -1418,6 +1418,36 @@ fn code_quality_definitions_trace_to_fixture_requirements() {
     assert_eq!(judge["runtime_version"], config["runtime_version"]);
 }
 
+/// A milestone's `files` are what the Falinks arm enrolls hidden until delivery (#250): each is
+/// named in that milestone's requirements, new to the fixture, and part of the reference.
+#[test]
+fn milestone_files_are_named_new_and_in_the_reference() {
+    for entry in fs::read_dir(root().join("fixtures")).unwrap() {
+        let path = entry.unwrap().path();
+        let fixture = read(&path);
+        let name = fixture["name"].as_str().unwrap();
+        let protected = root().join(format!("protected/{name}.json"));
+        for milestone in fixture["milestones"].as_array().unwrap() {
+            let requirements = milestone["requirements"].to_string();
+            for file in milestone["files"].as_array().into_iter().flatten() {
+                let file = file.as_str().unwrap();
+                assert!(
+                    requirements.contains(file),
+                    "{name}: {file} not in its requirements"
+                );
+                assert!(
+                    fixture["files"].get(file).is_none(),
+                    "{name}: {file} already exists"
+                );
+                assert!(
+                    read(&protected)["reference"].get(file).is_some(),
+                    "{name}: {file} not in the reference"
+                );
+            }
+        }
+    }
+}
+
 /// Commits `files` over a prepared fixture repository and returns the commit.
 fn snapshot(fixture: &str, repo: &Path, files: &[(&str, &str)]) -> String {
     fs::create_dir_all(repo.parent().unwrap()).unwrap();
@@ -1639,14 +1669,30 @@ func TestLabel(t *testing.T) {
         .map(|p| p.as_str().unwrap())
         .collect();
     assert_eq!(prompts.len(), 10);
-    // The material: no file names, no reference, no arm-identifying words.
-    let render = reference("go-relationships")["consumer.go"]
+    // The material: no file names, no reference, no arm-identifying words. The requirement
+    // text is the same for both arms and may name files (fixture 3 v2), so it is left out.
+    let parse = reference("go-relationships")["parse.go"]
         .as_str()
         .unwrap()
         .to_string();
-    let render = render.lines().find(|l| l.contains("func Render")).unwrap();
+    let parse = parse.lines().find(|l| l.contains("func Parse")).unwrap();
+    let fixture = read(root().join("fixtures/go-relationships.json"));
+    let requirements: Vec<&str> = std::iter::once(&fixture["requirements"])
+        .chain(
+            fixture["milestones"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| &m["requirements"]),
+        )
+        .flat_map(|r| r.as_array().unwrap())
+        .map(|r| r.as_str().unwrap())
+        .collect();
     for prompt in [prompts[0], prompts[5]] {
-        let lower = prompt.to_lowercase();
+        let lower = requirements
+            .iter()
+            .fold(prompt.to_string(), |p, r| p.replace(r, ""))
+            .to_lowercase();
         for word in [
             ".go",
             ".rs",
@@ -1654,7 +1700,7 @@ func TestLabel(t *testing.T) {
             "worktree",
             "git ",
             "workspace",
-            render,
+            parse,
         ] {
             assert!(!lower.contains(&word.to_lowercase()), "{word} in {prompt}");
         }

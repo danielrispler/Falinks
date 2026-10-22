@@ -1,8 +1,10 @@
 {
-  "version": 1,
+  "version": 2,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
   "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4).",
-  "amendments": [],
+  "amendments": [
+    {"version": 2, "issue": 250, "reason": "Fixture 3 version 2 (#139, landed by #250) removes Render and rewords Stats, so L3 and L4 no longer traced to the fixture. L3 now checks Parse and IDs; L4 checks Stats and Duplicates, keeping 13 properties. Leading zeros in an id are excluded because the requirement does not decide them. No property value had been computed under version 1 (Daniel, 2026-10-22, on #250)."}
+  ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
   "deterministic": {
     "test_code": "Go _test.go files, Rust files under tests/, and Rust #[cfg(test)] items. Everything else is production code. (#228 decision 2)",
@@ -117,16 +119,16 @@
       {
         "id": "L3",
         "fixture": "go-relationships",
-        "checks": "Render joining",
-        "requirement": {"at": "/milestones/1/requirements/1", "text": "B: add Render(records []Record) string joining Consume output with newline, with no trailing newline; empty is empty string."},
-        "domain": "the L2 domain",
-        "excluded": ["whitespace other than ASCII space and tab"]
+        "checks": "Parse fields and IDs order",
+        "requirement": {"at": "/milestones/1/requirements/1", "text": "Split at the first colon; id is the part before it, written with ASCII digits only, positive and fitting in int; text is the rest trimmed, and must be nonblank."},
+        "domain": "single lines of length 0-20 over ASCII digits, letters, ':', space and tab, plus the ids 0, 9223372036854775807 and 9223372036854775808; IDs takes lists of 0-12 such lines",
+        "excluded": ["whitespace other than ASCII space and tab", "leading zeros in an id"]
       },
       {
         "id": "L4",
         "fixture": "go-relationships",
-        "checks": "Stats counts",
-        "requirement": {"at": "/milestones/1/requirements/0", "text": "A: add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy."},
+        "checks": "Stats counts and Duplicates order",
+        "requirement": {"at": "/milestones/1/requirements/0", "text": "add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy as Produce"},
         "domain": "the L1 domain",
         "excluded": ["whitespace other than ASCII space and tab"]
       }

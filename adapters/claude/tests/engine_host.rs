@@ -59,6 +59,7 @@ fn fixture() -> Fixture {
             &format!("agent-{agent}"),
             go.with_file_name("gofmt"),
             root.join(format!("agent-{agent}/scratch")),
+            Default::default(),
         )
     };
     Fixture {
@@ -512,7 +513,7 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
         let registered = f.call(agent, "register", json!({"id":id,"task":id,"nodes":[node]}));
         assert_eq!(registered["accepted"], true, "{registered}");
     }
-    let (start, mut given) = opening(&f.engine, &f.clients[1]).unwrap();
+    let (start, mut given) = opening(&f.engine, &f.clients[1], &Default::default()).unwrap();
     let version = start["files"]["price.go"]["version"].clone();
     assert!(
         start["files"]["price.go"].get("content").is_none(),
@@ -521,7 +522,14 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
     // Events that renew nothing carry no capture.
     let quiet = f.engine.events(&f.clients[1], 0).unwrap();
     assert_eq!(
-        notice_capture(&f.engine, &f.clients[1], &quiet, &mut given).unwrap(),
+        notice_capture(
+            &f.engine,
+            &f.clients[1],
+            &quiet,
+            &mut given,
+            &Default::default()
+        )
+        .unwrap(),
         None
     );
 
@@ -532,9 +540,15 @@ fn a_renewing_notice_capture_authorizes_an_inline_review() {
     );
     assert_eq!(applied["accepted"], true, "{applied}");
     let events = f.engine.events(&f.clients[1], 0).unwrap();
-    let notice = notice_capture(&f.engine, &f.clients[1], &events, &mut given)
-        .unwrap()
-        .expect("renewing events carry a capture");
+    let notice = notice_capture(
+        &f.engine,
+        &f.clients[1],
+        &events,
+        &mut given,
+        &Default::default(),
+    )
+    .unwrap()
+    .expect("renewing events carry a capture");
     // Only the changed file's content travels with the notice.
     assert_eq!(notice["files"]["price.go"]["content"], DISCOUNT, "{notice}");
     assert!(

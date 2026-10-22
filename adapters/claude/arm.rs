@@ -3,7 +3,7 @@
 //! the shared `falinks-eval oracle` seam on exact captures. Agents reach it through the
 //! `falinks_*` tools; `ack`, `ready` and `check` are evaluation-host tools, the rest map
 //! onto the engine via `EngineHost`.
-use crate::engine_host::{self, EngineHost};
+use crate::engine_host::{self, EngineHost, Hidden};
 use falinks::{
     Action, Body, Check, Client, Engine, Language, Outcome, Pin, ProposalState, Toolchain,
 };
@@ -176,6 +176,39 @@ pub fn language(name: &str) -> Result<Language> {
 /// Enrolled source: the fixture files plus optional files agents may create. The engine
 /// audits every live file against its enrollment, so the Falinks arm fixes this set up
 /// front (`x.go` -> `x_test.go`, `src/x.rs` -> `tests/x.rs`). The Git arm may add any file.
+/// The fixture's enrolled source, and the files agents may create from the start: test
+/// companions, but not the files a milestone introduces, which stay hidden until it arrives.
+pub fn enrolled(fixture: &Value, language: Language) -> (Vec<String>, Vec<String>) {
+    let files: Vec<String> = (fixture["files"].as_object().into_iter().flatten())
+        .map(|(path, _)| path.clone())
+        .collect();
+    let milestones = fixture["milestones"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let hidden = introduced(&milestones, language);
+    let mut enrolled = enrollment(&files, language);
+    enrolled.extend(hidden.iter().cloned());
+    enrolled.sort();
+    enrolled.dedup();
+    let optional = (enrolled.iter())
+        .filter(|f| !files.contains(f) && !hidden.contains(f))
+        .cloned()
+        .collect();
+    (enrolled, optional)
+}
+
+/// Files the fixture's milestones introduce (`files`), with their test companions: enrolled
+/// up front and hidden from both agents until their milestone is delivered (#250).
+pub fn introduced(milestones: &[Value], language: Language) -> Vec<String> {
+    let files: Vec<String> = milestones
+        .iter()
+        .flat_map(|m| m["files"].as_array().into_iter().flatten())
+        .filter_map(|f| f.as_str().map(String::from))
+        .collect();
+    enrollment(&files, language)
+}
+
 pub fn enrollment(files: &[String], language: Language) -> Vec<String> {
     let files: Vec<&String> = files.iter().filter(|f| !reserved(f)).collect();
     let mut enrolled: BTreeSet<String> = files.iter().map(|f| f.to_string()).collect();
@@ -347,6 +380,7 @@ fn around(root: &Path, keep: &Path) -> Result<Vec<PathBuf>> {
 pub struct Arm {
     pub engine: Arc<Engine>,
     hosts: [EngineHost; 2],
+    pub hidden: Hidden,
     clients: [Client; 2],
     fixture: Value,
     eval: PathBuf,
@@ -394,6 +428,16 @@ impl Arm {
         denied: Vec<PathBuf>,
         scratch: [PathBuf; 2],
     ) -> Self {
+        let milestones = fixture["milestones"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let hidden = Hidden::new(
+            language(fixture["language"].as_str().unwrap_or_default())
+                .map(|l| introduced(&milestones, l))
+                // `setup` checked the language first; never fall back to hiding nothing.
+                .expect("fixture language"),
+        );
         let host = |agent: usize| {
             EngineHost::new(
                 Arc::clone(&engine),
@@ -401,14 +445,13 @@ impl Arm {
                 &agent_name(agent),
                 formatter.clone(),
                 scratch[agent].clone(),
+                hidden.clone(),
             )
         };
         Self {
             hosts: [host(0), host(1)],
-            milestones: fixture["milestones"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
+            hidden,
+            milestones,
             engine,
             clients,
             fixture,
@@ -610,6 +653,10 @@ impl Arm {
         {
             let milestone = self.milestones[self.delivered].clone();
             self.delivered += 1;
+            if let Ok(language) = language(self.fixture["language"].as_str().unwrap_or_default()) {
+                self.hidden
+                    .reveal(&introduced(std::slice::from_ref(&milestone), language));
+            }
             self.awaiting = BTreeSet::from([0, 1]);
             self.ready = [false; 2];
             self.log

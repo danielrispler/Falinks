@@ -110,11 +110,48 @@ func l2(r *rng) any {
 	return []any{empty(out), slices.Equal(in, original)}
 }
 
-func l3(r *rng) any { return f.Render(records(r)) }
+// idLine is 0-20 ASCII digits, letters, ':', spaces and tabs, half of them shaped ID:Text,
+// some with the ids 0, 9223372036854775807 or 9223372036854775808. Ids with a leading zero
+// are excluded: the requirement does not decide them.
+func idLine(r *rng) string {
+	for {
+		var s string
+		switch r.n(4) {
+		case 0:
+			s = []string{"0", "9223372036854775807", "9223372036854775808"}[r.n(3)] + ":" + line(r)
+		case 1:
+			s = strconv.Itoa(1+r.n(1000)) + ":" + line(r)
+		default:
+			const chars = "0123456789abcXYZ: \t"
+			b := make([]byte, r.n(21))
+			for i := range b {
+				b[i] = chars[r.n(len(chars))]
+			}
+			s = string(b)
+		}
+		head, _, _ := strings.Cut(s, ":")
+		if len(head) > 1 && head[0] == '0' && strings.Trim(head, "0123456789") == "" {
+			continue
+		}
+		return s
+	}
+}
+
+func l3(r *rng) any {
+	id, text, ok := f.Parse(idLine(r))
+	in := make([]string, r.n(13))
+	for i := range in {
+		in[i] = idLine(r)
+	}
+	original := append([]string(nil), in...)
+	return []any{id, text, ok, empty(f.IDs(in)), slices.Equal(in, original)}
+}
 
 func l4(r *rng) any {
-	kept, dropped := f.Stats(lines(r))
-	return []int{kept, dropped}
+	in := lines(r)
+	original := append([]string(nil), in...)
+	kept, dropped := f.Stats(in)
+	return []any{kept, dropped, empty(f.Duplicates(in)), slices.Equal(in, original)}
 }
 
 func TestFalinksProperties(t *testing.T) {

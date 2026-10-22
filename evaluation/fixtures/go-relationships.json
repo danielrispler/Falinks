@@ -38,7 +38,8 @@
       ],
       "dependencies": [
         "Stats, Duplicates, Parse and IDs share no types or calls with the other agent's code."
-      ]
+      ],
+      "files": ["parse.go"]
     }
   ],
   "commands": [
