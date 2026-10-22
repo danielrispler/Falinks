@@ -3,8 +3,8 @@
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
 use falinks::{
-    Body, Capture, Client, Engine, Event, File, JobSpec, Mode, Outcome, Output, Pending, Request,
-    Review,
+    Body, Capture, Checkpoint, Client, Engine, Event, File, JobSpec, Mode, Outcome, Output,
+    Pending, Request, Review,
 };
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
@@ -58,8 +58,6 @@ impl EngineHost {
             return Err(format!("engine incident: {}", incident.reason).into());
         }
         let result = match outcome {
-            // shortcut: offer, withdraw and checkpoint keep their IDs until #222.
-            Ok(value) if matches!(operation, "offer" | "withdraw" | "checkpoint") => text(value),
             Ok(value) => text(lean(value)),
             Err(error) => json!({"accepted":false,"reason":error.to_string()}),
         };
@@ -132,9 +130,11 @@ impl EngineHost {
                 )?;
                 require_review_keys(request)?;
                 let offered = engine.offer(client, parse(request)?)?;
-                let coverage = offered.coverage;
-                json!({"accepted":true,"checkpoint":offered.checkpoint,"missing":coverage.missing,
-                    "queued":coverage.queued,"reason":coverage.reason})
+                let (mut reply, coverage) = (state(&offered.checkpoint), offered.coverage);
+                reply["missing"] = json!(coverage.missing);
+                reply["queued"] = json!(coverage.queued);
+                reply["reason"] = json!(coverage.reason);
+                reply
             }
             "handle" => {
                 takes(&[], &["through", "deferred", "processed"])?;
@@ -158,12 +158,14 @@ impl EngineHost {
             }
             "withdraw" => {
                 takes(&["offer"], &[])?;
-                json!({"accepted":true,"checkpoint":engine.withdraw(client, field(request, "offer")?)?})
+                state(&engine.withdraw(client, field(request, "offer")?)?)
             }
             "checkpoint" => {
                 takes(&["id"], &[])?;
-                let checkpoint = engine.checkpoint(field(request, "id")?)?;
-                json!({"accepted":checkpoint.is_some(),"checkpoint":checkpoint})
+                match engine.checkpoint(field(request, "id")?)? {
+                    Some(checkpoint) => state(&checkpoint),
+                    None => json!({"accepted":false}),
+                }
             }
             "candidate" => {
                 takes(&["revision"], &[])?;
@@ -582,6 +584,11 @@ fn edit(request: &Value) -> Result<Request> {
 }
 /// Results drop the engine's Git tree and blob IDs, which agents never use (#221). Only
 /// string or null values go, so a file named `tree` or `blob` stays.
+/// An offer's state without its capture: agents already hold the content (#222).
+fn state(checkpoint: &Checkpoint) -> Value {
+    json!({"accepted":true,"id":checkpoint.id,"state":checkpoint.state,
+        "revision":checkpoint.offer.revision,"scope":checkpoint.offer.scope})
+}
 fn lean(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(

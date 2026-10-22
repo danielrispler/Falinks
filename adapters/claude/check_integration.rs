@@ -1043,10 +1043,10 @@ fn accepted_recovery(gate: &mut Gate) -> Result<()> {
         let seen = gate.accepted(agent, "checkpoint");
         require(
             offers.len() == 1
-                && offers[0]["result"]["checkpoint"]["state"]["Accepted"].is_object()
+                && offers[0]["result"]["state"]["Accepted"].is_object()
                 && seen
                     .iter()
-                    .any(|c| c["result"]["checkpoint"]["state"]["Accepted"].is_object()),
+                    .any(|c| c["result"]["state"]["Accepted"].is_object()),
             "resumed worker did not observe the recorded acceptance",
         )?;
         gate.control(agent, "resume_replay")?;
