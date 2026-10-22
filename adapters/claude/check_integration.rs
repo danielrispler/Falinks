@@ -241,7 +241,13 @@ impl Gate {
             .relocate(session, &name(agent))?;
         }
         let gofmt = self.go.with_file_name("gofmt");
-        let host = EngineHost::new(engine, client.clone(), &name(agent), gofmt);
+        let host = EngineHost::new(
+            engine,
+            client.clone(),
+            &name(agent),
+            gofmt,
+            launch.scratch.clone(),
+        );
         let runtime = Runtime::new(
             &self.binary,
             &launch,

@@ -664,6 +664,7 @@ fn setup(
         eval,
         oracle,
         denied,
+        [0, 1].map(|a| dir.join(agent_name(a)).join("scratch")),
     );
     let workflow = fs::read_to_string(evaluation.join("instructions/falinks.md"))?;
     let root = engine.root(arm.client(0))?;
