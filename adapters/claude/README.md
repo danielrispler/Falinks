@@ -4,12 +4,12 @@ Issue [#33](https://github.com/danielrispler/Falinks/issues/33) ports the [#23](
 
 ## Run
 
-Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) and Claude Code `2.1.304`, whose per-platform SHA-256 is in `PINS`. On Linux use the glibc `linux-x64`/`linux-arm64` release binary and meet the Linux adapter requirements there. Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
+Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) and Claude Code `2.1.308`, whose per-platform SHA-256 is in `PINS`. On Linux use the glibc `linux-x64`/`linux-arm64` release binary and meet the Linux adapter requirements there. Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
 
 ```sh
 cargo build --release --bins
 ./target/release/check-claude-adapter \
-  --binary /path/to/pinned/claude-2.1.304 \
+  --binary /path/to/pinned/claude-2.1.308 \
   --output /path/to/current-claude-controls.json
 ```
 
@@ -77,7 +77,7 @@ These are finite probes on one binary and machine; any version change requires r
 ```sh
 cargo build --release --bins
 ./target/release/check-integration \
-  --binary /path/to/pinned/claude-2.1.304 \
+  --binary /path/to/pinned/claude-2.1.308 \
   --output /path/to/integration-report.json
 ```
 
