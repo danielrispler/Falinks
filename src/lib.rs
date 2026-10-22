@@ -10,10 +10,11 @@ pub use analysis::{Evidence, Language, Owner, Pin, Tool, Toolchain, Unit, sha256
 pub use contain::helper_main;
 pub use coordination::{
     Availability, Body, Cancel, Checkpoint, Condition, Decision, Event, Kind, Message, Obligation,
-    Offer, Pending, Plan, Reply, Review, Scope, WaitOutcome, Work,
+    Offer, Offered, Pending, Plan, Reply, Review, Scope, WaitOutcome, Work,
 };
 pub use publication::{
-    Binding, Candidate, Check, CheckResult, Run, RunAttempt, RunKind, RunOutcome, Stage,
+    Binding, Candidate, Check, CheckResult, Coverage, Run, RunAttempt, RunKind, RunOutcome, Stage,
+    Unqueued,
 };
 pub use regroup::{Action, ProposalState, Propose, RegroupingProposal, Response, Signals};
 use rusqlite::{Connection, OptionalExtension, params};

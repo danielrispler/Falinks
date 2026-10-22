@@ -90,7 +90,12 @@ impl EngineHost {
             "review" => {
                 json!({"accepted":true,"obligation":engine.review(client, parse(request)?)?})
             }
-            "offer" => json!({"accepted":true,"checkpoint":engine.offer(client, parse(request)?)?}),
+            "offer" => {
+                let offered = engine.offer(client, parse(request)?)?;
+                let coverage = offered.coverage;
+                json!({"accepted":true,"checkpoint":offered.checkpoint,"missing":coverage.missing,
+                    "queued":coverage.queued,"reason":coverage.reason})
+            }
             "handle" => {
                 let deferred: Option<BTreeMap<u64, String>> = parse(&request["deferred"])?;
                 let processed: Option<Vec<u64>> = parse(&request["processed"])?;
