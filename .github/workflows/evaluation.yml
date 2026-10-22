@@ -24,8 +24,9 @@ env:
 jobs:
   evaluation:
     # Sandboxed Go/Cargo checks are slow and time out under contention, so each
-    # shard runs serially on its own runner. Shards are balanced by measured test
-    # time; the last shard takes every other test, so keep its skips in step.
+    # shard runs serially on its own runner. Shards are balanced by each test's
+    # worst time in runs 39766522074 and 39764928341; the last shard takes every
+    # other test, so keep its skips in step.
     # Four shards plus the checks.yml macos job fill the free plan's five
     # concurrent macOS runners; a fifth shard would queue. Linux runners have their
     # own quota, so the same shards run there on the Landlock backend (#56).
@@ -36,10 +37,10 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest]
         tests:
-          - batch_gates_pauses batch_tells_a_gate
-          - fixture_shard_runs oracles_reject_compiling
-          - frozen_oracles claude_bridge codex_bridge baseline_exchanges
-          - --skip batch_gates_pauses --skip batch_tells_a_gate --skip fixture_shard_runs --skip oracles_reject_compiling --skip frozen_oracles --skip claude_bridge --skip codex_bridge --skip baseline_exchanges
+          - frozen_oracles baseline_retains fixture_shard_runs
+          - nested_agents_invalidate two_agent_runs
+          - oracle_blocks track_t_batch usage_is_complete
+          - --skip frozen_oracles --skip baseline_retains --skip fixture_shard_runs --skip nested_agents_invalidate --skip two_agent_runs --skip oracle_blocks --skip track_t_batch --skip usage_is_complete
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
