@@ -1668,8 +1668,9 @@ func TestLabel(t *testing.T) {
     assert_eq!(quality["measurement"]["batch_commits"], json!(["f00d"]));
     assert!(quality["measurement"]["commit"].is_string());
     // Produce still returns []string, so the suite does not compile: missing, with the error.
-    let mut go = quality["runs"]["go-relationships-1-falinks"]["metrics"].clone();
-    let uncompiled = go["failing_properties"].take();
+    let go = &quality["runs"]["go-relationships-1-falinks"];
+    let mut go_metrics = go["metrics"].clone();
+    let uncompiled = go_metrics["failing_properties"].take();
     let uncompiled = uncompiled["missing"].as_str().unwrap();
     assert!(
         uncompiled.starts_with("the property suite does not compile")
@@ -1677,7 +1678,7 @@ func TestLabel(t *testing.T) {
         "{uncompiled}"
     );
     assert_eq!(
-        go,
+        go_metrics,
         json!({"failing_properties": null, "production_lines_changed": {"value": 9},
             "test_lines_added": {"value": 13}, "test_functions": {"value": 2},
             "vet_findings": {"value": 1, "lints": {"printf": 1}}}),
