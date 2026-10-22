@@ -1,0 +1,41 @@
+{
+  "hashes": {
+    "Cargo.lock": "0454ca05e92d6fb25d47c4938537690e9c6365a6909355a1919bbf748a2d70fd",
+    "Cargo.toml": "1c6bc262c1b4b81b4c7bd5ae291db2fc06de3578cd672c060337c0ebe5ae9ec0",
+    "code-quality.json": "dce9c0a9d6019f85c46d287ac42a0b6e9f98e1e0d6210a3ab952b185a5fe8d5a",
+    "config.json": "558c95c16fb9293560ee952ef413a9154c887546af8e99b584251ab51061977e",
+    "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
+    "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
+    "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
+    "fixtures/go-relationships.json": "3f3cdd1d1b061b9dcee056ea77a9fec999326684309b1ece06785ffb346b764e",
+    "fixtures/rust-errors.json": "c1ef8768913cd2e7278ae92bf64be61e6b25782814345d0e56d74bfe92002b0e",
+    "instructions/falinks.md": "89e065ab6a629d86dd29f22a05a1eb3c3a0604e21e1965b2eede94916a083283",
+    "instructions/git-solo.md": "b535ddefe9edc94ac1d58063fc8f910bf5a2ecfd1524a86da3b6de5d375057fb",
+    "instructions/git.md": "5324fe674118b8e5fcd0d0464a4c1e9e1f599adf1a493ae7257d950a0c72ec0e",
+    "protected/go-indep-2.json": "ca704d1af86e8df6caa79289f70d6dbc7c941e091bb47f65648dd3dde2909905",
+    "protected/go-indep-4.json": "b10e6fd972fdc9f67777952e9aef7fbb9334765a74b0a662639f386ef5f699fc",
+    "protected/go-page.json": "30c91a06e9c56e6449e77a029eaf05c89c84bd4b620b1f7bc9a3671a3bb658d2",
+    "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
+    "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
+    "result-schema.json": "40096661322cbd53c37845a6194415d292d8708a8933bea15de47f96479d0fce",
+    "src/baseline.rs": "38c80504ecde134ca4e726fee02e05dfbb22b2081a5d87b0d2b694416c77417e",
+    "src/batch.rs": "593a516c5cf11b00f741b6f10ce41caaae1fcff858320632646d214ba1007389",
+    "src/bin/claude-worker.rs": "c6e206e6e5d21c96b937bfda1f9040f320aef6c1c613f386f9ab9a07906675a1",
+    "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
+    "src/bin/falinks-eval-contain.rs": "c5c53fad8087a3b8d6cf3f31f04b96ae2946dfa530093d9b902c307871513a10",
+    "src/bin/scripted-worker.rs": "3f2880258291e4a73cb5dda92f486c3df2f35da3b24b65501cbd1aae413e014a",
+    "src/main.rs": "ff0efc7f4bf66233a62f4c358a589e638d06bde6fdce131c3802e8d343a2535a",
+    "src/quality.rs": "ba2e9e36e1705efbcb35cff2012f27552181b6a9faf05293c237aa6e656e2eb1",
+    "src/report.rs": "dd0577f2eabefbdd741d9b5b45a6112c5ffe1fe765ba5411f11cd3d889711d3a",
+    "src/timing.rs": "826e0b76ea8607213c58916a773283bbdc219919975ea9b9e37ac07932e034eb",
+    "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
+  },
+  "initial_commits": {
+    "go-indep-2": "5d12ee62675dcf2e2914885bee4814f851d4272f",
+    "go-indep-4": "0c2ee2010de23d95296a2bad0e3e4bbe7553e9ff",
+    "go-page": "0a9b7fb1c3ffc994d6748860c0c2dafb4a1d969b",
+    "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
+    "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
+  },
+  "version": 27
+}

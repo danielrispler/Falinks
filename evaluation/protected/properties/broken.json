@@ -1,0 +1,73 @@
+{
+  "rust-errors": {
+    "R1": {
+      "file": "src/catalog.rs",
+      "old": "Missing { key: key.into() }",
+      "new": "Missing { key: key.trim().into() }"
+    },
+    "R2": {
+      "file": "src/consumer.rs",
+      "old": "try_fold(0,",
+      "new": "try_fold(1,"
+    },
+    "R3": {
+      "file": "src/consumer.rs",
+      "old": "keys.iter().try_fold",
+      "new": "keys.iter().rev().try_fold"
+    },
+    "R4": {
+      "file": "src/consumer.rs",
+      "old": "format!(\"missing:{key}\")",
+      "new": "format!(\"missing: {key}\")"
+    }
+  },
+  "go-page": {
+    "G1": {
+      "file": "handler.go",
+      "old": "item.Kind == kind",
+      "new": "len(item.Kind) >= len(kind) && item.Kind[:len(kind)] == kind"
+    },
+    "G2": {
+      "file": "handler.go",
+      "old": "kind := r.URL.Query().Get(\"kind\")",
+      "new": "kind := r.URL.Query().Get(\"kind\")\n        if len(items) > 1 { items[0], items[1] = items[1], items[0] }"
+    },
+    "G3": {
+      "file": "handler.go",
+      "old": "selected = selected[:limit]",
+      "new": "selected = selected[:limit+1]"
+    },
+    "G4": {
+      "file": "handler.go",
+      "old": "exists {",
+      "new": "exists && raw[0] != \"\" {"
+    },
+    "G5": {
+      "file": "handler.go",
+      "old": "\"application/json\"",
+      "new": "\"application/json; charset=utf-8\""
+    }
+  },
+  "go-relationships": {
+    "L1": {
+      "file": "producer.go",
+      "old": "Text:text}",
+      "new": "Text:line}"
+    },
+    "L2": {
+      "file": "consumer.go",
+      "old": "\"%d:%s\"",
+      "new": "\"%d: %s\""
+    },
+    "L3": {
+      "file": "consumer.go",
+      "old": "strings.Join(Consume(records), \"\\n\")",
+      "new": "strings.Join(Consume(records), \"\\n\") + \"\\n\""
+    },
+    "L4": {
+      "file": "producer.go",
+      "old": "len(lines)-kept",
+      "new": "len(lines)"
+    }
+  }
+}

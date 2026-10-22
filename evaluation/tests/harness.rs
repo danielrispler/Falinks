@@ -1567,10 +1567,18 @@ func TestLabel(t *testing.T) {
         assert!(!run.join("quality.json").exists());
     }
     let quality = read(batch.join("quality.json"));
+    // The real gates hold. The String errors still compile against the property suite: R2's
+    // sums match the reference, while lookup's errors (R1), total's first error (R3) and
+    // describe (R4) differ.
+    assert_eq!(
+        quality["property_gates"],
+        json!({"go-relationships": "passed", "rust-errors": "passed"})
+    );
     let rust = &quality["runs"]["rust-errors-1-git"];
     assert_eq!(
         rust["metrics"],
-        json!({"production_lines_changed": {"value": 10}, "test_lines_added": {"value": 14},
+        json!({"failing_properties": {"value": 3, "properties": ["R1", "R3", "R4"]},
+            "production_lines_changed": {"value": 10}, "test_lines_added": {"value": 14},
             "test_functions": {"value": 2},
             "clippy_findings": {"value": 1, "lints": {"clippy::needless_return": 1}}}),
         "{rust}"
@@ -1581,15 +1589,28 @@ func TestLabel(t *testing.T) {
     assert!(rust["go_note"].as_str().unwrap().contains("go0.0"));
     assert_eq!(quality["measurement"]["batch_commits"], json!(["f00d"]));
     assert!(quality["measurement"]["commit"].is_string());
-    let go = &quality["runs"]["go-relationships-1-falinks"];
+    // Produce still returns []string, so the suite does not compile: missing, with the error.
+    let mut go = quality["runs"]["go-relationships-1-falinks"]["metrics"].clone();
+    let uncompiled = go["failing_properties"].take();
+    let uncompiled = uncompiled["missing"].as_str().unwrap();
+    assert!(
+        uncompiled.starts_with("the property suite does not compile")
+            && uncompiled.contains("Record"),
+        "{uncompiled}"
+    );
     assert_eq!(
-        go["metrics"],
-        json!({"production_lines_changed": {"value": 9}, "test_lines_added": {"value": 13},
-            "test_functions": {"value": 2}, "vet_findings": {"value": 1, "lints": {"printf": 1}}}),
+        go,
+        json!({"failing_properties": null, "production_lines_changed": {"value": 9},
+            "test_lines_added": {"value": 13}, "test_functions": {"value": 2},
+            "vet_findings": {"value": 1, "lints": {"printf": 1}}}),
         "{go}"
     );
     let broken = &quality["runs"]["rust-errors-1-falinks"]["metrics"];
-    for metric in ["production_lines_changed", "clippy_findings"] {
+    for metric in [
+        "production_lines_changed",
+        "clippy_findings",
+        "failing_properties",
+    ] {
         let reason = broken[metric]["missing"].as_str().unwrap();
         assert!(reason.starts_with("rustfmt failed"), "{reason}");
     }
@@ -1617,10 +1638,85 @@ func TestLabel(t *testing.T) {
     assert!(treatment.contains("fixes the file set") && treatment.contains("rustfmt job"));
     let rust = &report["fixtures"]["rust-errors"]["code_quality"];
     assert_eq!(rust["git"]["clippy_findings"]["values"], json!([1.0]));
+    assert_eq!(rust["git"]["failing_properties"]["values"], json!([3.0]));
+    assert_eq!(
+        rust["git"]["failing_properties"]["properties"],
+        json!([["R1", "R3", "R4"]])
+    );
     assert!(
         rust["falinks"]["clippy_findings"]["missing_reasons"][0]
             .as_str()
             .unwrap()
             .starts_with("rustfmt failed")
     );
+}
+
+/// #231, #228 decision 13: when the reference fails a property, or a broken copy passes its
+/// property, the fixture gets no property values, and every run's reason names the property
+/// and the gate. The other metrics are still measured.
+#[test]
+fn property_gates_withhold_values_and_name_the_property() {
+    let tmp = tmp("falinks-gates-");
+    let batch = tmp.path().join("batch");
+    let run = batch.join("rust-errors-1-git");
+    let reference = reference("rust-errors");
+    let files: Vec<(&str, &str)> = reference
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str().unwrap()))
+        .collect();
+    let sha = snapshot("rust-errors", &run.join("agents/repo"), &files);
+    fs::create_dir_all(run.join("controller")).unwrap();
+    fs::write(
+        run.join("controller/result.json"),
+        json!({"arm": "git", "outcome": "success", "final_snapshot": sha}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        batch.join("batch.json"),
+        json!({"runs": [{"run_dir": run, "run_id": "rust-errors-1-git", "pair": "rust-errors-1",
+            "fixture": "rust-errors", "arm": "git", "scored": true}], "invocations": []})
+        .to_string(),
+    )
+    .unwrap();
+    let real = root().join("protected/properties");
+    let suite = fs::read_to_string(real.join("rust-errors.rs")).unwrap();
+    let broken = fs::read_to_string(real.join("broken.json")).unwrap();
+
+    // A suite one input short on every property: the reference fails R1 first. A no-op edit
+    // (formatting removes the space) as R2's broken copy: it passes R2.
+    for (suite, broken, reason) in [
+        (
+            suite.replace("INPUTS: usize = 500", "INPUTS: usize = 499"),
+            broken.clone(),
+            "property R1 failed the reference gate",
+        ),
+        (
+            suite.clone(),
+            broken.replace(r#""new": "try_fold(1,""#, r#""new": "try_fold(0 ,""#),
+            "property R2 failed the broken-copy gate: its broken copy passes it",
+        ),
+    ] {
+        let suites = tmp.path().join("suites");
+        fs::create_dir_all(&suites).unwrap();
+        fs::write(suites.join("rust-errors.rs"), suite).unwrap();
+        fs::write(suites.join("broken.json"), broken).unwrap();
+        let measured = Command::new(CLI)
+            .args(["quality", "--runs", batch.to_str().unwrap()])
+            .env("FALINKS_PROPERTY_SUITES", &suites)
+            .output()
+            .unwrap();
+        assert!(measured.status.success(), "{}", text(&measured));
+        let quality = read(batch.join("quality.json"));
+        let gate = quality["property_gates"]["rust-errors"].as_str().unwrap();
+        assert!(gate.starts_with(reason), "{gate}");
+        let metrics = &quality["runs"]["rust-errors-1-git"]["metrics"];
+        assert_eq!(metrics["failing_properties"], json!({"missing": gate}));
+        assert_eq!(metrics["test_functions"], json!({"value": 0}));
+        assert_eq!(
+            quality["measurement"]["property_suites"],
+            suites.to_str().unwrap()
+        );
+    }
 }

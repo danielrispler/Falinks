@@ -4,18 +4,22 @@
 //! fixture's `code_quality`. Only runs whose final oracle passed are measured. Each measured
 //! run's final snapshot is exported from its arm's own run storage; the pinned formatters run
 //! on copies of it, of the initial tree and of the reference, and every metric uses those
-//! copies. Formatters and lints run through the oracle's contained check path.
+//! copies. Formatters, lints and the differential property suites (#231) run through the
+//! oracle's contained check path.
 use crate::{
     Output, Result, SCRATCH_DIRS, Sandbox, bail, blobs, check_denied, check_env, command, fixture,
     frozen, git, protected, read, resolve, restore, root, strings, utc_now, write,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 type Files = BTreeMap<String, Vec<u8>>;
+/// Each property's output lines, by property ID.
+type Outputs = BTreeMap<String, Vec<String>>;
 
 const TIMEOUT: Duration = Duration::from_secs(300);
 const VERSIONS: [(&str, &[&str]); 4] = [
@@ -61,6 +65,17 @@ impl Contained {
         self.runs.set(self.runs.get() + 1);
         let work = self.work();
         restore(&work, files)?;
+        let output = self.exec(argv, rewrite)?;
+        let mut after = Files::new();
+        for name in files.keys() {
+            after.insert(name.clone(), fs::read(work.join(name))?);
+        }
+        Ok((output, after))
+    }
+
+    /// Runs argv again in the latest run's copy.
+    fn exec(&self, argv: &[&str], rewrite: bool) -> Result<Output> {
+        let work = self.work();
         let writable = if rewrite {
             vec![work.clone()]
         } else {
@@ -72,17 +87,79 @@ impl Contained {
             reopened: Vec::new(),
             network: false,
         };
-        let output = command(
+        command(
             &sandbox.wrap(strings(argv))?,
             &work,
             &check_env(&work),
             TIMEOUT,
-        )?;
-        let mut after = Files::new();
-        for name in files.keys() {
-            after.insert(name.clone(), fs::read(work.join(name))?);
+        )
+    }
+
+    /// The property suite's output on `files`, without their test files, as the oracle runs
+    /// (#228 decisions 12 and 14); the compiler's error when the suite does not compile.
+    fn properties(&self, files: &Files, rust: bool, suite: &[u8]) -> Result<Outputs> {
+        let mut files: Files = files
+            .iter()
+            .filter(|(n, _)| !test_file(n))
+            .map(|(n, d)| (n.clone(), d.clone()))
+            .collect();
+        // shortcut: the crate name is rust-errors'; read Cargo.toml if a second Rust fixture is scored.
+        let builds: &[&[&str]] = if rust {
+            files.insert("properties.rs".into(), suite.to_vec());
+            &[
+                &[
+                    "rustc",
+                    "--edition=2021",
+                    "--crate-name",
+                    "catalog",
+                    "--crate-type",
+                    "lib",
+                    "src/lib.rs",
+                    "-o",
+                    "bin/libcatalog.rlib",
+                ],
+                &[
+                    "rustc",
+                    "--edition=2021",
+                    "properties.rs",
+                    "--extern",
+                    "catalog=bin/libcatalog.rlib",
+                    "-o",
+                    "bin/properties",
+                ],
+            ]
+        } else {
+            files.insert("falinks_properties_test.go".into(), suite.to_vec());
+            &[&["go", "test", "-c", "-vet=off", "-o", "bin/properties", "."]]
+        };
+        self.run(&files, &["true"], false)?;
+        for argv in builds {
+            let output = self.exec(argv, false)?;
+            if !output.success {
+                bail!(
+                    "the property suite does not compile: {}",
+                    output.text().trim()
+                );
+            }
         }
-        Ok((output, after))
+        let binary = self.work().join("bin/properties");
+        let binary = binary.to_string_lossy();
+        let mut argv = vec![binary.as_ref()];
+        if !rust {
+            argv.extend(["-test.run", "^TestFalinksProperties$"]);
+        }
+        let output = self.exec(&argv, false)?;
+        // A crash ends the output early; the missing lines fail their properties.
+        let mut outputs = Outputs::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Some((_, rest)) = line.split_once("falinks-property ") else {
+                continue;
+            };
+            if let Some((id, rest)) = rest.split_once(' ') {
+                outputs.entry(id.into()).or_default().push(rest.into());
+            }
+        }
+        Ok(outputs)
     }
 
     /// The pinned formatter over every source file (#228 decision 6); its error otherwise.
@@ -208,10 +285,15 @@ fn changed(old: &[&str], new: &[&str]) -> (Vec<usize>, Vec<usize>) {
     (removed, added)
 }
 
+/// A whole test file: Go `_test.go`, or Rust under `tests/`.
+fn test_file(name: &str) -> bool {
+    name.ends_with("_test.go") || (name.starts_with("tests/") && name.ends_with(".rs"))
+}
+
 /// Whether each line of a file is test code: Go `_test.go` files, Rust files under `tests/`,
 /// and Rust `#[cfg(test)]` items (#228 decision 2).
 fn test_lines(name: &str, lines: &[&str]) -> Vec<bool> {
-    if name.ends_with("_test.go") || (name.starts_with("tests/") && name.ends_with(".rs")) {
+    if test_file(name) {
         return vec![true; lines.len()];
     }
     let mut test = vec![false; lines.len()];
@@ -319,8 +401,99 @@ fn final_snapshot(run_dir: &Path, result: &Value) -> Result<Files> {
     blobs(&repo, sha)
 }
 
-/// One fixture's formatted initial tree and the formatted reference's own figure.
-fn baseline(space: &Contained, name: &str) -> Result<(Files, bool, Value)> {
+/// The property suites and broken copies: host-only, beside the oracles. Tests point
+/// `FALINKS_PROPERTY_SUITES` at their own.
+fn suites() -> PathBuf {
+    env::var_os("FALINKS_PROPERTY_SUITES")
+        .map_or_else(|| root().join("protected/properties"), PathBuf::from)
+}
+
+/// A fixture's property suite and the reference's output, once both gates hold.
+struct Gated {
+    suite: Vec<u8>,
+    expected: Outputs,
+}
+
+/// The two gates of #228 decision 13, checked before any property value: the reference passes
+/// every property, and each property fails on its broken copy. The reason names the property
+/// and the gate.
+fn gates(space: &Contained, name: &str, rust: bool, reference: &Files) -> Result<Gated> {
+    let definitions = read(root().join("code-quality.json"))?;
+    let properties = &definitions["properties"];
+    let inputs = properties["inputs_per_property"]
+        .as_u64()
+        .ok_or("code-quality.json has no inputs_per_property")? as usize;
+    let ids: Vec<&str> = properties["list"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["fixture"] == name)
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    let suite = suites().join(if rust {
+        format!("{name}.rs")
+    } else {
+        format!("{name}_test.go")
+    });
+    let suite = fs::read(&suite).map_err(|e| format!("{}: {e}", suite.display()))?;
+    let broken = read(suites().join("broken.json"))?;
+    let formatted = space.format(reference, rust)?;
+    let expected = space
+        .properties(&formatted, rust, &suite)
+        .map_err(|e| format!("the reference gate failed: {e}"))?;
+    for id in &ids {
+        let lines = expected.get(*id).map_or(&[][..], Vec::as_slice);
+        let passes = lines.len() == inputs
+            && lines.iter().enumerate().all(|(i, line)| {
+                line.split_once(' ')
+                    .is_some_and(|(at, value)| at == i.to_string() && value != "panic")
+            });
+        if !passes {
+            return Err(format!(
+                "property {id} failed the reference gate: the reference gave {} of {inputs} inputs without a panic",
+                lines.len()
+            )
+            .into());
+        }
+    }
+    for id in &ids {
+        let failed = |why: String| format!("property {id} failed the broken-copy gate: {why}");
+        let edit = &broken[name][id];
+        let (Some(file), Some(old), Some(new)) = (
+            edit["file"].as_str(),
+            edit["old"].as_str(),
+            edit["new"].as_str(),
+        ) else {
+            return Err(failed("it has no broken copy".into()).into());
+        };
+        let text = String::from_utf8_lossy(reference.get(file).map_or(&[][..], Vec::as_slice))
+            .into_owned();
+        if text.matches(old).count() != 1 {
+            return Err(failed(format!("its edit does not occur exactly once in {file}")).into());
+        }
+        let mut copy = reference.clone();
+        copy.insert(file.into(), text.replacen(old, new, 1).into_bytes());
+        let got = space
+            .format(&copy, rust)
+            .and_then(|copy| space.properties(&copy, rust, &suite))
+            .map_err(|e| failed(e.to_string()))?;
+        if got.get(*id) == expected.get(*id) {
+            return Err(failed("its broken copy passes it".into()).into());
+        }
+    }
+    Ok(Gated { suite, expected })
+}
+
+/// One fixture's formatted initial tree, the formatted reference's own figure, and its
+/// gated property suite or the gate's reason.
+struct Baseline {
+    initial: Files,
+    rust: bool,
+    figure: Value,
+    properties: std::result::Result<Gated, String>,
+}
+
+fn baseline(space: &Contained, name: &str) -> Result<Baseline> {
     let fixture = fixture(name)?;
     let rust = fixture["language"] == "rust";
     let files = |value: &Value| -> Files {
@@ -343,11 +516,18 @@ fn baseline(space: &Contained, name: &str) -> Result<(Files, bool, Value)> {
         Ok(reference) => json!({"value": change(&initial, &reference).production_lines_changed}),
         Err(error) => missing(error),
     };
-    Ok((initial, rust, figure))
+    let properties = gates(space, name, rust, &reference).map_err(|e| e.to_string());
+    Ok(Baseline {
+        initial,
+        rust,
+        figure,
+        properties,
+    })
 }
 
 /// One oracle-passing run's metrics; a tool failure makes only its own metrics missing.
-fn measure(space: &Contained, initial: &Files, rust: bool, last: &Files) -> Value {
+fn measure(space: &Contained, base: &Baseline, last: &Files) -> Value {
+    let (initial, rust) = (&base.initial, base.rust);
     let lint_metric = if rust {
         "clippy_findings"
     } else {
@@ -358,6 +538,7 @@ fn measure(space: &Contained, initial: &Files, rust: bool, last: &Files) -> Valu
         "test_lines_added",
         "test_functions",
         lint_metric,
+        "failing_properties",
     ];
     let last = match space.format(last, rust) {
         Ok(last) => last,
@@ -382,7 +563,23 @@ fn measure(space: &Contained, initial: &Files, rust: bool, last: &Files) -> Valu
         }
         Err(error) => missing(error),
     };
+    // #228 decision 12: the number of properties whose output differs from the reference's.
+    let properties = match &base.properties {
+        Err(reason) => missing(reason),
+        Ok(gated) => match space.properties(&last, rust, &gated.suite) {
+            Ok(got) => {
+                let failing: Vec<&String> = gated
+                    .expected
+                    .keys()
+                    .filter(|id| got.get(*id) != gated.expected.get(*id))
+                    .collect();
+                json!({"value": failing.len(), "properties": failing})
+            }
+            Err(error) => missing(error),
+        },
+    };
     json!({
+        "failing_properties": properties,
         "production_lines_changed": {"value": diff.production_lines_changed},
         "test_lines_added": {"value": diff.test_lines_added},
         "test_functions": {"value": diff.test_functions},
@@ -440,8 +637,10 @@ pub fn quality(dirs: &[&Path]) -> Result<i32> {
             measurement["batch_commit_note"] =
                 "batch.json records no commit: it predates #230".into();
         }
-        let mut fixtures: BTreeMap<String, std::result::Result<(Files, bool, Value), String>> =
-            BTreeMap::new();
+        if let Some(suites) = env::var_os("FALINKS_PROPERTY_SUITES") {
+            measurement["property_suites"] = suites.to_string_lossy().into();
+        }
+        let mut fixtures: BTreeMap<String, std::result::Result<Baseline, String>> = BTreeMap::new();
         let mut runs = Map::new();
         for entry in ledger["runs"].as_array().into_iter().flatten() {
             let id = entry["run_id"].as_str().unwrap_or_default();
@@ -468,7 +667,7 @@ pub fn quality(dirs: &[&Path]) -> Result<i32> {
             let base = fixtures
                 .entry(name.clone())
                 .or_insert_with(|| baseline(&space, &name).map_err(|e| e.to_string()));
-            let (initial, rust, reference) = match base {
+            let base = match base {
                 Ok(base) => base,
                 Err(error) => {
                     record["missing"] = format!("initial tree: {error}").into();
@@ -478,9 +677,9 @@ pub fn quality(dirs: &[&Path]) -> Result<i32> {
             };
             record["versions"] = versions.clone().into();
             record["go_note"] = json!(go_note);
-            record["reference_production_lines_changed"] = reference.clone();
+            record["reference_production_lines_changed"] = base.figure.clone();
             record["metrics"] = match final_snapshot(&run_dir, &result) {
-                Ok(last) => measure(&space, initial, *rust, &last),
+                Ok(last) => measure(&space, base, &last),
                 Err(error) => {
                     record["missing"] = format!("final snapshot: {error}").into();
                     Value::Null
@@ -488,9 +687,26 @@ pub fn quality(dirs: &[&Path]) -> Result<i32> {
             };
             runs.insert(id.into(), record);
         }
+        // Gate evidence per measured fixture (#228 decision 13).
+        let gates: Map<String, Value> = fixtures
+            .iter()
+            .map(|(name, base)| {
+                let gate = match base {
+                    Ok(Baseline {
+                        properties: Ok(_), ..
+                    }) => "passed".to_string(),
+                    Ok(Baseline {
+                        properties: Err(reason),
+                        ..
+                    }) => reason.clone(),
+                    Err(error) => format!("initial tree: {error}"),
+                };
+                (name.clone(), gate.into())
+            })
+            .collect();
         write(
             dir.join("quality.json"),
-            &json!({"measurement": measurement, "runs": runs}),
+            &json!({"measurement": measurement, "property_gates": gates, "runs": runs}),
         )?;
         println!("{}", dir.join("quality.json").display());
     }
