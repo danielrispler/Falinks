@@ -100,11 +100,14 @@ struct EditCall {
 }
 
 /// MCP definitions: every engine operation plus the evaluation-host tools.
-pub fn tools(workspace: &Path) -> Value {
-    let mut tools = engine_host::tools(workspace);
+pub fn tools() -> Value {
+    let mut tools = engine_host::tools();
     let list = tools.as_array_mut().expect("tool list");
     for (operation, help) in HOST_TOOLS {
-        list.push(tool(operation, format!("Evaluation host {operation}: {help} Call with {{\"workspace\": \"{}\", \"request\": {{...}}}}.", workspace.display())));
+        list.push(tool(
+            operation,
+            format!("Evaluation host {operation}: {help}"),
+        ));
     }
     tools
 }
@@ -130,7 +133,7 @@ pub fn prompt(
     format!(
         "[Falinks host] You are {name} (agent {letter} in the task allocation), one of two agents implementing a small software task together. \
          Your live workspace is {root}; read it with Read, Grep or Glob. It shows your peer's unfinished edits as they happen. \
-         You cannot write it directly: change source only with falinks tools, each called as {{\"workspace\": \"{root}\", \"request\": {{...}}}}. \
+         You cannot write it directly: change source only with falinks tools, each taking its request as its whole input. \
          Your current directory is a private scratch directory where you may copy files and run builds or tests with Bash. \
          Engine events, host notices and task developments arrive as messages starting with \"Host notice\". \
          When you have nothing to do until the next event, end your turn; the next event starts a new turn. Do not run long sleeps or polling loops. \
@@ -450,9 +453,22 @@ impl Arm {
             return Ok(refuse("you declared ready; no further edits"));
         }
         let result = match operation {
-            "ack" => self.ack(agent, request),
-            "ready" => self.ready(agent)?,
-            "check" => self.check(agent)?,
+            "ack" | "ready" | "check" => {
+                let required: &[&str] = if operation == "ack" {
+                    &["milestone"]
+                } else {
+                    &[]
+                };
+                match (
+                    operation,
+                    engine_host::keys(request, operation, required, &[]),
+                ) {
+                    (_, Err(error)) => refuse(&error.to_string()),
+                    ("ack", _) => self.ack(agent, request),
+                    ("ready", _) => self.ready(agent)?,
+                    _ => self.check(agent)?,
+                }
+            }
             _ => self.hosts[agent].call(envelope)?,
         };
         if result["accepted"] == false {

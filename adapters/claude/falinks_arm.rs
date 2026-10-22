@@ -135,7 +135,7 @@ impl Run {
                 .filter(|s| *s != root),
         );
         Ok(Launch {
-            tools: arm::tools(&root),
+            tools: arm::tools(),
             source: root,
             scratch: mine.join("scratch"),
             controller: mine.join("controller"),

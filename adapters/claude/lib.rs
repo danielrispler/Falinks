@@ -247,7 +247,7 @@ impl Launch {
     pub fn fixture(root: &Path) -> Self {
         let source = root.join("source");
         Self {
-            tools: falinks_host::tools(&source.to_string_lossy()),
+            tools: falinks_host::tools(),
             source,
             scratch: root.join("scratch"),
             controller: root.join("controller"),

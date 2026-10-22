@@ -95,7 +95,7 @@ fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result
     let result = (|| -> Result<()> {
         let original = hash(b"original\n");
         runtime.start(&format!(
-            "This is a Falinks fixture workflow on sacrificial files. Workspace: {ws}. Every falinks tool takes {{\"workspace\": \"{ws}\", \"request\": {{...}}}} with the named fields inside request. Make one tool call at a time, in order:\n1. Bash: run exactly `{probe}` (do not change it) and keep its FALINKS_CONTROLS line.\n2. Read tool: read {secret} (it may be unavailable; just note the outcome).\n3. Call falinks_edit with request exactly {edit}.\n4. Bash: run `cat {ws}/source.txt`.\nA host notice may arrive while you work; it names further falinks calls. Follow it, then finish with a one-line summary.",
+            "This is a Falinks fixture workflow on sacrificial files. Workspace: {ws}. Every falinks tool takes the named fields as its whole input. Make one tool call at a time, in order:\n1. Bash: run exactly `{probe}` (do not change it) and keep its FALINKS_CONTROLS line.\n2. Read tool: read {secret} (it may be unavailable; just note the outcome).\n3. Call falinks_edit with input exactly {edit}.\n4. Bash: run `cat {ws}/source.txt`.\nA host notice may arrive while you work; it names further falinks calls. Follow it, then finish with a one-line summary.",
             ws = workspace.display(),
             probe = probe_command(&root, "original\n")?,
             secret = root.join("validation/secret.txt").display(),
@@ -204,7 +204,7 @@ fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result
     let result = (|| -> Result<()> {
         let revision = hash(b"engine_updated\n");
         resumed.start(&format!(
-            "Continue the Falinks fixture workflow. Workspace: {ws}. Every falinks tool takes {{\"workspace\": \"{ws}\", \"request\": {{...}}}}. Make one tool call at a time, in order:\n1. Call falinks_offer with request {{\"expected_hash\": \"{revision}\"}}.\n2. Bash: run exactly `{probe}` (do not change it).\n3. Bash: run `cat {ws}/source.txt` and reassess it.\n4. Call falinks_review with request {{\"event\": \"E1\", \"action\": \"keep\", \"reviewed_hash\": \"{revision}\"}}.\n5. Call falinks_review with request {{\"event\": \"E2\", \"action\": \"keep\", \"reviewed_hash\": \"{revision}\"}}.\n6. Call falinks_offer with request {{\"expected_hash\": \"{revision}\"}} again.\nThen finish with a one-line summary.",
+            "Continue the Falinks fixture workflow. Workspace: {ws}. Every falinks tool takes the named fields as its whole input. Make one tool call at a time, in order:\n1. Call falinks_offer with input {{\"expected_hash\": \"{revision}\"}}.\n2. Bash: run exactly `{probe}` (do not change it).\n3. Bash: run `cat {ws}/source.txt` and reassess it.\n4. Call falinks_review with input {{\"event\": \"E1\", \"action\": \"keep\", \"reviewed_hash\": \"{revision}\"}}.\n5. Call falinks_review with input {{\"event\": \"E2\", \"action\": \"keep\", \"reviewed_hash\": \"{revision}\"}}.\n6. Call falinks_offer with input {{\"expected_hash\": \"{revision}\"}} again.\nThen finish with a one-line summary.",
             ws = workspace.display(),
             probe = probe_command(&root, "engine_updated\n")?,
         ))?;

@@ -255,21 +255,17 @@ impl ControlGate {
     }
 }
 
-/// One MCP tool definition: `falinks_<operation>` taking `{workspace, request}`, the
-/// argument shape `Boundary::authenticate` accepts.
+/// One MCP tool definition: `falinks_<operation>` taking the request as its whole input, the
+/// argument shape `Boundary::authenticate` accepts. The adapter checks the request's keys.
 pub fn tool(operation: &str, description: String) -> Value {
     json!({"name":format!("falinks_{operation}"),"description":description,
-        "inputSchema":{"type":"object","properties":{"workspace":{"type":"string"},"request":{"type":"object"}},
-            "required":["workspace","request"],"additionalProperties":false}})
+        "inputSchema":{"type":"object"}})
 }
 /// The fixture host's historical edit/review/offer operations.
 pub const OPERATIONS: [&str; 3] = ["edit", "review", "offer"];
 /// MCP tools for `OPERATIONS`.
-pub fn tools(workspace: &str) -> Value {
-    json!(OPERATIONS.map(|operation| tool(
-        operation,
-        format!("Submit an engine {operation}. Workspace: {workspace}")
-    )))
+pub fn tools() -> Value {
+    json!(OPERATIONS.map(|operation| tool(operation, format!("Submit an engine {operation}."))))
 }
 /// The `<operation>` of every `falinks_<operation>` in an MCP tool list.
 pub fn operations(tools: &Value) -> Vec<String> {
@@ -412,32 +408,23 @@ impl Boundary {
             .and_then(|tool| tool.strip_prefix("falinks_"))
             .filter(|operation| self.operations.iter().any(|o| o == operation))
             .ok_or("unregistered tool")?;
-        let arguments = call["arguments"]
+        // The tool input is the request; identity comes only from this boundary's state.
+        let request = call["arguments"]
             .as_object()
-            .ok_or("expected workspace and engine request")?;
+            .ok_or("expected request object")?;
         require(
-            arguments.len() == 2
-                && arguments.contains_key("workspace")
-                && arguments.contains_key("request"),
-            "expected workspace and engine request",
-        )?;
-        let request = arguments["request"]
-            .as_object()
-            .ok_or("expected engine request object")?;
-        require(
-            arguments["workspace"].as_str() == Some(&self.workspace)
-                && ![
-                    "author",
-                    "identity",
-                    "agent",
-                    "session",
-                    "thread",
-                    "turn",
-                    "workspace",
-                ]
-                .iter()
-                .any(|key| request.contains_key(*key)),
-            "unauthorized workspace or caller-supplied identity",
+            ![
+                "author",
+                "identity",
+                "agent",
+                "session",
+                "thread",
+                "turn",
+                "workspace",
+            ]
+            .iter()
+            .any(|key| request.contains_key(*key)),
+            "caller-supplied identity",
         )?;
         Ok(
             json!({"identity":{"agent":self.agent,"session":self.session,"thread":self.thread,"turn":self.turn,"workspace":self.workspace},"operation":operation,"request":request}),
