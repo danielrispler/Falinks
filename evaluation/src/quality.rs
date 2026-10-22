@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-type Files = BTreeMap<String, Vec<u8>>;
+pub type Files = BTreeMap<String, Vec<u8>>;
 /// Each property's output lines, by property ID.
 type Outputs = BTreeMap<String, Vec<String>>;
 
@@ -258,7 +258,7 @@ impl Contained {
 
 /// The 1-based lines of `old` and of `new` outside one longest common subsequence: removed
 /// and added lines.
-fn changed(old: &[&str], new: &[&str]) -> (Vec<usize>, Vec<usize>) {
+pub fn changed(old: &[&str], new: &[&str]) -> (Vec<usize>, Vec<usize>) {
     let (n, m) = (old.len(), new.len());
     let mut lcs = vec![vec![0u32; m + 1]; n + 1];
     for i in (0..n).rev() {
@@ -292,7 +292,7 @@ fn test_file(name: &str) -> bool {
 
 /// Whether each line of a file is test code: Go `_test.go` files, Rust files under `tests/`,
 /// and Rust `#[cfg(test)]` items (#228 decision 2).
-fn test_lines(name: &str, lines: &[&str]) -> Vec<bool> {
+pub fn test_lines(name: &str, lines: &[&str]) -> Vec<bool> {
     if test_file(name) {
         return vec![true; lines.len()];
     }
@@ -525,8 +525,9 @@ fn baseline(space: &Contained, name: &str) -> Result<Baseline> {
     })
 }
 
-/// One oracle-passing run's metrics; a tool failure makes only its own metrics missing.
-fn measure(space: &Contained, base: &Baseline, last: &Files) -> Value {
+/// One oracle-passing run's metrics, and its formatted final snapshot; a tool failure makes
+/// only its own metrics missing.
+fn measure(space: &Contained, base: &Baseline, last: &Files) -> (Value, Option<Files>) {
     let (initial, rust) = (&base.initial, base.rust);
     let lint_metric = if rust {
         "clippy_findings"
@@ -543,10 +544,8 @@ fn measure(space: &Contained, base: &Baseline, last: &Files) -> Value {
     let last = match space.format(last, rust) {
         Ok(last) => last,
         Err(error) => {
-            return names
-                .map(|n| (n.to_string(), missing(&error)))
-                .into_iter()
-                .collect();
+            let metrics = names.map(|n| (n.to_string(), missing(&error)));
+            return (metrics.into_iter().collect(), None);
         }
     };
     let diff = change(initial, &last);
@@ -578,19 +577,25 @@ fn measure(space: &Contained, base: &Baseline, last: &Files) -> Value {
             Err(error) => missing(error),
         },
     };
-    json!({
+    let metrics = json!({
         "failing_properties": properties,
         "production_lines_changed": {"value": diff.production_lines_changed},
         "test_lines_added": {"value": diff.test_lines_added},
         "test_functions": {"value": diff.test_functions},
         lint_metric: lints,
-    })
+    });
+    (metrics, Some(last))
 }
 
-/// Measures every run of each batch directory and writes its `quality.json`.
-pub fn quality(dirs: &[&Path]) -> Result<i32> {
+/// Measures every run of each batch directory and writes its `quality.json`. With `judge`, a
+/// run configuration, the judge also rates each measured final snapshot (#232).
+pub fn quality(dirs: &[&Path], judge: Option<&Path>) -> Result<i32> {
     // The initial trees and references come from the frozen materials only.
     frozen()?;
+    let definitions = crate::judge::definitions()?;
+    let runtime = judge
+        .map(|config| crate::judge::Runtime::load(config, &definitions))
+        .transpose()?;
     let dirs: Vec<PathBuf> = dirs.iter().map(|d| resolve(d)).collect();
     let commit = git(&root(), &["rev-parse", "HEAD"], None)?;
     for dir in &dirs {
@@ -642,6 +647,8 @@ pub fn quality(dirs: &[&Path]) -> Result<i32> {
         }
         let mut fixtures: BTreeMap<String, std::result::Result<Baseline, String>> = BTreeMap::new();
         let mut runs = Map::new();
+        // Without --judge, a run keeps the paid ratings an earlier measurement recorded.
+        let previous = read(dir.join("quality.json")).unwrap_or(Value::Null);
         for entry in ledger["runs"].as_array().into_iter().flatten() {
             let id = entry["run_id"].as_str().unwrap_or_default();
             let recorded_dir = PathBuf::from(entry["run_dir"].as_str().unwrap_or_default());
@@ -678,13 +685,32 @@ pub fn quality(dirs: &[&Path]) -> Result<i32> {
             record["versions"] = versions.clone().into();
             record["go_note"] = json!(go_note);
             record["reference_production_lines_changed"] = base.figure.clone();
-            record["metrics"] = match final_snapshot(&run_dir, &result) {
-                Ok(last) => measure(&space, base, &last),
+            let formatted = match final_snapshot(&run_dir, &result) {
+                Ok(last) => {
+                    let (metrics, formatted) = measure(&space, base, &last);
+                    record["metrics"] = metrics;
+                    formatted
+                }
                 Err(error) => {
                     record["missing"] = format!("final snapshot: {error}").into();
-                    Value::Null
+                    record["metrics"] = Value::Null;
+                    None
                 }
             };
+            if let Some(runtime) = &runtime {
+                record["judge"] = match formatted {
+                    Some(last) => {
+                        let material = crate::judge::material(&base.initial, &last);
+                        let requirements = crate::judge::requirements(&fixture(&name)?);
+                        let arm = entry["arm"].as_str().unwrap_or_default();
+                        let mut call = |prompt: &str| runtime.call(prompt);
+                        crate::judge::judge(&mut call, &definitions, &requirements, &material, arm)
+                    }
+                    None => json!({"missing": "not judged: the final snapshot was not formatted"}),
+                };
+            } else if let Some(judged) = previous["runs"][id].get("judge") {
+                record["judge"] = judged.clone();
+            }
             runs.insert(id.into(), record);
         }
         // Gate evidence per measured fixture (#228 decision 13).

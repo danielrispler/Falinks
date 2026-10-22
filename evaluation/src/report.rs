@@ -305,8 +305,78 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
         "reference_production_lines_changed".into(),
         json!(reference),
     );
+    let definitions = crate::judge::definitions().unwrap_or(Value::Null);
+    out.insert("judge".into(), judge_cells(slots, &definitions));
     out.insert("treatment_properties".into(), json!(TREATMENT));
     out.insert("measurements".into(), json!(measurements));
+    Value::Object(out)
+}
+
+/// One fixture's judge cells from `quality --judge` (#232): per arm and dimension, the runs'
+/// medians with the usual statistics, each run's spread, and why a repetition lacks a value. A
+/// dimension without a passing calibration record prints "Not yet calibrated" instead. The
+/// blinding check prints `arm guessed k/n` over parsed guesses, with the frozen note.
+fn judge_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>, definitions: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    let (mut correct, mut parsed, mut missing) = (0, 0, 0);
+    for arm in ARMS {
+        let mut entry = serde_json::Map::new();
+        for dimension in crate::judge::DIMENSIONS {
+            if definitions["judge"]["calibration"][dimension]["passed"] != true {
+                entry.insert(dimension.into(), "Not yet calibrated".into());
+                continue;
+            }
+            let (values, reasons): (Vec<Option<f64>>, Vec<Value>) = slots[arm]
+                .iter()
+                .map(|run| {
+                    let Some(run) = run else {
+                        return (None, json!("no run: absent or interrupted"));
+                    };
+                    let judge = &run["quality"]["judge"];
+                    let cell = &judge["ratings"][dimension];
+                    let reason = [
+                        &judge["ratings"]["missing"],
+                        &judge["missing"],
+                        &run["quality"]["missing"],
+                    ]
+                    .into_iter()
+                    .find(|r| r.is_string())
+                    .cloned()
+                    .unwrap_or_else(|| json!("not judged: run quality --judge on this batch"));
+                    match cell["value"].as_f64() {
+                        Some(value) => (Some(value), Value::Null),
+                        None => (None, reason),
+                    }
+                })
+                .unzip();
+            let mut figure = stats(&values);
+            figure["missing_reasons"] = json!(reasons);
+            figure["spreads"] = slots[arm]
+                .iter()
+                .map(|r| {
+                    r.map_or(Value::Null, |r| {
+                        r["quality"]["judge"]["ratings"][dimension]["spread"].clone()
+                    })
+                })
+                .collect();
+            entry.insert(dimension.into(), figure);
+        }
+        out.insert(arm.into(), Value::Object(entry));
+        for run in slots[arm].iter().flatten() {
+            let guess = &run["quality"]["judge"]["guess"];
+            match guess["correct"].as_bool() {
+                Some(right) => (correct, parsed) = (correct + usize::from(right), parsed + 1),
+                None if !guess.is_null() => missing += 1,
+                None => {}
+            }
+        }
+    }
+    let blinding = &definitions["judge"]["blinding"];
+    out.insert(
+        "blinding".into(),
+        json!({"arm_guessed": format!("arm guessed {correct}/{parsed}"),
+            "missing_guesses": missing, "note": blinding["note"]}),
+    );
     Value::Object(out)
 }
 
@@ -802,6 +872,49 @@ mod tests {
         assert_eq!(time["label"], "incomplete");
         assert_eq!(time["paired_differences"][4], Value::Null);
         assert_eq!(out["gaps"], json!(["go-indep-4: 4 of 5 complete pairs"]));
+    }
+
+    /// #232: ratings print only for a calibrated dimension; a missing guess lowers n.
+    #[test]
+    fn judge_cells_need_calibration_and_count_parsed_guesses() {
+        let run = |value: u64, guess: Value| {
+            json!({"quality": {"judge": {"guess": guess, "ratings": {"duplication":
+                {"value": value, "spread": [value - 1, value]}}}}})
+        };
+        let runs = [
+            run(4, json!({"arm": "git", "correct": true})),
+            run(2, json!({"arm": "git", "correct": false})),
+            run(3, json!({"missing": "unparseable guess: \"maybe\""})),
+        ];
+        let slots = BTreeMap::from([
+            ("git", vec![Some(&runs[0]), None]),
+            ("falinks", vec![Some(&runs[1]), Some(&runs[2])]),
+        ]);
+        let mut definitions = crate::judge::definitions().unwrap();
+        let cells = judge_cells(&slots, &definitions);
+        for dimension in crate::judge::DIMENSIONS {
+            assert_eq!(cells["falinks"][dimension], "Not yet calibrated");
+        }
+        let blinding = &cells["blinding"];
+        assert_eq!(blinding["arm_guessed"], "arm guessed 1/2");
+        assert_eq!(blinding["missing_guesses"], 1);
+        assert!(
+            blinding["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("Chance is about n/2.")
+        );
+
+        definitions["judge"]["calibration"] = json!({"duplication": {"passed": true}});
+        let cells = judge_cells(&slots, &definitions);
+        let falinks = &cells["falinks"]["duplication"];
+        assert_eq!(falinks["values"], json!([2.0, 3.0]));
+        assert_eq!(falinks["spreads"], json!([[1, 2], [2, 3]]));
+        assert_eq!(
+            cells["git"]["duplication"]["missing_reasons"],
+            json!([null, "no run: absent or interrupted"])
+        );
+        assert_eq!(cells["git"]["maintainability"], "Not yet calibrated");
     }
 
     #[test]

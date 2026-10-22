@@ -308,7 +308,27 @@ it as `usage_limit`.
         `quality.json`'s `property_gates` gives each fixture's result. Tests point
         `FALINKS_PROPERTY_SUITES` at other suites; `measurement.property_suites` then
         records it.
-      - The judge is a later #228 stage 2 ticket.
+      - **Judge** (#232), with `quality ... --judge CONFIG`, where CONFIG is a run
+        configuration whose `runtime_version` and `model` must equal `code-quality.json`'s
+        judge pin and whose `runtime_binary` must match `runtime_sha256`. Each call is a
+        fresh `claude -p --output-format json` session from an empty directory, with
+        `--tools ""` and the workers' isolation flags. The material is the fixture's
+        requirement text, the formatted initial production code, the formatted change as a
+        whole-file diff per changed source file, and all test code after the change as one
+        block (Rust inline test modules moved out); file names and the reference are not
+        shown. The frozen prompt and anchors are filled verbatim.
+        - Per measured snapshot, `k` rating calls; each failed or unparseable call is retried
+          once. `quality.json` gives each dimension's `value` (median), `spread`, ratings and
+          reasons, or `missing` with the reason when any rating is still missing. Every call's
+          `usage` is in `calls`.
+        - One forced-choice blinding call per snapshot, not retried. `report` prints
+          `judge.blinding.arm_guessed` (`arm guessed k/n`, n counting parsed guesses), the
+          missing guesses and the frozen note.
+        - A dimension without a passing calibration record
+          (`judge.calibration.<dimension>.passed` in `code-quality.json`) prints
+          `Not yet calibrated` instead of its values. The calibration ticket adds the record.
+        - Tests use the scripted worker's fake judge only; real calls need a session outside
+          auto mode.
     - **Values and labels.** Each metric gives every repetition's value per arm, its
       `median`, `range`, `n` and `missing`. A repetition lacks a value when its run is
       absent, interrupted or lacks the metric; missing data is never imputed. The `label`
