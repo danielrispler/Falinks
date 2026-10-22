@@ -396,6 +396,9 @@ evaluation/target/release/falinks-eval quality --runs /private/tmp/ev/s-rust --r
 evaluation/target/release/falinks-eval report --runs /private/tmp/ev/s-rust --runs /private/tmp/ev/s-page --runs /private/tmp/ev/s-rel
 ```
 
+`/private/tmp` does not survive a reboot. When a batch is finished, move its directory into
+`local-evidence/` and index it (`AGENTS.md`, "Local evidence").
+
 Track T (#178) compares one agent with two Git agents, unscored, in its own batch directory:
 
 ```sh

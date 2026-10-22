@@ -280,6 +280,22 @@
         },
         "measurement": "Implementation is not charged (Daniel, 2026-10-22) and was not timed. No real runs and no run preparation: building the v11 harness and the ci-checks runs were verification. No usage.",
         "work": "#182 (T4): cumulative verification of track T's freezes against v11 (manifest paths, hash-identical v11 fixtures and oracles, C6.1, C6.4 against a rebuilt 9564d45, ci-checks); the budget re-estimate below; five track-T repetitions per cell upfront; `timing` for a team of one; the track-T report (`report --schedule track-t`, written by the track-T batch); #181's entry; re-freeze v19 -> v20."
+      },
+      {
+        "issue": 183,
+        "implementation_seconds": 0,
+        "run_seconds": 7493,
+        "preparation_seconds": 297,
+        "charged_seconds": 7790,
+        "complete_usage": {
+          "runs": 50,
+          "input_tokens": 2020,
+          "output_tokens": 753314,
+          "cache_read_input_tokens": 18348181,
+          "cache_creation_input_tokens": 1753621
+        },
+        "measurement": "Implementation is not charged (Daniel, 2026-10-22) and was not timed. run_seconds is measured: the wall time of the three `batch --schedule track-t` invocations in /private/tmp/ev/track-t, each with its gate, drain and verify: 47 s (14:57:50-14:58:37Z, the gate failed on #239), 2,653 s (17:42:51-18:27:04Z, paused on go-relationships-5-git-2's infrastructure failure) and 4,793 s (18:35:02-19:54:55Z). preparation_seconds is measured: 286 s from the first release build to the written run configuration (14:52:43-14:57:29Z: builds, the dedicated Claude Code 2.1.308 copy and the configuration), plus the rebuilds after #239 and #237 merged (6 s and 5 s). The #239 fix between the first and second invocations is that ticket's own work and is not charged here. Usage is from the 50 complete runs; the failed run (agent B's worker exited) and the three gates are excluded.",
+        "work": "#183 (T2+T4): one interleaved track-T batch, one agent against two Git agents on five fixtures, 5 repetitions each (50 runs, plus one identified replacement), at manifest v21 on Claude Code 2.1.308; `report --schedule track-t` and `timing` on every successful run."
       }
     ],
     "re_estimate": {
@@ -299,17 +315,17 @@
     },
     "totals": {
       "implementation_seconds": 13796,
-      "run_seconds": 2104,
-      "preparation_seconds": 600,
-      "charged_seconds": 2704,
+      "run_seconds": 9597,
+      "preparation_seconds": 897,
+      "charged_seconds": 10494,
       "complete_usage": {
-        "runs": 10,
-        "input_tokens": 158,
-        "output_tokens": 229188,
-        "cache_read_input_tokens": 1844929,
-        "cache_creation_input_tokens": 315479
+        "runs": 60,
+        "input_tokens": 2178,
+        "output_tokens": 982502,
+        "cache_read_input_tokens": 20193110,
+        "cache_creation_input_tokens": 2069100
       }
     },
-    "remaining_seconds": 40496
+    "remaining_seconds": 32706
   }
 }
