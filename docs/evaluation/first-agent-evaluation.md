@@ -56,6 +56,8 @@ Review recommendations for evidence, acceptance, timing, preservation and overhe
 
 Correctness is mandatory. Unsafe publication or lost work pauses performance evaluation until repaired and the safety gate passes again; retain the failed evidence.
 
+The [#5 amendment](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6322468250) (2026-10-21) replaces the continuation signal in this paragraph and the next: no winner is computed, and every dimension is reported for both arms. The original text follows.
+
 A continuation signal is at least 20% lower median completion time on two of three fixtures with no lower task-success rate. Compute time comparisons on paired repetitions where both arms succeed and report the number of qualifying pairs alongside all successes/failures. No jointly successful pairs means no time comparison. With three repetitions per fixture, this is exploratory evidence, not statistical proof or general superiority. Monetary efficiency remains unestablished without comparable billing evidence; report available resource usage separately.
 
 Mixed results, missing transitions, usage exhaustion or insufficient successful pairs are inconclusive. Missing the target is not immediate abandonment: inspect the largest observed bottleneck and propose one separately bounded improvement batch. Preserve initial results, version the changed engine and rerun both arms comparably. Do not tune against hidden oracle cases. Repeated protocol failures, inability to enforce the adapter boundary, or overhead that cannot plausibly be addressed motivate redesign. A promising result motivates a subsequent real-repository trial.

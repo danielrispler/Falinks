@@ -4,7 +4,7 @@
 //! `falinks_*` tools; `ack`, `ready` and `check` are evaluation-host tools, the rest map
 //! onto the engine via `EngineHost`.
 use crate::engine_host::{self, EngineHost};
-use falinks::{Check, Client, Engine, Language, Pin, Toolchain};
+use falinks::{Check, Client, Engine, Language, Outcome, Pin, Toolchain};
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
@@ -32,10 +32,71 @@ pub const HOST_TOOLS: &[(&str, &str)] = &[
 ];
 /// Operations that change a live workspace; refused after an agent declares ready.
 pub const MUTATIONS: &[&str] = &["edit", "retry", "incorporate", "apply_job"];
+/// Mutations that take output forms.
+pub const EDITS: [&str; 3] = ["edit", "retry", "incorporate"];
+/// Output forms of `EDITS` (#193 decision 1); a deletion has none. `evaluation/src/timing.rs`
+/// and `report.rs` copy this and `EDIT_COUNTS`; `tests/arm.rs` checks they agree.
+pub const FORMS: [&str; 3] = ["content", "replace", "from"];
+/// Counted per form: the ledger's outcomes, then calls refused before they reached the ledger
+/// (a malformed request or, for `from`, a scratch reference the host refused) and resends.
+pub const EDIT_COUNTS: [&str; 7] = [
+    "accepted",
+    "stale",
+    "unreviewed",
+    "rejected",
+    "interrupted",
+    "host_refused",
+    "resends",
+];
 const LETTERS: [&str; 2] = ["A", "B"];
 
 pub fn agent_name(agent: usize) -> String {
     format!("agent-{agent}")
+}
+
+/// The output forms an edit request uses, in `FORMS` order.
+pub fn forms(request: &Value) -> Vec<&'static str> {
+    let outputs: Vec<&Value> = request["output"]
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.values())
+        .collect();
+    FORMS
+        .into_iter()
+        .filter(|form| outputs.iter().any(|o| o.get(form).is_some()))
+        .collect()
+}
+
+/// The lines of `path` in `capture` that have a letter or digit, counted; blank and
+/// brace-only lines name nobody's text.
+fn lines(capture: Option<&falinks::Capture>, path: &str) -> BTreeMap<String, usize> {
+    let mut lines = BTreeMap::new();
+    let file = capture.and_then(|c| c.files.get(path)?.file.as_ref());
+    let text = file.map_or_else(String::new, |f| String::from_utf8_lossy(&f.bytes).into());
+    for line in text
+        .lines()
+        .filter(|l| l.chars().any(char::is_alphanumeric))
+    {
+        *lines.entry(line.to_string()).or_insert(0) += 1;
+    }
+    lines
+}
+
+/// Lines of `a` beyond their count in `b`.
+fn minus(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> BTreeMap<String, usize> {
+    a.iter()
+        .filter(|(line, n)| b.get(*line).is_none_or(|m| m < n))
+        .map(|(line, n)| (line.clone(), n - b.get(line).unwrap_or(&0)))
+        .collect()
+}
+
+/// One edit, retry or incorporation as it reached the host.
+struct EditCall {
+    agent: usize,
+    forms: Vec<&'static str>,
+    accepted: bool,
+    /// Set when it was refused before reaching the ledger.
+    host_refused: Option<String>,
 }
 
 /// MCP definitions: every engine operation plus the evaluation-host tools.
@@ -296,6 +357,9 @@ pub struct Arm {
     pub validation_attempts: Vec<Value>,
     pub rejected: u64,
     pub retries: u64,
+    /// Every edit, retry and incorporation in call order, and its forms by (agent, request id).
+    edit_calls: Vec<EditCall>,
+    forms: BTreeMap<(usize, String), Vec<&'static str>>,
     /// Set once both agents are ready: final oracle on the exact published state.
     pub outcome: Option<Value>,
     /// Agents whose live root moved after an applied regrouping.
@@ -348,6 +412,8 @@ impl Arm {
             validation_attempts: vec![],
             rejected: 0,
             retries: 0,
+            edit_calls: vec![],
+            forms: BTreeMap::new(),
             outcome: None,
             relocated: BTreeSet::new(),
             calls: 0,
@@ -395,6 +461,23 @@ impl Arm {
         if operation == "retry" {
             self.retries += 1;
         }
+        if EDITS.contains(&operation) {
+            let forms = forms(request);
+            let host_refused = result.get("outcome").is_none();
+            // A call refused before the ledger uses no ID: a later request may reuse it.
+            if let Some(id) = request["id"].as_str().filter(|_| !host_refused) {
+                self.forms
+                    .entry((agent, id.into()))
+                    .or_insert(forms.clone());
+            }
+            self.edit_calls.push(EditCall {
+                agent,
+                forms,
+                accepted: result["accepted"] == true,
+                host_refused: host_refused
+                    .then(|| result["reason"].as_str().unwrap_or_default().into()),
+            });
+        }
         // Mutation results are accepted exactly when the engine applied them.
         if MUTATIONS.contains(&operation) && result["accepted"] == true {
             self.drafts[agent] += 1;
@@ -437,6 +520,92 @@ impl Arm {
         self.log
             .push(json!({"kind": "ack", "agent": agent, "milestone": request["milestone"]}));
         json!({"accepted": true})
+    }
+
+    /// Per output form, from the ledger and the calls: each `EDIT_COUNTS` entry, `Rejected` and
+    /// host-refusal reasons; and accepted edits that bring back lines a peer's earlier accepted
+    /// edit removed from that file, listed for a manual check (#193 decision 9). A resend is an
+    /// edit sent after the same agent's previous one was refused.
+    pub fn edits(&self) -> Result<Value> {
+        let mut forms: BTreeMap<&'static str, Value> = FORMS
+            .iter()
+            .map(|form| {
+                let mut counts: serde_json::Map<String, Value> = EDIT_COUNTS
+                    .iter()
+                    .map(|k| (k.to_string(), json!(0)))
+                    .collect();
+                counts.insert("rejected_reasons".into(), json!([]));
+                counts.insert("host_refused_reasons".into(), json!([]));
+                (*form, Value::Object(counts))
+            })
+            .collect();
+        let mut add = |used: &[&'static str], count: &str, reason: Option<&str>| {
+            for form in used {
+                let entry = forms.get_mut(form).unwrap();
+                entry[count] = json!(entry[count].as_u64().unwrap() + 1);
+                if let Some(reason) = reason {
+                    let key = format!("{count}_reasons");
+                    entry[key.as_str()]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!(reason));
+                }
+            }
+        };
+        let mut refused = [false; 2];
+        for call in &self.edit_calls {
+            if std::mem::replace(&mut refused[call.agent], !call.accepted) {
+                add(&call.forms, "resends", None);
+            }
+            if let Some(reason) = &call.host_refused {
+                add(&call.forms, "host_refused", Some(reason));
+            }
+        }
+        let history = self.engine.history()?;
+        let mut reverted = vec![];
+        for (n, record) in history.iter().enumerate() {
+            let key = (record.agent, record.request.id.clone());
+            let Some(used) = self.forms.get(&key) else {
+                continue; // a job's output, not an edit
+            };
+            let (count, reason) = match &record.outcome {
+                Some(Outcome::Applied { .. }) => ("accepted", None),
+                Some(Outcome::Stale { .. }) => ("stale", None),
+                Some(Outcome::Unreviewed { .. }) => ("unreviewed", None),
+                Some(Outcome::Rejected { reason }) => ("rejected", Some(reason.as_str())),
+                // No recorded outcome: the operation never finished.
+                Some(Outcome::Interrupted { .. }) | None => ("interrupted", None),
+            };
+            add(used, count, reason);
+            if count != "accepted" {
+                continue;
+            }
+            for path in record.request.output.keys() {
+                let added = minus(
+                    &lines(record.proposed.as_ref(), path),
+                    &lines(Some(&record.before), path),
+                );
+                for peer in &history[..n] {
+                    if peer.agent == record.agent
+                        || !matches!(peer.outcome, Some(Outcome::Applied { .. }))
+                        || !peer.request.output.contains_key(path)
+                    {
+                        continue;
+                    }
+                    let removed = minus(
+                        &lines(Some(&peer.before), path),
+                        &lines(peer.proposed.as_ref(), path),
+                    );
+                    let back: Vec<&String> =
+                        added.keys().filter(|l| removed.contains_key(*l)).collect();
+                    if !back.is_empty() {
+                        reverted.push(json!({"agent": record.agent, "id": record.request.id,
+                            "path": path, "peer_id": peer.request.id, "lines": back}));
+                    }
+                }
+            }
+        }
+        Ok(json!({"forms": forms, "reverted_peer_text": reverted}))
     }
 
     fn files(capture: &falinks::Capture) -> BTreeMap<&String, &Option<falinks::File>> {

@@ -3,8 +3,8 @@
 use falinks::Language;
 use falinks::{Check, Engine};
 use falinks_claude::arm::{
-    Arm, HOST_TOOLS, MUTATIONS, Tools, agent_name, denied_roots, deny_check_reads, enrollment,
-    language, prompt, worker_protected,
+    Arm, EDIT_COUNTS, EDITS, FORMS, HOST_TOOLS, MUTATIONS, Tools, agent_name, denied_roots,
+    deny_check_reads, enrollment, language, prompt, worker_protected,
 };
 use falinks_claude::engine_host::OPERATIONS;
 use serde_json::{Value, json};
@@ -513,4 +513,124 @@ fn the_opening_prompt_carries_revision_and_versions_but_no_file_contents() {
     }
     // The empty pending state: nothing is owed before work starts.
     assert!(text.contains("\"obligations\":[]"), "{text}");
+}
+
+/// Per-form edit counts agree with the engine's recorded ledger (#204), and an accepted edit
+/// that brings back a line the peer's earlier edit removed is listed for a manual check.
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn per_form_edit_counts_match_the_recorded_ledger() {
+    let mut run = setup("go-relationships");
+    let capture = run.call(0, "capture", json!({"paths": ["producer.go"]}));
+    let old = capture["files"]["producer.go"]["version"].clone();
+    let text = capture["files"]["producer.go"]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let marked = format!("{text}\n// marker from a1\n");
+    assert_eq!(run.edit(0, "a1", "producer.go", &marked)["accepted"], true);
+    // The peer removes the marker.
+    assert_eq!(run.edit(1, "b1", "producer.go", &text)["accepted"], true);
+    let content = json!({"producer.go": {"content": marked}});
+    let stale = run.call(
+        0,
+        "edit",
+        json!({"id": "a2", "expected": {"producer.go": old}, "output": content}),
+    );
+    assert!(stale["outcome"]["Stale"].is_object(), "{stale}");
+    let rejected = run.call(
+        0,
+        "edit",
+        json!({"id": "a3", "expected": {}, "output": content}),
+    );
+    assert!(rejected["outcome"]["Rejected"].is_object(), "{rejected}");
+    // A scratch reference to a missing file never reaches the ledger.
+    let reference = json!({"producer.go": {"from": "missing.go"}});
+    let refused = run.call(
+        0,
+        "edit",
+        json!({"id": "a4", "expected": {"producer.go": old}, "output": reference}),
+    );
+    assert!(refused.get("outcome").is_none(), "{refused}");
+    // Brings the marker back, reusing the refused reference's unused ID as `content`.
+    assert_eq!(run.edit(0, "a4", "producer.go", &marked)["accepted"], true);
+
+    let edits = run.arm.edits().unwrap();
+    let forms = &edits["forms"];
+    let mut ledger = json!({"accepted": 0, "stale": 0, "rejected": 0});
+    for record in run.arm.engine.history().unwrap() {
+        let kind = match record.outcome.unwrap() {
+            falinks::Outcome::Applied { .. } => "accepted",
+            falinks::Outcome::Stale { .. } => "stale",
+            falinks::Outcome::Rejected { .. } => "rejected",
+            other => panic!("{other:?}"),
+        };
+        ledger[kind] = json!(ledger[kind].as_u64().unwrap() + 1);
+    }
+    assert_eq!(ledger, json!({"accepted": 3, "stale": 1, "rejected": 1}));
+    for kind in ["accepted", "stale", "rejected"] {
+        assert_eq!(forms["content"][kind], ledger[kind], "{kind}: {edits}");
+    }
+    assert_eq!(forms["content"]["unreviewed"], 0);
+    // a3 and the second a4 follow agent 0's refused edits; the first a4 is a `from` resend.
+    assert_eq!(forms["content"]["resends"], 2, "{edits}");
+    assert_eq!(
+        forms["content"]["rejected_reasons"],
+        json!(["all inputs/outputs must be enrolled with explicit freshness"])
+    );
+    assert_eq!(forms["from"]["host_refused"], 1, "{edits}");
+    assert_eq!(forms["from"]["resends"], 1);
+    assert_eq!(
+        forms["from"]["host_refused_reasons"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(forms["replace"]["accepted"], 0);
+    assert_eq!(
+        edits["reverted_peer_text"],
+        json!([{"agent": 0, "id": "a4", "path": "producer.go", "peer_id": "b1",
+            "lines": ["// marker from a1"]}])
+    );
+}
+
+/// The standalone evaluation crate copies the arm's edit forms and counts, and reads the keys
+/// `edits` writes; both copies must agree with these (CODING_STANDARDS.md, "One source for
+/// configuration").
+#[test]
+fn evaluation_copies_of_the_edit_forms_and_counts_agree() {
+    let squash = |text: &str| {
+        text.split_whitespace()
+            .collect::<String>()
+            .replace(",]", "]")
+    };
+    let constant = |name: &str, values: &[&str]| {
+        squash(&format!(
+            "const {name}: [&str; {}] = {values:?};",
+            values.len()
+        ))
+    };
+    let source = |file: &str| squash(&fs::read_to_string(repo().join(file)).unwrap());
+    let timing = source("evaluation/src/timing.rs");
+    let report = source("evaluation/src/report.rs");
+    for (text, name, values) in [
+        (&timing, "EDITS", &EDITS[..]),
+        (&timing, "FORMS", &FORMS[..]),
+        (&report, "FORMS", &FORMS[..]),
+        (&report, "EDIT_COUNTS", &EDIT_COUNTS[..]),
+    ] {
+        assert!(text.contains(&constant(name, values)), "{name}");
+    }
+    for key in [
+        "forms",
+        "rejected_reasons",
+        "host_refused_reasons",
+        "reverted_peer_text",
+    ] {
+        assert!(report.contains(&format!("[\"{key}\"]")), "{key}");
+    }
 }

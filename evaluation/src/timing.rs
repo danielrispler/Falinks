@@ -16,6 +16,11 @@
 //! - **Output bytes** are the file content the model wrote, scratch included. **Changed bytes**
 //!   are the lines of each source file's last write that a line diff against its initial
 //!   content does not match.
+//! - **Refusal recovery** (#193 decision 9), per output form of a refused Falinks `edit`,
+//!   `retry` or `incorporate`: the round-trips after it, and their model seconds, up to and
+//!   including the agent's next accepted one. Refusals inside an open recovery belong to it, so
+//!   a resend in another form is charged to the first; a refused deletion opens none. A
+//!   recovery the transcript ends in is `unresolved`; its round-trips still count.
 use crate::{Result, bail, fixture, read};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -25,6 +30,10 @@ use std::path::Path;
 const FALINKS: &str = "mcp__falinks__falinks_";
 const SOURCE_WRITES: [&str; 4] = ["edit", "retry", "incorporate", "apply_job"];
 const CATEGORIES: [&str; 4] = ["edit", "refused_edit", "native", "coordination"];
+/// Falinks mutations that take output forms, and the forms (#193 decision 1), as
+/// `adapters/claude/arm.rs` counts them; its `tests/arm.rs` checks they agree.
+const EDITS: [&str; 3] = ["edit", "retry", "incorporate"];
+const FORMS: [&str; 3] = ["content", "replace", "from"];
 
 /// Seconds since the Unix epoch of a UTC timestamp such as `2026-10-15T17:37:34.552Z`.
 pub fn unix(timestamp: &str) -> Option<f64> {
@@ -158,11 +167,10 @@ fn writes(call: &Call, bash_writes_source: bool) -> Vec<(String, Write, bool)> {
             .strip_prefix(FALINKS)
             .is_some_and(|op| SOURCE_WRITES.contains(&op)) =>
         {
-            let request = match &input["request"] {
-                Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
-                request => request.clone(),
-            };
-            let output = request["output"].as_object().cloned().unwrap_or_default();
+            let output = request(call)["output"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
             output
                 .into_iter()
                 .map(|(path, file)| (path, Write::Replace(text(&file["content"])), true))
@@ -170,6 +178,27 @@ fn writes(call: &Call, bash_writes_source: bool) -> Vec<(String, Write, bool)> {
         }
         _ => vec![],
     }
+}
+
+/// A Falinks call's request; models sometimes send it as a JSON string.
+fn request(call: &Call) -> Value {
+    match &call.input["request"] {
+        Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
+        request => request.clone(),
+    }
+}
+
+/// The output forms a Falinks edit request uses.
+fn forms(request: &Value) -> Vec<&'static str> {
+    let outputs: Vec<&Value> = request["output"]
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.values())
+        .collect();
+    FORMS
+        .into_iter()
+        .filter(|form| outputs.iter().any(|o| o.get(form).is_some()))
+        .collect()
 }
 
 fn category(call: &Call, bash_writes_source: bool) -> usize {
@@ -309,6 +338,46 @@ fn agent(
         json!({"count": total.0, "model_seconds": rounded(total.1)}),
     );
 
+    // Per form: refusals, unresolved, round-trips and model seconds.
+    let mut recovery: BTreeMap<&str, (u64, u64, u64, f64)> =
+        FORMS.map(|f| (f, (0, 0, 0, 0.0))).into();
+    let mut open: Option<Vec<&str>> = None;
+    for message in messages.iter().filter(|m| !m.calls.is_empty()) {
+        for form in open.iter().flatten() {
+            let entry = recovery.get_mut(form).unwrap();
+            (entry.2, entry.3) = (entry.2 + 1, entry.3 + model(message));
+        }
+        for call in message.calls.iter().map(|&c| &calls[c]) {
+            let edit = call
+                .name
+                .strip_prefix(FALINKS)
+                .is_some_and(|op| EDITS.contains(&op));
+            match call.result {
+                Some((_, false)) if edit => open = None,
+                Some((_, true)) if edit && open.is_none() => {
+                    let used = forms(&request(call));
+                    used.iter()
+                        .for_each(|f| recovery.get_mut(f).unwrap().0 += 1);
+                    open = Some(used).filter(|used| !used.is_empty());
+                }
+                _ => {}
+            }
+        }
+    }
+    for form in open.iter().flatten() {
+        recovery.get_mut(form).unwrap().1 += 1;
+    }
+    let recovery: Map<String, Value> = recovery
+        .into_iter()
+        .map(|(form, (refusals, unresolved, count, seconds))| {
+            (
+                form.to_string(),
+                json!({"refusals": refusals, "unresolved": unresolved,
+                "round_trips": count, "model_seconds": rounded(seconds)}),
+            )
+        })
+        .collect();
+
     // Initial content of the source files, keyed by fixture path; other source writes start empty.
     let mut contents: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut output = 0;
@@ -366,6 +435,7 @@ fn agent(
         "launch_seconds": start.zip(first).map(|(start, first)| rounded(first - start)),
         "waiting_on_peer_seconds": stop.zip(first).map(|(stop, first)| rounded((stop - first - busy).max(0.0))),
         "round_trips": round_trips,
+        "refusal_recovery": recovery,
         "output_bytes": output,
         "changed_bytes": changed,
         "results": events.iter().filter(|e| e["type"] == "result").count(),
@@ -446,11 +516,26 @@ pub fn timing(run: &Path) -> Result<Value> {
     let total = |f: &Value, key: &str| f["round_trips"]["total"][key].as_f64().unwrap();
     let count: f64 = figures.values().map(|f| total(f, "count")).sum();
     let seconds: f64 = figures.values().map(|f| total(f, "model_seconds")).sum();
+    let recovery: Map<String, Value> = FORMS
+        .iter()
+        .map(|form| {
+            let sum = |key: &str| -> f64 {
+                figures
+                    .values()
+                    .map(|f| f["refusal_recovery"][form][key].as_f64().unwrap())
+                    .sum()
+            };
+            let entry = json!({"refusals": sum("refusals") as u64, "unresolved": sum("unresolved") as u64,
+                "round_trips": sum("round_trips") as u64, "model_seconds": rounded(sum("model_seconds"))});
+            (form.to_string(), entry)
+        })
+        .collect();
     Ok(json!({
         "run": result["run_id"], "arm": arm, "fixture": result["fixture"],
         "elapsed_seconds": timing["elapsed_seconds"], "start_precision": precision,
         "slowest_agent": slowest,
         "round_trips": {"count": count as u64, "model_seconds": rounded(seconds)},
+        "refusal_recovery": recovery,
         "agents": figures,
     }))
 }
@@ -476,6 +561,45 @@ mod tests {
         assert_eq!(changed_bytes("a\nb\nc\n", "a\nx\nc\nd\n"), 4);
         assert_eq!(changed_bytes("", "abc"), 3);
         assert_eq!(changed_bytes("a\nb\n", ""), 0);
+    }
+
+    #[test]
+    fn refusal_recovery_runs_to_the_next_accepted_edit() {
+        let at = |s: u32| json!(format!("2026-10-21T10:00:{s:02}.000Z"));
+        let call = |id: &str, s: u32, name: &str, form: &str| {
+            let input = json!({"request": {"output": {"a.go": {form: "x"}}}});
+            json!({"type": "assistant", "timestamp": at(s), "message": {"id": id,
+                "content": [{"type": "tool_use", "id": id, "name": name, "input": input}]}})
+        };
+        let result = |id: &str, s: u32, accepted: bool| {
+            json!({"type": "user", "timestamp": at(s), "message": {"content": [{"type": "tool_result",
+                "tool_use_id": id, "content": json!({"accepted": accepted}).to_string()}]}})
+        };
+        let edit = format!("{FALINKS}edit");
+        let events = [
+            json!({"type": "system", "subtype": "init"}),
+            json!({"type": "user", "timestamp": at(0), "message": {"content": "go"}}),
+            call("m1", 2, &edit, "content"),
+            result("m1", 3, false),
+            call("m2", 5, "Read", ""),
+            result("m2", 6, true),
+            call("m3", 9, &edit, "content"),
+            result("m3", 10, true),
+            call("m4", 11, &edit, "replace"),
+            result("m4", 12, false),
+        ];
+        let figures = agent(&events, &Map::new(), false, (None, None));
+        let recovery = &figures["refusal_recovery"];
+        // m2 (3 to 5) and m3 (6 to 9) follow m1's refusal; m4's refusal is never recovered.
+        assert_eq!(
+            recovery["content"],
+            json!({"refusals": 1, "unresolved": 0, "round_trips": 2, "model_seconds": 5.0})
+        );
+        assert_eq!(
+            recovery["replace"],
+            json!({"refusals": 1, "unresolved": 1, "round_trips": 0, "model_seconds": 0.0})
+        );
+        assert_eq!(recovery["from"]["refusals"], 0);
     }
 
     #[test]

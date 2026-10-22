@@ -897,6 +897,8 @@ fn timing_reports_hand_computed_figures() {
             json!({"edit": entry(edit), "refused_edit": entry(refused), "native": entry(native),
             "coordination": entry(coordination), "total": entry(total)})
         };
+    let none = json!({"refusals": 0, "unresolved": 0, "round_trips": 0, "model_seconds": 0.0});
+    let recovery = |content: &Value| json!({"content": content, "replace": none, "from": none});
 
     // Git: the clock starts at 0.5 (to the millisecond) and stops at 20.5.
     let git = figures("git");
@@ -920,6 +922,8 @@ fn timing_reports_hand_computed_figures() {
             // m1 here-document into producer.go; m4 a refused Write; m5 an Edit; m2 Bash share
             // plus Read is native; m6 only Bash ready.
             "round_trips": trips((2, 2.5), (1, 1.5), (1, 1.5), (1, 0.75)),
+            // Recovery counts Falinks edits only.
+            "refusal_recovery": recovery(&none),
             // t1 0.5, t2 0.25, t3 0.5, t4 0.5, t5 0.25, t6 0.5.
             "tool_seconds": 2.5,
             // 16 (here-document) + 35 (refused Write) + 22 (Edit's new string).
@@ -934,12 +938,15 @@ fn timing_reports_hand_computed_figures() {
         git["agents"]["B"],
         json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
-            "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "refusal_recovery": recovery(&none), "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
             "usage_reports": 1})
     );
 
     // Falinks: the clock starts at 0 (to the second) and stops at 10; agent-0 resumes once.
     let falinks = figures("falinks");
+    let unresolved =
+        json!({"refusals": 1, "unresolved": 1, "round_trips": 1, "model_seconds": 1.0});
+    assert_eq!(falinks["refusal_recovery"], recovery(&unresolved));
     assert_eq!(falinks["start_precision"], "second");
     assert_eq!(falinks["slowest_agent"], "agent-0");
     assert_eq!(
@@ -957,6 +964,9 @@ fn timing_reports_hand_computed_figures() {
             // An accepted edit with a Read, an edit refused as Stale (its request a JSON string),
             // then falinks_ready.
             "round_trips": trips((1, 1.0), (1, 1.0), (0, 0.0), (1, 1.0)),
+            // The Stale refusal is never followed by an accepted edit: falinks_ready (8.0-9.0)
+            // still counts.
+            "refusal_recovery": recovery(&unresolved),
             "tool_seconds": 1.75,
             // 23 + 2; the refused edit is output but changes nothing.
             "output_bytes": 25,
@@ -969,7 +979,7 @@ fn timing_reports_hand_computed_figures() {
         falinks["agents"]["agent-1"],
         json!({"busy_seconds": 3.0, "launch_seconds": 2.0, "waiting_on_peer_seconds": 5.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (1, 1.0), (0, 0.0)),
-            "tool_seconds": 1.0, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "refusal_recovery": recovery(&none), "tool_seconds": 1.0, "output_bytes": 0, "changed_bytes": 0, "results": 1,
             "usage_reports": 1})
     );
 }
