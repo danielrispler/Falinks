@@ -126,11 +126,14 @@ fn setup(name: &str) -> Run {
 /// `ack`, `check` and `ready` dispatch in the milestone test below.
 #[test]
 fn mutations_and_host_tools_name_real_operations() {
-    let engine: Vec<&str> = OPERATIONS.iter().map(|(operation, _)| *operation).collect();
+    let engine: Vec<&str> = OPERATIONS
+        .iter()
+        .map(|(operation, ..)| *operation)
+        .collect();
     for mutation in MUTATIONS {
         assert!(engine.contains(mutation), "{mutation}");
     }
-    for (tool, _) in HOST_TOOLS {
+    for (tool, ..) in HOST_TOOLS {
         assert!(!engine.contains(tool), "{tool}");
     }
 }
@@ -645,7 +648,7 @@ fn evaluation_copies_of_the_edit_forms_and_counts_agree() {
 fn host_tools_refuse_unknown_or_missing_request_keys() {
     let mut run = setup("go-relationships");
     // Each refusal names the keys its description gives: `ack` takes `{milestone}`.
-    for (operation, help) in HOST_TOOLS {
+    for (operation, _, help) in HOST_TOOLS {
         let takes = help.split(" -> ").next().unwrap();
         for request in [json!({"id": "x"}), json!({"request": {}})] {
             let reply = run.call(0, operation, request.clone());

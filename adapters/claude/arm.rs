@@ -15,18 +15,22 @@ use std::{
     sync::Arc,
 };
 
-/// Evaluation-host tools added to the engine's agent operations.
-pub const HOST_TOOLS: &[(&str, &str)] = &[
+/// Evaluation-host tools added to the engine's agent operations, with the JSON type of each
+/// request key.
+pub const HOST_TOOLS: &[(&str, &str, &str)] = &[
     (
         "ack",
+        r#"{"milestone":"string"}"#,
         "{milestone} -> acknowledge a delivered task development before working on it.",
     ),
     (
         "check",
+        "{}",
         "{} -> run the trusted visible checks and the independent acceptance check on your workspace's last completed revision; returns pass/fail only. Never publishes.",
     ),
     (
         "ready",
+        "{}",
         "{} -> declare your part finished. Accepted only after every development is acknowledged and your workspace has no unpublished work; when both agents are ready the published state is the final candidate.",
     ),
 ];
@@ -103,9 +107,10 @@ struct EditCall {
 pub fn tools() -> Value {
     let mut tools = engine_host::tools();
     let list = tools.as_array_mut().expect("tool list");
-    for (operation, help) in HOST_TOOLS {
+    for (operation, types, help) in HOST_TOOLS {
         list.push(tool(
             operation,
+            types,
             format!("Evaluation host {operation}: {help}"),
         ));
     }

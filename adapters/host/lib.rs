@@ -267,16 +267,28 @@ impl ControlGate {
 }
 
 /// One MCP tool definition: `falinks_<operation>` taking the request as its whole input, the
-/// argument shape `Boundary::authenticate` accepts. The adapter checks the request's keys.
-pub fn tool(operation: &str, description: String) -> Value {
+/// argument shape `Boundary::authenticate` accepts. `types` maps each request key to its JSON
+/// type (`{"nodes":"array"}`): untyped, the runtime sends arrays as encoded strings (#239).
+/// No key is required, because the adapter checks the request's keys.
+pub fn tool(operation: &str, types: &str, description: String) -> Value {
+    let types: serde_json::Map<String, Value> =
+        serde_json::from_str(types).expect("tool types are a JSON object");
+    let properties: serde_json::Map<String, Value> = types
+        .into_iter()
+        .map(|(key, kind)| (key, json!({"type": kind})))
+        .collect();
     json!({"name":format!("falinks_{operation}"),"description":description,
-        "inputSchema":{"type":"object"}})
+        "inputSchema":{"type":"object","properties":properties}})
 }
 /// The fixture host's historical edit/review/offer operations.
 pub const OPERATIONS: [&str; 3] = ["edit", "review", "offer"];
-/// MCP tools for `OPERATIONS`.
+/// MCP tools for `OPERATIONS`; their live inputs are all strings, so they declare no types.
 pub fn tools() -> Value {
-    json!(OPERATIONS.map(|operation| tool(operation, format!("Submit an engine {operation}."))))
+    json!(OPERATIONS.map(|operation| tool(
+        operation,
+        "{}",
+        format!("Submit an engine {operation}.")
+    )))
 }
 /// The `<operation>` of every `falinks_<operation>` in an MCP tool list.
 pub fn operations(tools: &Value) -> Vec<String> {
