@@ -490,6 +490,10 @@ fn block(id: &str, tool: &str) -> Value {
 
 /// The result counts of a run that splits and then joins (#134 "Measurement").
 #[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
 fn a_split_and_a_join_produce_the_regrouping_result_counts() {
     let mut run = setup("go-relationships");
     let space1 = run.dir.path().join("space1");
