@@ -27,7 +27,7 @@
     "src/judge.rs": "85bd596c3ba66900cb39cd4b2b27da44c5dc6fbda09555a092b57fc997a4bae5",
     "src/main.rs": "643e73740fd217cc53f872c1780425440978ebd0c1df055eabea12c46421d7e0",
     "src/quality.rs": "acb6214ac789d28cddd75dff7ced219ab0a8038601bc1067350ae6bbd2be2875",
-    "src/report.rs": "87d18754bc01eb0cdab3234474fe5c836240cf15d2160e35795ac2d920b65fbc",
+    "src/report.rs": "3846f9f91e08be51597121378455715e96d31ce5299a5fa667cf9891ffd37b9f",
     "src/timing.rs": "826e0b76ea8607213c58916a773283bbdc219919975ea9b9e37ac07932e034eb",
     "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
   },
@@ -38,5 +38,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 28
+  "version": 29
 }
