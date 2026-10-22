@@ -284,7 +284,7 @@ fn an_offer_that_queues_nothing_shows_its_state_and_why() {
         let reply = f.call(
             agent,
             "edit",
-            json!({"id":id,"expected":{path:version},
+            json!({"id": id, "note": "n","expected":{path:version},
             "output":{path:{"content":content}}}),
         );
         assert_eq!(reply["accepted"], true, "{reply}");
