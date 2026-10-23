@@ -66,8 +66,8 @@
     },
     "L4": {
       "file": "producer.go",
-      "old": "len(lines)-kept",
-      "new": "len(lines)"
+      "old": "; counts[record.Text] = 0 }",
+      "new": " }"
     }
   }
 }

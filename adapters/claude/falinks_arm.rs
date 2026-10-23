@@ -508,9 +508,9 @@ fn run(options: Options) -> Result<i32> {
     }
     evidence["rejected_operations"] = arm.rejected.into();
     evidence["retries"] = arm.retries.into();
-    evidence["hidden_path_refusals"] = arm
+    evidence["hidden_path_requests"] = arm
         .hidden
-        .refusals
+        .requests
         .load(std::sync::atomic::Ordering::Relaxed)
         .into();
     evidence["edits"] = arm.edits()?;
@@ -774,7 +774,7 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
         if Instant::now() >= deadline {
             return Ok("timeout");
         }
-        let developments = std::mem::take(&mut run.arm.borrow_mut().outbox);
+        let developments = run.arm.borrow_mut().take_outbox();
         for development in developments {
             run.event("development", json!({"milestone": development["id"]}))?;
             for worker in &mut run.workers {

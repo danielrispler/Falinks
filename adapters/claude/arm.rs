@@ -173,9 +173,6 @@ pub fn language(name: &str) -> Result<Language> {
     }
 }
 
-/// Enrolled source: the fixture files plus optional files agents may create. The engine
-/// audits every live file against its enrollment, so the Falinks arm fixes this set up
-/// front (`x.go` -> `x_test.go`, `src/x.rs` -> `tests/x.rs`). The Git arm may add any file.
 /// The fixture's enrolled source, and the files agents may create from the start: test
 /// companions, but not the files a milestone introduces, which stay hidden until it arrives.
 pub fn enrolled(fixture: &Value, language: Language) -> (Vec<String>, Vec<String>) {
@@ -209,6 +206,9 @@ pub fn introduced(milestones: &[Value], language: Language) -> Vec<String> {
     enrollment(&files, language)
 }
 
+/// Enrolled source: the fixture files plus optional files agents may create. The engine
+/// audits every live file against its enrollment, so the Falinks arm fixes this set up
+/// front (`x.go` -> `x_test.go`, `src/x.rs` -> `tests/x.rs`). The Git arm may add any file.
 pub fn enrollment(files: &[String], language: Language) -> Vec<String> {
     let files: Vec<&String> = files.iter().filter(|f| !reserved(f)).collect();
     let mut enrolled: BTreeSet<String> = files.iter().map(|f| f.to_string()).collect();
@@ -396,6 +396,8 @@ pub struct Arm {
     checks: usize,
     /// Developments for the runner to deliver to both agents, oldest first.
     pub outbox: Vec<Value>,
+    /// Each milestone's introduced files, revealed when the runner takes its development.
+    introduced: Vec<Vec<String>>,
     /// Timeline rows for the runner's `events.jsonl`.
     pub log: Vec<Value>,
     pub validation_attempts: Vec<Value>,
@@ -432,12 +434,13 @@ impl Arm {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let hidden = Hidden::new(
-            language(fixture["language"].as_str().unwrap_or_default())
-                .map(|l| introduced(&milestones, l))
-                // `setup` checked the language first; never fall back to hiding nothing.
-                .expect("fixture language"),
-        );
+        // `setup` checked the language first; never fall back to hiding nothing.
+        let language =
+            language(fixture["language"].as_str().unwrap_or_default()).expect("fixture language");
+        let introduced: Vec<Vec<String>> = (milestones.iter())
+            .map(|m| introduced(std::slice::from_ref(m), language))
+            .collect();
+        let hidden = Hidden::new(introduced.concat());
         let host = |agent: usize| {
             EngineHost::new(
                 Arc::clone(&engine),
@@ -465,6 +468,7 @@ impl Arm {
             ready: [false; 2],
             checks: 0,
             outbox: vec![],
+            introduced,
             log: vec![],
             validation_attempts: vec![],
             rejected: 0,
@@ -653,10 +657,6 @@ impl Arm {
         {
             let milestone = self.milestones[self.delivered].clone();
             self.delivered += 1;
-            if let Ok(language) = language(self.fixture["language"].as_str().unwrap_or_default()) {
-                self.hidden
-                    .reveal(&introduced(std::slice::from_ref(&milestone), language));
-            }
             self.awaiting = BTreeSet::from([0, 1]);
             self.ready = [false; 2];
             self.log
@@ -668,6 +668,18 @@ impl Arm {
                 .extend(milestone.as_object().unwrap().clone());
             self.outbox.push(development);
         }
+    }
+
+    /// Takes the developments to deliver and reveals the files each introduces, so neither
+    /// agent sees them before its development is on its way (#250).
+    pub fn take_outbox(&mut self) -> Vec<Value> {
+        let developments = std::mem::take(&mut self.outbox);
+        for development in &developments {
+            if let Some(i) = (self.milestones.iter()).position(|m| m["id"] == development["id"]) {
+                self.hidden.reveal(&self.introduced[i]);
+            }
+        }
+        developments
     }
 
     fn ack(&mut self, agent: usize, request: &Value) -> Value {

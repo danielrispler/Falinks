@@ -9,6 +9,7 @@ use falinks::{
 use falinks_host::{Result, require, tool};
 use serde_json::{Value, json};
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     ffi::CString,
     fs,
@@ -45,8 +46,8 @@ pub struct EngineHost {
 pub struct Hidden {
     paths: Arc<Mutex<BTreeSet<String>>>,
     prefix: Arc<String>,
-    /// Requests that named a hidden path (host evidence).
-    pub refusals: Arc<AtomicU64>,
+    /// Requests that named a hidden path in a path field, accepted or not (host evidence).
+    pub requests: Arc<AtomicU64>,
 }
 impl Hidden {
     pub fn new(paths: impl IntoIterator<Item = String>) -> Self {
@@ -57,7 +58,7 @@ impl Hidden {
         Self {
             paths: Arc::new(Mutex::new(paths.into_iter().collect())),
             prefix: Arc::new(format!("unenrolled-{random:016x}")),
-            refusals: Arc::default(),
+            requests: Arc::default(),
         }
     }
     pub fn reveal(&self, paths: &[String]) {
@@ -72,58 +73,92 @@ impl Hidden {
         self.paths.lock().unwrap().contains(file)
     }
     /// Removes every hidden path used as an object key: file maps in captures and records.
+    /// An echoed `request` is left as the agent wrote it.
     pub fn conceal(&self, value: Value) -> Value {
-        match value {
-            Value::Object(map) => Value::Object(
-                map.into_iter()
-                    .filter(|(key, _)| !self.is_hidden(key))
-                    .map(|(key, value)| (key, self.conceal(value)))
-                    .collect(),
-            ),
-            Value::Array(items) => {
-                Value::Array(items.into_iter().map(|v| self.conceal(v)).collect())
+        fn walk(value: Value, hidden: &BTreeSet<String>) -> Value {
+            match value {
+                Value::Object(map) => Value::Object(
+                    map.into_iter()
+                        .filter(|(key, _)| {
+                            !hidden.contains(key.split_once('#').map_or(key.as_str(), |(p, _)| p))
+                        })
+                        // An echoed request keeps what the agent wrote, as for any path.
+                        .map(|(key, value)| match key.as_str() {
+                            "request" => (key, value),
+                            _ => (key, walk(value, hidden)),
+                        })
+                        .collect(),
+                ),
+                Value::Array(items) => {
+                    Value::Array(items.into_iter().map(|v| walk(v, hidden)).collect())
+                }
+                other => other,
             }
-            other => other,
         }
+        let hidden = self.paths.lock().unwrap().clone();
+        if hidden.is_empty() {
+            return value;
+        }
+        walk(value, &hidden)
     }
-    /// `request` with each hidden path (as a key, a value or a `path#symbol` node) replaced
-    /// by its substitute, or None when it names none. Free text is left as written.
+    /// `request` with each hidden path in a path field replaced by its substitute, or None
+    /// when it names none. Path fields are the keys of `expected` and `output` and the items
+    /// of `paths`, `nodes` and `depends` (a node may be `path#symbol`); ids, `from` and free
+    /// text are left as written, as for any never-enrolled path.
     fn substitute(&self, request: &Value) -> Option<Value> {
+        let hidden = self.paths.lock().unwrap().clone();
+        if hidden.is_empty() {
+            return None;
+        }
         let swap = |text: &str| {
-            self.is_hidden(text)
+            let file = text.split_once('#').map_or(text, |(p, _)| p);
+            hidden
+                .contains(file)
                 .then(|| format!("{}/{text}", self.prefix))
         };
-        fn walk(value: &Value, swap: &dyn Fn(&str) -> Option<String>, hit: &mut bool) -> Value {
+        fn walk(value: &Value, swap: &dyn Fn(&str) -> Option<String>, hit: &Cell<bool>) -> Value {
+            let swapped = |text: &String| {
+                swap(text)
+                    .inspect(|_| hit.set(true))
+                    .unwrap_or(text.clone())
+            };
             match value {
                 Value::Object(map) => Value::Object(
                     map.iter()
                         .map(|(key, value)| {
-                            let value = if matches!(key.as_str(), "text" | "note" | "reason") {
-                                value.clone()
-                            } else {
-                                walk(value, swap, hit)
+                            let value = match (key.as_str(), value) {
+                                ("expected" | "output", Value::Object(files)) => Value::Object(
+                                    files
+                                        .iter()
+                                        .map(|(path, file)| (swapped(path), file.clone()))
+                                        .collect(),
+                                ),
+                                ("paths" | "nodes" | "depends", Value::Array(items)) => {
+                                    Value::Array(
+                                        items
+                                            .iter()
+                                            .map(|item| match item {
+                                                Value::String(path) => Value::String(swapped(path)),
+                                                other => other.clone(),
+                                            })
+                                            .collect(),
+                                    )
+                                }
+                                _ => walk(value, swap, hit),
                             };
-                            let key = swap(key).inspect(|_| *hit = true).unwrap_or(key.clone());
-                            (key, value)
+                            (key.clone(), value)
                         })
                         .collect(),
                 ),
                 Value::Array(items) => {
                     Value::Array(items.iter().map(|v| walk(v, swap, hit)).collect())
                 }
-                Value::String(text) => match swap(text) {
-                    Some(substitute) => {
-                        *hit = true;
-                        Value::String(substitute)
-                    }
-                    None => value.clone(),
-                },
                 other => other.clone(),
             }
         }
-        let mut hit = false;
-        let substituted = walk(request, &swap, &mut hit);
-        hit.then_some(substituted)
+        let hit = Cell::new(false);
+        let substituted = walk(request, &swap, &hit);
+        hit.get().then_some(substituted)
     }
     /// `reply` with every substitute put back as the path the agent wrote.
     fn restore(&self, reply: Value) -> Value {
@@ -181,7 +216,7 @@ impl EngineHost {
         let mut stages = None;
         let substituted = self.hidden.substitute(request);
         if substituted.is_some() {
-            self.hidden.refusals.fetch_add(1, Ordering::Relaxed);
+            self.hidden.requests.fetch_add(1, Ordering::Relaxed);
         }
         let request = substituted.as_ref().unwrap_or(request);
         let outcome = self.dispatch(operation, request, &mut stages);
@@ -193,12 +228,8 @@ impl EngineHost {
             Ok(value) => text(lean(value)),
             Err(error) => json!({"accepted":false,"reason":error.to_string()}),
         };
-        let result = if substituted.is_some() {
-            self.hidden.restore(result)
-        } else {
-            result
-        };
-        Ok((self.hidden.conceal(result), stages))
+        // Always restored: the engine keeps substituted requests, and a later reply reads them.
+        Ok((self.hidden.conceal(self.hidden.restore(result)), stages))
     }
     /// Each operation's parser checks its request keys before the engine sees the request.
     fn dispatch(

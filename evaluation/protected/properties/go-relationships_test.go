@@ -110,31 +110,40 @@ func l2(r *rng) any {
 	return []any{empty(out), slices.Equal(in, original)}
 }
 
-// idLine is 0-20 ASCII digits, letters, ':', spaces and tabs, half of them shaped ID:Text,
-// some with the ids 0, 9223372036854775807 or 9223372036854775808. Ids with a leading zero
-// are excluded: the requirement does not decide them.
+// idLine is, half the time, 0-20 ASCII digits, letters, ':', spaces and tabs; otherwise an
+// id (1-1000, or 0, 000, 007, 9223372036854775807, 9223372036854775808), ':' and a line.
 func idLine(r *rng) string {
-	for {
-		var s string
-		switch r.n(4) {
-		case 0:
-			s = []string{"0", "9223372036854775807", "9223372036854775808"}[r.n(3)] + ":" + line(r)
-		case 1:
-			s = strconv.Itoa(1+r.n(1000)) + ":" + line(r)
-		default:
-			const chars = "0123456789abcXYZ: \t"
-			b := make([]byte, r.n(21))
-			for i := range b {
-				b[i] = chars[r.n(len(chars))]
-			}
-			s = string(b)
-		}
-		head, _, _ := strings.Cut(s, ":")
-		if len(head) > 1 && head[0] == '0' && strings.Trim(head, "0123456789") == "" {
+	switch r.n(4) {
+	case 0:
+		ids := []string{"0", "000", "007", "9223372036854775807", "9223372036854775808"}
+		return ids[r.n(len(ids))] + ":" + line(r)
+	case 1:
+		return strconv.Itoa(1+r.n(1000)) + ":" + line(r)
+	}
+	const chars = "0123456789abcXYZ: \t"
+	b := make([]byte, r.n(21))
+	for i := range b {
+		b[i] = chars[r.n(len(chars))]
+	}
+	return string(b)
+}
+
+// pooled is 0-12 lines, each blank or 1-3 words from a, b and ab with spaces and tabs around
+// and between them, so texts repeat.
+func pooled(r *rng) []string {
+	out := make([]string, r.n(13))
+	for i := range out {
+		if r.n(4) == 0 {
+			out[i] = space(r)
 			continue
 		}
-		return s
+		words := make([]string, 1+r.n(3))
+		for j := range words {
+			words[j] = []string{"a", "b", "ab"}[r.n(3)]
+		}
+		out[i] = space(r) + strings.Join(words, " "+space(r)) + space(r)
 	}
+	return out
 }
 
 func l3(r *rng) any {
@@ -148,7 +157,7 @@ func l3(r *rng) any {
 }
 
 func l4(r *rng) any {
-	in := lines(r)
+	in := pooled(r)
 	original := append([]string(nil), in...)
 	kept, dropped := f.Stats(in)
 	return []any{kept, dropped, empty(f.Duplicates(in)), slices.Equal(in, original)}

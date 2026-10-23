@@ -65,7 +65,7 @@ impl Run {
         )
     }
     fn milestone(&mut self) -> String {
-        let development = self.arm.outbox.remove(0);
+        let development = self.arm.take_outbox().remove(0);
         assert_eq!(development["type"], "development");
         development["id"].as_str().unwrap().to_string()
     }
@@ -884,17 +884,64 @@ fn every_tool_answers_a_hidden_path_as_a_never_enrolled_one() {
     let shown = falinks_claude::engine_host::notice_events(&events)
         .unwrap()
         .to_string();
-    assert!(
-        shown.contains("unenrolled-"),
-        "the post reached the peer: {shown}"
-    );
     let notice = hidden.arm.hidden.restore_text(&shown);
     assert!(
-        !notice.contains("unenrolled-") && notice.contains("parse.go"),
+        notice.contains("parse.go") && !notice.contains("unenrolled-"),
         "{notice}"
     );
-    assert!(hidden.arm.hidden.refusals.load(Ordering::Relaxed) > 0);
-    assert_eq!(never.arm.hidden.refusals.load(Ordering::Relaxed), 0);
+    assert!(hidden.arm.hidden.requests.load(Ordering::Relaxed) > 0);
+    assert_eq!(never.arm.hidden.requests.load(Ordering::Relaxed), 0);
+}
+
+/// A later call that reads stored state answers a hidden path as a never-enrolled one too:
+/// the engine keeps what the request named, and no reply shows the substitute (#250).
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn stored_requests_answer_a_hidden_path_as_a_never_enrolled_one() {
+    let [mut hidden, mut never] = [setup("go-relationships"), setup("go-relationships")];
+    let calls = |run: &mut Run, path: &str| {
+        let refused = run.call(
+            1,
+            "edit",
+            json!({"id": "b1", "note": "n", "expected": {}, "output": {path: {"content": "package fixture\n"}}}),
+        );
+        let registered = run.call(
+            1,
+            "register",
+            json!({"id": path, "task": "consumer", "nodes": ["consumer.go"]}),
+        );
+        let dir = run.dir.path().canonicalize().unwrap();
+        [
+            refused,
+            registered,
+            run.call(1, "request", json!({"id": "b1"})),
+            run.call(1, "obligations", json!({})),
+            run.call(0, "recommend", json!({})),
+        ]
+        .map(|reply| {
+            // Each run's workspace, session and proposal context are its own hashes.
+            let mut text = reply.to_string().replace(dir.to_str().unwrap(), "<run>");
+            for key in ["\"workspace\":\"", "\"session\":\"", "\"context\":\""] {
+                let mut parts = text.split(key);
+                let mut out = parts.next().unwrap().to_string();
+                for part in parts {
+                    out += key;
+                    out += part.get(64..).unwrap_or(part);
+                }
+                text = out;
+            }
+            text
+        })
+    };
+    let a = calls(&mut hidden, "parse.go");
+    let b = calls(&mut never, "nope.go");
+    for (a, b) in a.iter().zip(&b) {
+        assert!(!a.contains("unenrolled-"), "{a}");
+        assert_eq!(a, &b.replace("nope.go", "parse.go"));
+    }
 }
 
 /// Hidden files stay out of every workspace's view through a split and a join, and appear in
@@ -960,29 +1007,38 @@ fn regrouping_neither_reveals_nor_splits_hidden_files() {
         assert_eq!(a["files"][path], b["files"][path], "{path}");
     }
 
-    // Hidden again for the join: a joined view hides it too.
-    let hidden = falinks_claude::engine_host::Hidden::new(["parse.go".to_string()]);
-    run.call(
+    // A join before the reveal, on a second run: the arm's own hidden set still hides it.
+    let mut joined = setup("go-relationships");
+    let space1 = joined.dir.path().join("space1");
+    fs::create_dir(&space1).unwrap();
+    joined.arm.engine.add_workspace(&space1).unwrap();
+    for (agent, id, node) in [
+        (0, "producer", "producer.go"),
+        (1, "consumer", "consumer.go"),
+    ] {
+        joined.call(
+            agent,
+            "register",
+            json!({"id": id, "task": id, "nodes": [node]}),
+        );
+    }
+    let split = joined.call(1, "recommend", json!({}))["proposal"].clone();
+    agree(&mut joined, &split);
+    joined.call(
         1,
         "register",
         json!({"id": "consumer", "task": "consumer", "nodes": ["consumer.go"], "depends": ["producer.go#Produce"]}),
     );
-    let join = run.call(
+    let join = joined.call(
         1,
         "propose",
         json!({"action": "Join", "text": "Consume now takes Produce's output", "failing": false}),
     )["proposal"]
         .clone();
-    agree(&mut run, &join);
-    assert_eq!(run.arm.engine.placement().unwrap(), [0, 0]);
-    for agent in [0, 1] {
-        let client = run.arm.client(agent).clone();
-        let (opening, _) =
-            falinks_claude::engine_host::opening(&run.arm.engine, &client, &hidden).unwrap();
-        assert!(!opening.to_string().contains("\"parse.go\""), "{opening}");
-        assert!(
-            opening.to_string().contains("\"parse_test.go\""),
-            "{opening}"
-        );
+    agree(&mut joined, &join);
+    assert_eq!(joined.arm.engine.placement().unwrap(), [0, 0]);
+    for (capture, opening) in views(&mut joined) {
+        assert!(!capture.to_string().contains("parse"), "{capture}");
+        assert!(!opening.to_string().contains("parse"), "{opening}");
     }
 }

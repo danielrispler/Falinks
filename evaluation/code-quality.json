@@ -1,9 +1,10 @@
 {
-  "version": 2,
+  "version": 3,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
   "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4).",
   "amendments": [
-    {"version": 2, "issue": 250, "reason": "Fixture 3 version 2 (#139, landed by #250) removes Render and rewords Stats, so L3 and L4 no longer traced to the fixture. L3 now checks Parse and IDs; L4 checks Stats and Duplicates, keeping 13 properties. Leading zeros in an id are excluded because the requirement does not decide them. No property value had been computed under version 1 (Daniel, 2026-10-22, on #250)."}
+    {"version": 2, "issue": 250, "reason": "Fixture 3 version 2 (#139, landed by #250) removes Render and rewords Stats, so L3 and L4 no longer traced to the fixture. L3 now checks Parse and IDs; L4 checks Stats and Duplicates, keeping 13 properties. Leading zeros in an id are excluded because the requirement does not decide them. No property value had been computed under version 1 (Daniel, 2026-10-22, on #250)."},
+    {"version": 3, "issue": 250, "reason": "Review of #262, before any value was computed. Leading zeros: the requirement decides them (an id written with ASCII digits only, positive), so 007 parses as 7 and 000 is rejected as not positive; the exclusion is withdrawn and L3's domain adds the ids 000 and 007. L3's domain now states the lengths its ID:Text lines reach. L4's domain draws words from a, b and ab so texts repeat and Duplicates is exercised, and its broken copy now changes Duplicates (each repeated text once). L3 and L4 quote every sentence they compare. Judge material (decision 16): file names are removed from the code; the requirement text is shown verbatim, file names included, because it is the same for both arms and cannot identify one (Daniel, 2026-10-23, on #250)."}
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
   "deterministic": {
@@ -120,16 +121,16 @@
         "id": "L3",
         "fixture": "go-relationships",
         "checks": "Parse fields and IDs order",
-        "requirement": {"at": "/milestones/1/requirements/1", "text": "Split at the first colon; id is the part before it, written with ASCII digits only, positive and fitting in int; text is the rest trimmed, and must be nonblank."},
-        "domain": "single lines of length 0-20 over ASCII digits, letters, ':', space and tab, plus the ids 0, 9223372036854775807 and 9223372036854775808; IDs takes lists of 0-12 such lines",
-        "excluded": ["whitespace other than ASCII space and tab", "leading zeros in an id"]
+        "requirement": {"at": "/milestones/1/requirements/1", "text": "Split at the first colon; id is the part before it, written with ASCII digits only, positive and fitting in int; text is the rest trimmed, and must be nonblank. Any other line returns 0, \"\", false. Add IDs(lines []string) []int returning the ids of the lines that parse, in order, without mutating input; empty when none."},
+        "domain": "single lines, half of length 0-20 over ASCII digits, a-c, X-Z, ':', space and tab, the rest an id (1-1000, or 0, 000, 007, 9223372036854775807, 9223372036854775808), ':' and an L1 line; IDs takes lists of 0-12 such lines",
+        "excluded": ["whitespace other than ASCII space and tab"]
       },
       {
         "id": "L4",
         "fixture": "go-relationships",
         "checks": "Stats counts and Duplicates order",
-        "requirement": {"at": "/milestones/1/requirements/0", "text": "add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy as Produce"},
-        "domain": "the L1 domain",
+        "requirement": {"at": "/milestones/1/requirements/0", "text": "add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy as Produce, and Duplicates(lines []string) []string returning each trimmed nonblank text that occurs more than once, once each, in order of first occurrence; empty when none. Neither mutates its input."},
+        "domain": "line lists of length 0-12; each line is blank or 1-3 words from a, b and ab, with ASCII spaces and tabs around and between them",
         "excluded": ["whitespace other than ASCII space and tab"]
       }
     ]
@@ -142,7 +143,7 @@
     "k": 3,
     "value": "The median of the k calls per dimension; the spread is shown. (#228 decision 18)",
     "retry": "A failed or unparseable call is retried once. If any rating is still missing, the run's judge value is missing. (#228 decision 18)",
-    "material": "The requirement text, the formatted initial code and the formatted change. File names are removed; Rust inline test modules are moved out; all test code is shown as one block. The reference is not shown. (#228 decision 16)",
+    "material": "The requirement text, verbatim, the formatted initial code and the formatted change. File names are removed from the code; Rust inline test modules are moved out; all test code is shown as one block. The reference is not shown. (#228 decision 16; amended in version 3)",
     "prompt": "You are reviewing a code change made to a small project. Below are the task's requirements, the initial code, and the change. Correctness is checked elsewhere: do not rate it, and do not guess whether the code passes its tests. Rate the change on each of the four dimensions below with an integer from 1 to 5, using the anchors given for 1, 3 and 5; use 2 and 4 for changes between anchors. Rate the change on its own; do not compare it with any other solution. Give one sentence of reason per dimension. Reply with only a JSON object of this form: {\"maintainability\": {\"rating\": N, \"reason\": \"...\"}, \"duplication\": {\"rating\": N, \"reason\": \"...\"}, \"unnecessary_changes\": {\"rating\": N, \"reason\": \"...\"}, \"test_quality\": {\"rating\": N, \"reason\": \"...\"}}\n\n{anchors}\n\nRequirements:\n{requirements}\n\nInitial code:\n{initial}\n\nChange:\n{change}\n\nTest code after the change:\n{tests}",
     "dimensions": {
       "maintainability": {
