@@ -499,6 +499,15 @@ no longer appears verbatim in its fixture. Stage 2 changes the file only by a ve
 amendment: bump its `version` and add an `amendments` entry with the reason, then
 re-freeze.
 
+The judge's known-answer set (#233) is `protected/known-answer.json`: per fixture, the
+test file that joins the reference to make the known-answer base, and one degraded copy per
+dimension as a declaration edit of the formatted base. `known-answer` checks the base and
+every copy: the formatter leaves it unchanged, the oracle and its tests pass, no property
+fails, and `vet` or `clippy` report nothing on changed lines. With `--judge CONFIG`, from a
+session outside auto mode, it then rates each tree three times (45 calls) and writes
+`calibration/v<definitions version>.json`, which names the manifest version; re-freeze to
+freeze it. After an amendment, the next record gets the new version's name. The 54 information calls on the #27 runs are `quality --runs DIR --judge CONFIG` over those batches. A record's outcome reaches the report by an amendment that sets `judge.calibration.<dimension>` to `{"passed": true}`, or to `{"dropped": true}` after a second failure.
+
 `freeze` lists each changed frozen path and refuses unstaged changes to them, so
 stage your repair first. Re-freeze before observing a red harness test, or the
 freeze guard fails first and masks the real failure.

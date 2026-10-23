@@ -312,6 +312,9 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
     Value::Object(out)
 }
 
+/// Where the judge's known-answer set lives (#233).
+const KNOWN_ANSWER_SET: &str = "evaluation/protected/known-answer.json";
+
 /// One fixture's judge cells from `quality --judge` (#232): per arm and dimension, the runs'
 /// medians with the usual statistics, each run's spread, and why a repetition lacks a value. A
 /// dimension without a passing calibration record prints "Not yet calibrated" instead. The
@@ -322,7 +325,15 @@ fn judge_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>, definitions: &Value)
     for arm in ARMS {
         let mut entry = serde_json::Map::new();
         for dimension in crate::judge::DIMENSIONS {
-            if definitions["judge"]["calibration"][dimension]["passed"] != true {
+            let calibration = &definitions["judge"]["calibration"][dimension];
+            if calibration["dropped"] == true {
+                entry.insert(
+                    dimension.into(),
+                    definitions["judge"]["wording"]["dropped"].clone(),
+                );
+                continue;
+            }
+            if calibration["passed"] != true {
                 entry.insert(dimension.into(), "Not yet calibrated".into());
                 continue;
             }
@@ -368,6 +379,21 @@ fn judge_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>, definitions: &Value)
                 Some(right) => (correct, parsed) = (correct + usize::from(right), parsed + 1),
                 None if !guess.is_null() => missing += 1,
                 None => {}
+            }
+        }
+    }
+    // #228 decision 24: a calibrated dimension whose arms' medians agree names the set's sensitivity.
+    for dimension in crate::judge::DIMENSIONS {
+        let medians: Vec<&Value> = ARMS.iter().map(|a| &out[*a][dimension]["median"]).collect();
+        if medians[0].is_number() && medians.iter().all(|m| *m == medians[0]) {
+            let flat = format!(
+                "{} ({KNOWN_ANSWER_SET}).",
+                definitions["judge"]["wording"]["flat"]
+                    .as_str()
+                    .unwrap_or_default()
+            );
+            for arm in ARMS {
+                out[arm][dimension]["note"] = flat.clone().into();
             }
         }
     }
@@ -950,6 +976,29 @@ mod tests {
             json!([null, "no run: absent or interrupted"])
         );
         assert_eq!(cells["git"]["maintainability"], "Not yet calibrated");
+        assert!(cells["git"]["duplication"].get("note").is_none());
+
+        // #233: equal arm medians print the flat wording; a dropped dimension prints no values.
+        definitions["judge"]["calibration"] =
+            json!({"duplication": {"passed": true}, "test_quality": {"dropped": true}});
+        let flat = [run(3, Value::Null), run(3, Value::Null)];
+        let slots = BTreeMap::from([
+            ("git", vec![Some(&flat[0])]),
+            ("falinks", vec![Some(&flat[1])]),
+        ]);
+        let cells = judge_cells(&slots, &definitions);
+        for arm in ARMS {
+            let note = cells[arm]["duplication"]["note"].as_str().unwrap();
+            assert!(
+                note.starts_with("No difference detected at the sensitivity"),
+                "{note}"
+            );
+            assert!(note.contains(KNOWN_ANSWER_SET), "{note}");
+            assert_eq!(
+                cells[arm]["test_quality"],
+                "Failed calibration; not reported."
+            );
+        }
     }
 
     #[test]

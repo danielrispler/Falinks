@@ -295,16 +295,15 @@ fn median(values: &mut [u64]) -> u64 {
     values[values.len() / 2]
 }
 
-/// One measured snapshot's ratings (#228 decisions 17-18) and arm guess (decision 19). Each
-/// of the k rating calls is retried once when it fails or is unparseable; any rating still
-/// missing makes the run's judge value missing. A missing guess is not retried.
-pub fn judge(
+/// One snapshot's ratings (#228 decisions 17-18), and each call's record. Each of the k
+/// rating calls is retried once when it fails or is unparseable; any rating still missing
+/// makes the ratings missing.
+pub fn rate(
     call: &mut Call,
     definitions: &Value,
     requirements: &str,
     material: &Material,
-    arm: &str,
-) -> Value {
+) -> (Value, Vec<Value>) {
     let k = definitions["judge"]["k"].as_u64().unwrap_or(3);
     let prompt = rating_prompt(definitions, requirements, material);
     let mut calls = vec![];
@@ -356,6 +355,19 @@ pub fn judge(
             .collect::<serde_json::Map<_, _>>()
             .into(),
     };
+    (ratings, calls)
+}
+
+/// One measured snapshot's ratings and arm guess (#228 decision 19). A missing guess is not
+/// retried.
+pub fn judge(
+    call: &mut Call,
+    definitions: &Value,
+    requirements: &str,
+    material: &Material,
+    arm: &str,
+) -> Value {
+    let (ratings, mut calls) = rate(call, definitions, requirements, material);
     let (text, mut record) = call(&blinding_prompt(definitions, requirements, material));
     record["purpose"] = "blinding".into();
     let guessed = match text.and_then(|t| guess(&t, definitions)) {
