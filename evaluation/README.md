@@ -467,9 +467,11 @@ run `freeze`, which bumps `version` and retains the previous manifest under
 `manifests/`, and record why it changed in `setup.json`. Never tune
 against hidden oracle cases after scoring starts. Public and protected material
 hashes, instructions, worker/harness bytes and run configuration are evidence;
-the setup ledger is `setup.json`. The shared setup ceiling is eight hours and
-covers this preparation plus remaining pilot/evaluation setup, **not engine
-implementation**. Add timed setup sessions to that ledger; it does not enforce
+the setup ledger is `setup.json`. The shared setup ceiling is eight hours
+(`config.json`'s `setup_limit_seconds`, 28,800 s) and covers this preparation
+plus remaining pilot/evaluation setup, **not engine implementation**; the ledger
+test checks it against `setup.json`'s limit and amendments. #123's 40,517 s was
+the limit before #250's two amendments. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
 for safety gates and run interpretation. The [#5 amendment](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6322468250)
 replaced its continuation criteria with the report above, which computes no winner. Track T (#178) has
@@ -505,6 +507,12 @@ session outside auto mode, it then rates each tree three times (45 calls) and wr
 `calibration/v<definitions version>.json`, which names the manifest version; re-freeze to
 freeze it. After an amendment, the next record gets the new version's name. The 54 information calls on the #27 runs are `quality --runs DIR --judge CONFIG` over those batches. A record's outcome reaches the report by an amendment that sets `judge.calibration.<dimension>` to `{"passed": true}`, or to `{"dropped": true}` after a second failure.
 
+`config.json`'s `protocol` names the protocol version a batch measures, and each
+batch invocation records it with its configuration. Track P's is manifest v34
+(#247). Every pilot and scored invocation runs from its freeze commit, recorded
+on #188 (#228 decision 29a); the batch records its `HEAD` but does not compare it,
+so the operator checks it.
+
 `freeze` lists each changed frozen path and refuses unstaged changes to them, so
 stage your repair first. Re-freeze before observing a red harness test, or the
 freeze guard fails first and masks the real failure.
@@ -515,5 +523,5 @@ freeze guard fails first and masks the real failure.
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
 ledger `setup.json` holds the charged total and the remaining balance of the shared
-eight-hour setup allowance; `setup_ledger_totals_match_its_sessions` checks the total
+setup allowance (eight hours plus amendments); `setup_ledger_totals_match_its_sessions` checks the total
 against its sessions and the balance against the limit.

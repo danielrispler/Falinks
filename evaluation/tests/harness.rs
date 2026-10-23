@@ -197,6 +197,17 @@ fn setup_ledger_totals_match_its_sessions() {
         .sum();
     assert_eq!(ledger["charged_total_seconds"], charged);
     let limit = ledger["limit_seconds"].as_i64().unwrap();
+    // The limit is config.json's eight-hour base plus every amendment (#247).
+    let base = read(root().join("config.json"))["setup_limit_seconds"]
+        .as_i64()
+        .unwrap();
+    let amended: i64 = ledger["amendments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|amendment| amendment["added_seconds"].as_i64().unwrap())
+        .sum();
+    assert_eq!(limit, base + amended, "limit_seconds");
     assert_eq!(ledger["remaining_seconds"], limit - charged);
     assert!(limit >= charged, "setup ledger overdrawn: stop and ask");
 
