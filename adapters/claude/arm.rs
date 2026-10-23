@@ -674,10 +674,9 @@ impl Arm {
     /// agent sees them before its development is on its way (#250).
     pub fn take_outbox(&mut self) -> Vec<Value> {
         let developments = std::mem::take(&mut self.outbox);
-        for development in &developments {
-            if let Some(i) = (self.milestones.iter()).position(|m| m["id"] == development["id"]) {
-                self.hidden.reveal(&self.introduced[i]);
-            }
+        // The outbox holds the last milestones delivered, in order.
+        for i in self.delivered - developments.len()..self.delivered {
+            self.hidden.reveal(&self.introduced[i]);
         }
         developments
     }

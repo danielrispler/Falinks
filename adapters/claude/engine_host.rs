@@ -57,7 +57,7 @@ impl Hidden {
             .finish();
         Self {
             paths: Arc::new(Mutex::new(paths.into_iter().collect())),
-            prefix: Arc::new(format!("unenrolled-{random:016x}")),
+            prefix: Arc::new(format!("!unenrolled-{random:016x}")),
             requests: Arc::default(),
         }
     }
@@ -69,24 +69,16 @@ impl Hidden {
     }
     /// Whether `path`, or the file of a `path#symbol` node, is hidden.
     pub fn is_hidden(&self, path: &str) -> bool {
-        let file = path.split_once('#').map_or(path, |(p, _)| p);
-        self.paths.lock().unwrap().contains(file)
+        self.paths.lock().unwrap().contains(file_of(path))
     }
     /// Removes every hidden path used as an object key: file maps in captures and records.
-    /// An echoed `request` is left as the agent wrote it.
     pub fn conceal(&self, value: Value) -> Value {
         fn walk(value: Value, hidden: &BTreeSet<String>) -> Value {
             match value {
                 Value::Object(map) => Value::Object(
                     map.into_iter()
-                        .filter(|(key, _)| {
-                            !hidden.contains(key.split_once('#').map_or(key.as_str(), |(p, _)| p))
-                        })
-                        // An echoed request keeps what the agent wrote, as for any path.
-                        .map(|(key, value)| match key.as_str() {
-                            "request" => (key, value),
-                            _ => (key, walk(value, hidden)),
-                        })
+                        .filter(|(key, _)| !hidden.contains(file_of(key)))
+                        .map(|(key, value)| (key, walk(value, hidden)))
                         .collect(),
                 ),
                 Value::Array(items) => {
@@ -111,10 +103,12 @@ impl Hidden {
             return None;
         }
         let swap = |text: &str| {
-            let file = text.split_once('#').map_or(text, |(p, _)| p);
+            // A suffix keeps the path's sort position, so a check that names only the first bad
+            // path names it where it would name a never-enrolled one.
+            let file = file_of(text);
             hidden
                 .contains(file)
-                .then(|| format!("{}/{text}", self.prefix))
+                .then(|| format!("{file}{}{}", self.prefix, &text[file.len()..]))
         };
         fn walk(value: &Value, swap: &dyn Fn(&str) -> Option<String>, hit: &Cell<bool>) -> Value {
             let swapped = |text: &String| {
@@ -162,6 +156,9 @@ impl Hidden {
     }
     /// `reply` with every substitute put back as the path the agent wrote.
     fn restore(&self, reply: Value) -> Value {
+        if self.requests.load(Ordering::Relaxed) == 0 {
+            return reply;
+        }
         let text = reply.to_string();
         let restored = self.restore_text(&text);
         if restored == text {
@@ -176,9 +173,14 @@ impl Hidden {
         if self.prefix.is_empty() {
             return text.into();
         }
-        text.replace(&format!("{}/", self.prefix), "")
+        text.replace(self.prefix.as_str(), "")
     }
 }
+/// The file of a path or a `path#symbol` node.
+fn file_of(path: &str) -> &str {
+    path.split_once('#').map_or(path, |(p, _)| p)
+}
+
 impl EngineHost {
     pub fn new(
         engine: Arc<Engine>,
@@ -228,8 +230,9 @@ impl EngineHost {
             Ok(value) => text(lean(value)),
             Err(error) => json!({"accepted":false,"reason":error.to_string()}),
         };
-        // Always restored: the engine keeps substituted requests, and a later reply reads them.
-        Ok((self.hidden.conceal(self.hidden.restore(result)), stages))
+        // Concealed first, so a substitute the agent caused survives as the path it wrote; then
+        // restored on every call once any request was substituted, since the engine keeps them.
+        Ok((self.hidden.restore(self.hidden.conceal(result)), stages))
     }
     /// Each operation's parser checks its request keys before the engine sees the request.
     fn dispatch(

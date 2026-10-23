@@ -944,6 +944,38 @@ fn stored_requests_answer_a_hidden_path_as_a_never_enrolled_one() {
     }
 }
 
+/// With a second bad path, a hidden path still fails first where a never-enrolled one would:
+/// the substitute keeps its sort position (#250).
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn a_hidden_path_keeps_its_place_among_bad_paths() {
+    let [mut hidden, mut never] = [setup("go-relationships"), setup("go-relationships")];
+    // `parsa.go` is never enrolled and sorts where `parse.go` does among the fixture's paths.
+    for (operation, request) in [
+        (
+            "register",
+            json!({"id": "s", "task": "consumer", "nodes": ["PATH", "q.go"]}),
+        ),
+        (
+            "edit",
+            json!({"id": "e", "note": "n", "expected": {}, "output": {"PATH": {}, "producer.go": {}}}),
+        ),
+    ] {
+        let ask = |run: &mut Run, path: &str| {
+            let request = request.to_string().replace("PATH", path);
+            run.call(1, operation, serde_json::from_str(&request).unwrap())
+                .to_string()
+        };
+        let a = ask(&mut hidden, "parse.go");
+        let b = ask(&mut never, "parsa.go");
+        assert_eq!(a, b.replace("parsa.go", "parse.go"), "{operation}");
+        assert!(a.contains("parse.go"), "{operation}: {a}");
+    }
+}
+
 /// Hidden files stay out of every workspace's view through a split and a join, and appear in
 /// both once revealed, at the same version and absent (#250).
 #[test]
