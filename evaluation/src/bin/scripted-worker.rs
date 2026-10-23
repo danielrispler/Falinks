@@ -20,13 +20,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{env, fs, thread};
 
-fn reference(fixture: &str, file: &str) -> String {
+fn references(fixture: &str) -> Value {
     let protected = match fixture {
         "go-page" => include_str!("../../protected/go-page.json"),
         _ => include_str!("../../protected/go-relationships.json"),
     };
     let value: Value = serde_json::from_str(protected).unwrap();
-    value["reference"][file].as_str().unwrap().to_string()
+    value["reference"].clone()
+}
+
+fn reference(fixture: &str, file: &str) -> String {
+    references(fixture)[file].as_str().unwrap().to_string()
+}
+
+/// Writes an agent's final go-relationships files beside `file`: A owns `producer.go`, B every
+/// other reference file, including its follow-up's own file.
+fn write_final_files(file: &str) {
+    let path = Path::new(file);
+    let producer = path.file_name().unwrap() == "producer.go";
+    for (name, text) in references("go-relationships").as_object().unwrap() {
+        if (name == "producer.go") == producer {
+            fs::write(path.with_file_name(name), text.as_str().unwrap()).unwrap();
+        }
+    }
 }
 
 fn send(value: Value) {
@@ -119,12 +135,12 @@ fn relationships(usage_mode: Option<&str>) {
             ("ok", Some("ack")) => {
                 let contract = pending["id"] == "record-contract";
                 for file in &files {
-                    let draft = if contract {
-                        "\n// unfinished contract draft\n"
+                    if contract {
+                        let draft = "\n// unfinished contract draft\n";
+                        fs::write(file, reference("go-relationships", file) + draft).unwrap();
                     } else {
-                        ""
-                    };
-                    fs::write(file, reference("go-relationships", file) + draft).unwrap();
+                        write_final_files(file);
+                    }
                 }
                 last_final = !contract;
                 send(json!({"action": "share"}));
@@ -290,16 +306,15 @@ fn fake_codex(argv: &[String]) {
     } else if phase.starts_with("ack-") && has("ok", Some("ack")).is_some() {
         let is_final = phase == "ack-follow-ups";
         let file = state["file"].as_str().unwrap().to_string();
-        fs::write(
-            &file,
-            reference("go-relationships", &file)
-                + if is_final {
-                    ""
-                } else {
-                    "\n// contract draft\n"
-                },
-        )
-        .unwrap();
+        if is_final {
+            write_final_files(&file);
+        } else {
+            fs::write(
+                &file,
+                reference("go-relationships", &file) + "\n// contract draft\n",
+            )
+            .unwrap();
+        }
         response["action"] = "share".into();
         state["phase"] = if is_final { "final" } else { "contract" }.into();
     } else if phase == "final"
@@ -406,12 +421,12 @@ fn fake_claude(argv: &[String]) {
                 let id = event["id"].as_str().unwrap();
                 assert!(host_command(&["ack", id]).0);
                 let name = &file[3..];
-                let draft = if id == "record-contract" {
-                    "\n// unfinished contract draft\n"
+                if id == "record-contract" {
+                    let draft = "\n// unfinished contract draft\n";
+                    fs::write(&file, reference("go-relationships", name) + draft).unwrap();
                 } else {
-                    ""
-                };
-                fs::write(&file, reference("go-relationships", name) + draft).unwrap();
+                    write_final_files(&file);
+                }
                 assert!(host_command(&["share"]).0);
                 if id == "follow-ups" {
                     let (ok, reply) = host_command(&["ready"]);

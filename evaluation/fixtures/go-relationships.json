@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "name": "go-relationships",
   "language": "go",
   "files": {
@@ -12,11 +12,11 @@
     "Initial task: Produce trims each input and drops blank lines without mutating input. Consume preserves incoming order without mutating its input. Add focused tests. Further behavioral developments will arrive at the frozen milestones."
   ],
   "allocation": {
-    "A": "Producer in producer.go; subsequent producer developments.",
-    "B": "Consumer in consumer.go; subsequent consumer developments."
+    "A": "Producer in producer.go with tests in producer_test.go; subsequent producer developments.",
+    "B": "Consumer in consumer.go with tests in consumer_test.go; subsequent consumer developments."
   },
   "dependencies": [
-    "Initially Produce returns []string consumed by Consume. Developments may change that shared contract."
+    "Produce returns []string; Consume takes []string."
   ],
   "milestones": [
     {
@@ -24,15 +24,22 @@
       "trigger": "both agents have shared at least one nonempty unfinished diff",
       "requirements": [
         "The upstream feed now requires public Record struct { ID int; Text string }. Produce(lines []string) []Record uses the original 1-based line number for ID, trims Text and drops blanks without renumbering. Consume(records []Record) []string formats ID:Text, retaining order and inputs. This replaces the string contract."
+      ],
+      "dependencies": [
+        "Record is shared by Produce and Consume."
       ]
     },
     {
       "id": "follow-ups",
       "trigger": "both agents have shared a new nonempty diff after acknowledging record-contract",
       "requirements": [
-        "A: add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy.",
-        "B: add Render(records []Record) string joining Consume output with newline, with no trailing newline; empty is empty string. Keep record contract behavior."
-      ]
+        "A: in producer.go, add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy as Produce, and Duplicates(lines []string) []string returning each trimmed nonblank text that occurs more than once, once each, in order of first occurrence; empty when none. Neither mutates its input. Test them in producer_test.go. Keep record contract behavior.",
+        "B: in a new file parse.go, add Parse(line string) (id int, text string, ok bool) reading one ID:Text line. Split at the first colon; id is the part before it, written with ASCII digits only, positive and fitting in int; text is the rest trimmed, and must be nonblank. Any other line returns 0, \"\", false. Add IDs(lines []string) []int returning the ids of the lines that parse, in order, without mutating input; empty when none. Test them in parse_test.go. Keep record contract behavior."
+      ],
+      "dependencies": [
+        "Stats, Duplicates, Parse and IDs share no types or calls with the other agent's code."
+      ],
+      "files": ["parse.go"]
     }
   ],
   "commands": [

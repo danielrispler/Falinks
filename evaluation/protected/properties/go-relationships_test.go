@@ -110,11 +110,57 @@ func l2(r *rng) any {
 	return []any{empty(out), slices.Equal(in, original)}
 }
 
-func l3(r *rng) any { return f.Render(records(r)) }
+// idLine is, half the time, 0-20 ASCII digits, letters, ':', spaces and tabs; otherwise an
+// id (1-1000, or 0, 000, 007, 9223372036854775807, 9223372036854775808), ':' and a line.
+func idLine(r *rng) string {
+	switch r.n(4) {
+	case 0:
+		ids := []string{"0", "000", "007", "9223372036854775807", "9223372036854775808"}
+		return ids[r.n(len(ids))] + ":" + line(r)
+	case 1:
+		return strconv.Itoa(1+r.n(1000)) + ":" + line(r)
+	}
+	const chars = "0123456789abcXYZ: \t"
+	b := make([]byte, r.n(21))
+	for i := range b {
+		b[i] = chars[r.n(len(chars))]
+	}
+	return string(b)
+}
+
+// pooled is 0-12 lines, each blank or 1-3 words from a, b and ab with spaces and tabs around
+// and between them, so texts repeat.
+func pooled(r *rng) []string {
+	out := make([]string, r.n(13))
+	for i := range out {
+		if r.n(4) == 0 {
+			out[i] = space(r)
+			continue
+		}
+		words := make([]string, 1+r.n(3))
+		for j := range words {
+			words[j] = []string{"a", "b", "ab"}[r.n(3)]
+		}
+		out[i] = space(r) + strings.Join(words, " "+space(r)) + space(r)
+	}
+	return out
+}
+
+func l3(r *rng) any {
+	id, text, ok := f.Parse(idLine(r))
+	in := make([]string, r.n(13))
+	for i := range in {
+		in[i] = idLine(r)
+	}
+	original := append([]string(nil), in...)
+	return []any{id, text, ok, empty(f.IDs(in)), slices.Equal(in, original)}
+}
 
 func l4(r *rng) any {
-	kept, dropped := f.Stats(lines(r))
-	return []int{kept, dropped}
+	in := pooled(r)
+	original := append([]string(nil), in...)
+	kept, dropped := f.Stats(in)
+	return []any{kept, dropped, empty(f.Duplicates(in)), slices.Equal(in, original)}
 }
 
 func TestFalinksProperties(t *testing.T) {

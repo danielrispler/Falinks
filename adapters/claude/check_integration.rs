@@ -247,6 +247,7 @@ impl Gate {
             &name(agent),
             gofmt,
             launch.scratch.clone(),
+            Default::default(),
         );
         let runtime = Runtime::new(
             &self.binary,

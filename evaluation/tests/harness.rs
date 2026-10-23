@@ -287,6 +287,23 @@ fn go_indep_2_is_a_subset_of_go_indep_4() {
     }
 }
 
+/// Fixture 3's follow-ups are independent in code (#134): B's new file uses neither
+/// `Consume` nor `Record`, and A's file uses nothing from B's files.
+#[test]
+fn relationships_follow_ups_share_no_code() {
+    let reference = reference("go-relationships");
+    let source = |file: &str| reference[file].as_str().unwrap().to_string();
+    for name in ["Consume", "Record", "Produce", "Stats", "Duplicates"] {
+        assert!(!source("parse.go").contains(name), "parse.go uses {name}");
+    }
+    for name in ["Consume", "Parse", "IDs"] {
+        assert!(
+            !source("producer.go").contains(name),
+            "producer.go uses {name}"
+        );
+    }
+}
+
 #[test]
 fn oracles_reject_compiling_behavioral_regressions() {
     let tmp = tmp("falinks-oracle-test-");
@@ -312,9 +329,16 @@ fn oracles_reject_compiling_behavioral_regressions() {
                 ("for i, line := range lines", "for _, line := range lines"),
             ],
         ),
+        // One per follow-up: A's Duplicates and B's Parse.
+        (
+            "go-relationships",
+            "producer.go",
+            vec![("counts[record.Text] > 1", "counts[record.Text] > 0")],
+        ),
+        ("go-relationships", "parse.go", vec![("id <= 0 || ", "")]),
     ];
-    for (name, file, edits) in mutants {
-        let base = tmp.path().join(name);
+    for (index, (name, file, edits)) in mutants.into_iter().enumerate() {
+        let base = tmp.path().join(format!("{index}-{name}"));
         fs::create_dir(&base).unwrap();
         let repo = base.join("repo");
         prepare(name, &repo);
@@ -1394,6 +1418,36 @@ fn code_quality_definitions_trace_to_fixture_requirements() {
     assert_eq!(judge["runtime_version"], config["runtime_version"]);
 }
 
+/// A milestone's `files` are what the Falinks arm enrolls hidden until delivery (#250): each is
+/// named in that milestone's requirements, new to the fixture, and part of the reference.
+#[test]
+fn milestone_files_are_named_new_and_in_the_reference() {
+    for entry in fs::read_dir(root().join("fixtures")).unwrap() {
+        let path = entry.unwrap().path();
+        let fixture = read(&path);
+        let name = fixture["name"].as_str().unwrap();
+        let protected = root().join(format!("protected/{name}.json"));
+        for milestone in fixture["milestones"].as_array().unwrap() {
+            let requirements = milestone["requirements"].to_string();
+            for file in milestone["files"].as_array().into_iter().flatten() {
+                let file = file.as_str().unwrap();
+                assert!(
+                    requirements.contains(file),
+                    "{name}: {file} not in its requirements"
+                );
+                assert!(
+                    fixture["files"].get(file).is_none(),
+                    "{name}: {file} already exists"
+                );
+                assert!(
+                    read(&protected)["reference"].get(file).is_some(),
+                    "{name}: {file} not in the reference"
+                );
+            }
+        }
+    }
+}
+
 /// Commits `files` over a prepared fixture repository and returns the commit.
 fn snapshot(fixture: &str, repo: &Path, files: &[(&str, &str)]) -> String {
     fs::create_dir_all(repo.parent().unwrap()).unwrap();
@@ -1615,14 +1669,30 @@ func TestLabel(t *testing.T) {
         .map(|p| p.as_str().unwrap())
         .collect();
     assert_eq!(prompts.len(), 10);
-    // The material: no file names, no reference, no arm-identifying words.
-    let render = reference("go-relationships")["consumer.go"]
+    // The material: no file names, no reference, no arm-identifying words. The requirement
+    // text is the same for both arms and may name files (fixture 3 v2), so it is left out.
+    let parse = reference("go-relationships")["parse.go"]
         .as_str()
         .unwrap()
         .to_string();
-    let render = render.lines().find(|l| l.contains("func Render")).unwrap();
+    let parse = parse.lines().find(|l| l.contains("func Parse")).unwrap();
+    let fixture = read(root().join("fixtures/go-relationships.json"));
+    let requirements: Vec<&str> = std::iter::once(&fixture["requirements"])
+        .chain(
+            fixture["milestones"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| &m["requirements"]),
+        )
+        .flat_map(|r| r.as_array().unwrap())
+        .map(|r| r.as_str().unwrap())
+        .collect();
     for prompt in [prompts[0], prompts[5]] {
-        let lower = prompt.to_lowercase();
+        let lower = requirements
+            .iter()
+            .fold(prompt.to_string(), |p, r| p.replace(r, ""))
+            .to_lowercase();
         for word in [
             ".go",
             ".rs",
@@ -1630,7 +1700,7 @@ func TestLabel(t *testing.T) {
             "worktree",
             "git ",
             "workspace",
-            render,
+            parse,
         ] {
             assert!(!lower.contains(&word.to_lowercase()), "{word} in {prompt}");
         }
@@ -1744,11 +1814,8 @@ func TestLabel(t *testing.T) {
     );
     assert_eq!(rel["labels"]["vet_findings"], "incomplete");
     assert!(rel["reference_production_lines_changed"]["value"].is_u64());
-    // Calibrated (#233): a dimension prints its values, here only why the run lacks one.
-    assert_eq!(
-        rel["judge"]["git"]["test_quality"]["missing_reasons"],
-        json!(["not measured: outcome task_failure"])
-    );
+    // Calibrated (#233), but not go-relationships until it is recalibrated on fixture 3 v2 (#250).
+    assert_eq!(rel["judge"]["git"]["test_quality"], "Not yet calibrated");
     assert_eq!(rel["judge"]["blinding"]["arm_guessed"], "arm guessed 0/0");
     assert_eq!(rel["judge"]["blinding"]["missing_guesses"], 1);
     let blinding = &report["fixtures"]["rust-errors"]["code_quality"]["judge"]["blinding"];
@@ -1854,19 +1921,21 @@ fn property_gates_withhold_values_and_name_the_property() {
 fn known_answer_names_broken_checks_and_calibrates_only_the_full_set() {
     let dir = tmp("falinks-known-answer-test-");
     let mut set = read(root().join("protected/known-answer.json"));
-    let copy = &mut set["go-relationships"]["copies"]["maintainability"];
-    let new = copy["old"].as_str().unwrap().replace("ID: i + 1", "ID:i");
+    // go-page: go-relationships' set predates fixture 3 version 2 until it is recalibrated (#250).
+    let copy = &mut set["go-page"]["copies"]["maintainability"];
+    let new = (copy["old"].as_str().unwrap())
+        .replace("err != nil || value < 0", "err != nil || value<=0");
     copy["new"] = new.into();
     let path = dir.path().join("known-answer.json");
     fs::write(&path, set.to_string()).unwrap();
     let checked = Command::new(CLI)
-        .args(["known-answer", "--fixtures", "go-relationships"])
+        .args(["known-answer", "--fixtures", "go-page"])
         .env("FALINKS_KNOWN_ANSWER", &path)
         .output()
         .unwrap();
     assert_eq!(checked.status.code(), Some(1), "{}", text(&checked));
     let checks: Value = serde_json::from_slice(&checked.stdout).unwrap();
-    let fixture = &checks["checks"]["go-relationships"];
+    let fixture = &checks["checks"]["go-page"];
     for label in [
         "reference",
         "duplication",

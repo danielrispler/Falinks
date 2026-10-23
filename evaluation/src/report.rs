@@ -306,7 +306,7 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
         json!(reference),
     );
     let definitions = crate::judge::definitions().unwrap_or(Value::Null);
-    out.insert("judge".into(), judge_cells(slots, &definitions));
+    out.insert("judge".into(), judge_cells(fixture, slots, &definitions));
     out.insert("treatment_properties".into(), json!(TREATMENT));
     out.insert("measurements".into(), json!(measurements));
     Value::Object(out)
@@ -317,9 +317,16 @@ const KNOWN_ANSWER_SET: &str = "evaluation/protected/known-answer.json";
 
 /// One fixture's judge cells from `quality --judge` (#232): per arm and dimension, the runs'
 /// medians with the usual statistics, each run's spread, and why a repetition lacks a value. A
-/// dimension without a passing calibration record prints "Not yet calibrated" instead. The
-/// blinding check prints `arm guessed k/n` over parsed guesses, with the frozen note.
-fn judge_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>, definitions: &Value) -> Value {
+/// dimension without a passing calibration record prints "Not yet calibrated" instead, as does
+/// every dimension of a fixture whose known-answer set predates it (`uncalibrated_fixtures`).
+/// The blinding check prints `arm guessed k/n` over parsed guesses, with the frozen note.
+fn judge_cells(
+    fixture: &str,
+    slots: &BTreeMap<&str, Vec<Option<&Value>>>,
+    definitions: &Value,
+) -> Value {
+    let stale = (definitions["judge"]["uncalibrated_fixtures"].as_array())
+        .is_some_and(|f| f.iter().any(|f| f == fixture));
     let mut out = serde_json::Map::new();
     let (mut correct, mut parsed, mut missing) = (0, 0, 0);
     for arm in ARMS {
@@ -333,7 +340,7 @@ fn judge_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>, definitions: &Value)
                 );
                 continue;
             }
-            if calibration["passed"] != true {
+            if stale || calibration["passed"] != true {
                 entry.insert(dimension.into(), "Not yet calibrated".into());
                 continue;
             }
@@ -953,7 +960,7 @@ mod tests {
         ]);
         let mut definitions = crate::judge::definitions().unwrap();
         definitions["judge"]["calibration"] = Value::Null;
-        let cells = judge_cells(&slots, &definitions);
+        let cells = judge_cells("go-page", &slots, &definitions);
         for dimension in crate::judge::DIMENSIONS {
             assert_eq!(cells["falinks"][dimension], "Not yet calibrated");
         }
@@ -968,7 +975,12 @@ mod tests {
         );
 
         definitions["judge"]["calibration"] = json!({"duplication": {"passed": true}});
-        let cells = judge_cells(&slots, &definitions);
+        // #250: a fixture whose known-answer set predates it is not calibrated.
+        definitions["judge"]["uncalibrated_fixtures"] = json!(["go-page"]);
+        let stale = judge_cells("go-page", &slots, &definitions);
+        assert_eq!(stale["falinks"]["duplication"], "Not yet calibrated");
+        definitions["judge"]["uncalibrated_fixtures"] = Value::Null;
+        let cells = judge_cells("go-page", &slots, &definitions);
         let falinks = &cells["falinks"]["duplication"];
         assert_eq!(falinks["values"], json!([2.0, 3.0]));
         assert_eq!(falinks["spreads"], json!([[1, 2], [2, 3]]));
@@ -987,7 +999,7 @@ mod tests {
             ("git", vec![Some(&flat[0])]),
             ("falinks", vec![Some(&flat[1])]),
         ]);
-        let cells = judge_cells(&slots, &definitions);
+        let cells = judge_cells("go-page", &slots, &definitions);
         for arm in ARMS {
             let note = cells[arm]["duplication"]["note"].as_str().unwrap();
             assert!(

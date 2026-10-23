@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
   "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4).",
   "amendments": [
@@ -12,6 +12,11 @@
       "version": 3,
       "ticket": 233,
       "reason": "Calibration on manifest v31 (calibration/v2.json): every dimension's copy rated lower than the reference on all three fixtures, so all four dimensions passed on the first calibration and none was amended or dropped. judge.calibration records the outcome the report reads."
+    },
+    {
+      "version": 4,
+      "ticket": 250,
+      "reason": "Fixture 3 version 2 (#139, landed by #250), before any value was computed. L3 now checks Parse and IDs and L4 checks Stats and Duplicates, keeping 13 properties. Leading zeros are decided by the requirement (an id written with ASCII digits only, positive): 007 parses as 7 and 000 is rejected; L3's domain adds both ids and states that its other half is an id, ':' and an L1 line, longer than 20. L4's domain draws words from a, b and ab so texts repeat, and its broken copy changes Duplicates. L3 and L4 quote every sentence they compare. Judge material (decision 16): file names are removed from the code; the requirement text is shown verbatim, file names included, because it is the same for both arms. The calibration on manifest v31 (calibration/v2.json) used a known-answer set built on fixture 3 version 1, so go-relationships is listed in uncalibrated_fixtures: its judge cells print Not yet calibrated, and the inspection rule stays in force for it, until a follow-up recalibrates it on a new known-answer set (Daniel, 2026-10-23, on #250)."
     }
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
@@ -128,17 +133,17 @@
       {
         "id": "L3",
         "fixture": "go-relationships",
-        "checks": "Render joining",
-        "requirement": {"at": "/milestones/1/requirements/1", "text": "B: add Render(records []Record) string joining Consume output with newline, with no trailing newline; empty is empty string."},
-        "domain": "the L2 domain",
+        "checks": "Parse fields and IDs order",
+        "requirement": {"at": "/milestones/1/requirements/1", "text": "add Parse(line string) (id int, text string, ok bool) reading one ID:Text line. Split at the first colon; id is the part before it, written with ASCII digits only, positive and fitting in int; text is the rest trimmed, and must be nonblank. Any other line returns 0, \"\", false. Add IDs(lines []string) []int returning the ids of the lines that parse, in order, without mutating input; empty when none."},
+        "domain": "single lines, half of length 0-20 over ASCII digits, a-c, X-Z, ':', space and tab, the rest an id (1-1000, or 0, 000, 007, 9223372036854775807, 9223372036854775808), ':' and an L1 line; IDs takes lists of 0-12 such lines",
         "excluded": ["whitespace other than ASCII space and tab"]
       },
       {
         "id": "L4",
         "fixture": "go-relationships",
-        "checks": "Stats counts",
-        "requirement": {"at": "/milestones/1/requirements/0", "text": "A: add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy."},
-        "domain": "the L1 domain",
+        "checks": "Stats counts and Duplicates order",
+        "requirement": {"at": "/milestones/1/requirements/0", "text": "add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy as Produce, and Duplicates(lines []string) []string returning each trimmed nonblank text that occurs more than once, once each, in order of first occurrence; empty when none. Neither mutates its input."},
+        "domain": "line lists of length 0-12; each line is blank or 1-3 words from a, b and ab, with ASCII spaces and tabs around and between them",
         "excluded": ["whitespace other than ASCII space and tab"]
       }
     ]
@@ -151,7 +156,7 @@
     "k": 3,
     "value": "The median of the k calls per dimension; the spread is shown. (#228 decision 18)",
     "retry": "A failed or unparseable call is retried once. If any rating is still missing, the run's judge value is missing. (#228 decision 18)",
-    "material": "The requirement text, the formatted initial code and the formatted change. File names are removed; Rust inline test modules are moved out; all test code is shown as one block. The reference is not shown. (#228 decision 16)",
+    "material": "The requirement text, verbatim, the formatted initial code and the formatted change. File names are removed from the code; Rust inline test modules are moved out; all test code is shown as one block. The reference is not shown. (#228 decision 16; amended in version 4)",
     "prompt": "You are reviewing a code change made to a small project. Below are the task's requirements, the initial code, and the change. Correctness is checked elsewhere: do not rate it, and do not guess whether the code passes its tests. Rate the change on each of the four dimensions below with an integer from 1 to 5, using the anchors given for 1, 3 and 5; use 2 and 4 for changes between anchors. Rate the change on its own; do not compare it with any other solution. Give one sentence of reason per dimension. Reply with only a JSON object of this form: {\"maintainability\": {\"rating\": N, \"reason\": \"...\"}, \"duplication\": {\"rating\": N, \"reason\": \"...\"}, \"unnecessary_changes\": {\"rating\": N, \"reason\": \"...\"}, \"test_quality\": {\"rating\": N, \"reason\": \"...\"}}\n\n{anchors}\n\nRequirements:\n{requirements}\n\nInitial code:\n{initial}\n\nChange:\n{change}\n\nTest code after the change:\n{tests}",
     "dimensions": {
       "maintainability": {
@@ -183,6 +188,7 @@
     },
     "known_answer_set": "Per fixture, the known-answer base: the formatted reference plus one test file covering the behaviour and the edge cases the requirements name, since the reference has no tests. Then four degraded copies of that base, one per dimension: copied-in logic (duplication), an untouched function rewritten or behaviour nobody asked for (unnecessary_changes), happy-path-only tests (test_quality), needlessly convoluted control flow (maintainability). The base and copies are in protected/known-answer.json; `known-answer` checks them. (#228 decision 20, amended by #233)",
     "calibration_record": "`known-answer --judge CONFIG` rates the base and each copy k times and writes calibration/v{version}.json, named by this file's version and recording the manifest version. A record is never overwritten. (#233)",
+    "uncalibrated_fixtures": ["go-relationships"],
     "calibration": {"maintainability": {"passed": true, "record": "calibration/v2.json"}, "duplication": {"passed": true, "record": "calibration/v2.json"}, "unnecessary_changes": {"passed": true, "record": "calibration/v2.json"}, "test_quality": {"passed": true, "record": "calibration/v2.json"}},
     "subtlety_rule": "Each copy changes one declaration, changed or added, aimed at one dimension. It passes the oracle, all properties, vet and clippy with no findings on changed lines, and the formatter. No comment names or hints at the defect. It must be code a competent agent could write under the 30-minute limit. Daniel signs off each copy as plausible before it freezes. (#228 decision 21)",
     "calibration_criterion": "On every fixture, the targeted copy's median over three calls is lower than the reference's on that dimension. The #27 runs are rated for information only. (#228 decision 22)",
@@ -197,7 +203,7 @@
     "versions": "Each run's metrics record go version, rustc -V, clippy-driver -V and rustfmt -V. The pins are rust-toolchain.toml and the evaluation's recorded Go version. (#228 decision 26)"
   },
   "rules": {
-    "lasts": "Until #228's stage 2 freezes. Lifted by #233: stage 2 is frozen with the calibration record calibration/v2.json, so a scored run's final code may be inspected.",
+    "lasts": "Until #228's stage 2 freezes. Lifted by #233: stage 2 is frozen with the calibration record calibration/v2.json, so a scored run's final code may be inspected. Not for go-relationships until it is recalibrated (#250): its known-answer set predates fixture 3 version 2.",
     "inspection": "Nobody opens a scored run's final tree, diffs, transcripts, events.jsonl or session JSONL, and nobody runs report --show-code on a scored batch. (#228 decision 30)",
     "diagnosis": "A session diagnosing an infrastructure or safety failure may open any file in the failed run's own directory, plus code-free batch files. It must not open other runs' directories. The ticket comment lists the run and every file opened. A failed run is never measured, and its replacement runs in a new directory. (#228 decision 31)",
     "batch_checkout": "Every invocation of the scored batch, including resumes and shards, runs from a checkout of #188's freeze commit. (#228 decision 29a)"

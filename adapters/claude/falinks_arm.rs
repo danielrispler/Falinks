@@ -279,8 +279,12 @@ impl Run {
             serde_json::to_string(&developments)?,
             serde_json::to_string(&pending.obligations)?
         );
+        let hidden = self.arm.borrow().hidden.clone();
+        text = hidden.restore_text(&text);
         let given = &mut self.workers[agent].given;
-        if let Some(capture) = engine_host::notice_capture(&self.engine, &client, &events, given)? {
+        if let Some(capture) =
+            engine_host::notice_capture(&self.engine, &client, &events, given, &hidden)?
+        {
             text += &format!(
                 " A capture given to you, with the content of files changed since your last one: {capture}."
             );
@@ -504,6 +508,11 @@ fn run(options: Options) -> Result<i32> {
     }
     evidence["rejected_operations"] = arm.rejected.into();
     evidence["retries"] = arm.retries.into();
+    evidence["hidden_path_requests"] = arm
+        .hidden
+        .requests
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .into();
     evidence["edits"] = arm.edits()?;
     evidence["validation_attempts"] = json!(arm.validation_attempts);
     evidence["recommendations"] = recommendations.into();
@@ -611,12 +620,7 @@ fn setup(
         fs::remove_file(space0.join(file))?;
     }
     let language = arm::language(fixture["language"].as_str().unwrap_or_default())?;
-    let enrolled = arm::enrollment(&files, language);
-    let optional: Vec<String> = enrolled
-        .iter()
-        .filter(|f| !files.contains(f))
-        .cloned()
-        .collect();
+    let (enrolled, optional) = arm::enrolled(&fixture, language);
     let engine = Engine::open(
         &space0,
         &dir.join("controller/state"),
@@ -670,7 +674,7 @@ fn setup(
     );
     let workflow = fs::read_to_string(evaluation.join("instructions/falinks.md"))?;
     let root = engine.root(arm.client(0))?;
-    let [first, second] = [0, 1].map(|a| engine_host::opening(&engine, arm.client(a)));
+    let [first, second] = [0, 1].map(|a| engine_host::opening(&engine, arm.client(a), &arm.hidden));
     let opening = [first?, second?];
     let prompt = [0, 1].map(|a| prompt(a, &root, &fixture, &workflow, &optional, &opening[a].0));
     let worker = || Worker {
@@ -770,7 +774,7 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
         if Instant::now() >= deadline {
             return Ok("timeout");
         }
-        let developments = std::mem::take(&mut run.arm.borrow_mut().outbox);
+        let developments = run.arm.borrow_mut().take_outbox();
         for development in developments {
             run.event("development", json!({"milestone": development["id"]}))?;
             for worker in &mut run.workers {

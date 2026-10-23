@@ -60,14 +60,14 @@
       "new": "\"%d: %s\""
     },
     "L3": {
-      "file": "consumer.go",
-      "old": "strings.Join(Consume(records), \"\\n\")",
-      "new": "strings.Join(Consume(records), \"\\n\") + \"\\n\""
+      "file": "parse.go",
+      "old": "id <= 0",
+      "new": "id < 0"
     },
     "L4": {
       "file": "producer.go",
-      "old": "len(lines)-kept",
-      "new": "len(lines)"
+      "old": "; counts[record.Text] = 0 }",
+      "new": " }"
     }
   }
 }
