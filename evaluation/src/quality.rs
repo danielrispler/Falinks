@@ -31,7 +31,7 @@ const VERSIONS: [(&str, &[&str]); 4] = [
 
 /// A private copy beneath a fresh temporary directory, run like the oracle's checks: the
 /// same environment, no network, and the checkout, its Git storage and `denied` unreadable.
-struct Contained {
+pub(crate) struct Contained {
     _tmp: tempfile::TempDir,
     private: PathBuf,
     runs: std::cell::Cell<usize>,
@@ -39,7 +39,7 @@ struct Contained {
 }
 
 impl Contained {
-    fn new(denied: Vec<PathBuf>) -> Result<Self> {
+    pub(crate) fn new(denied: Vec<PathBuf>) -> Result<Self> {
         let tmp = tempfile::Builder::new()
             .prefix("falinks-quality-")
             .tempdir()?;
@@ -163,7 +163,7 @@ impl Contained {
     }
 
     /// The pinned formatter over every source file (#228 decision 6); its error otherwise.
-    fn format(&self, files: &Files, rust: bool) -> Result<Files> {
+    pub(crate) fn format(&self, files: &Files, rust: bool) -> Result<Files> {
         let mut argv = if rust {
             vec!["rustfmt", "--edition", "2021"]
         } else {
@@ -486,14 +486,14 @@ fn gates(space: &Contained, name: &str, rust: bool, reference: &Files) -> Result
 
 /// One fixture's formatted initial tree, the formatted reference's own figure, and its
 /// gated property suite or the gate's reason.
-struct Baseline {
-    initial: Files,
-    rust: bool,
+pub(crate) struct Baseline {
+    pub(crate) initial: Files,
+    pub(crate) rust: bool,
     figure: Value,
     properties: std::result::Result<Gated, String>,
 }
 
-fn baseline(space: &Contained, name: &str) -> Result<Baseline> {
+pub(crate) fn baseline(space: &Contained, name: &str) -> Result<Baseline> {
     let fixture = fixture(name)?;
     let rust = fixture["language"] == "rust";
     let files = |value: &Value| -> Files {
@@ -527,7 +527,7 @@ fn baseline(space: &Contained, name: &str) -> Result<Baseline> {
 
 /// One oracle-passing run's metrics, and its formatted final snapshot; a tool failure makes
 /// only its own metrics missing.
-fn measure(space: &Contained, base: &Baseline, last: &Files) -> (Value, Option<Files>) {
+pub(crate) fn measure(space: &Contained, base: &Baseline, last: &Files) -> (Value, Option<Files>) {
     let (initial, rust) = (&base.initial, base.rust);
     let lint_metric = if rust {
         "clippy_findings"

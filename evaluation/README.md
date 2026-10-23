@@ -246,13 +246,9 @@ it as `usage_limit`.
     shard killed mid-run leaves a stale lock: delete it, or the others over-report concurrency.
   - **Batch checkout** (#228 decision 29a): every invocation of the scored batch,
     including resumes and shards, runs from a checkout of #188's freeze commit.
-  - **Inspection rule** (#228 decisions 30–31), until #228's stage 2 freezes; the
-    calibration ticket lifts it. Nobody opens a scored run's final tree, diffs,
-    transcripts, `events.jsonl` or session JSONL, and nobody runs `report --show-code`
-    on a scored batch. A session diagnosing an infrastructure or safety failure may open
-    any file in the failed run's own directory, plus code-free batch files, but no other
-    run's directory. Its ticket comment lists the run and every file opened. A failed run
-    is never measured, and its replacement runs in a new directory.
+  - **Inspection rule** (#228 decisions 30–31): lifted. #228's stage 2 is frozen (#233),
+    so a scored run's final code may be inspected; the lifted rules stay on record in
+    `code-quality.json`, `rules`.
   - **Report** (#204): `report --runs DIR [--runs DIR]...` puts every dimension of both
     arms side by side, per fixture. **It computes no winner**: the decision is written on
     the ticket once the evidence is in ([#5 amendment](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6322468250)).
@@ -384,7 +380,7 @@ it as `usage_limit`.
       `reverted_peer_text` lists accepted edits that bring back lines a peer's earlier
       edit removed, for a manual check: each entry's agent, id, path, peer id and
       `line_count`. No report field prints source text by default; `--show-code` adds
-      the lines (see the inspection rule above).
+      the lines.
     - **Merging and gaps.** Several directories are merged as one batch: they must share
       one configuration and one pilot, and no run may appear twice. `concurrent_runs`
       lists the runs whose times overlapped a run in a sibling directory. `gaps` names
@@ -498,6 +494,15 @@ pin, prompt, anchors and rules, and the inspection and diagnosis rules.
 no longer appears verbatim in its fixture. Stage 2 changes the file only by a versioned
 amendment: bump its `version` and add an `amendments` entry with the reason, then
 re-freeze.
+
+The judge's known-answer set (#233) is `protected/known-answer.json`: per fixture, the
+test file that joins the reference to make the known-answer base, and one degraded copy per
+dimension as a declaration edit of the formatted base. `known-answer` checks the base and
+every copy: the formatter leaves it unchanged, the oracle and its tests pass, no property
+fails, and `vet` or `clippy` report nothing on changed lines. With `--judge CONFIG`, from a
+session outside auto mode, it then rates each tree three times (45 calls) and writes
+`calibration/v<definitions version>.json`, which names the manifest version; re-freeze to
+freeze it. After an amendment, the next record gets the new version's name. The 54 information calls on the #27 runs are `quality --runs DIR --judge CONFIG` over those batches. A record's outcome reaches the report by an amendment that sets `judge.calibration.<dimension>` to `{"passed": true}`, or to `{"dropped": true}` after a second failure.
 
 `freeze` lists each changed frozen path and refuses unstaged changes to them, so
 stage your repair first. Re-freeze before observing a red harness test, or the

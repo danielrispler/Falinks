@@ -1744,8 +1744,11 @@ func TestLabel(t *testing.T) {
     );
     assert_eq!(rel["labels"]["vet_findings"], "incomplete");
     assert!(rel["reference_production_lines_changed"]["value"].is_u64());
-    // No calibration record yet: every dimension prints "Not yet calibrated".
-    assert_eq!(rel["judge"]["git"]["test_quality"], "Not yet calibrated");
+    // Calibrated (#233): a dimension prints its values, here only why the run lacks one.
+    assert_eq!(
+        rel["judge"]["git"]["test_quality"]["missing_reasons"],
+        json!(["not measured: outcome task_failure"])
+    );
     assert_eq!(rel["judge"]["blinding"]["arm_guessed"], "arm guessed 0/0");
     assert_eq!(rel["judge"]["blinding"]["missing_guesses"], 1);
     let blinding = &report["fixtures"]["rust-errors"]["code_quality"]["judge"]["blinding"];
@@ -1843,4 +1846,59 @@ fn property_gates_withhold_values_and_name_the_property() {
             suites.to_str().unwrap()
         );
     }
+}
+
+/// #233: `known-answer` names each check a copy breaks, passes the frozen base, and calibrates
+/// only on the full set.
+#[test]
+fn known_answer_names_broken_checks_and_calibrates_only_the_full_set() {
+    let dir = tmp("falinks-known-answer-test-");
+    let mut set = read(root().join("protected/known-answer.json"));
+    let copy = &mut set["go-relationships"]["copies"]["maintainability"];
+    let new = copy["old"].as_str().unwrap().replace("ID: i + 1", "ID:i");
+    copy["new"] = new.into();
+    let path = dir.path().join("known-answer.json");
+    fs::write(&path, set.to_string()).unwrap();
+    let checked = Command::new(CLI)
+        .args(["known-answer", "--fixtures", "go-relationships"])
+        .env("FALINKS_KNOWN_ANSWER", &path)
+        .output()
+        .unwrap();
+    assert_eq!(checked.status.code(), Some(1), "{}", text(&checked));
+    let checks: Value = serde_json::from_slice(&checked.stdout).unwrap();
+    let fixture = &checks["checks"]["go-relationships"];
+    for label in [
+        "reference",
+        "duplication",
+        "unnecessary_changes",
+        "test_quality",
+    ] {
+        assert_eq!(fixture[label], json!([]), "{label}: {checks}");
+    }
+    let failed: Vec<&str> = fixture["maintainability"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    for expected in [
+        "the formatter changes it",
+        "failing_properties",
+        "the oracle or its tests fail",
+    ] {
+        assert!(failed.iter().any(|f| f.starts_with(expected)), "{failed:?}");
+    }
+    let partial = cli([
+        "known-answer",
+        "--fixtures",
+        "go-page",
+        "--judge",
+        "config.json",
+    ]);
+    assert!(!partial.status.success());
+    assert!(
+        text(&partial).contains("calibration needs every fixture"),
+        "{}",
+        text(&partial)
+    );
 }
