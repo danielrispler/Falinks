@@ -952,6 +952,7 @@ mod tests {
             ("falinks", vec![Some(&runs[1]), Some(&runs[2])]),
         ]);
         let mut definitions = crate::judge::definitions().unwrap();
+        definitions["judge"]["calibration"] = Value::Null;
         let cells = judge_cells(&slots, &definitions);
         for dimension in crate::judge::DIMENSIONS {
             assert_eq!(cells["falinks"][dimension], "Not yet calibrated");

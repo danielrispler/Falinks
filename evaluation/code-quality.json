@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
   "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4).",
   "amendments": [
@@ -7,6 +7,11 @@
       "version": 2,
       "ticket": 233,
       "reason": "None of the three references has test code, so a happy-path-only test copy would add tests to a test-free reference and could not rate lower on test_quality. The known-answer base is therefore the reference plus thorough tests, and every copy degrades that base (Daniel, 2026-10-23, on #233). unnecessary_changes also admits an added declaration nobody asked for: go-page and go-relationships each have only declarations the requirements name, so their copies add one instead of rewriting one; rust-errors names every declaration too, so its copy adds one as well. judge.calibration_record names where the record goes, versioned so an amendment never overwrites it."
+    },
+    {
+      "version": 3,
+      "ticket": 233,
+      "reason": "Calibration on manifest v31 (calibration/v2.json): every dimension's copy rated lower than the reference on all three fixtures, so all four dimensions passed on the first calibration and none was amended or dropped. judge.calibration records the outcome the report reads."
     }
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
@@ -178,6 +183,7 @@
     },
     "known_answer_set": "Per fixture, the known-answer base: the formatted reference plus one test file covering the behaviour and the edge cases the requirements name, since the reference has no tests. Then four degraded copies of that base, one per dimension: copied-in logic (duplication), an untouched function rewritten or behaviour nobody asked for (unnecessary_changes), happy-path-only tests (test_quality), needlessly convoluted control flow (maintainability). The base and copies are in protected/known-answer.json; `known-answer` checks them. (#228 decision 20, amended by #233)",
     "calibration_record": "`known-answer --judge CONFIG` rates the base and each copy k times and writes calibration/v{version}.json, named by this file's version and recording the manifest version. A record is never overwritten. (#233)",
+    "calibration": {"maintainability": {"passed": true, "record": "calibration/v2.json"}, "duplication": {"passed": true, "record": "calibration/v2.json"}, "unnecessary_changes": {"passed": true, "record": "calibration/v2.json"}, "test_quality": {"passed": true, "record": "calibration/v2.json"}},
     "subtlety_rule": "Each copy changes one declaration, changed or added, aimed at one dimension. It passes the oracle, all properties, vet and clippy with no findings on changed lines, and the formatter. No comment names or hints at the defect. It must be code a competent agent could write under the 30-minute limit. Daniel signs off each copy as plausible before it freezes. (#228 decision 21)",
     "calibration_criterion": "On every fixture, the targeted copy's median over three calls is lower than the reference's on that dimension. The #27 runs are rated for information only. (#228 decision 22)",
     "amendment_rule": "A failing dimension gets at most one versioned amendment to its prompt and anchors, checked against the same frozen copies, before any scored code is opened. The copies are never changed after the first calibration call. A dimension that fails twice is dropped. (#228 decision 23)",
@@ -191,7 +197,7 @@
     "versions": "Each run's metrics record go version, rustc -V, clippy-driver -V and rustfmt -V. The pins are rust-toolchain.toml and the evaluation's recorded Go version. (#228 decision 26)"
   },
   "rules": {
-    "lasts": "Until #228's stage 2 freezes. The calibration ticket lifts it.",
+    "lasts": "Until #228's stage 2 freezes. Lifted by #233: stage 2 is frozen with the calibration record calibration/v2.json, so a scored run's final code may be inspected.",
     "inspection": "Nobody opens a scored run's final tree, diffs, transcripts, events.jsonl or session JSONL, and nobody runs report --show-code on a scored batch. (#228 decision 30)",
     "diagnosis": "A session diagnosing an infrastructure or safety failure may open any file in the failed run's own directory, plus code-free batch files. It must not open other runs' directories. The ticket comment lists the run and every file opened. A failed run is never measured, and its replacement runs in a new directory. (#228 decision 31)",
     "batch_checkout": "Every invocation of the scored batch, including resumes and shards, runs from a checkout of #188's freeze commit. (#228 decision 29a)"

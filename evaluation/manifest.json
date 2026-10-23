@@ -2,7 +2,8 @@
   "hashes": {
     "Cargo.lock": "0454ca05e92d6fb25d47c4938537690e9c6365a6909355a1919bbf748a2d70fd",
     "Cargo.toml": "1c6bc262c1b4b81b4c7bd5ae291db2fc06de3578cd672c060337c0ebe5ae9ec0",
-    "code-quality.json": "a4fa9581c14a254eea2a0ffa674b285f4b207833a7dda7aa6968f31156045791",
+    "calibration/v2.json": "c0597650c95e4ebd4f0f0a083152c4705b41a70c2b4f7eef393cd2828251dccf",
+    "code-quality.json": "8da87f3d670a4d967feea3a0e7343302f35a883774bcc24e99abe81f2122f3b2",
     "config.json": "558c95c16fb9293560ee952ef413a9154c887546af8e99b584251ab51061977e",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
@@ -33,7 +34,7 @@
     "src/known_answer.rs": "cd8337c2d397e06f5fd9178c77f0df3723e2dffad8154f206f9688d4d264740e",
     "src/main.rs": "980a3535ff13e0800516a57d5886f2380abde5aa9edc5242d0675a3796ea9f76",
     "src/quality.rs": "231d5aa450782eff53e559bfbd0950e3eef51656526c0c7185a5c4ae5bc7ad14",
-    "src/report.rs": "28e6a2c3a9349ef458b5c9a7c70ed8993a8cec74e4e3890a38dfbbdad01fb652",
+    "src/report.rs": "46b12ba27a0e38cdebe635bcd35bb36a8050fc732cc6b876bf36d3dde7c0a55a",
     "src/timing.rs": "826e0b76ea8607213c58916a773283bbdc219919975ea9b9e37ac07932e034eb",
     "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
   },
@@ -44,5 +45,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 31
+  "version": 32
 }

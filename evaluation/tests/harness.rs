@@ -1744,8 +1744,11 @@ func TestLabel(t *testing.T) {
     );
     assert_eq!(rel["labels"]["vet_findings"], "incomplete");
     assert!(rel["reference_production_lines_changed"]["value"].is_u64());
-    // No calibration record yet: every dimension prints "Not yet calibrated".
-    assert_eq!(rel["judge"]["git"]["test_quality"], "Not yet calibrated");
+    // Calibrated (#233): a dimension prints its values, here only why the run lacks one.
+    assert_eq!(
+        rel["judge"]["git"]["test_quality"]["missing_reasons"],
+        json!(["not measured: outcome task_failure"])
+    );
     assert_eq!(rel["judge"]["blinding"]["arm_guessed"], "arm guessed 0/0");
     assert_eq!(rel["judge"]["blinding"]["missing_guesses"], 1);
     let blinding = &report["fixtures"]["rust-errors"]["code_quality"]["judge"]["blinding"];
