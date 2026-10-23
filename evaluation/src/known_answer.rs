@@ -7,7 +7,7 @@
 //! record, which a second calibration after an amendment never overwrites.
 use crate::judge::{self, DIMENSIONS};
 use crate::quality::{Baseline, Contained, Files, baseline, measure};
-use crate::{Result, bail, check, fixture, frozen, git, initial, read, root, utc_now, write};
+use crate::{Result, bail, check, fixture, frozen, git, initial, read, root, utc_now};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 use std::time::Duration;
@@ -95,10 +95,74 @@ fn failures(
     failed
 }
 
-pub fn known_answer(judge_config: Option<&Path>) -> Result<i32> {
+/// One fixture's requirement text, formatted initial tree and known-answer trees.
+type Rated = (String, String, Files, Vec<(String, Files)>);
+
+/// Rates every tree k times and applies #228 decision 22 per fixture and dimension. Any rating
+/// still missing after its retry is a tool failure (decision 25), not a calibration result: it
+/// is an error, so no record is written.
+fn calibrate(call: &mut judge::Call, definitions: &Value, fixtures: &[Rated]) -> Result<Value> {
+    let mut record = Map::new();
+    let mut calls = vec![];
+    let mut dimensions: Map<String, Value> = DIMENSIONS
+        .iter()
+        .map(|d| (d.to_string(), true.into()))
+        .collect();
+    for (name, requirements, initial, trees) in fixtures {
+        let mut ratings = Map::new();
+        for (label, tree) in trees {
+            let material = judge::material(initial, tree);
+            let (rated, made) = judge::rate(call, definitions, requirements, &material);
+            calls.extend(made.into_iter().map(|mut c| {
+                c["fixture"] = name.as_str().into();
+                c["tree"] = label.as_str().into();
+                c
+            }));
+            if let Some(reason) = rated["missing"].as_str() {
+                bail!("known-answer: {name} {label}: {reason}; no record written");
+            }
+            ratings.insert(label.clone(), rated);
+        }
+        let mut entry = Map::new();
+        for dimension in DIMENSIONS {
+            let (reference, copy) = (
+                &ratings["reference"][dimension],
+                &ratings[dimension][dimension],
+            );
+            // #228 decision 22: the targeted copy's median is lower than the reference's.
+            let pass = copy["value"].as_u64() < reference["value"].as_u64();
+            if !pass {
+                dimensions[dimension] = false.into();
+            }
+            entry.insert(
+                dimension.into(),
+                json!({"reference": reference, "copy": copy, "passed": pass}),
+            );
+        }
+        record.insert(name.clone(), entry.into());
+    }
+    Ok(json!({"fixtures": record, "dimensions": dimensions, "calls": calls}))
+}
+
+/// Checks the known-answer trees of `only` (every scored fixture by default) and, with a run
+/// configuration, calibrates the judge on the full set.
+pub fn known_answer(judge_config: Option<&Path>, only: Option<&str>) -> Result<i32> {
     // The copies are frozen before any calibration call (#233).
     let manifest = frozen()?;
-    let set = read(root().join("protected/known-answer.json"))?;
+    let names: Vec<&str> = only.map_or(crate::SCORED_FIXTURES.to_vec(), |list| {
+        list.split(',').collect()
+    });
+    if names.iter().any(|n| !crate::SCORED_FIXTURES.contains(n)) {
+        bail!("--fixtures takes {:?}", crate::SCORED_FIXTURES);
+    }
+    if judge_config.is_some() && names.len() != crate::SCORED_FIXTURES.len() {
+        bail!("known-answer: calibration needs every fixture (#228 decision 22)");
+    }
+    // Tests point `FALINKS_KNOWN_ANSWER` at their own set.
+    let set = read(std::env::var_os("FALINKS_KNOWN_ANSWER").map_or_else(
+        || root().join("protected/known-answer.json"),
+        std::path::PathBuf::from,
+    ))?;
     let definitions = judge::definitions()?;
     let runtime = judge_config
         .map(|config| judge::Runtime::load(config, &definitions))
@@ -109,7 +173,7 @@ pub fn known_answer(judge_config: Option<&Path>) -> Result<i32> {
         .tempdir()?;
     let mut checks = Map::new();
     let mut fixtures = vec![];
-    for name in crate::SCORED_FIXTURES {
+    for name in names {
         let base = baseline(&space, name)?;
         let trees = trees(&space, name, base.rust, &set)?;
         let mut entry = Map::new();
@@ -121,7 +185,8 @@ pub fn known_answer(judge_config: Option<&Path>) -> Result<i32> {
             );
         }
         checks.insert(name.into(), entry.into());
-        fixtures.push((name, base, trees));
+        let requirements = judge::requirements(&fixture(name)?);
+        fixtures.push((name.to_string(), requirements, base.initial, trees));
     }
     let passed = checks
         .values()
@@ -139,57 +204,29 @@ pub fn known_answer(judge_config: Option<&Path>) -> Result<i32> {
     }
     let version = &definitions["version"];
     let path = root().join(format!("calibration/v{version}.json"));
-    if path.exists() {
-        bail!(
-            "{} exists: a calibration record is never overwritten",
-            path.display()
-        );
-    }
-    let mut record = Map::new();
-    let mut calls = vec![];
-    let mut dimensions: Map<String, Value> = DIMENSIONS
-        .iter()
-        .map(|d| (d.to_string(), true.into()))
-        .collect();
-    for (name, base, trees) in &fixtures {
-        let requirements = judge::requirements(&fixture(name)?);
-        let mut ratings = Map::new();
-        for (label, tree) in trees {
-            let material = judge::material(&base.initial, tree);
-            let mut call = |prompt: &str| runtime.call(prompt);
-            let (rated, made) = judge::rate(&mut call, &definitions, &requirements, &material);
-            calls.extend(made.into_iter().map(|mut c| {
-                c["fixture"] = (*name).into();
-                c["tree"] = label.as_str().into();
-                c
-            }));
-            ratings.insert(label.clone(), rated);
-        }
-        let mut entry = Map::new();
-        for dimension in DIMENSIONS {
-            let (reference, copy) = (
-                &ratings["reference"][dimension],
-                &ratings[dimension][dimension],
-            );
-            // #228 decision 22: the targeted copy's median is lower than the reference's.
-            let pass = matches!((reference["value"].as_u64(), copy["value"].as_u64()),
-                (Some(r), Some(c)) if c < r);
-            if !pass {
-                dimensions[dimension] = false.into();
-            }
-            entry.insert(
-                dimension.into(),
-                json!({"reference": reference, "copy": copy, "passed": pass}),
-            );
-        }
-        record.insert((*name).into(), entry.into());
-    }
+    let mut record = calibrate(
+        &mut |prompt: &str| runtime.call(prompt),
+        &definitions,
+        &fixtures,
+    )?;
+    record["utc"] = utc_now().into();
+    record["manifest_version"] = manifest["version"].clone();
+    record["definitions_version"] = version.clone();
     std::fs::create_dir_all(root().join("calibration"))?;
-    write(
-        &path,
-        &json!({"utc": utc_now(), "manifest_version": manifest["version"],
-            "definitions_version": version, "fixtures": record, "dimensions": dimensions,
-            "calls": calls}),
+    // A calibration record is never overwritten (#228 decision 23).
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| {
+            format!(
+                "{}: {e}; a calibration record is never overwritten",
+                path.display()
+            )
+        })?;
+    std::io::Write::write_all(
+        &mut file,
+        format!("{}\n", serde_json::to_string_pretty(&record)?).as_bytes(),
     )?;
     println!("{}", path.display());
     Ok(0)
@@ -199,34 +236,83 @@ pub fn known_answer(judge_config: Option<&Path>) -> Result<i32> {
 mod tests {
     use super::*;
 
-    /// The subtlety rule's checks name a copy that is unformatted and changes behaviour.
+    fn reply(ratings: [u64; 4]) -> String {
+        let field = |r: u64| json!({"rating": r, "reason": "r."});
+        json!({"maintainability": field(ratings[0]), "duplication": field(ratings[1]),
+            "unnecessary_changes": field(ratings[2]), "test_quality": field(ratings[3])})
+        .to_string()
+    }
+
+    /// Two fixtures, each the reference and one copy per dimension. A tree's single file holds
+    /// its label, so a canned judge knows which tree it rates.
+    fn fixtures() -> Vec<Rated> {
+        let tree =
+            |label: &str| Files::from([("a.go".to_string(), format!("{label}\n").into_bytes())]);
+        ["one", "two"]
+            .iter()
+            .map(|name| {
+                let trees = std::iter::once("reference")
+                    .chain(DIMENSIONS)
+                    .map(|label| (label.to_string(), tree(&format!("{name}-{label}"))))
+                    .collect();
+                (
+                    name.to_string(),
+                    "Do it.".to_string(),
+                    tree("initial"),
+                    trees,
+                )
+            })
+            .collect()
+    }
+
+    /// #228 decision 22: a dimension passes only when its copy rates lower on every fixture;
+    /// a tie fails it. A rating still missing after its retry writes no record (decision 25).
     #[test]
-    fn failures_name_an_unformatted_behaviour_change() {
-        let space = Contained::new(vec![]).unwrap();
-        let set = read(root().join("protected/known-answer.json")).unwrap();
-        let base = baseline(&space, "go-relationships").unwrap();
-        let mut bad = trees(&space, "go-relationships", false, &set).unwrap()[0]
-            .1
-            .clone();
-        let text = String::from_utf8(bad["producer.go"].clone()).unwrap();
-        bad.insert(
-            "producer.go".into(),
-            text.replace("ID: i + 1", "ID:i").into_bytes(),
+    fn calibration_needs_a_lower_copy_on_every_fixture_and_every_rating() {
+        let definitions = judge::definitions().unwrap();
+        let mut canned = |prompt: &str| {
+            let ratings =
+                if prompt.contains("+one-duplication") || prompt.contains("+two-duplication") {
+                    [4, 2, 4, 4]
+                } else if prompt.contains("+one-test_quality") {
+                    [4, 4, 4, 3]
+                } else {
+                    [4; 4]
+                };
+            (Ok(reply(ratings)), json!({"usage": null}))
+        };
+        let record = calibrate(&mut canned, &definitions, &fixtures()).unwrap();
+        assert_eq!(
+            record["dimensions"],
+            json!({"maintainability": false, "duplication": true,
+                "unnecessary_changes": false, "test_quality": false})
         );
-        let tmp = tempfile::tempdir().unwrap();
-        let failed = failures(
-            &space,
-            &base,
-            "go-relationships",
-            &bad,
-            &tmp.path().join("repo"),
+        let one = &record["fixtures"]["one"];
+        assert_eq!(one["test_quality"]["passed"], true);
+        assert_eq!(one["test_quality"]["copy"]["ratings"], json!([3, 3, 3]));
+        assert_eq!(one["test_quality"]["reference"]["value"], 4);
+        assert_eq!(record["fixtures"]["two"]["test_quality"]["passed"], false);
+        // k = 3 calls per tree: 2 fixtures x 5 trees x 3.
+        assert_eq!(record["calls"].as_array().unwrap().len(), 30);
+        assert_eq!(record["calls"][0]["tree"], "reference");
+
+        let mut failing = |prompt: &str| {
+            if prompt.contains("+two-maintainability") {
+                (
+                    Err("runtime call failed: boom".to_string()),
+                    json!({"usage": null}),
+                )
+            } else {
+                (Ok(reply([4; 4])), json!({"usage": null}))
+            }
+        };
+        let error = calibrate(&mut failing, &definitions, &fixtures())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("two maintainability") && error.contains("boom"),
+            "{error}"
         );
-        for expected in [
-            "the formatter changes it",
-            "failing_properties",
-            "the oracle or its tests fail",
-        ] {
-            assert!(failed.iter().any(|f| f.starts_with(expected)), "{failed:?}");
-        }
+        assert!(error.ends_with("no record written"), "{error}");
     }
 }

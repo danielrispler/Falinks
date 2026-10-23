@@ -6,7 +6,7 @@
     {
       "version": 2,
       "ticket": 233,
-      "reason": "None of the three references has test code, so a happy-path-only test copy would add tests to a test-free reference and could not rate lower on test_quality. The known-answer base is therefore the reference plus thorough tests, and every copy degrades that base (Daniel, 2026-10-23, on #233). unnecessary_changes also admits an added declaration nobody asked for: go-page and go-relationships each have only declarations the requirements name, so their copies add one instead of rewriting one."
+      "reason": "None of the three references has test code, so a happy-path-only test copy would add tests to a test-free reference and could not rate lower on test_quality. The known-answer base is therefore the reference plus thorough tests, and every copy degrades that base (Daniel, 2026-10-23, on #233). unnecessary_changes also admits an added declaration nobody asked for: go-page and go-relationships each have only declarations the requirements name, so their copies add one instead of rewriting one; rust-errors names every declaration too, so its copy adds one as well. judge.calibration_record names where the record goes, versioned so an amendment never overwrites it."
     }
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",

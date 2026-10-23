@@ -810,7 +810,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t] [--fixtures NAME[,NAME]]
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
-  known-answer [--judge CONFIG]
+  known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
   report --runs DIR [--runs DIR]... [--schedule track-t] [--show-code]
   timing RUN_DIR";
 
@@ -954,7 +954,9 @@ fn run() -> Result<i32> {
             let dirs: Vec<&Path> = args.all("runs").into_iter().map(Path::new).collect();
             quality::quality(&dirs, args.get("judge").map(Path::new))
         }
-        Some("known-answer") => known_answer::known_answer(args.get("judge").map(Path::new)),
+        Some("known-answer") => {
+            known_answer::known_answer(args.get("judge").map(Path::new), args.get("fixtures"))
+        }
         Some("timing") => {
             let run = args.positional.get(1).ok_or(USAGE)?;
             let figures = timing::timing(Path::new(run))?;
