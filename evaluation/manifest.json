@@ -4,7 +4,7 @@
     "Cargo.toml": "1c6bc262c1b4b81b4c7bd5ae291db2fc06de3578cd672c060337c0ebe5ae9ec0",
     "calibration/v2.json": "c0597650c95e4ebd4f0f0a083152c4705b41a70c2b4f7eef393cd2828251dccf",
     "code-quality.json": "b2e97568d8070c651cfc0040b8f00a567695d2426b793f0e1ec89067af5b4e06",
-    "config.json": "558c95c16fb9293560ee952ef413a9154c887546af8e99b584251ab51061977e",
+    "config.json": "6cc89aec9024b226135588fb3c17e09703b0c7561916738b7c2ce02b66c46bbb",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
     "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
@@ -45,5 +45,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 33
+  "version": 34
 }
