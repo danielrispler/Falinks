@@ -17,7 +17,7 @@
       "maintainability": {
         "file": "src/consumer.rs",
         "old": "pub fn describe(key: &str) -> String {\n    match lookup(key) {\n        Ok(value) => format!(\"{key}={value}\"),\n        Err(LookupError::Missing { key }) => format!(\"missing:{key}\"),\n        Err(LookupError::Unavailable { retryable }) => format!(\"unavailable:retryable={retryable}\"),\n    }\n}",
-        "new": "pub fn describe(key: &str) -> String {\n    let result = lookup(key);\n    let mut out = String::new();\n    if let Ok(value) = &result {\n        out = format!(\"{key}={value}\");\n    }\n    if out.is_empty() {\n        if let Err(error) = result {\n            let missing = matches!(error, LookupError::Missing { .. });\n            out = match (missing, error) {\n                (true, LookupError::Missing { key }) => format!(\"missing:{key}\"),\n                (false, LookupError::Unavailable { retryable }) => {\n                    format!(\"unavailable:retryable={retryable}\")\n                }\n                _ => unreachable!(),\n            };\n        }\n    }\n    out\n}"
+        "new": "pub fn describe(key: &str) -> String {\n    let mut out = String::new();\n    let result = lookup(key);\n    if let Ok(value) = &result {\n        out = format!(\"{key}={value}\");\n    }\n    if let Err(LookupError::Missing { key }) = &result {\n        out = format!(\"missing:{key}\");\n    }\n    if let Err(LookupError::Unavailable { retryable }) = &result {\n        out = format!(\"unavailable:retryable={retryable}\");\n    }\n    out\n}"
       },
       "test_quality": {
         "file": "tests/catalog.rs",
@@ -61,7 +61,7 @@
       "duplication": {
         "file": "producer.go",
         "old": "func Stats(lines []string) (kept int, dropped int) {\n\tkept = len(Produce(lines))\n\treturn kept, len(lines) - kept\n}",
-        "new": "func Stats(lines []string) (kept int, dropped int) {\n\tfor _, line := range lines {\n\t\tif strings.TrimSpace(line) != \"\" {\n\t\t\tkept++\n\t\t} else {\n\t\t\tdropped++\n\t\t}\n\t}\n\treturn kept, dropped\n}"
+        "new": "func Stats(lines []string) (kept int, dropped int) {\n\trecords := make([]Record, 0, len(lines))\n\tfor i, line := range lines {\n\t\ttext := strings.TrimSpace(line)\n\t\tif text != \"\" {\n\t\t\trecords = append(records, Record{ID: i + 1, Text: text})\n\t\t}\n\t}\n\treturn len(records), len(lines) - len(records)\n}"
       },
       "unnecessary_changes": {
         "file": "consumer.go",

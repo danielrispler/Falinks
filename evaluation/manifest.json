@@ -16,7 +16,7 @@
     "protected/go-indep-4.json": "b10e6fd972fdc9f67777952e9aef7fbb9334765a74b0a662639f386ef5f699fc",
     "protected/go-page.json": "30c91a06e9c56e6449e77a029eaf05c89c84bd4b620b1f7bc9a3671a3bb658d2",
     "protected/go-relationships.json": "9e9e30ffb3f72155d523083fb718a04b3b7762ae176812d4df17f5b10e96aa4f",
-    "protected/known-answer.json": "8d90a87d4175396dc6ffd53054d9fc059ecbd0bba3401d1a7ff7c3568fbe3c04",
+    "protected/known-answer.json": "fd2a4669939a0e79b52e453e28edc081bd4726773a895386a6256ea78928aa4d",
     "protected/properties/broken.json": "55878efd0da2cd29b7d2444a3c6d5ab6f13f01e68c758805a5efa990286441df",
     "protected/properties/go-page_test.go": "b79de8d8007f108c0c6ad5e386fe06853dee7ca181236c7b16b563f6d1b5e41c",
     "protected/properties/go-relationships_test.go": "6bafae076af6b3fd028ed10f260ffc8c688c746d7c1fd3aaec961b3a69995506",
