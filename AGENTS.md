@@ -26,12 +26,7 @@ The evaluation sources are hash-frozen in `evaluation/manifest.json`. Before you
 
 ## Scored-batch inspection
 
-Until #228's stage 2 freezes (the calibration ticket lifts this rule):
-
-- Except as the next bullet allows, never open a scored run's final tree, diffs, transcripts, `events.jsonl` or session JSONL. Never run `report --show-code` on a scored batch.
-- When diagnosing an infrastructure or safety failure, you may open any file in the failed run's own directory, plus code-free batch files. Never open other runs' directories. List the run and every file you opened in the ticket comment. Never measure a failed run; its replacement runs in a new directory.
-
-The rules are frozen in `evaluation/code-quality.json`; the batch steps are in `evaluation/README.md`, "Paired evaluation (#27)".
+#228's stage 2 is frozen (#233), so the scored-batch inspection and diagnosis rules are lifted. A scored run's final code may be inspected. The lifted rules stay on record in `evaluation/code-quality.json`, `rules`.
 
 ## Local evidence
 
