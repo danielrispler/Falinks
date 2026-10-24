@@ -6,6 +6,8 @@ mod coordination;
 mod publication;
 mod regroup;
 pub use analysis::{Evidence, Language, Owner, Pin, Tool, Toolchain, Unit, sha256_file};
+#[cfg(target_os = "linux")]
+pub use contain::confine_self;
 #[doc(hidden)]
 pub use contain::helper_main;
 pub use coordination::{

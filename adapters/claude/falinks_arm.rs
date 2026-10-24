@@ -653,6 +653,10 @@ fn setup(
     let tool = env::current_exe()?.with_file_name("falinks-claude-tool");
     fs::create_dir(dir.join("worker-tools"))?;
     fs::copy(&tool, dir.join("worker-tools/falinks-claude-tool"))?;
+    fs::copy(
+        tool.with_file_name("falinks-claude-shell"),
+        dir.join("worker-tools/falinks-claude-shell"),
+    )?;
     evidence["tool_sha256"] = file_hash(&tool)?.into();
     for agent in 0..2 {
         for part in ["scratch", "controller"] {

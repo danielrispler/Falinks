@@ -10,7 +10,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::{
-        fs::OpenOptionsExt,
+        fs::{DirBuilderExt, OpenOptionsExt},
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
@@ -714,6 +714,10 @@ struct Waiting {
     started: Instant,
 }
 
+/// Beneath scratch: Claude Code's temp files, such as each Bash command's cwd file, and the
+/// commands' `TMPDIR`, since a confined command writes nowhere else.
+const TMP: &str = ".tmp";
+
 pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
     let path = |p: &Path| p.to_string_lossy().into_owned();
     let mut deny = [
@@ -734,20 +738,20 @@ pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
         // `//` marks an absolute path in permission rules.
         deny.push(format!("Read(/{name}/**)"));
     }
-    let mut read_only = vec![path(&launch.source), path(&launch.worker_tools)];
-    read_only.extend(hidden.iter().cloned());
-    let hook = shlex::try_join([
-        tool.to_string_lossy().as_ref(),
-        "hook",
-        path(&launch.controller).as_str(),
-    ])?;
+    // Per-command confinement (#236 spike): Claude Code's sandbox is off and every Bash
+    // command runs through `falinks-claude-shell`, which writes only beneath scratch. The
+    // relay's line matches mcp.json; the hook is exec form, which the prefix skips.
+    let shell =
+        json!({"scratch":launch.scratch,"denied":hidden,"relay":[tool,"mcp",launch.controller]});
+    let tmp = launch.scratch.join(TMP);
     Ok(json!({
         "permissions":{"defaultMode":"dontAsk","allow":launch.allowed(),"deny":deny},
-        "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
-            "failIfUnavailable":true,"filesystem":{"allowWrite":[path(&launch.scratch)],
-            "denyWrite":read_only,"denyRead":hidden}},
-        "hooks":{"PreToolUse":[{"matcher":"mcp__falinks__.*","hooks":[{"type":"command","command":hook}]}]},
-        "env":{"DISABLE_AUTOUPDATER":"1"}
+        "sandbox":{"enabled":false},
+        "hooks":{"PreToolUse":[{"matcher":"mcp__falinks__.*","hooks":[{"type":"command","command":tool,"args":["hook",launch.controller]}]}]},
+        "env":{"DISABLE_AUTOUPDATER":"1",
+            "CLAUDE_CODE_SHELL_PREFIX":launch.worker_tools.join("falinks-claude-shell"),
+            "CLAUDE_CODE_SHELL":"/bin/bash","CLAUDE_CODE_TMPDIR":tmp,"TMPDIR":tmp,
+            "FALINKS_SHELL":shell.to_string()}
     }))
 }
 pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String> {
@@ -898,6 +902,10 @@ impl Runtime {
         session.runtime = binary.to_string_lossy().into_owned();
         session.gate.record("pin", true)?;
         let settings = settings(launch, &tool)?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(launch.scratch.join(TMP))?;
         fs::write(controller.join("settings.json"), settings.to_string())?;
         fs::write(controller.join("tools.json"), launch.tools.to_string())?;
         let server = json!({"mcpServers":{"falinks":{"command":tool,"args":["mcp",controller]}}});
@@ -909,7 +917,6 @@ impl Runtime {
         command
             .args(&args)
             .current_dir(&launch.scratch)
-            .env("DISABLE_AUTOUPDATER", "1")
             // The Git arm's Go settings: the sandbox denies Go's default cache outside scratch (#112).
             .env("GOCACHE", launch.scratch.join("go-cache"))
             .env("GOTOOLCHAIN", "local")
@@ -929,6 +936,11 @@ impl Runtime {
             .filter(|(k, _)| k.starts_with("CLAUDE") && k != "CLAUDE_CODE_OAUTH_TOKEN")
         {
             command.env_remove(key);
+        }
+        // Also in the process environment, so the prefix holds from startup, before the
+        // MCP server launches.
+        for (key, value) in settings["env"].as_object().into_iter().flatten() {
+            command.env(key, value.as_str().unwrap_or_default());
         }
         let mut child = command.spawn()?;
         let input = child.stdin.take();

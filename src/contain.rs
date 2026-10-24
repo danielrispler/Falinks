@@ -396,6 +396,15 @@ fn complement(denied: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(allowed)
 }
 
+/// Confines the calling process and whatever it execs: reads outside `denied`, writes
+/// only beneath `writable` and `/dev/null`, no sockets. For a single-threaded caller
+/// about to exec, such as the Claude Code adapter's Bash wrapper (#236). `denied` must
+/// be canonical.
+#[cfg(target_os = "linux")]
+pub fn confine_self(denied: &[PathBuf], writable: &Path) -> Result<()> {
+    linux_helper::confine_self(&complement(denied)?, writable)
+}
+
 /// Default helper location: beside the host executable, or beside Cargo's `deps`
 /// directory for integration tests.
 pub(crate) fn default_helper() -> Result<PathBuf> {
@@ -568,6 +577,11 @@ mod linux_helper {
             .split_whitespace()
             .filter_map(|p| p.parse().ok())
             .collect())
+    }
+
+    pub(super) fn confine_self(reads: &[PathBuf], writable: &std::path::Path) -> Result<()> {
+        require_landlock(landlock_abi())?;
+        contain(reads, &writable.to_path_buf())
     }
 
     /// Runs in the forked child before exec: Landlock for files, seccomp for sockets.

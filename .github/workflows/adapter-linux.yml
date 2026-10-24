@@ -3,6 +3,10 @@ name: Claude Code adapter on Linux
 # Evidence for the Claude Code adapter's Linux cells in docs/platforms.md (#57, #115), not
 # a required check.
 #
+# #236 spike branch: per-command confinement (falinks-claude-shell) replaces Claude Code's
+# sandbox. Bubblewrap must still fail under the default AppArmor policy, and every control
+# must pass under that same policy, with no user namespaces. Linux x86_64 only.
+#
 # Every run builds the adapter binaries and runs the worker-sandbox prerequisite check on
 # both runners, with no model call: under the runner's default AppArmor policy, bubblewrap
 # with a new network namespace must fail with `loopback: Failed RTM_NEWADDR`, and once
@@ -59,8 +63,6 @@ jobs:
         include:
           - runner: ubuntu-24.04
             claude: linux-x64
-          - runner: ubuntu-24.04-arm
-            claude: linux-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -72,7 +74,7 @@ jobs:
           rustflags: ""
       # Claude Code's Linux sandbox needs both.
       - run: sudo apt-get install -y bubblewrap socat
-      - run: cargo build --release --locked --bin check-claude-adapter --bin falinks-claude-tool --bin sandbox-probe
+      - run: cargo build --release --locked --bin check-claude-adapter --bin falinks-claude-tool --bin falinks-claude-shell --bin sandbox-probe
       # A deleted secret must fail the run, not silently stop the evidence.
       - name: Token
         env:
@@ -117,18 +119,11 @@ jobs:
             echo "::error::bubblewrap failed without 'loopback: Failed RTM_NEWADDR'; docs/platforms.md records that message."
             exit 1
           fi
-      # The worker sandbox cannot start here, so the check asserts it fails closed.
+      # Per-command confinement needs no user namespaces, so every control must pass here.
       - name: Live adapter check, default policy
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-default.json --expect-sandbox-unavailable
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Worker-sandbox prerequisite, user namespaces allowed
-        run: bwrap --unshare-net --ro-bind / / true
-      - name: Live adapter check, user namespaces allowed
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-userns.json
+        run: target/release/check-claude-adapter --binary "$CLAUDE" --output claude-default.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
