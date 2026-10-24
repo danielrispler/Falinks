@@ -2,7 +2,7 @@
 
 ## Layout
 
-This repo uses a single-context layout: `CONTEXT.md` at the repo root and architecture decision records in `docs/adr/`.
+This repo has two contexts. The engine uses `CONTEXT.md` at the repo root and architecture decision records in `docs/adr/`. The studio, a control room for understanding agent work, uses `docs/studio/CONTEXT.md`. Use the context of the area you work in; a term defined in both means what its own context says.
 
 ## Before exploring
 

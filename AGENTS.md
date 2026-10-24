@@ -44,7 +44,7 @@ Track issues and specs in GitHub Issues for `danielrispler/Falinks`. To read, li
 
 ### Wayfinder
 
-For Wayfinder sessions, run `cargo run --bin wayfinder-startup -- [map-number]`. The default is the newest open `wayfinder:map` issue; the live tickets are under #19, so pass `19`. Claim a ticket with `--claim <n>`. Follow the startup steps in `docs/agents/issue-tracker.md` and the ticket-context rules in `docs/agents/ticket-authoring.md`.
+For Wayfinder sessions, run `cargo run --bin wayfinder-startup -- [map-number]`. The default is the newest open `wayfinder:map` issue, so pass a number: `19` for the engine, whose live tickets are under #19, or `266` for the studio, the control-room effort whose issues are titled `Studio:` and labelled `studio`. Claim a ticket with `--claim <n>`. Follow the startup steps in `docs/agents/issue-tracker.md` and the ticket-context rules in `docs/agents/ticket-authoring.md`.
 
 ### Triage labels
 
@@ -52,4 +52,4 @@ Use the five default triage labels. Before triaging issues, read `docs/agents/tr
 
 ### Domain docs
 
-Use a single-context layout: root `CONTEXT.md` and `docs/adr/`. Before exploring the codebase, read `docs/agents/domain.md`. Settled decisions are indexed in a `wayfinder:map`'s Decisions-so-far or a spec's Implementation Decisions; read the linked resolution comment before proposing a design change.
+The engine's context is root `CONTEXT.md` and `docs/adr/`; the studio's is `docs/studio/CONTEXT.md`. Before exploring the codebase, read `docs/agents/domain.md`. Settled decisions are indexed in a `wayfinder:map`'s Decisions-so-far or a spec's Implementation Decisions; read the linked resolution comment before proposing a design change.
