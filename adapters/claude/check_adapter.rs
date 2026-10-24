@@ -1,7 +1,7 @@
 //! Fresh finite controls against the pinned Claude Code binary; historical evidence never
 //! authorizes another host.
 use falinks_claude::{
-    Launch, Runtime, WorkerSandboxOutcome, bash_probe_controls, blocks, fixture_files, refused,
+    Launch, Runtime, WorkerSandboxOutcome, bash_probe_controls, fixture_files, refused,
     tool_results, verify_binary, worker_sandbox_unavailable,
 };
 use falinks_host::{
@@ -60,7 +60,9 @@ fn probe_command(root: &Path, expected: &str) -> Result<String> {
 }
 /// The exact probe command must have run through the real Bash tool with every control passing.
 fn bash_controls(runtime: &mut Runtime, root: &Path, expected: &str) -> Result<Value> {
-    let checks = bash_probe_controls(&runtime.session.events, &probe_command(root, expected)?)?;
+    let command = probe_command(root, expected)?;
+    let checks = bash_probe_controls(&runtime.session.events, &command)?;
+    refusals(&bash_result(&runtime.session.events, &command)?["stdout"])?;
     for name in falinks_host::PROBE_CONTROLS {
         runtime.session.gate.record(name, true)?;
     }
@@ -107,6 +109,32 @@ fn background_command(root: &Path, expected: &str) -> Result<String> {
         root.join("scratch/background.txt").display()
     ))
 }
+/// Every probe read and write was refused, never masked: under Claude Code's Linux sandbox a
+/// protected read found an empty tmpfs and a write landed in it (#57). Seatbelt refuses
+/// with EPERM, Landlock with EACCES.
+fn refusals(stdout: &Value) -> Result<()> {
+    let errors: Value = serde_json::from_str(
+        stdout
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .find_map(|l| l.strip_prefix("FALINKS_ERRORS="))
+            .ok_or("the probe printed no FALINKS_ERRORS")?,
+    )?;
+    let refused = |e: &Value| {
+        e.as_str().is_some_and(|e| {
+            e.contains("Operation not permitted") || e.contains("Permission denied")
+        })
+    };
+    require(
+        errors.as_object().is_some_and(|o| {
+            o.iter()
+                .filter(|(k, _)| k.ends_with("_read") || k.ends_with("_write"))
+                .all(|(_, e)| refused(e))
+        }),
+        &format!("a probe read or write was not refused: {errors}"),
+    )
+}
 /// The runtime's record of the exact command's completed Bash call.
 fn bash_result(events: &[Value], command: &str) -> Result<Value> {
     let bash = |b: &Value| b["name"] == "Bash" && b["input"]["command"] == command;
@@ -116,7 +144,9 @@ fn bash_result(events: &[Value], command: &str) -> Result<Value> {
         .ok_or_else(|| format!("`{command}` did not run through the actual Bash tool").into())
 }
 fn no_host_access(events: &[Value], root: &Path) -> Result<Value> {
-    let token = bash_probe_controls(events, &token_command(root)?)?;
+    let command = token_command(root)?;
+    let token = bash_probe_controls(events, &command)?;
+    refusals(&bash_result(events, &command)?["stdout"])?;
     let connect = bash_result(events, &connect_command(root))?;
     require(
         connect["stdout"]
@@ -128,23 +158,21 @@ fn no_host_access(events: &[Value], root: &Path) -> Result<Value> {
 }
 fn background_controls(events: &[Value], root: &Path, expected: &str) -> Result<Value> {
     let command = background_command(root, expected)?;
+    let background = |b: &Value| {
+        b["name"] == "Bash"
+            && b["input"]["command"] == command
+            && b["input"]["run_in_background"] == true
+    };
     require(
-        events
-            .iter()
-            .filter(|e| e["type"] == "assistant")
-            .flat_map(blocks)
-            .any(|b| {
-                b["type"] == "tool_use"
-                    && b["name"] == "Bash"
-                    && b["input"]["command"] == command
-                    && b["input"]["run_in_background"] == true
-            }),
+        tool_results(events, background).next().is_some(),
         "the background probe was not run with run_in_background",
     )?;
     let output = root.join("scratch/background.txt");
+    // Up to 30 s; the probe takes milliseconds and started during the turn.
     for _ in 0..60 {
         let text = fs::read_to_string(&output).unwrap_or_default();
         if text.contains("FALINKS_ERRORS=") {
+            refusals(&json!(text))?;
             let args = falinks_host::fixture_probe_args(root, expected);
             return falinks_host::probe_controls(&text, &args)?
                 .ok_or_else(|| "background probe printed no controls".into());

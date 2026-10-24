@@ -212,18 +212,29 @@ fn a_wrapper_that_cannot_confine_runs_nothing() {
     let command = format!("touch {}", marker.display());
     let missing = f.through(&f.path("worker-tools/no-such-shell"), &command);
     assert_eq!(missing.status.code(), Some(127), "{}", text(&missing));
-    for (key, value) in [
-        ("FALINKS_SHELL", "".to_string()),
-        (
-            "FALINKS_SHELL",
-            serde_json::json!({"scratch": f.root.join("gone"), "denied": []}).to_string(),
-        ),
+    let valid = f
+        .env()
+        .into_iter()
+        .find(|(k, _)| k == "FALINKS_SHELL")
+        .unwrap()
+        .1;
+    let broken = |key: &str, value: serde_json::Value| {
+        let mut spec: serde_json::Value = serde_json::from_str(&valid).unwrap();
+        spec[key] = value;
+        spec.to_string()
+    };
+    // No spec, a missing scratch, and a denied root that is not a string, which must not
+    // be dropped.
+    for spec in [
+        String::new(),
+        broken("scratch", serde_json::json!(f.root.join("gone"))),
+        broken("denied", serde_json::json!([f.root.join("controller"), 7])),
     ] {
         let out = Command::new("/bin/bash")
             .arg("-c")
             .arg(shlex::try_join([SHELL, &command]).unwrap())
             .envs(f.env())
-            .env(key, value)
+            .env("FALINKS_SHELL", spec)
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(126), "{}", text(&out));
@@ -265,9 +276,11 @@ fn settings_turn_claude_codes_sandbox_off_and_wrap_bash_only() {
     );
     let spec: serde_json::Value =
         serde_json::from_str(settings["env"]["FALINKS_SHELL"].as_str().unwrap()).unwrap();
+    // The MCP server entry mcp.json gets.
     assert_eq!(
         spec["relay"],
-        serde_json::json!([tool, "mcp", f.launch.controller])
+        serde_json::json!({"command": tool, "args": ["mcp", f.launch.controller]})
     );
+    assert_eq!(spec["shell"], settings["env"]["CLAUDE_CODE_SHELL"]);
     assert!(Path::new(settings["env"]["TMPDIR"].as_str().unwrap()).starts_with(&f.launch.scratch));
 }

@@ -584,7 +584,8 @@ mod linux_helper {
         contain(reads, &writable.to_path_buf())
     }
 
-    /// Runs in the forked child before exec: Landlock for files, seccomp for sockets.
+    /// Runs just before exec, in the helper's forked child or in `confine_self`'s caller:
+    /// Landlock for files, seccomp for sockets.
     fn contain(reads: &[PathBuf], output: &PathBuf) -> Result<()> {
         let status = Ruleset::default()
             .set_compatibility(CompatLevel::HardRequirement)

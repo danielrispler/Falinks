@@ -717,6 +717,15 @@ struct Waiting {
 /// Beneath scratch: Claude Code's temp files, such as each Bash command's cwd file, and the
 /// commands' `TMPDIR`, since a confined command writes nowhere else.
 const TMP: &str = ".tmp";
+/// Claude Code's shell (`CLAUDE_CODE_SHELL`) and the one `falinks-claude-shell` runs, so the
+/// shell snapshot Claude Code sources matches it.
+const SHELL: &str = "/bin/bash";
+
+/// The `falinks` stdio MCP server: mcp.json's entry, and the one command line
+/// `falinks-claude-shell` leaves unconfined.
+pub fn relay(tool: &Path, controller: &Path) -> Value {
+    json!({"command":tool,"args":["mcp",controller]})
+}
 
 pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
     let path = |p: &Path| p.to_string_lossy().into_owned();
@@ -740,9 +749,9 @@ pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
     }
     // Per-command confinement (#236 spike): Claude Code's sandbox is off and every Bash
     // command runs through `falinks-claude-shell`, which writes only beneath scratch. The
-    // relay's line matches mcp.json; the hook is exec form, which the prefix skips.
-    let shell =
-        json!({"scratch":launch.scratch,"denied":hidden,"relay":[tool,"mcp",launch.controller]});
+    // hook is exec form, which the prefix skips.
+    let shell = json!({"shell":SHELL,"scratch":launch.scratch,"denied":hidden,
+        "relay":relay(tool, &launch.controller)});
     let tmp = launch.scratch.join(TMP);
     Ok(json!({
         "permissions":{"defaultMode":"dontAsk","allow":launch.allowed(),"deny":deny},
@@ -750,7 +759,7 @@ pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
         "hooks":{"PreToolUse":[{"matcher":"mcp__falinks__.*","hooks":[{"type":"command","command":tool,"args":["hook",launch.controller]}]}]},
         "env":{"DISABLE_AUTOUPDATER":"1",
             "CLAUDE_CODE_SHELL_PREFIX":launch.worker_tools.join("falinks-claude-shell"),
-            "CLAUDE_CODE_SHELL":"/bin/bash","CLAUDE_CODE_TMPDIR":tmp,"TMPDIR":tmp,
+            "CLAUDE_CODE_SHELL":SHELL,"CLAUDE_CODE_TMPDIR":tmp,"TMPDIR":tmp,
             "FALINKS_SHELL":shell.to_string()}
     }))
 }
@@ -908,7 +917,7 @@ impl Runtime {
             .create(launch.scratch.join(TMP))?;
         fs::write(controller.join("settings.json"), settings.to_string())?;
         fs::write(controller.join("tools.json"), launch.tools.to_string())?;
-        let server = json!({"mcpServers":{"falinks":{"command":tool,"args":["mcp",controller]}}});
+        let server = json!({"mcpServers":{"falinks":relay(&tool, &controller)}});
         fs::write(controller.join("mcp.json"), server.to_string())?;
         let (sender, inputs) = mpsc::channel();
         let listener = Listener::bind(controller.join("host.sock"), sender.clone())?;

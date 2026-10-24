@@ -4,21 +4,17 @@ name: Claude Code adapter on Linux
 # a required check.
 #
 # #236 spike branch: per-command confinement (falinks-claude-shell) replaces Claude Code's
-# sandbox. Bubblewrap must still fail under the default AppArmor policy, and every control
-# must pass under that same policy, with no user namespaces. Linux x86_64 only.
-#
-# Every run builds the adapter binaries and runs the worker-sandbox prerequisite check on
-# both runners, with no model call: under the runner's default AppArmor policy, bubblewrap
-# with a new network namespace must fail with `loopback: Failed RTM_NEWADDR`, and once
-# unprivileged user namespaces are allowed it must succeed. Then the live adapter check
-# runs check-claude-adapter with the pinned runtime under both policies: under the default
-# policy the worker sandbox must fail closed, and with user namespaces every control must
-# pass. A model refusal exits 2 and is red: inconclusive, never evidence either way.
+# sandbox, so Claude Code needs no bubblewrap. Every run builds the adapter binaries on the
+# Linux x86_64 runner. With no model call, bubblewrap with a new network namespace must
+# still fail under the default AppArmor policy with `loopback: Failed RTM_NEWADDR`. Then
+# check-claude-adapter runs with the pinned runtime under that same policy, with no user
+# namespaces, and every control must pass. A model refusal exits 2 and is red:
+# inconclusive, never evidence either way.
 #
 # The live check logs in with the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`), the
-# maintainer's own subscription: a run on both runners adds about 2 points to its 5-hour
-# window. So pull requests never run it; "Live adapter checks" in
-# docs/agents/ticket-authoring.md says when it runs.
+# maintainer's own subscription: a run adds about 1 point to its 5-hour window. So pull
+# requests never run it; "Live adapter checks" in docs/agents/ticket-authoring.md says when
+# it runs.
 on:
   schedule:
     - cron: "0 1 * * *"
@@ -72,8 +68,8 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           rustflags: ""
-      # Claude Code's Linux sandbox needs both.
-      - run: sudo apt-get install -y bubblewrap socat
+      # Only for the prerequisite step: bubblewrap must still fail under the default policy.
+      - run: sudo apt-get install -y bubblewrap
       - run: cargo build --release --locked --bin check-claude-adapter --bin falinks-claude-tool --bin falinks-claude-shell --bin sandbox-probe
       # A deleted secret must fail the run, not silently stop the evidence.
       - name: Token
