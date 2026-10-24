@@ -1932,7 +1932,6 @@ fn property_gates_withhold_values_and_name_the_property() {
 fn known_answer_names_broken_checks_and_calibrates_only_the_full_set() {
     let dir = tmp("falinks-known-answer-test-");
     let mut set = read(root().join("protected/known-answer.json"));
-    // go-page: go-relationships' set predates fixture 3 version 2 until it is recalibrated (#250).
     let copy = &mut set["go-page"]["copies"]["maintainability"];
     let new = (copy["old"].as_str().unwrap())
         .replace("err != nil || value < 0", "err != nil || value<=0");

@@ -318,7 +318,8 @@ const KNOWN_ANSWER_SET: &str = "evaluation/protected/known-answer.json";
 /// One fixture's judge cells from `quality --judge` (#232): per arm and dimension, the runs'
 /// medians with the usual statistics, each run's spread, and why a repetition lacks a value. A
 /// dimension without a passing calibration record prints "Not yet calibrated" instead, as does
-/// every dimension of a fixture whose known-answer set predates it (`uncalibrated_fixtures`).
+/// every dimension of a fixture whose known-answer set predates it (`uncalibrated_fixtures`). A
+/// dimension dropped overall or on this fixture alone (#263) prints the dropped wording.
 /// The blinding check prints `arm guessed k/n` over parsed guesses, with the frozen note.
 fn judge_cells(
     fixture: &str,
@@ -333,7 +334,7 @@ fn judge_cells(
         let mut entry = serde_json::Map::new();
         for dimension in crate::judge::DIMENSIONS {
             let calibration = &definitions["judge"]["calibration"][dimension];
-            if calibration["dropped"] == true {
+            if calibration["dropped"] == true || calibration[fixture]["dropped"] == true {
                 entry.insert(
                     dimension.into(),
                     definitions["judge"]["wording"]["dropped"].clone(),
@@ -1012,6 +1013,17 @@ mod tests {
                 "Failed calibration; not reported."
             );
         }
+
+        // #263: a dimension dropped on one fixture prints the dropped wording there only.
+        definitions["judge"]["calibration"]["duplication"]["go-relationships"] =
+            json!({"dropped": true});
+        let dropped = judge_cells("go-relationships", &slots, &definitions);
+        assert_eq!(
+            dropped["git"]["duplication"],
+            "Failed calibration; not reported."
+        );
+        let kept = judge_cells("go-page", &slots, &definitions);
+        assert!(kept["git"]["duplication"]["note"].is_string());
     }
 
     #[test]

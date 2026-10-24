@@ -1,0 +1,990 @@
+{
+  "calls": [
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5831,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0586658,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 594,
+          "provider": "firstParty",
+          "thinkingTokens": 264,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "reference",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5831,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5831,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5831,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5831,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 594,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 594,
+        "output_tokens_details": {
+          "thinking_tokens": 264
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5827,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0572738,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 526,
+          "provider": "firstParty",
+          "thinkingTokens": 231,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "reference",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5827,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5827,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5827,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5827,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 526,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 526,
+        "output_tokens_details": {
+          "thinking_tokens": 231
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5829,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0561698,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 470,
+          "provider": "firstParty",
+          "thinkingTokens": 160,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "reference",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5829,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5829,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5829,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5829,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 470,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 470,
+        "output_tokens_details": {
+          "thinking_tokens": 160
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5855,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0582978,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 566,
+          "provider": "firstParty",
+          "thinkingTokens": 227,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "maintainability",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5855,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5855,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5855,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5855,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 566,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 566,
+        "output_tokens_details": {
+          "thinking_tokens": 227
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5853,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0574818,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 526,
+          "provider": "firstParty",
+          "thinkingTokens": 183,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "maintainability",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5853,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5853,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5853,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5853,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 526,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 526,
+        "output_tokens_details": {
+          "thinking_tokens": 183
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5855,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0608378,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 693,
+          "provider": "firstParty",
+          "thinkingTokens": 320,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "maintainability",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5855,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5855,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5855,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5855,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 693,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 693,
+        "output_tokens_details": {
+          "thinking_tokens": 320
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5903,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0585818,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 561,
+          "provider": "firstParty",
+          "thinkingTokens": 219,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "duplication",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5903,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5903,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5903,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5903,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 561,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 561,
+        "output_tokens_details": {
+          "thinking_tokens": 219
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5907,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.056533799999999995,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 457,
+          "provider": "firstParty",
+          "thinkingTokens": 139,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "duplication",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5907,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5907,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5907,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5907,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 457,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 457,
+        "output_tokens_details": {
+          "thinking_tokens": 139
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5907,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.058073799999999995,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 534,
+          "provider": "firstParty",
+          "thinkingTokens": 228,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "duplication",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5907,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5907,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5907,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5907,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 534,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 534,
+        "output_tokens_details": {
+          "thinking_tokens": 228
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5925,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.057337799999999994,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 490,
+          "provider": "firstParty",
+          "thinkingTokens": 165,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "unnecessary_changes",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5925,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5925,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5925,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5925,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 490,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 490,
+        "output_tokens_details": {
+          "thinking_tokens": 165
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5925,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.058677799999999995,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 557,
+          "provider": "firstParty",
+          "thinkingTokens": 259,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "unnecessary_changes",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5925,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5925,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5925,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5925,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 557,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 557,
+        "output_tokens_details": {
+          "thinking_tokens": 259
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 5925,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0560778,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 427,
+          "provider": "firstParty",
+          "thinkingTokens": 126,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "unnecessary_changes",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 5925,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 5925,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 5925,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 5925,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 427,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 427,
+        "output_tokens_details": {
+          "thinking_tokens": 126
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 4815,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0449378,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 314,
+          "provider": "firstParty",
+          "thinkingTokens": 0,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "test_quality",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 4815,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 4815,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 4815,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 4815,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 314,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 314,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 4813,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0446018,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 298,
+          "provider": "firstParty",
+          "thinkingTokens": 0,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "test_quality",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 4813,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 4813,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 4813,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 4813,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 298,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 298,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-relationships",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 4815,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.0497978,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 557,
+          "provider": "firstParty",
+          "thinkingTokens": 232,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "test_quality",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 4815,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 4815,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 4815,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 4815,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 557,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 557,
+        "output_tokens_details": {
+          "thinking_tokens": 232
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    }
+  ],
+  "definitions_version": 4,
+  "dimensions": {
+    "duplication": true,
+    "maintainability": false,
+    "test_quality": true,
+    "unnecessary_changes": true
+  },
+  "fixtures": {
+    "go-relationships": {
+      "duplication": {
+        "copy": {
+          "ratings": [
+            2,
+            2,
+            2
+          ],
+          "reasons": [
+            "Stats re-implements Produce's trim/blank/numbering loop verbatim instead of calling Produce, so the blank policy lives in two places, while Duplicates correctly reuses Produce.",
+            "Stats copies Produce's trim-and-drop loop verbatim instead of calling Produce, so the blank policy now lives in two places, even though Duplicates correctly reuses Produce.",
+            "Stats copies Produce's trim/drop-blank loop instead of calling Produce, so the blank policy is written twice, while Duplicates correctly reuses Produce."
+          ],
+          "spread": [
+            2,
+            2
+          ],
+          "value": 2
+        },
+        "passed": true,
+        "reference": {
+          "ratings": [
+            5,
+            5,
+            5
+          ],
+          "reasons": [
+            "Stats and Duplicates reuse Produce for the trim and blank policy, and IDs reuses Parse, so each rule is written once.",
+            "Stats and Duplicates reuse Produce for the trim/blank policy, and IDs reuses Parse, so each rule is written once.",
+            "The trimming and blank-dropping policy lives only in Produce and is reused by Stats and Duplicates, and IDs reuses Parse."
+          ],
+          "spread": [
+            5,
+            5
+          ],
+          "value": 5
+        }
+      },
+      "maintainability": {
+        "copy": {
+          "ratings": [
+            4,
+            4,
+            3
+          ],
+          "reasons": [
+            "Parse, IDs, Stats and Duplicates are direct and clearly named, but Produce uses a manual `for { if i >= len { break } ... i++ }` loop, which makes the reader trace by hand that the ID is the 1-based line number.",
+            "Parse, IDs, Stats, Duplicates and Consume are direct and well named, but Produce uses a manual index with an infinite `for` loop and break instead of a plain range loop, which makes the 1-based ID logic harder to see.",
+            "Parse, IDs, Stats and Duplicates are direct and well named, but Produce uses a manual `for { if i >= len { break } ... i++ }` loop that bumps the index before using it as the ID, so a reader has to trace it by hand to see that IDs are 1-based."
+          ],
+          "spread": [
+            3,
+            4
+          ],
+          "value": 4
+        },
+        "passed": false,
+        "reference": {
+          "ratings": [
+            4,
+            4,
+            5
+          ],
+          "reasons": [
+            "Functions are short and direct; the only wrinkle is that Duplicates resets the count to 0 to mean 'already emitted', which a named seen-set would state more plainly.",
+            "Functions are short and direct with clear names, though Duplicates' trick of resetting a count to 0 to mark an emitted item is slightly less obvious than a separate seen set.",
+            "Each function is short and direct: Stats and Duplicates build on Produce, and Parse validates in a clear sequence with well-named values."
+          ],
+          "spread": [
+            4,
+            5
+          ],
+          "value": 4
+        }
+      },
+      "test_quality": {
+        "copy": {
+          "ratings": [
+            1,
+            1,
+            1
+          ],
+          "reasons": [
+            "A single happy-path test skips the named edge cases (blank-line dropping without renumbering, trimming, input non-mutation, empty Duplicates and IDs, and Parse rejecting non-digits, zero, overflow, missing colon and blank text) and does not use the required producer_test.go and parse_test.go split.",
+            "A single happy-path test with no blank lines, whitespace trimming, ID gaps, empty results, invalid Parse inputs (non-digits, zero, overflow, blank text, missing colon), or non-mutation checks, and tests live in one file rather than producer_test.go and parse_test.go.",
+            "One combined happy-path test, not split into producer_test.go and parse_test.go, leaves the named edge cases untested: blank dropping without renumbering, input non-mutation, empty results, and invalid Parse inputs (non-digits, zero, overflow, blank text, missing colon)."
+          ],
+          "spread": [
+            1,
+            1
+          ],
+          "value": 1
+        },
+        "passed": true,
+        "reference": {
+          "ratings": [
+            4,
+            4,
+            4
+          ],
+          "reasons": [
+            "Edge cases are covered thoroughly (gap-preserving IDs, mutation checks, empty results, and Parse cases for leading zeros, signs, spaces, overflow and extra colons), but everything sits in one monolithic test function instead of focused tests split into producer_test.go and parse_test.go as asked.",
+            "Assertions are clear and cover the named edge cases well (non-mutation, blanks, renumbering, ID positivity, sign, spaces, overflow, empty results), but everything sits in one large test function instead of focused tests.",
+            "Assertions are thorough and cover the named edge cases (blank dropping without renumbering, non-mutation, the empty result, leading zeros, signs, spaces, overflow, the first-colon split), but everything is packed into one monolithic test rather than focused tests in producer_test.go and parse_test.go."
+          ],
+          "spread": [
+            4,
+            4
+          ],
+          "value": 4
+        }
+      },
+      "unnecessary_changes": {
+        "copy": {
+          "ratings": [
+            3,
+            3,
+            2
+          ],
+          "reasons": [
+            "The change adds an exported Filter function to the consumer file that no requirement asked for, while the remaining edits serve the requirements.",
+            "An unrequested, untested Filter function was added to the consumer file; the other edits serve the requirements.",
+            "The change adds an unrequested, untested exported Filter function to the consumer file, which is behaviour nobody asked for."
+          ],
+          "spread": [
+            2,
+            3
+          ],
+          "value": 3
+        },
+        "passed": true,
+        "reference": {
+          "ratings": [
+            5,
+            5,
+            5
+          ],
+          "reasons": [
+            "Every edit implements the record contract or the milestone A/B functions, and nothing outside the requirements was added or reshaped.",
+            "Every edit implements the record contract, milestone A, or milestone B, with no unrelated reshaping.",
+            "Every edit serves the record contract or milestones A and B, and nothing extra was added or reshaped."
+          ],
+          "spread": [
+            5,
+            5
+          ],
+          "value": 5
+        }
+      }
+    }
+  },
+  "manifest_version": 35,
+  "utc": "2026-10-24T15:11:55Z"
+}

@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
   "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4).",
   "amendments": [
@@ -17,6 +17,11 @@
       "version": 4,
       "ticket": 250,
       "reason": "Fixture 3 version 2 (#139, landed by #250), before any value was computed. L3 now checks Parse and IDs and L4 checks Stats and Duplicates, keeping 13 properties. Leading zeros are decided by the requirement (an id written with ASCII digits only, positive): 007 parses as 7 and 000 is rejected; L3's domain adds both ids and states that its other half is an id, ':' and an L1 line, longer than 20. L4's domain draws words from a, b and ab so texts repeat, and its broken copy changes Duplicates. L3 and L4 quote every sentence they compare. Judge material (decision 16): file names are removed from the code; the requirement text is shown verbatim, file names included, because it is the same for both arms. The calibration on manifest v31 (calibration/v2.json) used a known-answer set built on fixture 3 version 1, so go-relationships is listed in uncalibrated_fixtures: its judge cells print Not yet calibrated, and the inspection rule stays in force for it, until a follow-up recalibrates it on a new known-answer set (Daniel, 2026-10-23, on #250)."
+    },
+    {
+      "version": 5,
+      "ticket": 263,
+      "reason": "Recalibration of go-relationships on fixture 3 version 2 (#263). Its known-answer set was rebuilt on the v2 reference: records_test.go covers Produce, Consume, Stats, Duplicates, Parse and IDs, and the four copies (Daniel signed them off) were frozen in manifest v35 before any calibration call. Decision 23 is read as allowing a new set for a new fixture version: no calibrated copy changed. Only go-relationships was rated (calibration/v4.json, 15 calls); rust-errors and go-page keep calibration/v2.json, because nothing the judge reads for them (fixture, reference, copies, prompt, anchors, material code, runtime pin) changed since it. duplication, test_quality and unnecessary_changes passed (reference medians 5, 4 and 5; copy medians 2, 1 and 3). maintainability tied at median 4 (reference 4,4,5; copy 4,4,3): every copy reason named its manual loop, but the reference lost a point for Duplicates' count reset. maintainability is dropped for go-relationships only, where it prints Failed calibration; not reported. It stays calibrated on rust-errors and go-page, whose reported values are unchanged, and its prompt is not amended (Daniel, 2026-10-24, on #263). go-relationships leaves uncalibrated_fixtures, and the inspection rule is lifted for it."
     }
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
@@ -187,9 +192,9 @@
       "note": "Chance is about n/2. A count far from n/2 in either direction means the arm can be guessed from the material, so treat the judge ratings for this fixture as possibly unblinded."
     },
     "known_answer_set": "Per fixture, the known-answer base: the formatted reference plus one test file covering the behaviour and the edge cases the requirements name, since the reference has no tests. Then four degraded copies of that base, one per dimension: copied-in logic (duplication), an untouched function rewritten or behaviour nobody asked for (unnecessary_changes), happy-path-only tests (test_quality), needlessly convoluted control flow (maintainability). The base and copies are in protected/known-answer.json; `known-answer` checks them. (#228 decision 20, amended by #233)",
-    "calibration_record": "`known-answer --judge CONFIG` rates the base and each copy k times and writes calibration/v{version}.json, named by this file's version and recording the manifest version. A record is never overwritten. (#233)",
-    "uncalibrated_fixtures": ["go-relationships"],
-    "calibration": {"maintainability": {"passed": true, "record": "calibration/v2.json"}, "duplication": {"passed": true, "record": "calibration/v2.json"}, "unnecessary_changes": {"passed": true, "record": "calibration/v2.json"}, "test_quality": {"passed": true, "record": "calibration/v2.json"}},
+    "calibration_record": "`known-answer --judge CONFIG` rates the base and each copy k times and writes calibration/v{version}.json, named by this file's version and recording the manifest version. A record is never overwritten. (#233) With --fixtures it rates only fixtures in uncalibrated_fixtures, whose judged inputs changed; the other fixtures keep their record, and a dimension such a fixture fails is dropped for it alone. (#263)",
+    "uncalibrated_fixtures": [],
+    "calibration": {"maintainability": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"dropped": true, "record": "calibration/v4.json"}}, "duplication": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}}, "unnecessary_changes": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}}, "test_quality": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}}},
     "subtlety_rule": "Each copy changes one declaration, changed or added, aimed at one dimension. It passes the oracle, all properties, vet and clippy with no findings on changed lines, and the formatter. No comment names or hints at the defect. It must be code a competent agent could write under the 30-minute limit. Daniel signs off each copy as plausible before it freezes. (#228 decision 21)",
     "calibration_criterion": "On every fixture, the targeted copy's median over three calls is lower than the reference's on that dimension. The #27 runs are rated for information only. (#228 decision 22)",
     "amendment_rule": "A failing dimension gets at most one versioned amendment to its prompt and anchors, checked against the same frozen copies, before any scored code is opened. The copies are never changed after the first calibration call. A dimension that fails twice is dropped. (#228 decision 23)",
@@ -203,7 +208,7 @@
     "versions": "Each run's metrics record go version, rustc -V, clippy-driver -V and rustfmt -V. The pins are rust-toolchain.toml and the evaluation's recorded Go version. (#228 decision 26)"
   },
   "rules": {
-    "lasts": "Until #228's stage 2 freezes. Lifted by #233: stage 2 is frozen with the calibration record calibration/v2.json, so a scored run's final code may be inspected. Not for go-relationships until it is recalibrated (#250): its known-answer set predates fixture 3 version 2.",
+    "lasts": "Until #228's stage 2 freezes. Lifted by #233: stage 2 is frozen with the calibration record calibration/v2.json, so a scored run's final code may be inspected. Lifted for go-relationships by #263, recalibrated on fixture 3 version 2 (calibration/v4.json).",
     "inspection": "Nobody opens a scored run's final tree, diffs, transcripts, events.jsonl or session JSONL, and nobody runs report --show-code on a scored batch. (#228 decision 30)",
     "diagnosis": "A session diagnosing an infrastructure or safety failure may open any file in the failed run's own directory, plus code-free batch files. It must not open other runs' directories. The ticket comment lists the run and every file opened. A failed run is never measured, and its replacement runs in a new directory. (#228 decision 31)",
     "batch_checkout": "Every invocation of the scored batch, including resumes and shards, runs from a checkout of #188's freeze commit. (#228 decision 29a)"

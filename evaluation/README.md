@@ -508,7 +508,7 @@ session outside auto mode, it then rates each tree three times (45 calls) and wr
 freeze it. After an amendment, the next record gets the new version's name. `--judge` with
 `--fixtures` is refused unless every fixture named is in `judge.uncalibrated_fixtures`: their
 judged inputs changed, so they are calibrated alone (15 calls each) and the other fixtures keep
-their record (#263). The 54 information calls on the #27 runs are `quality --runs DIR --judge CONFIG` over those batches. A record's outcome reaches the report by an amendment that sets `judge.calibration.<dimension>` to `{"passed": true}`, or to `{"dropped": true}` after a second failure.
+their record (#263). The 54 information calls on the #27 runs are `quality --runs DIR --judge CONFIG` over those batches. A record's outcome reaches the report by an amendment that sets `judge.calibration.<dimension>` to `{"passed": true}`, or to `{"dropped": true}` after a second failure. A dimension dropped on one fixture alone (#263) sets `judge.calibration.<dimension>.<fixture>` to `{"dropped": true}`.
 
 `config.json`'s `protocol` names the protocol version a batch measures, and each
 batch invocation records it with its configuration. Track P's is manifest v34
