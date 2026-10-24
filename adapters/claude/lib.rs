@@ -117,20 +117,46 @@ pub fn refused(events: &[Value]) -> bool {
         .iter()
         .any(|e| e["type"] == "system" && e["subtype"] == "model_refusal_fallback")
 }
-/// The bytes of every file in the fixture's source and protected storage directories;
-/// `None` for an unreadable entry, so it never compares equal to an empty file.
+/// The bytes of every source file and of each protected `secret.txt`; `None` for an
+/// unreadable or missing entry, so it never compares equal to an empty file. Other
+/// `controller/` files, such as `claude.stderr`, are written by the adapter and runtime.
 pub fn fixture_files(root: &Path) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>> {
-    let mut files = BTreeMap::new();
-    for name in ["source", "controller", "snapshots", "validation"] {
-        let Ok(entries) = fs::read_dir(root.join(name)) else {
-            continue;
-        };
+    let mut files: BTreeMap<_, _> = ["controller", "snapshots", "validation"]
+        .map(|name| root.join(name).join("secret.txt"))
+        .into_iter()
+        .map(|path| (path.clone(), fs::read(&path).ok()))
+        .collect();
+    if let Ok(entries) = fs::read_dir(root.join("source")) {
         for entry in entries {
             let path = entry?.path();
             files.insert(path.clone(), fs::read(&path).ok());
         }
     }
     Ok(files)
+}
+/// Each path whose bytes differ between `before` and `after`, with its sizes.
+fn changed_files(
+    before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+    after: &BTreeMap<PathBuf, Option<Vec<u8>>>,
+) -> Vec<String> {
+    let size = |files: &BTreeMap<PathBuf, Option<Vec<u8>>>, path| match files.get(path) {
+        Some(Some(bytes)) => bytes.len().to_string(),
+        Some(None) => "unreadable or absent".into(),
+        None => "absent".into(),
+    };
+    before
+        .keys()
+        .chain(after.keys().filter(|p| !before.contains_key(*p)))
+        .filter(|p| before.get(*p) != after.get(*p))
+        .map(|p| {
+            format!(
+                "{} ({} -> {} bytes)",
+                p.display(),
+                size(before, p),
+                size(after, p)
+            )
+        })
+        .collect()
 }
 /// Classify a turn whose only task was the exact probe command, with fixture files
 /// `before` and `after` it. Fail-open evidence outranks a refusal.
@@ -150,8 +176,12 @@ pub fn worker_sandbox_unavailable(
             "a tool result contains a FALINKS_CONTROLS line".into(),
         );
     }
-    if before != after {
-        return WorkerSandboxOutcome::FailOpen("a source or protected file changed".into());
+    let changed = changed_files(before, after);
+    if !changed.is_empty() {
+        return WorkerSandboxOutcome::FailOpen(format!(
+            "a source or protected file changed: {}",
+            changed.join(", ")
+        ));
     }
     if refused(events) {
         return WorkerSandboxOutcome::Inconclusive;
