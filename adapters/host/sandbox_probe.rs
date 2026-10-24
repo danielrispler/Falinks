@@ -30,23 +30,6 @@ fn run() -> Result<()> {
         println!("CHILD_DENIED");
         return Ok(());
     }
-    // A Unix-socket connect, such as to the host channel; no worker command needs one (#236).
-    if args.get(1).is_some_and(|x| x == "--connect") {
-        let socket = args.get(2).ok_or("missing socket")?;
-        let result = std::os::unix::net::UnixStream::connect(socket);
-        let outcome = match &result {
-            Ok(_) => "connected".to_string(),
-            Err(error) => error.to_string(),
-        };
-        let verdict = if denied(result) {
-            "denied"
-        } else {
-            "not-denied"
-        };
-        println!("FALINKS_CONNECT={verdict}");
-        println!("FALINKS_CONNECT_ERROR={outcome}");
-        return Ok(());
-    }
     require(
         args.len() >= 4,
         "usage: sandbox-probe SOURCE_FILE EXPECTED_HASH SCRATCH [NAME=PROTECTED_FILE]...",
