@@ -152,7 +152,13 @@ fn heredocs(command: &str) -> Vec<(String, Write)> {
 enum Write {
     Replace(String),
     Append(String),
-    Patch { old: String, new: String, all: bool },
+    Patch {
+        old: String,
+        new: String,
+        all: bool,
+    },
+    /// A Falinks `from` output: the whole file, read from this scratch path.
+    From(String),
 }
 
 /// The file writes in one tool call, with the bytes the model emitted for each.
@@ -188,18 +194,36 @@ fn writes(call: &Call, bash_writes_source: bool) -> Vec<(String, Write, bool)> {
                 .unwrap_or_default();
             output
                 .into_iter()
-                .map(|(path, file)| (path, Write::Replace(text(&file["content"])), true))
+                .flat_map(|(path, file)| {
+                    let writes: Vec<Write> = if let Some(hunks) = file["replace"].as_array() {
+                        hunks
+                            .iter()
+                            .map(|h| Write::Patch {
+                                old: text(&h["old"]),
+                                new: text(&h["new"]),
+                                all: false,
+                            })
+                            .collect()
+                    } else if file["from"].is_string() {
+                        vec![Write::From(text(&file["from"]))]
+                    } else {
+                        vec![Write::Replace(text(&file["content"]))]
+                    };
+                    writes.into_iter().map(move |w| (path.clone(), w, true))
+                })
                 .collect()
         }
         _ => vec![],
     }
 }
 
-/// A Falinks call's request; models sometimes send it as a JSON string.
+/// A Falinks call's request: the input itself since #220, before it under a `request` key,
+/// which models sometimes sent as a JSON string.
 fn request(call: &Call) -> Value {
-    match &call.input["request"] {
-        Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
-        request => request.clone(),
+    match call.input.get("request") {
+        Some(Value::String(text)) => serde_json::from_str(text).unwrap_or_default(),
+        Some(request) => request.clone(),
+        None => call.input.clone(),
     }
 }
 
@@ -401,6 +425,8 @@ fn agent(
 
     // Initial content of the source files, keyed by fixture path; other source writes start empty.
     let mut contents: BTreeMap<String, (String, String)> = BTreeMap::new();
+    // The last applied text of each path written outside Falinks, for `from` outputs.
+    let mut scratches: BTreeMap<String, String> = BTreeMap::new();
     let mut output = 0;
     for call in &calls {
         let applied = !call.result.is_some_and(|(_, refused)| refused);
@@ -408,7 +434,23 @@ fn agent(
             output += match &write {
                 Write::Replace(text) | Write::Append(text) => text.len(),
                 Write::Patch { new, .. } => new.len(),
+                // Its bytes were counted when the model wrote the scratch file.
+                Write::From(_) => 0,
             };
+            if applied && !call.name.starts_with(FALINKS) {
+                let current = scratches.entry(path.clone()).or_default();
+                match &write {
+                    Write::Replace(text) => *current = text.clone(),
+                    Write::Append(text) => *current += text,
+                    Write::Patch {
+                        old,
+                        new,
+                        all: true,
+                    } => *current = current.replace(old, new),
+                    Write::Patch { old, new, .. } => *current = current.replacen(old, new, 1),
+                    Write::From(_) => {}
+                }
+            }
             if !applied || !source || scratch(&path) {
                 continue;
             }
@@ -430,6 +472,19 @@ fn agent(
                 Write::Append(text) => *current += &text,
                 Write::Patch { old, new, all } if all => *current = current.replace(&old, &new),
                 Write::Patch { old, new, .. } => *current = current.replacen(&old, &new, 1),
+                // shortcut: a scratch file the transcript never wrote leaves the file unchanged,
+                // so its bytes count as unchanged; read the run's scratch directory if that matters.
+                Write::From(from) => {
+                    // Agents run in their scratch directory, so relative writes resolve there.
+                    let named = |p: &&String| {
+                        **p == from
+                            || **p == format!("scratch/{from}")
+                            || p.ends_with(&format!("/scratch/{from}"))
+                    };
+                    if let Some(text) = scratches.keys().find(named).map(|p| &scratches[p]) {
+                        *current = text.clone();
+                    }
+                }
             }
         }
     }
@@ -634,6 +689,67 @@ mod tests {
             json!({"refusals": 1, "unresolved": 1, "round_trips": 0, "model_seconds": 0.0})
         );
         assert_eq!(recovery["from"]["refusals"], 0);
+    }
+
+    #[test]
+    fn falinks_edits_count_every_form_flat_or_wrapped() {
+        let at = |s: u32| json!(format!("2026-10-21T10:00:{s:02}.000Z"));
+        let call = |id: &str, s: u32, name: &str, input: Value| {
+            json!({"type": "assistant", "timestamp": at(s), "message": {"id": id,
+                "content": [{"type": "tool_use", "id": id, "name": name, "input": input}]}})
+        };
+        let result = |id: &str, s: u32, accepted: bool| {
+            json!({"type": "user", "timestamp": at(s), "message": {"content": [{"type": "tool_result",
+                "tool_use_id": id, "content": json!({"accepted": accepted}).to_string()}]}})
+        };
+        let edit = format!("{FALINKS}edit");
+        let files = json!({"a.go": "a\nb\n", "b.go": "x\n"});
+        let figures = |wrap: fn(Value) -> Value| {
+            let events = [
+                json!({"type": "system", "subtype": "init"}),
+                json!({"type": "user", "timestamp": at(0), "message": {"content": "go"}}),
+                // Agents run in their scratch directory: a relative write lands there.
+                call(
+                    "m1",
+                    1,
+                    "Bash",
+                    json!({"command": "cat > c.go <<'EOF'\nc\nEOF"}),
+                ),
+                result("m1", 2, true),
+                call(
+                    "m2",
+                    3,
+                    &edit,
+                    wrap(json!({"output": {"a.go": {"replace": [{"old": "b", "new": "bb"}]}}})),
+                ),
+                result("m2", 4, false),
+                call(
+                    "m3",
+                    5,
+                    &edit,
+                    wrap(
+                        json!({"output": {"a.go": {"replace": [{"old": "b", "new": "bc"}]},
+                    "b.go": {"content": "y\n"}, "c.go": {"from": "c.go"}}}),
+                    ),
+                ),
+                result("m3", 6, true),
+            ];
+            agent(&events, files.as_object().unwrap(), false, (None, None))
+        };
+        let flat = figures(|request| request);
+        assert_eq!(flat, figures(|request| json!({"request": request})));
+        assert_eq!(
+            flat,
+            figures(|request| json!({"request": request.to_string()}))
+        );
+        // Heredoc "c\n" 2, refused "bb" 2, "bc" 2, "y\n" 2; `from` emits no file bytes.
+        assert_eq!(flat["output_bytes"], 8);
+        // a.go "a\nbc\n" 3, b.go "y\n" 2, c.go "c\n" from scratch 2.
+        assert_eq!(flat["changed_bytes"], 7);
+        assert_eq!(
+            flat["refusal_recovery"]["replace"],
+            json!({"refusals": 1, "unresolved": 0, "round_trips": 1, "model_seconds": 1.0})
+        );
     }
 
     #[test]

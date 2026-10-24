@@ -36,7 +36,7 @@
     "src/main.rs": "980a3535ff13e0800516a57d5886f2380abde5aa9edc5242d0675a3796ea9f76",
     "src/quality.rs": "231d5aa450782eff53e559bfbd0950e3eef51656526c0c7185a5c4ae5bc7ad14",
     "src/report.rs": "835689c4a6e7fcb0b75a9c72dd8e962c69f5c750f6fa3609017ba37def5786f3",
-    "src/timing.rs": "826e0b76ea8607213c58916a773283bbdc219919975ea9b9e37ac07932e034eb",
+    "src/timing.rs": "695d537b61af5d961ce50767e29b98d6d1904e1fcefbaf9e51010c812397f66d",
     "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
   },
   "initial_commits": {
@@ -46,5 +46,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 36
+  "version": 37
 }
