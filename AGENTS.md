@@ -26,7 +26,7 @@ The evaluation sources are hash-frozen in `evaluation/manifest.json`. Before you
 
 ## Scored-batch inspection
 
-#228's stage 2 is frozen (#233), so the scored-batch inspection and diagnosis rules are lifted. A scored run's final code may be inspected. The lifted rules stay on record in `evaluation/code-quality.json`, `rules`.
+#228's stage 2 is frozen (#233), so the scored-batch inspection and diagnosis rules are lifted for rust-errors and go-page: their scored runs' final code may be inspected. For go-relationships the rules hold until #263 recalibrates its judge (`rules.lasts`). The rules are in `evaluation/code-quality.json`, `rules`.
 
 ## Local evidence
 

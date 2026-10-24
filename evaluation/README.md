@@ -247,8 +247,9 @@ it as `usage_limit`.
     shard killed mid-run leaves a stale lock: delete it, or the others over-report concurrency.
   - **Batch checkout** (#228 decision 29a): every invocation of the scored batch,
     including resumes and shards, runs from a checkout of #188's freeze commit.
-  - **Inspection rule** (#228 decisions 30–31): lifted. #228's stage 2 is frozen (#233),
-    so a scored run's final code may be inspected; the lifted rules stay on record in
+  - **Inspection rule** (#228 decisions 30–31): lifted for rust-errors and go-page. #228's
+    stage 2 is frozen (#233), so their scored runs' final code may be inspected. For
+    go-relationships the rules hold until #263 recalibrates its judge. The rules are in
     `code-quality.json`, `rules`.
   - **Report** (#204): `report --runs DIR [--runs DIR]...` puts every dimension of both
     arms side by side, per fixture. **It computes no winner**: the decision is written on
