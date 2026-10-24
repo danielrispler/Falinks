@@ -72,6 +72,8 @@ const SYSTEM: &[&str] = &[
     "thinking_tokens",
     "task_started",
     "task_notification",
+    // The background task list, after a `run_in_background` Bash command (#236, 2.1.308).
+    "background_tasks_changed",
 ];
 
 pub mod arm;
