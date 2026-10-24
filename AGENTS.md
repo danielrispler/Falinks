@@ -42,6 +42,8 @@ Before planning, grilling or explanations, read `docs/agents/learning.md`. Follo
 
 Track issues and specs in GitHub Issues for `danielrispler/Falinks`. To read, list or claim issues, read `docs/agents/issue-tracker.md`. To create, edit or resolve issues, read `docs/agents/ticket-authoring.md`.
 
+Label every issue by area: `studio` for the studio, `engine` for the rest (the engine, its adapters, evaluation and repository automation). An issue that spans both gets both.
+
 ### Wayfinder
 
 For Wayfinder sessions, run `cargo run --bin wayfinder-startup -- [map-number]`. The default is the newest open `wayfinder:map` issue, so pass a number: `19` for the engine, whose live tickets are under #19, or `266` for the studio, the control-room effort whose issues are titled `Studio:` and labelled `studio`. Claim a ticket with `--claim <n>`. Follow the startup steps in `docs/agents/issue-tracker.md` and the ticket-context rules in `docs/agents/ticket-authoring.md`.
