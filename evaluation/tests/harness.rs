@@ -1825,8 +1825,11 @@ func TestLabel(t *testing.T) {
     );
     assert_eq!(rel["labels"]["vet_findings"], "incomplete");
     assert!(rel["reference_production_lines_changed"]["value"].is_u64());
-    // Calibrated (#233), but not go-relationships until it is recalibrated on fixture 3 v2 (#250).
-    assert_eq!(rel["judge"]["git"]["test_quality"], "Not yet calibrated");
+    // Recalibrated on fixture 3 v2 (#263), with maintainability dropped for go-relationships alone.
+    assert_eq!(
+        rel["judge"]["git"]["maintainability"],
+        "Failed calibration; not reported."
+    );
     assert_eq!(rel["judge"]["blinding"]["arm_guessed"], "arm guessed 0/0");
     assert_eq!(rel["judge"]["blinding"]["missing_guesses"], 1);
     let blinding = &report["fixtures"]["rust-errors"]["code_quality"]["judge"]["blinding"];
@@ -1926,10 +1929,10 @@ fn property_gates_withhold_values_and_name_the_property() {
     }
 }
 
-/// #233: `known-answer` names each check a copy breaks, passes the frozen base, and calibrates
-/// only on the full set.
+/// #233: `known-answer` names each check a copy breaks, passes the frozen base, and refuses to
+/// calibrate a subset with a calibrated fixture (#263).
 #[test]
-fn known_answer_names_broken_checks_and_calibrates_only_the_full_set() {
+fn known_answer_names_broken_checks_and_refuses_a_calibrated_subset() {
     let dir = tmp("falinks-known-answer-test-");
     let mut set = read(root().join("protected/known-answer.json"));
     let copy = &mut set["go-page"]["copies"]["maintainability"];

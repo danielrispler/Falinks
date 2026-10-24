@@ -148,11 +148,11 @@ fn calibrate(call: &mut judge::Call, definitions: &Value, fixtures: &[Rated]) ->
 /// calibration (`uncalibrated_fixtures`): the others' inputs are unchanged, so their record
 /// stands (#263).
 fn may_calibrate(names: &[&str], definitions: &Value) -> bool {
-    let stale = definitions["judge"]["uncalibrated_fixtures"].as_array();
-    names.len() == crate::SCORED_FIXTURES.len()
+    let uncalibrated = definitions["judge"]["uncalibrated_fixtures"].as_array();
+    crate::SCORED_FIXTURES.iter().all(|f| names.contains(f))
         || names
             .iter()
-            .all(|n| stale.is_some_and(|f| f.iter().any(|f| f == n)))
+            .all(|n| uncalibrated.is_some_and(|list| list.iter().any(|f| f == n)))
 }
 
 /// Checks the known-answer trees of `only` (every scored fixture by default) and, with a run
@@ -285,6 +285,10 @@ mod tests {
         assert!(may_calibrate(&crate::SCORED_FIXTURES, &definitions));
         assert!(may_calibrate(&["go-relationships"], &definitions));
         assert!(!may_calibrate(&["go-page"], &definitions));
+        assert!(!may_calibrate(
+            &["go-page", "go-page", "go-page"],
+            &definitions
+        ));
         assert!(!may_calibrate(
             &["go-page", "go-relationships"],
             &definitions
