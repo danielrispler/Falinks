@@ -636,12 +636,24 @@ fn a_bash_error_with_unchanged_files_is_fail_closed() {
         falinks_claude::WorkerSandboxOutcome::FailClosed(error.into())
     );
 
-    // The same error is fail-open once a protected file has changed.
-    std::fs::write(dir.path().join("controller/secret.txt"), "BYPASS").unwrap();
-    assert!(matches!(
+    // Files the adapter and runtime write during the turn do not count.
+    std::fs::write(dir.path().join("controller/claude.stderr"), "warning\n").unwrap();
+    std::fs::write(dir.path().join("controller/context.sqlite"), "db").unwrap();
+    assert_eq!(
         classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::FailOpen(_)
-    ));
+        falinks_claude::WorkerSandboxOutcome::FailClosed(error.into())
+    );
+
+    // The same error is fail-open once a protected file has changed, naming it with its sizes.
+    let secret = dir.path().join("controller/secret.txt");
+    std::fs::write(&secret, "BYPASS").unwrap();
+    assert_eq!(
+        classify(dir.path(), &command, &before, &events),
+        falinks_claude::WorkerSandboxOutcome::FailOpen(format!(
+            "a source or protected file changed: {} (18 -> 6 bytes)",
+            secret.display()
+        ))
+    );
 }
 
 #[test]
