@@ -124,7 +124,6 @@ pub fn fixture_files(root: &Path) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>> 
     let mut files: BTreeMap<_, _> = ["controller", "snapshots", "validation"]
         .map(|name| root.join(name).join("secret.txt"))
         .into_iter()
-        .filter(|path| path.parent().is_some_and(Path::exists))
         .map(|path| (path.clone(), fs::read(&path).ok()))
         .collect();
     if let Ok(entries) = fs::read_dir(root.join("source")) {
@@ -142,7 +141,7 @@ fn changed_files(
 ) -> Vec<String> {
     let size = |files: &BTreeMap<PathBuf, Option<Vec<u8>>>, path| match files.get(path) {
         Some(Some(bytes)) => bytes.len().to_string(),
-        Some(None) => "unreadable".into(),
+        Some(None) => "unreadable or absent".into(),
         None => "absent".into(),
     };
     before
