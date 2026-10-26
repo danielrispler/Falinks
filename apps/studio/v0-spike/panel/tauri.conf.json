@@ -5,9 +5,10 @@
   "build": { "frontendDist": "./dist" },
   "app": {
     "macOSPrivateApi": true,
+    "withGlobalTauri": true,
     "security": { "csp": null },
     "windows": [
-      { "label": "panel", "width": 360, "height": 200, "x": 40, "y": 60,
+      { "label": "panel", "width": 420, "height": 340, "x": 40, "y": 60,
         "decorations": false, "alwaysOnTop": true, "visible": false, "focus": false,
         "visibleOnAllWorkspaces": true }
     ]

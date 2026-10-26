@@ -3650,6 +3650,7 @@ dependencies = [
 name = "v0-panel-spike"
 version = "0.0.0"
 dependencies = [
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-nspanel",
