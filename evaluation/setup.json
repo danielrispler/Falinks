@@ -254,6 +254,16 @@
       "charged_seconds": 1260,
       "measurement": "Active session time from claiming #292 (the GitHub assignment) through the ledger entry. Plus allowances for reading before the claim and for commit, PR and its evaluation checks.",
       "work": "#292: timing reads a Falinks edit from its flat input (since #220), and still from the `request` key of pre-#220 runs; refusal recovery, output_bytes and changed_bytes cover content, replace hunks (as patches) and from (the last text the transcript wrote to that scratch path; from emits no file bytes). The 50 track-T timing outputs of #183 are unchanged. Re-frozen v36 -> v37."
+    },
+    {
+      "start_utc": "2026-10-26T10:05:07Z",
+      "stop_utc": "2026-10-26T10:07:43Z",
+      "measured_seconds": 156,
+      "startup_allowance_seconds": 300,
+      "handoff_allowance_seconds": 600,
+      "charged_seconds": 1056,
+      "measurement": "Active session time from claiming #305 (the GitHub assignment) through the ledger entry. Plus allowances for reading before the claim and for commit, PR and its evaluation checks.",
+      "work": "#305: an engine-made regrouping decision for joined agents yields Keep while a pending offer exists (a checkpoint Available at its agent's current revision); a failure report still splits. config.json's protocol names the change. Re-frozen v37 -> v38."
     }
   ],
   "charged_total_seconds": 56921,

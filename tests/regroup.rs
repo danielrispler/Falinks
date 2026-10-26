@@ -125,11 +125,12 @@ fn useful_split_moves_unfinished_drafts_and_preserves_history_and_offers() {
     let (dir, engine, alice, bob) = fixture();
     independent(&engine, &alice, &bob);
     let before = engine.capture().unwrap();
-    let old = offer(&engine, &alice, "team");
-    assert_eq!(old.members, agents(&[0, 1]));
 
     // Recommended with concise evidence and no prior failure; both must agree.
     let proposal = engine.reconsider().unwrap();
+    // Offered after the proposal: a pending offer keeps the pair (#305).
+    let old = offer(&engine, &alice, "team");
+    assert_eq!(old.members, agents(&[0, 1]));
     assert_eq!(proposal.action, Action::Split);
     assert_eq!(proposal.state, ProposalState::Open);
     assert_eq!(proposal.from, [0, 0]);
@@ -1129,4 +1130,85 @@ fn engine_keeps_are_silent_but_recommend_returns_them() {
                 .any(|e| matches!(&e.body, Body::Regrouping(p) if p.id == own.id))
         );
     }
+}
+
+#[test]
+fn a_pending_offer_keeps_the_pair_until_the_revision_advances() {
+    let (_dir, engine, alice, bob) = paired();
+    applied(&engine, &alice, "record", "producer.go", RECORD);
+    settle(&engine, &bob, "consumer", Decision::Revise);
+    applied(&engine, &bob, "consume", "consumer.go", CONSUME_RECORD);
+    settle(&engine, &alice, "producer", Decision::Keep);
+    let follow_up = |client: &Client, id: &str, path: &str, scope: &str, other: &Client| {
+        append(
+            &engine,
+            client,
+            id,
+            path,
+            &format!("\nfunc {id}() int {{\n\treturn 1\n}}\n"),
+        );
+        settle(&engine, other, scope, Decision::Keep);
+    };
+    follow_up(&bob, "Summary", "consumer.go", "producer", &alice);
+    follow_up(&alice, "Stats", "producer.go", "consumer", &bob);
+    assert_eq!(engine.reconsider().unwrap().action, Action::Split);
+
+    // Withdrawn and superseded offers do not suppress.
+    offer(&engine, &alice, "gone");
+    engine.withdraw(&alice, "gone").unwrap();
+    offer(&engine, &bob, "old");
+    let revision = engine.capture_for(&bob).unwrap().revision;
+    let replacement = Offer {
+        id: "new".into(),
+        task: "task".into(),
+        revision,
+        scope: Vec::new(),
+        text: "new".into(),
+        supersedes: Some("old".into()),
+        reviews: Vec::new(),
+    };
+    engine.offer(&bob, replacement).unwrap();
+    engine.withdraw(&bob, "new").unwrap();
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    assert!(split.signals.pending.is_empty(), "{:?}", split.signals);
+
+    offer(&engine, &alice, "final");
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert!(keep.reasoning.contains("0/final"), "{}", keep.reasoning);
+
+    // The next accepted edit advances the revision past the offer.
+    follow_up(&bob, "Total", "consumer.go", "producer", &alice);
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+
+    // A failure report with a pending offer still splits.
+    decline(&engine, &alice, &split);
+    offer(&engine, &bob, "again");
+    let failing = engine
+        .propose(
+            &bob,
+            Propose {
+                action: Action::Split,
+                text: "not working".into(),
+                failing: true,
+            },
+        )
+        .unwrap();
+    decline(&engine, &alice, &failing);
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    assert!(split.signals.failing && !split.signals.pending.is_empty());
+}
+fn decline(engine: &Engine, client: &Client, proposal: &RegroupingProposal) {
+    let reason = "stay".into();
+    engine
+        .respond(
+            client,
+            &proposal.id,
+            &proposal.context,
+            Response::Decline { reason },
+        )
+        .unwrap();
 }
