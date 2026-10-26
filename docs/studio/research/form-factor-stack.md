@@ -117,3 +117,4 @@ Pick only significant actions (edits, new files, commands), not every `Read`, so
 - **No-focus show:** `focus: false` against `tauri-nspanel`, with the terminal keeping keystrokes.
 - **Draft survives blur** and Space switches.
 - **Hook coverage:** whether TodoWrite and ExitPlanMode reach `PreToolUse`, and whether the async hook adds no delay.
+- **Choosing the call:** a run makes dozens of tool calls, and many (reading a file, a search) are too shallow to guess about. A card per call would flood Daniel. v0 must find how to pick the one call per wait worth a card, and test it on real runs. Not researched yet.
