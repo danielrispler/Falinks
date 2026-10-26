@@ -1,12 +1,13 @@
 name: Workflow checks
 
-# Markdown-only changes skip the run; tests read docs/platforms.md, so it still counts.
+# Markdown-only and studio-only (apps/studio) changes skip the run; tests read
+# docs/platforms.md, so it still counts.
 on:
   pull_request:
-    paths: ["**", "!*.md", "!docs/**/*.md", "docs/platforms.md"]
+    paths: ["**", "!*.md", "!docs/**/*.md", "!apps/studio/**", "docs/platforms.md"]
   push:
     branches: [main]
-    paths: ["**", "!*.md", "!docs/**/*.md", "docs/platforms.md"]
+    paths: ["**", "!*.md", "!docs/**/*.md", "!apps/studio/**", "docs/platforms.md"]
 
 # A new push cancels its pull request's older run; every main commit runs to completion.
 concurrency:
