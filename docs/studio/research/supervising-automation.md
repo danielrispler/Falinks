@@ -45,16 +45,16 @@ Established:
 
 - Lee and See (2004, [Human Factors 46(1)](https://doi.org/10.1518/hfes.46.1.50_30392)) say trust rests on three things a person learns about a system: **performance** (what it does and how reliably), **process** (how it works) and **purpose** (why it was built, whose goals it serves). Trust is calibrated when people can observe these directly.
 - Their design advice: show the system's past performance; make its process understandable; show when it is in conditions where it is less reliable; train people on its limits, not just its features.
-- Trust drops sharply after a visible failure and recovers slowly. Failures on easy tasks hurt trust more than failures on hard ones ([Hoff and Bashir, 2015, Human Factors 57(3)](https://doi.org/10.1177/0018720814547570), a review of 127 studies).
+- Trust drops sharply after a visible failure and recovers slowly. Failures on easy tasks hurt trust more than failures on hard ones ([Hoff and Bashir, 2015, Human Factors 57(3)](https://doi.org/10.1177/0018720814547570), a literature review).
 
 ## 4. Evidence from AI and coding
 
 Established:
 
-- Bansal et al. (CHI 2021, [arXiv 2006.14779](https://arxiv.org/abs/2006.14779)): AI explanations made people accept the AI's answer more often, whether it was right or wrong. Team performance did not beat the best of human or AI alone.
-- Buçinca et al. (2021, [arXiv 2102.09692](https://arxiv.org/abs/2102.09692)): making people commit to their own answer before seeing the AI's ("cognitive forcing") reduced overreliance, but people liked it less.
-- Perry et al. (CCS 2023, [arXiv 2211.03622](https://arxiv.org/abs/2211.03622)): developers with an AI assistant wrote less secure code and were more likely to believe it was secure.
-- METR (2025, [arXiv 2507.09089](https://arxiv.org/abs/2507.09089)): in a randomized trial, 16 experienced open-source developers were 19% slower with AI tools, yet believed they were about 20% faster. Self-judged trust was badly calibrated. Small sample, one setting.
+- Bansal et al. (CHI 2021, [arXiv 2006.14779](https://arxiv.org/abs/2006.14779)): AI explanations made people accept the AI's answer more often, whether it was right or wrong. The explanations did not improve team accuracy beyond what the AI's recommendation alone already gave.
+- Buçinca, Malaya and Gajos (2021, [arXiv 2102.09692](https://arxiv.org/abs/2102.09692), 199 participants): making people commit to their own answer before seeing the AI's ("cognitive forcing") reduced overreliance, but people liked it less.
+- Perry et al. (CCS 2023, [arXiv 2211.03622](https://arxiv.org/abs/2211.03622)): developers with an AI assistant wrote less secure code and were more confident it was secure. Those who trusted the AI less and engaged more with their prompts wrote fewer vulnerabilities.
+- METR (2025, [arXiv 2507.09089](https://arxiv.org/abs/2507.09089)): in a randomized trial, 16 experienced open-source developers (246 tasks) took 19% longer with AI tools. They had forecast a 24% speed-up and afterwards still believed they had been 20% faster. Self-judged trust was badly calibrated. Small sample, one setting.
 
 Inference: these match the older findings. Fluent output and explanations raise trust; they do not show reliability. The supervisor's sense of how well it is going is not a good gauge.
 
@@ -69,4 +69,10 @@ Inference: these match the older findings. Fluent output and explanations raise 
 ## Limits of this report
 
 - Most evidence comes from aviation, process control and short lab tasks, not from supervising coding agents for hours.
-- Full texts of Bainbridge, Lee and See and Parasuraman and Riley are paywalled; claims here follow their abstracts and widely reproduced content. Daniel should check the two card sources directly.
+- Full texts of the journal papers are paywalled; claims about their content follow their abstracts and widely reproduced content. Daniel should check the two card sources directly.
+
+## Sources checked (2026-10-26)
+
+- **Abstract read and figures confirmed:** METR / Becker et al. (arXiv 2507.09089), Perry et al. (arXiv 2211.03622, CCS 2023), Bansal et al. (arXiv 2006.14779, CHI 2021), Buçinca et al. (arXiv 2102.09692). One claim about Bansal was corrected to match the abstract.
+- **DOI, title, journal, volume and issue confirmed via Crossref; body not read:** Bainbridge 1983, Lee and See 2004, Parasuraman and Riley 1997, Parasuraman and Manzey 2010, Endsley and Kiris 1995, Mosier et al. 1998, Hoff and Bashir 2015.
+- **Not confirmed against the text:** Bainbridge's "about half an hour" vigilance figure and her listed remedies; Lee and See's specific design advice; Parasuraman and Manzey's accountability finding; Hoff and Bashir's "easy-task failures hurt more" finding. All are from memory of these well-known papers.
