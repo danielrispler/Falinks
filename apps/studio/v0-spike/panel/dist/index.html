@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8">
+<body style="font:14px -apple-system;margin:10px;background:#fffbe6">
+<div id="card">What will the agent do next?</div>
+<textarea id="guess" rows="4" style="width:100%" placeholder="Your guess…"></textarea>
+<div id="log" style="color:#888;font-size:11px"></div>
+<script>
+  // draft lives in page state; the panel is only ever hidden, never reloaded
+  const g = document.getElementById('guess'), log = document.getElementById('log');
+  addEventListener('focus', () => log.textContent = 'focus ' + new Date().toLocaleTimeString());
+  addEventListener('blur', () => log.textContent = 'blur ' + new Date().toLocaleTimeString());
+</script>

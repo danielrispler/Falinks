@@ -1,0 +1,16 @@
+{
+  "productName": "v0-panel-spike",
+  "version": "0.0.0",
+  "identifier": "dev.falinks.studio.v0spike",
+  "build": { "frontendDist": "./dist" },
+  "app": {
+    "macOSPrivateApi": true,
+    "security": { "csp": null },
+    "windows": [
+      { "label": "panel", "width": 360, "height": 200, "x": 40, "y": 60,
+        "decorations": false, "alwaysOnTop": true, "visible": false, "focus": false,
+        "visibleOnAllWorkspaces": true }
+    ]
+  },
+  "bundle": { "active": false }
+}

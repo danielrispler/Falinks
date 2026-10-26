@@ -1,0 +1,1 @@
+{ "hooks": { "PreToolUse": [ { "hooks": [ { "type": "command", "async": true, "command": "/Users/danielrispler/work/Falinks/.claude/worktrees/issue-315-studio-prototype-the-guess/apps/studio/v0-spike/hook/log-hook.sh" } ] } ] } }
