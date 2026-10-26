@@ -121,9 +121,9 @@ fn probe_controls_need_every_check_and_host_proof_for_protected_writes() {
     let checks = probe_controls(&stdout, &args).unwrap().unwrap();
     assert_eq!(checks["controller_write"], json!(true));
     // A write the probe saw succeed fails, even when the real file is unchanged.
-    let mut masked = controls.clone();
-    masked.insert("controller_write".into(), json!(false));
-    assert!(probe_controls(&report(&masked), &args).is_err());
+    let mut succeeded = controls.clone();
+    succeeded.insert("controller_write".into(), json!(false));
+    assert!(probe_controls(&report(&succeeded), &args).is_err());
     // A missing check fails even when every reported check passed.
     let mut short = controls.clone();
     short.remove("controller_read");

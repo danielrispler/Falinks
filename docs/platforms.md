@@ -25,7 +25,7 @@ The engine's Linux x86_64 cell rests on the `linux` CI job (#54). Linux aarch64 
 - **Signals.** On both platforms a contained command can signal other processes of the same user.
 - **Worker storage denial.** `falinks-claude-shell` refuses protected storage: Seatbelt with `EPERM`, Landlock with `EACCES` (#295). The adapter check requires that refusal for every protected read and write, and the host also confirms the real file is unchanged.
 - **Worker signals on Linux.** A confined worker command can signal other processes of the same user. Claude Code's bubblewrap sandbox prevented that with a PID namespace. Landlock signal scoping needs ABI 6; the engine requires ABI 3 (#236).
-- **Worker profile on macOS.** The worker command's Seatbelt profile allows by default. It mirrors Claude Code's own profile on `lsopen`, Apple Events, the 14 `mach-lookup` services, signals and process information. Other operations, such as iokit, sysctl and IPC, stay allowed; Claude Code's own profile denies them by default (#236).
+- **Worker profile on macOS.** The worker command's Seatbelt profile allows by default. It mirrors Claude Code 2.1.308's own profile, checked by hand, on `lsopen`, Apple Events, the 14 `mach-lookup` services, signals and process information. Other operations, such as iokit, sysctl and IPC, stay allowed; Claude Code's own profile denies them by default (#236).
 
 ## Adapter row
 
