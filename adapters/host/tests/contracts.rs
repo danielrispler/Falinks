@@ -84,7 +84,7 @@ fn probe_arguments_follow_the_probe_usage() {
 }
 
 #[test]
-fn probe_controls_need_every_check_and_host_proof_for_masked_writes() {
+fn probe_controls_need_every_check_and_host_proof_for_protected_writes() {
     let dir = tempfile::tempdir().unwrap();
     let secret = dir.path().join("secret.txt");
     std::fs::write(&secret, "protected fixture\n").unwrap();
@@ -95,7 +95,7 @@ fn probe_controls_need_every_check_and_host_proof_for_masked_writes() {
         Path::new("scratch"),
         &[("controller", &secret)],
     );
-    let mut controls: serde_json::Map<String, Value> = [
+    let controls: serde_json::Map<String, Value> = [
         "read",
         "scratch",
         "source_write",
@@ -106,12 +106,11 @@ fn probe_controls_need_every_check_and_host_proof_for_masked_writes() {
         "alias_write",
         "child_write",
         "controller_read",
+        "controller_write",
     ]
     .iter()
     .map(|n| (n.to_string(), json!(true)))
     .collect();
-    // Linux Claude Code: the write succeeded into the tmpfs that hides the directory.
-    controls.insert("controller_write".into(), json!(false));
     let report = |c: &serde_json::Map<String, Value>| {
         format!(
             "noise\nFALINKS_CONTROLS={}\nFALINKS_ERRORS={{}}\n",
@@ -121,6 +120,10 @@ fn probe_controls_need_every_check_and_host_proof_for_masked_writes() {
     let stdout = report(&controls);
     let checks = probe_controls(&stdout, &args).unwrap().unwrap();
     assert_eq!(checks["controller_write"], json!(true));
+    // A write the probe saw succeed fails, even when the real file is unchanged.
+    let mut masked = controls.clone();
+    masked.insert("controller_write".into(), json!(false));
+    assert!(probe_controls(&report(&masked), &args).is_err());
     // A missing check fails even when every reported check passed.
     let mut short = controls.clone();
     short.remove("controller_read");

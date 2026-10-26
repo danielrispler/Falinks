@@ -7,10 +7,10 @@ use std::{
     path::Path,
     process::{self, Command},
 };
-// Seatbelt denies with EPERM. On Linux, bubblewrap's read-only binds fail writes with
-// EROFS, a rename between source and scratch (separate binds) fails with EXDEV, and a
-// masked read fails with ENOENT (`hidden` below). Per-control errno for every backend
-// tried: docs/research/sandbox-backends.md, "Per-property results".
+// Seatbelt denies with EPERM, Landlock with EACCES. A rename between separate binds fails
+// with EXDEV and a read-only bind with EROFS. A protected read must be refused: "not found"
+// would be a mask, such as bubblewrap's empty tmpfs (#295). Per-control errno for every
+// backend tried: docs/research/sandbox-backends.md, "Per-property results".
 fn denied(result: io::Result<impl Sized>) -> bool {
     result.err().is_some_and(|error| {
         matches!(
@@ -43,13 +43,7 @@ fn run() -> Result<()> {
     checks.insert("read".into(), json!(file_hash(source)? == args[2]));
     fs::write(&scratch, b"scratch\n")?;
     checks.insert("scratch".into(), json!(fs::read(&scratch)? == b"scratch\n"));
-    // `hidden` marks a read the sandbox may hide instead of deny: the host created the
-    // file, so "not found" means it is hidden (Claude Code masks it with an empty tmpfs).
-    let mut record = |name: String, result: io::Result<()>, hidden: bool| {
-        let masked = hidden
-            && result
-                .as_ref()
-                .is_err_and(|e| e.kind() == io::ErrorKind::NotFound);
+    let mut record = |name: String, result: io::Result<()>| {
         errors.insert(
             name.clone(),
             json!(
@@ -58,33 +52,30 @@ fn run() -> Result<()> {
                     .map_or_else(|e| e.to_string(), |_| "ok".into())
             ),
         );
-        checks.insert(name, json!(masked || denied(result)));
+        checks.insert(name, json!(denied(result)));
     };
-    record("source_write".into(), fs::write(source, b"BYPASS"), false);
-    record("source_delete".into(), fs::remove_file(source), false);
+    record("source_write".into(), fs::write(source, b"BYPASS"));
+    record("source_delete".into(), fs::remove_file(source));
     record(
         "source_rename".into(),
         fs::rename(source, scratch_dir.join("renamed.txt")),
-        false,
     );
     record(
         "source_create".into(),
         fs::write(directory.join("new.txt"), b"BYPASS"),
-        false,
     );
-    record("source_replace".into(), fs::rename(&scratch, source), false);
+    record("source_replace".into(), fs::rename(&scratch, source));
     // The host links `SCRATCH/alias` to the source file before the probe runs.
     record(
         "alias_write".into(),
         fs::write(scratch_dir.join("alias"), b"BYPASS"),
-        false,
     );
     for protected in &args[4..] {
         let (name, secret) = protected
             .split_once('=')
             .ok_or("protected storage is NAME=FILE")?;
-        record(format!("{name}_read"), fs::read(secret).map(drop), true);
-        record(format!("{name}_write"), fs::write(secret, b"BYPASS"), false);
+        record(format!("{name}_read"), fs::read(secret).map(drop));
+        record(format!("{name}_write"), fs::write(secret, b"BYPASS"));
     }
     let mut child = Command::new(env::current_exe()?);
     child.arg("--child-write").arg(source);

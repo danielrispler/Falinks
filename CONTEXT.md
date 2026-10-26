@@ -121,7 +121,7 @@ What every contained command receives on every supported platform: no network, r
 _Avoid_: Sandbox contract (a contract is an agreement a proposal depends on)
 
 **Worker sandbox**:
-The isolation a worker runtime applies to its own tool commands, such as bubblewrap on Linux or Seatbelt on macOS, which must refuse to run them when it cannot start. Distinct from the containment guarantee, which the engine gives contained commands.
+The isolation applied to a worker runtime's own tool commands, which must refuse to run them when it cannot start. For Claude Code it is `falinks-claude-shell`, which confines each Bash command: Seatbelt on macOS, the engine's Landlock and seccomp on Linux, network off. Distinct from the containment guarantee, which the engine gives contained commands.
 _Avoid_: Sandbox (alone), containment
 
 **Freeze**:

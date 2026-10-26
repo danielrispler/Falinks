@@ -576,129 +576,14 @@ fn probe_controls_come_only_from_the_exact_bash_command() {
     assert!(falinks_claude::bash_probe_controls(&events(&other, false), &command).is_err());
 }
 
-/// A sandbox-unavailable fixture: one source file and one protected file, the exact probe
-/// command, and the files' bytes before the turn.
-fn unavailable_fixture() -> (
-    tempfile::TempDir,
-    String,
-    std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
-) {
-    let dir = tempfile::tempdir().unwrap();
-    for (name, bytes) in [
-        ("source/source.txt", "original\n"),
-        ("controller/secret.txt", "protected fixture\n"),
-    ] {
-        let path = dir.path().join(name);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, bytes).unwrap();
-    }
-    let command = shlex::try_join([
-        "probe",
-        "source.txt",
-        "hash",
-        "scratch",
-        &format!(
-            "controller={}",
-            dir.path().join("controller/secret.txt").display()
-        ),
-    ])
-    .unwrap();
-    let before = falinks_claude::fixture_files(dir.path()).unwrap();
-    (dir, command, before)
-}
-fn bash_result(command: &str, result: Value) -> [Value; 2] {
-    [
-        json!({"type":"assistant","message":{"content":[
-            {"type":"tool_use","id":"t1","name":"Bash","input":{"command":command}}]}}),
-        json!({"type":"user","message":{"content":[result]}}),
-    ]
-}
-fn classify(
-    dir: &Path,
-    command: &str,
-    before: &std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>>,
-    events: &[Value],
-) -> falinks_claude::WorkerSandboxOutcome {
-    let after = falinks_claude::fixture_files(dir).unwrap();
-    falinks_claude::worker_sandbox_unavailable(events, command, before, &after)
-}
-
 #[test]
-fn a_bash_error_with_unchanged_files_is_fail_closed() {
-    let (dir, command, before) = unavailable_fixture();
-    let error = "Exit code 1\nbwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
-    let events = bash_result(
-        &command,
-        json!({"type":"tool_result","tool_use_id":"t1","is_error":true,"content":error}),
-    );
-    assert_eq!(
-        classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::FailClosed(error.into())
-    );
-
-    // Files the adapter and runtime write during the turn do not count.
-    std::fs::write(dir.path().join("controller/claude.stderr"), "warning\n").unwrap();
-    std::fs::write(dir.path().join("controller/context.sqlite"), "db").unwrap();
-    assert_eq!(
-        classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::FailClosed(error.into())
-    );
-
-    // The same error is fail-open once a protected file has changed, naming it with its sizes.
-    let secret = dir.path().join("controller/secret.txt");
-    std::fs::write(&secret, "BYPASS").unwrap();
-    assert_eq!(
-        classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::FailOpen(format!(
-            "a source or protected file changed: {} (18 -> 6 bytes)",
-            secret.display()
-        ))
-    );
-}
-
-#[test]
-fn a_controls_line_is_fail_open() {
-    let (dir, command, before) = unavailable_fixture();
-    let events = bash_result(
-        &command,
-        json!({"type":"tool_result","tool_use_id":"t1","content":"FALINKS_CONTROLS={\"read\":true}"}),
-    );
-    assert!(matches!(
-        classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::FailOpen(_)
-    ));
-}
-
-#[test]
-fn a_model_refusal_is_inconclusive() {
-    let (dir, command, before) = unavailable_fixture();
-    let events = [json!({"type":"system","subtype":"model_refusal_fallback"})];
-    assert_eq!(
-        classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::Inconclusive
-    );
-    assert!(falinks_claude::refused(&events));
-
-    // Fail-open evidence outranks a refusal.
-    std::fs::write(dir.path().join("source/source.txt"), "BYPASS").unwrap();
-    assert!(matches!(
-        classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::FailOpen(_)
-    ));
-}
-
-#[test]
-fn a_probe_that_never_ran_is_failed() {
-    let (dir, command, before) = unavailable_fixture();
-    let events = bash_result(
-        "echo other",
-        json!({"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Exit code 1"}),
-    );
-    assert!(matches!(
-        classify(dir.path(), &command, &before, &events),
-        falinks_claude::WorkerSandboxOutcome::Failed(_)
-    ));
-    assert!(!falinks_claude::refused(&events));
+fn a_model_refusal_is_detected() {
+    assert!(falinks_claude::refused(&[
+        json!({"type":"system","subtype":"model_refusal_fallback"})
+    ]));
+    assert!(!falinks_claude::refused(&[
+        json!({"type":"system","subtype":"init"})
+    ]));
 }
 
 /// A session whose engine defers `check` to `slow` work and answers `edit` and `post` now,

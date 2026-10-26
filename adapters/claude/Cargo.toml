@@ -24,6 +24,10 @@ path = "falinks_arm.rs"
 name = "falinks-claude-tool"
 path = "tool.rs"
 
+[[bin]]
+name = "falinks-claude-shell"
+path = "shell.rs"
+
 [lints]
 workspace = true
 

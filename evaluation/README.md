@@ -17,6 +17,10 @@ Binaries: `falinks-eval` (the host CLI), `claude-worker` (the Git-arm Claude Cod
 bridge, #27), `codex-worker` (the historical baseline Codex bridge) and
 `scripted-worker` (test-only scripted workers, fake runtimes and a fake Falinks runner).
 The Falinks arm runner is `falinks-arm` in `adapters/claude` (it needs the engine).
+It launches its workers through the adapter's own settings, so since #295 their Bash
+commands run under `falinks-claude-shell`'s per-command confinement instead of Claude
+Code's sandbox. That is a run-configuration change: Falinks-arm runs before #295 ran
+under Claude Code's sandbox, and a batch spanning both is not one configuration.
 
 ## Run the checks
 
