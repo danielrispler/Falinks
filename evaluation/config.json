@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "protocol": "Track P (#188, #247): one protocol version, the first since #27's scored batch on manifest v7, frozen at the commit recorded on #188. Its one change to the validity rules is C7 (tool_differences.nested_agents): a detected nested agent runtime makes the run invalid, hits are counted per arm, and the batch stops and asks on the first hit. Since #305 (manifest v38) the engine proposes no Split for joined agents while a pending offer exists (a checkpoint offer still available at its agent's current revision), so Falinks-arm runs before and after it are different protocol versions.",
+  "protocol": "Track P (#188, #247): one protocol version, the first since #27's scored batch on manifest v7, frozen at the commit recorded on #188. Its one change to the validity rules is C7 (tool_differences.nested_agents): a detected nested agent runtime makes the run invalid, hits are counted per arm, and the batch stops and asks on the first hit. Since #305 (manifest v38) the engine proposes no Split for joined agents while a pending offer exists (a checkpoint offer still available at its agent's current revision), so Falinks-arm runs before and after it are different protocol versions. Since #311 (manifest v39) a pending review obligation is uncertain regrouping evidence only when the owners its cause edit names relate to the closure of the obligation's scope, so Falinks-arm runs before and after it are different protocol versions.",
   "timeout_seconds": 1800,
   "usage_drain_seconds": 60,
   "setup_limit_seconds": 28800,

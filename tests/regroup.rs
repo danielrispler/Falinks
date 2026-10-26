@@ -1212,3 +1212,111 @@ fn decline(engine: &Engine, client: &Client, proposal: &RegroupingProposal) {
         )
         .unwrap();
 }
+
+/// Bob's consumer depends on `Produce` and `Record` by symbol, as in #249's go-relationships.
+fn symbolic() -> (TempDir, Engine, Client, Client) {
+    let (dir, engine, alice, bob) = support::fixture(&[
+        PAIRED[0],
+        ("producer.go", RECORD),
+        ("consumer.go", CONSUME_RECORD),
+    ]);
+    fs::create_dir_all(dir.path().join("second")).unwrap();
+    configure(&engine);
+    register(&engine, &alice, "producer", "produce", &["producer.go"]);
+    declare(
+        &engine,
+        &bob,
+        "consumer",
+        "consume",
+        &["consumer.go"],
+        &["producer.go#Produce", "producer.go#Record"],
+    );
+    (dir, engine, alice, bob)
+}
+fn unreviewed(signals: &Signals) -> bool {
+    signals
+        .uncertain
+        .iter()
+        .any(|u| u.starts_with("agent 1 has not reviewed consumer"))
+}
+const STATS: &str = "\nfunc Stats() int {\n\treturn 3\n}\n";
+
+#[test]
+fn an_insertion_unrelated_by_owner_is_not_uncertain() {
+    let (_dir, engine, alice, bob) = symbolic();
+    append(&engine, &alice, "stats", "producer.go", STATS);
+    assert!(
+        engine
+            .obligations(&bob)
+            .unwrap()
+            .iter()
+            .any(|o| o.pending())
+    );
+    let signals = engine.recommend(&alice).unwrap().signals;
+    assert!(!unreviewed(&signals), "{signals:?}");
+}
+
+#[test]
+fn an_edit_to_a_depended_symbol_is_uncertain_until_reviewed() {
+    let (_dir, engine, alice, bob) = symbolic();
+    let widened = RECORD.replace("Name string", "Name string\n\tSize int");
+    applied(&engine, &alice, "size", "producer.go", &widened);
+    assert!(unreviewed(&engine.recommend(&alice).unwrap().signals));
+    settle(&engine, &bob, "consumer", Decision::Keep);
+    assert!(!unreviewed(&engine.recommend(&alice).unwrap().signals));
+}
+
+#[test]
+fn a_file_level_edit_without_owners_is_uncertain() {
+    let (_dir, engine, alice, _bob) = symbolic();
+    let doc = format!("// Package probe produces records.\n{RECORD}");
+    applied(&engine, &alice, "doc", "producer.go", &doc);
+    let signals = engine.recommend(&alice).unwrap().signals;
+    assert!(unreviewed(&signals), "{signals:?}");
+}
+
+#[test]
+fn a_mixed_edit_reads_as_its_new_owner_only() {
+    // Accepted limitation (#306): the out-of-owner change loses its file-level coupling.
+    let (_dir, engine, alice, _bob) = symbolic();
+    let mixed = format!("{RECORD}\n// Records end here.\n{STATS}");
+    applied(&engine, &alice, "mixed", "producer.go", &mixed);
+    let signals = engine.recommend(&alice).unwrap().signals;
+    assert!(!unreviewed(&signals), "{signals:?}");
+}
+
+#[test]
+fn an_insertion_only_obligation_does_not_hold_a_split() {
+    let (_dir, engine, alice, bob) = symbolic();
+    let follow_up = |client: &Client, id: &str, path: &str, scope: &str, other: &Client| {
+        append(
+            &engine,
+            client,
+            id,
+            path,
+            &format!("\nfunc {id}() int {{\n\treturn 1\n}}\n"),
+        );
+        settle(&engine, other, scope, Decision::Keep);
+    };
+    // Two review rounds turn the window over.
+    follow_up(&bob, "Summary", "consumer.go", "producer", &alice);
+    follow_up(&alice, "Stats", "producer.go", "consumer", &bob);
+    follow_up(&bob, "Total", "consumer.go", "producer", &alice);
+    append(
+        &engine,
+        &alice,
+        "Duplicates",
+        "producer.go",
+        STATS.replace("Stats", "Duplicates").as_str(),
+    );
+    assert!(
+        engine
+            .obligations(&bob)
+            .unwrap()
+            .iter()
+            .any(|o| o.pending())
+    );
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    assert!(split.signals.overlap.is_empty() && split.signals.compiler.is_empty());
+}
