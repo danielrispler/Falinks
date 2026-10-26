@@ -133,6 +133,17 @@ fn mutations_and_host_tools_name_real_operations() {
     }
 }
 
+/// The `ack` text names the development's id, as the Git arm's `ack MILESTONE_ID` does (#299):
+/// agents told only `{milestone}` guessed an ordinal.
+#[test]
+fn ack_text_says_the_milestone_is_the_development_id() {
+    let (_, _, text) = HOST_TOOLS.iter().find(|(tool, ..)| *tool == "ack").unwrap();
+    assert!(
+        text.starts_with("{milestone: the development's id} -> "),
+        "{text}"
+    );
+}
+
 /// `claude-worker` (standalone evaluation crate) copies the adapter's turn cap.
 #[test]
 fn git_arm_bridge_uses_the_adapter_turn_cap() {
@@ -763,9 +774,14 @@ fn evaluation_copies_of_the_edit_forms_and_counts_agree() {
 )]
 fn host_tools_refuse_unknown_or_missing_request_keys() {
     let mut run = setup("go-relationships");
-    // Each refusal names the keys its description gives: `ack` takes `{milestone}`.
+    // Each refusal names the keys its description gives, without the description's gloss:
+    // `ack` takes `{milestone}`.
     for (operation, _, help) in HOST_TOOLS {
         let takes = help.split(" -> ").next().unwrap();
+        let takes = match takes.split_once(':') {
+            Some((keys, _)) => format!("{keys}}}"),
+            None => takes.to_string(),
+        };
         for request in [json!({"id": "x"}), json!({"request": {}})] {
             let reply = run.call(0, operation, request.clone());
             let reason = reply["reason"].as_str().unwrap_or_default();
