@@ -469,6 +469,32 @@ impl Engine {
                     .push(format!("agent {agent} registered no scope"));
             }
             for o in obligations(db, agent)?.iter().filter(|o| o.pending()) {
+                // Read a cause edit as the window does: an insertion names its file only
+                // for relevance. Other causes stay uncertain (#311).
+                let causes: Vec<Body> = all(
+                    db,
+                    "SELECT c.body FROM events o JOIN events c ON c.seq = json_extract(o.body, '$.Obligation.cause')
+                     WHERE json_extract(o.body, '$.Obligation.agent')=? AND json_extract(o.body, '$.Obligation.scope')=?
+                     AND json_extract(o.body, '$.Obligation.revision')>?",
+                    params![agent as i64, o.scope.id, o.reviewed as i64],
+                )?;
+                let relevant = analysis::closure(&o.scope.relevant(), &sides);
+                let related = causes.is_empty()
+                    || causes.iter().any(|cause| match cause {
+                        Body::Message(Message {
+                            kind: Kind::LiveEdit,
+                            scope,
+                            ..
+                        }) => {
+                            let mut footprint = Footprint::default();
+                            owners(scope, &mut footprint);
+                            analysis::related(&footprint, &relevant)
+                        }
+                        _ => true,
+                    });
+                if !related {
+                    continue;
+                }
                 signals.uncertain.push(format!(
                     "agent {agent} has not reviewed {} at revision {}",
                     o.scope.id, o.required
