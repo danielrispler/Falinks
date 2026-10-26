@@ -1,0 +1,44 @@
+/* Throwaway: the shared look of the three app-direction mockups. Tokens come from the v0 panel (#315). */
+:root { --bg:#fff; --fg:#1d1d1f; --muted:#86868b; --code:#f5f5f7; --line:#e5e5ea; --side:#fafafa;
+        --accent:#0a66d8; --alert:#c9341c; --add:#e6f4ea; --del:#fbe9e7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#1e1e20; --fg:#f2f2f2; --muted:#98989d; --code:#2a2a2d; --line:#38383a; --side:#232326;
+          --accent:#5ea2ff; --alert:#ff6b55; --add:#1f3a28; --del:#4a2421; }
+}
+* { box-sizing:border-box; }
+html, body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system, "Segoe UI", sans-serif; }
+body { direction:rtl; }
+.mono { direction:ltr; unicode-bidi:isolate; font:12px/1.7 ui-monospace, Menlo, monospace; }
+.muted { color:var(--muted); font-size:12px; }
+button { border:0; background:none; color:var(--accent); font:inherit; font-size:13px; cursor:pointer; padding:0; }
+[hidden] { display:none !important; }
+
+/* Mockup note: about the mockup, not part of the app, so English and left to right. */
+.note { direction:ltr; font:12px/1.5 ui-monospace, Menlo, monospace; padding:8px 16px; background:var(--side);
+        border-bottom:1px dashed var(--muted); }
+.note p { margin:2px 0; }
+
+/* Thin status strip: only "waiting for you" gets colour (#269). */
+.strip { display:flex; gap:8px; align-items:center; padding:6px 12px; border-bottom:1px solid var(--line);
+         font-size:12px; color:var(--muted); }
+.strip strong { color:var(--fg); margin-left:8px; }
+.chip { display:inline-flex; gap:6px; align-items:center; padding:2px 10px; border-radius:99px; background:var(--code); }
+.chip.needs { background:var(--alert); color:#fff; }
+.chip.needs button { color:#fff; text-decoration:underline; font-size:12px; }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; }
+.dot.work { background:var(--accent); }
+.dot.needs { background:var(--alert); }
+
+/* The guess-and-card loop, as in the v0 panel. */
+.loop .ctx { direction:ltr; text-align:left; font:12px ui-monospace, Menlo, monospace; color:var(--muted);
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.loop h1 { font-size:15px; font-weight:600; margin:6px 0 12px; }
+.loop textarea { width:100%; border:0; border-radius:8px; background:var(--code); color:var(--fg); font:inherit;
+                 padding:8px 10px; resize:none; outline:none; }
+.loop pre { direction:ltr; margin:0; background:var(--code); border-radius:8px; padding:8px 10px;
+            font:12px/1.7 ui-monospace, Menlo, monospace; overflow-x:auto; }
+.row { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:10px; color:var(--muted); font-size:12px; }
+.l { display:flex; gap:12px; }
+.l span:first-child { white-space:pre; }
+.lab { direction:rtl; unicode-bidi:isolate; color:var(--accent); font-family:-apple-system, sans-serif; white-space:nowrap; }
+.yours, .unchecked { color:var(--muted); font-size:12px; margin-top:8px; }

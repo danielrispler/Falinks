@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<meta charset="utf-8">
+<title>Mockup 1: agent workspace</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  body { height:100vh; display:flex; flex-direction:column; }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:230px 1fr 400px; }
+  nav { background:var(--side); border-left:1px solid var(--line); padding:12px; overflow:auto; }
+  nav h2 { font-size:11px; font-weight:600; color:var(--muted); margin:14px 4px 4px; display:flex; justify-content:space-between; }
+  nav h2:first-child { margin-top:0; }
+  nav h2 span { font-weight:400; }
+  .s { display:flex; gap:8px; align-items:center; padding:6px 8px; border-radius:6px; cursor:pointer; }
+  .s.on { background:var(--code); }
+  .s small { color:var(--muted); margin-right:auto; font-size:11px; }
+  .s small.needs { color:var(--alert); }
+  .term { display:flex; flex-direction:column; min-width:0; background:#16161a; color:#d6d6dc; }
+  .tabs { display:flex; gap:2px; padding:6px 8px 0; background:#0f0f12; direction:ltr; font-size:12px; }
+  .tabs span { padding:4px 12px; border-radius:6px 6px 0 0; color:#8a8a93; }
+  .tabs span.on { background:#16161a; color:#fff; }
+  .where { padding:6px 16px; font-size:12px; color:#a0a0aa; border-bottom:1px solid #2a2a30; }
+  pre.out { flex:1; margin:0; padding:12px 16px; direction:ltr; font:12.5px/1.6 ui-monospace, Menlo, monospace;
+            overflow:auto; white-space:pre-wrap; }
+  pre.shell { flex:0 0 22%; border-top:1px solid #2a2a30; }
+  .out b { color:#fff; font-weight:600; } .out i { color:#77777f; font-style:normal; }
+  .out .add { color:#7ed69a; } .out .del { color:#f28b82; }
+  .out .ask { display:block; border:1px solid #f28b82; border-radius:6px; padding:8px 12px; margin-top:8px; }
+  .cur { display:inline-block; width:8px; height:15px; background:#d6d6dc; vertical-align:text-bottom; }
+  aside.rail { border-right:1px solid var(--line); padding:16px; overflow:auto; }
+  aside.rail > .muted { margin-bottom:8px; }
+  aside.rail .lab { white-space:normal; }
+</style>
+<body>
+<aside class="note">
+  <p><b>Mockup note</b> (not app UI, all data fake)</p>
+  <p><b>Solves best:</b> "Too many windows: terminals, editor, GitHub and chats." Terminals, agent sessions and the approval prompt share one window, so a waiting agent is hard to miss.</p>
+  <p><b>Costs:</b> real terminals (a PTY per session plus xterm.js in Tauri) and owning how sessions start; Daniel's daily terminal moves into a young app, beside tools that already do this (#277).</p>
+  <p><b>Conflicts:</b> #283's "adds no window": this is the biggest window of the three and replaces the terminal app. #285 ruled out "one place for all the windows" as the main job and keeps watching thin and borrowed; here watching is the centre.</p>
+</aside>
+<main>
+  <nav>
+    <h2>tickets-api <span>להבין</span></h2>
+    <div class="s on" data-s="tickets"><span class="dot work"></span><span class="mono">#42 token expiry</span><small>מריץ בדיקות</small></div>
+    <div class="s" data-s="docs"><span class="dot"></span><span class="mono">docs cleanup</span><small>סיים</small></div>
+    <h2>falinks <span>להבין</span></h2>
+    <div class="s" data-s="falinks"><span class="dot needs"></span><span class="mono">recall-inbox</span><small class="needs">מחכה לך</small></div>
+    <h2>portfolio-site <span>רק תוצאה</span></h2>
+    <div class="s" data-s="site"><span class="dot work"></span><span class="mono">hero section</span><small>בונה</small></div>
+    <h2>&nbsp;</h2>
+    <button>+ סשן חדש</button>
+  </nav>
+
+  <section class="term">
+    <div class="tabs"><span class="on">claude</span><span>zsh</span><span>+</span></div>
+    <div class="where" id="where"></div>
+    <pre class="out" id="out"></pre>
+    <pre class="out shell" id="shell"></pre>
+  </section>
+
+  <aside class="rail">
+    <div class="muted">כרטיס אחד בכל פעם · <span class="mono">tickets-api #42</span></div>
+    <div class="loop" id="loop">
+      <section data-part="ask">
+        <div class="ctx" data-part="ctx"></div>
+        <h1 data-part="q"></h1>
+        <textarea data-part="guess" rows="3" placeholder="הניחוש שלך…"></textarea>
+        <div class="row"><span>⌘↩ לשליחה · בלי ציון</span><button data-part="send">שליחה</button></div>
+      </section>
+      <section data-part="wait" class="row">הניחוש נשמר. הכרטיס יופיע כשהשלב יסתיים.</section>
+      <section data-part="card">
+        <h1 data-part="title"></h1>
+        <pre data-part="code"></pre>
+        <div class="yours" data-part="yours"></div>
+        <div class="unchecked" data-part="unchecked"></div>
+        <div class="row"><span></span><button data-part="done">סיום</button></div>
+      </section>
+      <section data-part="idle" class="row"><span>אין שלב לנחש כרגע.</span><button data-part="again">להדגים שוב</button></section>
+    </div>
+  </aside>
+</main>
+<script src="loop.js"></script>
+<script>
+  const SESSIONS = {
+    tickets: {
+      where: 'איפה היית: ביקשת לתקן את #42. הסוכן ערך את src/auth.rs ועכשיו מריץ בדיקות.',
+      out: `<b>&gt; fix #42: a token that expires right now is still accepted</b>
+
+<b>⏺ Read(src/auth.rs)</b>
+<i>  ⎿  Read 88 lines</i>
+<b>⏺ Update(src/auth.rs)</b>
+<i>  ⎿  Updated src/auth.rs with 1 addition and 1 removal</i>
+<span class="del">       41 -    if token.expires_at &lt; now {</span>
+<span class="add">       41 +    if token.expires_at &lt;= now {</span>
+<b>⏺ Bash(cargo test auth::)</b>
+<i>  ⎿  Running…</i>`,
+      shell: '~/work/tickets-api $ <span class="cur"></span>',
+    },
+    docs: {
+      where: 'איפה היית: ביקשת לנקות קישורים שבורים ב-docs. הסוכן סיים לפני 20 דקות.',
+      out: `<b>&gt; fix the broken links in docs/</b>
+
+<b>⏺ Bash(lychee docs/)</b>
+<i>  ⎿  3 errors</i>
+<b>⏺ Update(docs/setup.md)</b>
+<i>  ⎿  Updated docs/setup.md with 3 additions and 3 removals</i>
+<b>⏺</b> Fixed 3 broken links in docs/setup.md.`,
+      shell: '~/work/tickets-api $ <span class="cur"></span>',
+    },
+    falinks: {
+      where: 'איפה היית: ביקשת לפתוח PR לענף recall-inbox. הסוכן מחכה לאישור שלך.',
+      out: `<b>&gt; open a PR for the recall-inbox branch</b>
+
+<b>⏺ Bash(cargo run --bin ci-checks)</b>
+<i>  ⎿  all checks passed</i>
+<b>⏺ Bash(git push -u origin recall-inbox)</b>
+<span class="ask">Do you want to proceed?
+❯ 1. Yes
+  2. No, and tell Claude what to do differently</span>`,
+      shell: '~/work/Falinks $ <span class="cur"></span>',
+    },
+    site: {
+      where: 'איפה היית: ביקשת שה-hero יתאים לטלפון. מצב "רק תוצאה": אין כרטיסים כאן.',
+      out: `<b>&gt; make the hero section responsive</b>
+
+<b>⏺ Update(src/components/Hero.tsx)</b>
+<i>  ⎿  Updated src/components/Hero.tsx with 14 additions and 6 removals</i>
+<b>⏺ Bash(npm run build)</b>
+<i>  ⎿  Running…</i>`,
+      shell: '~/work/portfolio-site $ <span class="cur"></span>',
+    },
+  };
+  const open = key => {
+    const s = SESSIONS[key];
+    document.getElementById('where').textContent = s.where;
+    document.getElementById('out').innerHTML = s.out;
+    document.getElementById('shell').innerHTML = s.shell;
+  };
+  document.querySelectorAll('.s').forEach(el => el.onclick = () => {
+    document.querySelector('.s.on').classList.remove('on');
+    el.classList.add('on');
+    open(el.dataset.s);
+  });
+  open('tickets');
+  loop(document.getElementById('loop'));
+</script>

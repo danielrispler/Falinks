@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<meta charset="utf-8">
+<title>Mockup 2: control room</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  body { height:100vh; display:flex; flex-direction:column; }
+  .break { display:flex; gap:12px; align-items:center; padding:8px 16px; background:var(--alert); color:#fff; font-size:13px; }
+  .break button { color:#fff; text-decoration:underline; }
+  .break .mono { margin-left:auto; }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:260px 1fr; }
+  nav { background:var(--side); border-left:1px solid var(--line); padding:12px; overflow:auto; }
+  nav h2 { font-size:11px; font-weight:600; color:var(--muted); margin:16px 4px 6px; }
+  nav h2:first-child { margin-top:0; }
+  .proj { padding:8px; border-radius:8px; cursor:pointer; }
+  .proj.on { background:var(--code); }
+  .seg { display:flex; margin-top:6px; border:1px solid var(--line); border-radius:6px; overflow:hidden; font-size:12px; }
+  .seg label { flex:1; text-align:center; padding:2px 0; cursor:pointer; color:var(--muted); }
+  .seg input { display:none; }
+  .seg label:has(input:checked) { background:var(--accent); color:#fff; }
+  .view { display:flex; justify-content:space-between; width:100%; padding:6px 8px; border-radius:6px; color:var(--fg); font-size:14px; }
+  .view.on { background:var(--code); }
+  .view span { color:var(--muted); font-size:12px; }
+  .s { display:flex; gap:8px; align-items:center; padding:4px 8px; font-size:12px; }
+  .s small { margin-right:auto; color:var(--muted); }
+  .s small.needs { color:var(--alert); }
+  section.pane { padding:24px 32px; overflow:auto; }
+  section.pane h1 { font-size:18px; margin:0 0 4px; }
+  .box { max-width:480px; border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-top:16px; }
+  .tabs { display:flex; gap:16px; margin:16px 0 8px; }
+  .tabs button { color:var(--muted); padding-bottom:4px; }
+  .tabs button.on { color:var(--fg); border-bottom:2px solid var(--accent); }
+  .problem { direction:ltr; text-align:left; max-width:640px; }
+  .problem textarea { width:100%; height:140px; border:0; border-radius:8px; background:var(--code); color:var(--fg);
+                      font:12px/1.7 ui-monospace, Menlo, monospace; padding:8px 10px; resize:none; }
+  .video { max-width:640px; aspect-ratio:16/9; border-radius:12px; background:#111; color:#ddd; display:grid; place-items:center; }
+  .day { font-size:12px; color:var(--muted); margin:20px 0 6px; }
+  details { max-width:560px; border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin-bottom:8px; }
+  details summary { cursor:pointer; list-style:none; }
+  details summary::-webkit-details-marker { display:none; }
+  details[open] summary { margin-bottom:10px; }
+  .recall textarea { width:100%; border:0; border-radius:8px; background:var(--code); color:var(--fg); font:inherit; padding:8px 10px; resize:none; margin:8px 0; }
+  .recall details { border:0; padding:0; margin:0; }
+  .recall .item { max-width:560px; border:1px solid var(--line); border-radius:10px; padding:12px 16px; margin-bottom:12px; }
+</style>
+<body>
+<aside class="note">
+  <p><b>Mockup note</b> (not app UI, all data fake)</p>
+  <p><b>Solves best:</b> "I forget what happened in previous runs." Card history, plus a recall inbox that brings a card back days later as a question (#272). Project mode also covers "Waiting is boring" when Daniel wants only the result.</p>
+  <p><b>Costs:</b> a full window with its own store (cards, recall schedule, mode per project); LeetCode or a lecture means hosting someone else's site and login; more surfaces to keep calm (#269).</p>
+  <p><b>Conflicts:</b> #283's "adds no window", and #285's "one small panel, a thin status strip, and one card or question at a time". #285 builds only Understand mode in v0, so Results-only here is later work. No clash with "no code editor".</p>
+</aside>
+<header class="strip">
+  <strong>חדר בקרה</strong>
+  <span class="chip"><span class="dot work"></span><span class="mono">tickets-api #42</span> מריץ בדיקות</span>
+  <span class="chip"><span class="dot work"></span><span class="mono">portfolio-site</span> בונה</span>
+  <span class="chip needs"><span class="mono">falinks</span> מחכה לך</span>
+</header>
+<!-- #285: approval requests and agent questions always break through, in every mode -->
+<div class="break" id="break">
+  <b>falinks מחכה לאישור שלך</b>
+  <span class="mono">Bash(git push -u origin recall-inbox)</span>
+  <button onclick="this.parentElement.remove()">אישור</button>
+  <button onclick="this.parentElement.remove()">דחייה</button>
+  <button>לטרמינל</button>
+</div>
+<main>
+  <nav>
+    <h2>פרויקטים</h2>
+    <div class="proj on" data-name="tickets-api">
+      <span class="mono">tickets-api</span>
+      <div class="seg"><label><input type="radio" name="m1" value="understand" checked>להבין</label><label><input type="radio" name="m1" value="results">רק תוצאה</label></div>
+    </div>
+    <div class="proj" data-name="falinks">
+      <span class="mono">falinks</span>
+      <div class="seg"><label><input type="radio" name="m2" value="understand" checked>להבין</label><label><input type="radio" name="m2" value="results">רק תוצאה</label></div>
+    </div>
+    <div class="proj" data-name="portfolio-site">
+      <span class="mono">portfolio-site</span>
+      <div class="seg"><label><input type="radio" name="m3" value="understand">להבין</label><label><input type="radio" name="m3" value="results" checked>רק תוצאה</label></div>
+    </div>
+
+    <h2>מבטים</h2>
+    <button class="view on" data-view="now">עכשיו</button>
+    <button class="view" data-view="history">היסטוריית כרטיסים <span id="count">3</span></button>
+    <button class="view" data-view="recall">תיבת היזכרות <span>2</span></button>
+
+    <h2>סשנים</h2>
+    <div class="s"><span class="dot work"></span><span class="mono">tickets-api #42</span><small>מריץ בדיקות</small></div>
+    <div class="s"><span class="dot needs"></span><span class="mono">falinks recall-inbox</span><small class="needs">מחכה לך</small></div>
+    <div class="s"><span class="dot work"></span><span class="mono">portfolio-site hero</span><small>בונה</small></div>
+  </nav>
+
+  <section class="pane" id="now">
+    <div id="understand">
+      <h1><span class="mono" id="nowTitle">tickets-api</span></h1>
+      <div class="muted">מצב: להבין · איפה היית: ביקשת לתקן את #42, הסוכן ערך את src/auth.rs ועכשיו מריץ בדיקות.</div>
+      <div class="box loop" id="loop">
+        <section data-part="ask">
+          <div class="ctx" data-part="ctx"></div>
+          <h1 data-part="q"></h1>
+          <textarea data-part="guess" rows="3" placeholder="הניחוש שלך…"></textarea>
+          <div class="row"><span>⌘↩ לשליחה · בלי ציון</span><button data-part="send">שליחה</button></div>
+        </section>
+        <section data-part="wait" class="row">הניחוש נשמר. הכרטיס יופיע כשהשלב יסתיים.</section>
+        <section data-part="card">
+          <h1 data-part="title"></h1>
+          <pre data-part="code"></pre>
+          <div class="yours" data-part="yours"></div>
+          <div class="unchecked" data-part="unchecked"></div>
+          <div class="row"><span>נשמר בהיסטוריה. יחזור כשאלה בעוד 3 ימים.</span><button data-part="done">סיום</button></div>
+        </section>
+        <section data-part="idle" class="row"><span>אין שלב לנחש כרגע.</span><button data-part="again">להדגים שוב</button></section>
+      </div>
+    </div>
+
+    <div id="results" hidden>
+      <h1><span class="mono" id="resultsTitle">portfolio-site</span></h1>
+      <div class="muted">מצב: רק תוצאה · הזמן הזה שלך. אישורים ושאלות של סוכנים עדיין מגיעים אליך.</div>
+      <div class="tabs"><button class="on" data-tab="leet">LeetCode</button><button data-tab="lecture">הרצאה</button></div>
+      <div class="problem" id="leet">
+        <b>1. Two Sum</b>
+        <p class="muted">Given an array of integers nums and an integer target, return the indices of the two numbers that add up to target.</p>
+        <textarea spellcheck="false">fn two_sum(nums: Vec&lt;i32&gt;, target: i32) -&gt; Vec&lt;i32&gt; {
+
+}</textarea>
+      </div>
+      <div id="lecture" hidden>
+        <div class="video">▶ הרצאה שבחרת: Rust ownership</div>
+        <div class="muted">ההרצאה נעצרת לבד כשסוכן מחכה לך.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane" id="history" hidden>
+    <h1>היסטוריית כרטיסים</h1>
+    <div class="muted">היסטוריה קלה: כרטיס אחד לכל המתנה, בלי ציון.</div>
+    <div id="today" class="day">היום</div>
+    <details>
+      <summary><b>למה refresh עוטף את הקריאה ב-retry</b> <span class="muted">· tickets-api · 10:12</span></summary>
+      <div class="loop"><pre><div class="l"><span>retry(3, || client.post("/refresh").send())</span><span class="lab">← 3 ניסיונות, בלי השהיה ביניהם</span></div></pre></div>
+      <div class="yours">ניחשת: כדי לא להיכשל על רשת איטית</div>
+      <div class="unchecked">לא נבדק: refresh כפול אם הניסיון הראשון הצליח בשקט.</div>
+    </details>
+    <div class="day">אתמול</div>
+    <details>
+      <summary><b>תוכנית: תיבת היזכרות</b> <span class="muted">· falinks · ExitPlanMode</span></summary>
+      <div class="loop"><pre><div class="l"><span>1. store cards in cards.jsonl</span><span class="lab">← כל כרטיס נשמר פעם אחת</span></div><div class="l"><span>2. schedule a recall after 3 days</span><span class="lab">← לא מבחן, תזכורת</span></div><div class="l"><span>3. show due recalls in the inbox</span><span></span></div></pre></div>
+      <div class="yours">ניחשת: שני שלבים, בלי תזמון</div>
+      <div class="unchecked">לא נבדק: מה קורה לכרטיס כשהקובץ שלו נמחק.</div>
+    </details>
+    <div class="day">לפני 3 ימים</div>
+    <details>
+      <summary><b>מיגרציה: עמודה חדשה expires_at</b> <span class="muted">· tickets-api</span></summary>
+      <div class="loop"><pre><div class="l"><span>ALTER TABLE tokens ADD COLUMN expires_at TIMESTAMPTZ NULL;</span><span class="lab">← NULL כי לשורות הקיימות אין ערך</span></div></pre></div>
+      <div class="yours">ניחשת: NOT NULL עם ערך ברירת מחדל</div>
+      <div class="unchecked">לא נבדק: כמה זמן המיגרציה נועלת את הטבלה.</div>
+    </details>
+  </section>
+
+  <section class="pane recall" id="recall" hidden>
+    <h1>תיבת היזכרות</h1>
+    <div class="muted">שאלות שחוזרות אחרי כמה ימים. בלי ציון ובלי רצף; שאלה חוזרת שוב רק אם בחרת בזה.</div>
+    <div class="item" style="margin-top:16px">
+      <div class="muted">מלפני 3 ימים · <span class="mono">tickets-api</span></div>
+      <b>הסוכן הוסיף את העמודה expires_at לטבלת tokens. למה היא nullable?</b>
+      <textarea rows="2" placeholder="מה זכור לך…"></textarea>
+      <details><summary class="muted">לראות את הכרטיס המקורי</summary>
+        <div class="loop"><pre><div class="l"><span>ALTER TABLE tokens ADD COLUMN expires_at TIMESTAMPTZ NULL;</span><span class="lab">← NULL כי לשורות הקיימות אין ערך</span></div></pre></div>
+      </details>
+      <div class="row"><button>לחזור לזה שוב בעוד שבוע</button><button>מספיק לזה</button></div>
+    </div>
+    <div class="item">
+      <div class="muted">מלפני שבוע · <span class="mono">falinks</span></div>
+      <b>למה ה-hooks שלך לא רואים סשן ש-Falinks מריץ?</b>
+      <textarea rows="2" placeholder="מה זכור לך…"></textarea>
+      <details><summary class="muted">לראות את הכרטיס המקורי</summary>
+        <p>Falinks מריץ את הסשנים בעצמו, לכן ה-hooks שלך לא רואים אותם. בשבילם המקור הוא ה-host של Falinks.</p>
+      </details>
+      <div class="row"><button>לחזור לזה שוב בעוד שבוע</button><button>מספיק לזה</button></div>
+    </div>
+  </section>
+</main>
+<script src="loop.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const showNow = () => {
+    const p = document.querySelector('.proj.on');
+    const results = p.querySelector('input[value=results]').checked;
+    $('understand').hidden = results;
+    $('results').hidden = !results;
+    $('nowTitle').textContent = $('resultsTitle').textContent = p.dataset.name;
+  };
+  document.querySelectorAll('.proj').forEach(p => p.onclick = () => {
+    document.querySelector('.proj.on').classList.remove('on');
+    p.classList.add('on');
+    showNow();
+  });
+  document.querySelectorAll('.view').forEach(v => v.onclick = () => {
+    document.querySelectorAll('.view').forEach(o => o.classList.toggle('on', o === v));
+    ['now', 'history', 'recall'].forEach(id => $(id).hidden = id !== v.dataset.view);
+  });
+  document.querySelectorAll('.tabs button').forEach(t => t.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(o => o.classList.toggle('on', o === t));
+    $('leet').hidden = t.dataset.tab !== 'leet';
+    $('lecture').hidden = t.dataset.tab !== 'lecture';
+  });
+  // a finished card joins today's history
+  loop($('loop'), guess => {
+    const d = document.createElement('details');
+    d.innerHTML = `<summary><b></b> <span class="muted">· tickets-api · עכשיו</span></summary><div class="loop"><pre></pre></div><div class="yours"></div><div class="unchecked"></div>`;
+    d.querySelector('b').textContent = STEP.title;
+    d.querySelector('pre').replaceChildren(...$('loop').querySelector('[data-part=code]').cloneNode(true).childNodes);
+    d.querySelector('.yours').textContent = 'ניחשת: ' + guess;
+    d.querySelector('.unchecked').textContent = STEP.unchecked;
+    $('today').after(d);
+    $('count').textContent = +$('count').textContent + 1;
+  });
+</script>

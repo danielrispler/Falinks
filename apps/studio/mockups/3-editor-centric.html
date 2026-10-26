@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<meta charset="utf-8">
+<title>Mockup 3: editor-centric</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  body { height:100vh; display:flex; flex-direction:column; }
+  main { flex:1; min-height:0; display:grid; grid-template-columns:240px 1fr; }
+  nav { background:var(--side); border-left:1px solid var(--line); padding:12px; overflow:auto; font-size:13px; }
+  nav h2 { font-size:11px; font-weight:600; color:var(--muted); margin:0 4px 6px; }
+  .f { display:flex; gap:6px; align-items:center; padding:3px 8px; border-radius:6px; }
+  .f.on { background:var(--code); }
+  .f .mono { font-size:12px; }
+  .f small { margin-right:auto; color:var(--muted); font-size:11px; }
+  .f small.agent { color:var(--accent); }
+  .ind { padding-right:20px; }
+  nav label { display:flex; gap:6px; margin-top:16px; color:var(--muted); font-size:12px; }
+  .editor { display:flex; flex-direction:column; min-width:0; }
+  .tabs { display:flex; direction:ltr; border-bottom:1px solid var(--line); font-size:12px; }
+  .tabs span { padding:6px 14px; color:var(--muted); border-right:1px solid var(--line); }
+  .tabs span.on { color:var(--fg); background:var(--code); }
+  .bar { padding:4px 16px; font-size:12px; color:var(--muted); border-bottom:1px solid var(--line); }
+  .code { flex:1; overflow:auto; direction:ltr; padding:8px 0; counter-reset:ln 29; font:13px/1.8 ui-monospace, Menlo, monospace; }
+  .ln { white-space:pre; padding-right:16px; }
+  .ln::before { counter-increment:ln; content:counter(ln); display:inline-block; width:44px; margin-right:16px;
+                text-align:right; color:var(--muted); }
+  .ln.del { background:var(--del); text-decoration:line-through; color:var(--muted); }
+  .ln.del::before { counter-increment:none; content:"−"; }
+  .ln.add { background:var(--add); }
+  .ln .lab { margin-left:28px; font-size:12px; }
+  .ln .lab.old { color:var(--muted); }
+  body.quiet .lab.old { display:none; }
+  .c { color:var(--muted); }
+  /* the guess and the card sit inline, under the lines they are about */
+  .widget { direction:rtl; white-space:normal; font:14px/1.5 -apple-system, sans-serif; max-width:520px;
+            margin:6px 0 10px 76px; padding:12px 16px; border:1px solid var(--line);
+            border-right:3px solid var(--accent); border-radius:8px; background:var(--bg); }
+  .widget .fail { direction:ltr; text-align:left; font:12px/1.7 ui-monospace, Menlo, monospace; margin-top:4px; }
+</style>
+<body>
+<aside class="note">
+  <p><b>Mockup note</b> (not app UI, all data fake)</p>
+  <p><b>Solves best:</b> "After a run, I don't understand what changed." Labels sit on the changed lines themselves, the strongest rule in #271 (split attention), and past cards stay where they happened.</p>
+  <p><b>Costs:</b> a code view with syntax colours, live diffs as the agent writes, and a file tree; it competes with VS Code, Zed and Cursor, and the pull to make it editable will grow.</p>
+  <p><b>Conflicts:</b> the original vision's "no code editor": read-only blurs the line but does not remove it. #283's "adds no window" and "skip ... editor panel for v0"; #285's "one small panel".</p>
+</aside>
+<header class="strip">
+  <strong>חדר בקרה</strong>
+  <span class="chip"><span class="dot work"></span><span class="mono">tickets-api #42</span> מריץ בדיקות</span>
+  <span class="chip"><span class="dot work"></span><span class="mono">portfolio-site</span> בונה</span>
+  <span class="chip needs"><span class="mono">falinks</span> מחכה לאישור: <span class="mono">git push</span>
+    <button onclick="this.parentElement.remove()">אישור</button><button onclick="this.parentElement.remove()">דחייה</button></span>
+</header>
+<main>
+  <nav>
+    <h2>tickets-api · להבין</h2>
+    <div class="f"><span class="mono">src/</span></div>
+    <div class="f on ind"><span class="mono">auth.rs</span><small class="agent">● הסוכן כאן · M</small></div>
+    <div class="f ind"><span class="mono">clock.rs</span><small>מוכר לך</small></div>
+    <div class="f ind"><span class="mono">error.rs</span></div>
+    <div class="f"><span class="mono">tests/</span></div>
+    <div class="f ind"><span class="mono">auth.rs</span><small>בודק עכשיו</small></div>
+    <div class="f"><span class="mono">migrations/</span><small>כרטיס אחד</small></div>
+    <label><input type="checkbox" onchange="document.body.classList.toggle('quiet', this.checked)">להסתיר תוויות מכרטיסים קודמים</label>
+  </nav>
+
+  <section class="editor">
+    <div class="tabs"><span class="on">src/auth.rs</span><span>tests/auth.rs</span></div>
+    <div class="bar">קריאה בלבד · השינויים של הסוכן מסומנים · הסוכן עכשיו: <span class="mono">Bash(cargo test auth::)</span></div>
+    <div class="code">
+<div class="ln">use crate::clock::now;</div>
+<div class="ln">use crate::error::AuthError;</div>
+<div class="ln"></div>
+<div class="ln">pub struct Token {</div>
+<div class="ln">    pub user_id: UserId,</div>
+<div class="ln">    pub expires_at: Instant,</div>
+<div class="ln">}</div>
+<div class="ln"></div>
+<div class="ln">pub fn validate(token: &amp;Token) -&gt; Result&lt;UserId, AuthError&gt; {</div>
+<div class="ln">    let now = now();</div>
+<div class="ln">    tracing::debug!(user = ?token.user_id, "validate");</div>
+<div class="ln del">    if token.expires_at &lt; now {</div>
+<div class="ln add">    if token.expires_at &lt;= now {<span class="lab new" hidden>← היה <span class="mono">&lt;</span>, עכשיו <span class="mono">&lt;=</span></span></div>
+<div class="ln">        return Err(AuthError::Expired);<span class="lab new" hidden>← קורה עכשיו גם ברגע התפוגה עצמו</span></div>
+<div class="ln">    }</div>
+<div class="widget loop" id="loop">
+  <section data-part="ask">
+    <div class="ctx" data-part="ctx"></div>
+    <h1 data-part="q"></h1>
+    <textarea data-part="guess" rows="2" placeholder="הניחוש שלך…"></textarea>
+    <div class="row"><span>⌘↩ לשליחה · בלי ציון</span><button data-part="send">שליחה</button></div>
+  </section>
+  <section data-part="wait" class="row">הניחוש נשמר. התוויות יופיעו על הקוד כשהשלב יסתיים.</section>
+  <section data-part="card">
+    <h1 data-part="title"></h1>
+    <div class="fail">tests/auth.rs: accepts_token_at_expiry ... FAILED <span class="lab">← הבדיקה ציפתה להתנהגות הישנה</span></div>
+    <div class="yours" data-part="yours"></div>
+    <div class="unchecked" data-part="unchecked"></div>
+    <div class="row"><span>התוויות נשארות על השורות.</span><button data-part="done">סיום</button></div>
+  </section>
+  <section data-part="idle" class="row"><span>אין שלב לנחש כרגע.</span><button data-part="again">להדגים שוב</button></section>
+</div>
+<div class="ln">    Ok(token.user_id)</div>
+<div class="ln">}</div>
+<div class="ln"></div>
+<div class="ln">pub fn refresh(client: &amp;Client, token: &amp;Token) -&gt; Result&lt;Token, AuthError&gt; {</div>
+<div class="ln">    retry(3, || client.post("/refresh").json(token).send())<span class="lab old">← כרטיס מהבוקר: 3 ניסיונות, בלי השהיה ביניהם</span></div>
+<div class="ln">}</div>
+    </div>
+  </section>
+</main>
+<script src="loop.js"></script>
+<script>
+  loop(document.getElementById('loop'), () => document.querySelectorAll('.lab.new').forEach(l => l.hidden = false));
+</script>
