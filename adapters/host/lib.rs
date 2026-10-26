@@ -208,13 +208,12 @@ pub fn probe_controls(stdout: &str, args: &[String]) -> Result<Option<Value>> {
         .skip(4)
         .filter_map(|a| a.split_once('='))
         .collect();
-    // On Linux the sandbox hides protected storage behind an empty tmpfs, so a probe
-    // write there succeeds into the mask. The host decides: a protected write passes
-    // only if the real file still exists and never received the probe's bytes.
+    // A second check from outside the worker: a protected write passes only if the probe
+    // saw it refused and the real file still exists without the probe's bytes.
     for (label, secret) in &protected {
         let unchanged = std::fs::read(secret)? != b"BYPASS";
         if let Some(write) = checks.get_mut(format!("{label}_write")) {
-            *write = json!(unchanged);
+            *write = json!(*write == json!(true) && unchanged);
         }
     }
     let names = probe_names(

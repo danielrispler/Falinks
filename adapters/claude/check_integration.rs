@@ -151,6 +151,10 @@ impl Gate {
         }
         fs::copy(probe, dir.join("worker-tools/sandbox-probe"))?;
         fs::copy(tool, dir.join("worker-tools/falinks-claude-tool"))?;
+        fs::copy(
+            tool.with_file_name("falinks-claude-shell"),
+            dir.join("worker-tools/falinks-claude-shell"),
+        )?;
         let (go, gopls) = go_tools()?;
         let (engine, clients) = Self::open(&dir, &go, &gopls)?;
         fs::write(dir.join("state/marker.txt"), b"marker\n")?;

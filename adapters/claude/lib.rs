@@ -10,7 +10,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::{
-        fs::OpenOptionsExt,
+        fs::{DirBuilderExt, OpenOptionsExt},
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
@@ -72,6 +72,10 @@ const SYSTEM: &[&str] = &[
     "thinking_tokens",
     "task_started",
     "task_notification",
+    // The background task list, after a `run_in_background` Bash command, and that task's
+    // status patch when it ends (#236, 2.1.308).
+    "background_tasks_changed",
+    "task_updated",
 ];
 
 pub mod arm;
@@ -91,121 +95,12 @@ pub fn bash_probe_controls(events: &[Value], command: &str) -> Result<Value> {
     Err("exact probe command did not complete through the actual Bash tool".into())
 }
 
-/// What a live step proved where the worker sandbox cannot start.
-#[derive(Debug, PartialEq)]
-pub enum WorkerSandboxOutcome {
-    /// The probe's Bash error text.
-    FailClosed(String),
-    FailOpen(String),
-    Failed(String),
-    /// A model refusal: not evidence either way.
-    Inconclusive,
-}
-impl WorkerSandboxOutcome {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::FailClosed(_) => "fail-closed",
-            Self::FailOpen(_) => "fail-open",
-            Self::Failed(_) => "failed",
-            Self::Inconclusive => "inconclusive",
-        }
-    }
-}
 /// The runtime emitted `model_refusal_fallback`.
 pub fn refused(events: &[Value]) -> bool {
     events
         .iter()
         .any(|e| e["type"] == "system" && e["subtype"] == "model_refusal_fallback")
 }
-/// The bytes of every source file and of each protected `secret.txt`; `None` for an
-/// unreadable or missing entry, so it never compares equal to an empty file. Other
-/// `controller/` files, such as `claude.stderr`, are written by the adapter and runtime.
-pub fn fixture_files(root: &Path) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>> {
-    let mut files: BTreeMap<_, _> = ["controller", "snapshots", "validation"]
-        .map(|name| root.join(name).join("secret.txt"))
-        .into_iter()
-        .map(|path| (path.clone(), fs::read(&path).ok()))
-        .collect();
-    if let Ok(entries) = fs::read_dir(root.join("source")) {
-        for entry in entries {
-            let path = entry?.path();
-            files.insert(path.clone(), fs::read(&path).ok());
-        }
-    }
-    Ok(files)
-}
-/// Each path whose bytes differ between `before` and `after`, with its sizes.
-fn changed_files(
-    before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
-    after: &BTreeMap<PathBuf, Option<Vec<u8>>>,
-) -> Vec<String> {
-    let size = |files: &BTreeMap<PathBuf, Option<Vec<u8>>>, path| match files.get(path) {
-        Some(Some(bytes)) => bytes.len().to_string(),
-        Some(None) => "unreadable or absent".into(),
-        None => "absent".into(),
-    };
-    before
-        .keys()
-        .chain(after.keys().filter(|p| !before.contains_key(*p)))
-        .filter(|p| before.get(*p) != after.get(*p))
-        .map(|p| {
-            format!(
-                "{} ({} -> {} bytes)",
-                p.display(),
-                size(before, p),
-                size(after, p)
-            )
-        })
-        .collect()
-}
-/// Classify a turn whose only task was the exact probe command, with fixture files
-/// `before` and `after` it. Fail-open evidence outranks a refusal.
-pub fn worker_sandbox_unavailable(
-    events: &[Value],
-    command: &str,
-    before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
-    after: &BTreeMap<PathBuf, Option<Vec<u8>>>,
-) -> WorkerSandboxOutcome {
-    let controls = tool_results(events, |_| true).any(|(event, block)| {
-        [&block["content"], &event["tool_use_result"]]
-            .iter()
-            .any(|v| v.to_string().contains("FALINKS_CONTROLS="))
-    });
-    if controls {
-        return WorkerSandboxOutcome::FailOpen(
-            "a tool result contains a FALINKS_CONTROLS line".into(),
-        );
-    }
-    let changed = changed_files(before, after);
-    if !changed.is_empty() {
-        return WorkerSandboxOutcome::FailOpen(format!(
-            "a source or protected file changed: {}",
-            changed.join(", ")
-        ));
-    }
-    if refused(events) {
-        return WorkerSandboxOutcome::Inconclusive;
-    }
-    let bash = |b: &Value| b["name"] == "Bash" && b["input"]["command"] == command;
-    tool_results(events, bash)
-        .find(|(_, b)| b["is_error"] == true)
-        .map_or_else(
-            || {
-                WorkerSandboxOutcome::Failed(
-                    "the exact probe command returned no Bash error".into(),
-                )
-            },
-            |(_, b)| {
-                let content = &b["content"];
-                WorkerSandboxOutcome::FailClosed(
-                    content
-                        .as_str()
-                        .map_or_else(|| content.to_string(), String::from),
-                )
-            },
-        )
-}
-
 /// The content blocks of one stream-json message.
 pub fn blocks(event: &Value) -> impl Iterator<Item = &Value> {
     event["message"]["content"].as_array().into_iter().flatten()
@@ -744,6 +639,19 @@ struct Waiting {
     started: Instant,
 }
 
+/// Beneath scratch: Claude Code's temp files, such as each Bash command's cwd file, and the
+/// commands' `TMPDIR`, since a confined command writes nowhere else.
+const TMP: &str = ".tmp";
+/// Claude Code's shell (`CLAUDE_CODE_SHELL`) and the one `falinks-claude-shell` runs, so the
+/// shell snapshot Claude Code sources matches it.
+const SHELL: &str = "/bin/bash";
+
+/// The `falinks` stdio MCP server: mcp.json's entry, and the one command line
+/// `falinks-claude-shell` leaves unconfined.
+pub fn relay(tool: &Path, controller: &Path) -> Value {
+    json!({"command":tool,"args":["mcp",controller]})
+}
+
 pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
     let path = |p: &Path| p.to_string_lossy().into_owned();
     let mut deny = [
@@ -764,20 +672,20 @@ pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
         // `//` marks an absolute path in permission rules.
         deny.push(format!("Read(/{name}/**)"));
     }
-    let mut read_only = vec![path(&launch.source), path(&launch.worker_tools)];
-    read_only.extend(hidden.iter().cloned());
-    let hook = shlex::try_join([
-        tool.to_string_lossy().as_ref(),
-        "hook",
-        path(&launch.controller).as_str(),
-    ])?;
+    // Per-command confinement (#236, #295): Claude Code's sandbox is off and every Bash
+    // command runs through `falinks-claude-shell`, which writes only beneath scratch. The
+    // hook is exec form, which the prefix skips.
+    let shell = json!({"shell":SHELL,"scratch":launch.scratch,"denied":hidden,
+        "relay":relay(tool, &launch.controller)});
+    let tmp = launch.scratch.join(TMP);
     Ok(json!({
         "permissions":{"defaultMode":"dontAsk","allow":launch.allowed(),"deny":deny},
-        "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
-            "failIfUnavailable":true,"filesystem":{"allowWrite":[path(&launch.scratch)],
-            "denyWrite":read_only,"denyRead":hidden}},
-        "hooks":{"PreToolUse":[{"matcher":"mcp__falinks__.*","hooks":[{"type":"command","command":hook}]}]},
-        "env":{"DISABLE_AUTOUPDATER":"1"}
+        "sandbox":{"enabled":false},
+        "hooks":{"PreToolUse":[{"matcher":"mcp__falinks__.*","hooks":[{"type":"command","command":tool,"args":["hook",launch.controller]}]}]},
+        "env":{"DISABLE_AUTOUPDATER":"1",
+            "CLAUDE_CODE_SHELL_PREFIX":launch.worker_tools.join("falinks-claude-shell"),
+            "CLAUDE_CODE_SHELL":SHELL,"CLAUDE_CODE_TMPDIR":tmp,"TMPDIR":tmp,
+            "FALINKS_SHELL":shell.to_string()}
     }))
 }
 pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String> {
@@ -928,9 +836,13 @@ impl Runtime {
         session.runtime = binary.to_string_lossy().into_owned();
         session.gate.record("pin", true)?;
         let settings = settings(launch, &tool)?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(launch.scratch.join(TMP))?;
         fs::write(controller.join("settings.json"), settings.to_string())?;
         fs::write(controller.join("tools.json"), launch.tools.to_string())?;
-        let server = json!({"mcpServers":{"falinks":{"command":tool,"args":["mcp",controller]}}});
+        let server = json!({"mcpServers":{"falinks":relay(&tool, &controller)}});
         fs::write(controller.join("mcp.json"), server.to_string())?;
         let (sender, inputs) = mpsc::channel();
         let listener = Listener::bind(controller.join("host.sock"), sender.clone())?;
@@ -939,7 +851,6 @@ impl Runtime {
         command
             .args(&args)
             .current_dir(&launch.scratch)
-            .env("DISABLE_AUTOUPDATER", "1")
             // The Git arm's Go settings: the sandbox denies Go's default cache outside scratch (#112).
             .env("GOCACHE", launch.scratch.join("go-cache"))
             .env("GOTOOLCHAIN", "local")
@@ -959,6 +870,11 @@ impl Runtime {
             .filter(|(k, _)| k.starts_with("CLAUDE") && k != "CLAUDE_CODE_OAUTH_TOKEN")
         {
             command.env_remove(key);
+        }
+        // Also in the process environment, so the prefix holds from startup, before the
+        // MCP server launches.
+        for (key, value) in settings["env"].as_object().into_iter().flatten() {
+            command.env(key, value.as_str().unwrap_or_default());
         }
         let mut child = command.spawn()?;
         let input = child.stdin.take();
