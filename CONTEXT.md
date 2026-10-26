@@ -37,6 +37,9 @@ A change applied to the live workspace, which may still be unfinished or unvalid
 **Checkpoint offer**:
 A message identifying exact work made available for combination and validation, without asserting publication.
 
+**Pending offer**:
+A checkpoint offer that is still available at the current revision. While one exists, the engine proposes no split of joined agents.
+
 **Checkpoint supersession**:
 Explicit replacement of a checkpoint offer by another identified offer. The earlier checkpoint retains its identity and recorded history.
 

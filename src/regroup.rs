@@ -60,6 +60,9 @@ pub struct Signals {
     /// Files a publication overlapped in a split workspace since the split.
     #[serde(default)]
     pub behind: Vec<String>,
+    /// Pending offers: checkpoint offers still available at their agent's current revision.
+    #[serde(default)]
+    pub pending: Vec<String>,
 }
 impl Signals {
     /// Current collaboration that keeps joined agents together.
@@ -534,6 +537,17 @@ impl Engine {
             |r| r.get::<_, i64>(0),
         )? as u64;
         let split = layout.placement[0] != layout.placement[1];
+        let available: Vec<(usize, u64, String)> = all(
+            db,
+            "SELECT json_array(json_extract(body, '$.agent'), json_extract(body, '$.capture.revision'), json_extract(body, '$.id'))
+             FROM checkpoints WHERE json_extract(body, '$.state')='Available' ORDER BY id",
+            [],
+        )?;
+        for (agent, revision, id) in available {
+            if layout.current(layout.placement[agent])?.revision == revision {
+                signals.pending.push(id);
+            }
+        }
         let last = history
             .iter()
             .rev()
@@ -1247,6 +1261,7 @@ type Material = (
     Vec<String>,
     Vec<String>,
     Vec<String>,
+    Vec<String>,
     bool,
     bool,
     bool,
@@ -1258,6 +1273,7 @@ fn material(signals: &Signals) -> Material {
         signals.revised.clone(),
         signals.redeclared.clone(),
         signals.behind.clone(),
+        signals.pending.clone(),
         signals.retries > 0,
         signals.failing,
         signals.uncertain.is_empty(),
@@ -1296,6 +1312,13 @@ fn decide(joined: bool, signals: &Signals) -> (Action, String) {
         }
         if signals.collaborating() {
             return (Action::Keep, format!("current collaboration; {summary}"));
+        }
+        // The rule lifts itself: the next accepted edit advances the revision past the offer.
+        if !signals.pending.is_empty() {
+            return (
+                Action::Keep,
+                format!("pending offer {:?}; {summary}", signals.pending),
+            );
         }
         return (
             Action::Split,
