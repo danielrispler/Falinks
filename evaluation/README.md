@@ -463,7 +463,7 @@ repair as a versioned pilot repair. A repair that changes frozen material needs
 `freeze`, which keeps the superseded manifest under `manifests/`, and a new
 configuration, so the scored batch uses a new directory.
 
-## Freeze and setup budget
+## Freeze and setup ledger
 
 `manifest.json` pins hashes and reproducible initial Git commits. The harness
 rejects changed materials. Repairs must be versioned before a new batch; then
@@ -471,24 +471,20 @@ run `freeze`, which bumps `version` and retains the previous manifest under
 `manifests/`, and record why it changed in `setup.json`. Never tune
 against hidden oracle cases after scoring starts. Public and protected material
 hashes, instructions, worker/harness bytes and run configuration are evidence;
-the setup ledger is `setup.json`. The shared setup ceiling is eight hours
-(`config.json`'s `setup_limit_seconds`, 28,800 s) and covers this preparation
-plus remaining pilot/evaluation setup, **not engine implementation**; the ledger
-test checks it against `setup.json`'s limit and amendments. #123's 40,517 s was
-the limit before #250's two amendments. Add timed setup sessions to that ledger; it does not enforce
+the setup ledger is `setup.json`. It records time spent on this preparation
+plus remaining pilot/evaluation setup, **not engine implementation**; there is no
+setup time limit. Add timed setup sessions to that ledger; it does not enforce
 or estimate engine work. See #19 and `docs/evaluation/first-agent-evaluation.md`
 for safety gates and run interpretation. The [#5 amendment](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6322468250)
 replaced its continuation criteria with the report above, which computes no winner. Track T (#178) has
-its own `team_size_research` section with a 43,200 s limit. It charges only
+its own `team_size_research` section, also without a limit. It charges only
 run time (including the usage drain) and harness preparation time, with
 complete-only usage; implementation time is not charged (Daniel, 2026-10-22,
-on #180). A session may still note `implementation_seconds` for the record. The ledger test fails when either section is
-overdrawn: stop and ask before that happens. Each `limit_seconds` already
-includes its amendments, so the remaining balance is the limit minus the charged
-sessions. From `evaluation/`:
+on #180). A session may still note `implementation_seconds` for the record. The ledger test
+checks each section's totals against its sessions. From `evaluation/`:
 
 ```sh
-jq -c '{shared: (.limit_seconds - ([.sessions[].charged_seconds] | add)), team_size_research: (.team_size_research | .limit_seconds - ([.sessions[].charged_seconds] | add))}' setup.json
+jq -c '{shared: ([.sessions[].charged_seconds] | add), team_size_research: ([.team_size_research.sessions[].charged_seconds] | add)}' setup.json
 ```
 
 For the time to charge, `report --runs` gives each run's outcome and paired
@@ -529,6 +525,5 @@ freeze guard fails first and masks the real failure.
 `verification.json` records the six passing integration checks, fixture identities,
 compiler/runtime versions and the explicit limits of the evidence. `review.md`
 records the independent Standards/Spec review and resolved findings. The setup
-ledger `setup.json` holds the charged total and the remaining balance of the shared
-setup allowance (eight hours plus amendments); `setup_ledger_totals_match_its_sessions` checks the total
-against its sessions and the balance against the limit.
+ledger `setup.json` holds the charged total of shared setup time;
+`setup_ledger_totals_match_its_sessions` checks the total against its sessions.

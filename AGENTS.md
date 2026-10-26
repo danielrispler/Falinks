@@ -58,7 +58,7 @@ It stops at the first failing step and names it. It skips actionlint unless a wo
 
 ### Evaluation freeze
 
-The evaluation sources are hash-frozen in `evaluation/manifest.json`. Before you edit `evaluation/`, read "Freeze and setup budget" in `evaluation/README.md` for the re-freeze procedure.
+The evaluation sources are hash-frozen in `evaluation/manifest.json`. Before you edit `evaluation/`, read "Freeze and setup ledger" in `evaluation/README.md` for the re-freeze procedure.
 
 ### Scored-batch inspection
 

@@ -22,7 +22,7 @@ Synthesize the complete draft independently from the settled conversation and re
 
 ## Spec and ticket constraints
 
-- **Evaluation freeze.** The evaluation sources are hash-frozen in `evaluation/manifest.json`. A spec or ticket that changes frozen evaluation material must say so and plan the versioned re-freeze. The procedure is in the "Freeze and setup budget" section of `evaluation/README.md`.
+- **Evaluation freeze.** The evaluation sources are hash-frozen in `evaluation/manifest.json`. A spec or ticket that changes frozen evaluation material must say so and plan the versioned re-freeze. The procedure is in the "Freeze and setup ledger" section of `evaluation/README.md`.
 - **Sourcing.** Each number, code reference and decision claim that a decision, scope or estimate depends on cites its source: a `path:line` at a named commit SHA, a comment permalink, or a command that reproduces the number. A decision claim links the resolution comment, not a bare issue number. A decision recorded in a spec body has no resolution comment; cite that spec's section by name instead (e.g. "#45, Out of Scope"). Prose reasoning and background figures that no decision rests on need no citation.
 - **Session logs, retros only.** A retro may cite a session log as `<session-id> L<line>`. Logs live only on the maintainer's machine, so quote or summarise the cited content inline. Other specs cite durable sources only.
 - **Nested agents.** A ticket that launches nested agents (`claude -p`, Codex) needs a session outside auto mode. Auto mode blocks these runs. Say so in the ticket, and raise it with the user before you start the work.

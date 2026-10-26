@@ -39,7 +39,7 @@ The baseline uses parallel Git worktrees, may inspect/exchange unfinished diffs,
 1. Prepare/freeze fixtures, oracle, instructions, runtime configuration and result schema; complete safety gates.
 2. Run one unscored paired pilot: one fresh Falinks run and one fresh baseline run. Record fixture selection and integration repairs. If a repair changes frozen materials, version them before scoring.
 3. Run three paired repetitions for each fixture: nine pairs, 18 scored runs. Alternate arm order, reverse starting order across fixtures, and record the schedule. Reset workspace, storage and agent context for every run. Do not pass solutions or transcripts between arms.
-4. Bound each run to 30 minutes. Bound evaluation setup separately to eight hours; this is not an engine implementation estimate. Subscription exhaustion pauses the batch with incomplete evidence rather than causing an automatic provider switch. There is no agreed dollar ceiling or API budget.
+4. Bound each run to 30 minutes. Evaluation setup time is recorded in `evaluation/setup.json` without a limit. Subscription exhaustion pauses the batch with incomplete evidence rather than causing an automatic provider switch. There is no agreed dollar ceiling or API budget.
 5. Keep failed/timed-out runs in results. Record infrastructure failures separately; replacements consume usage/time and must be identified rather than silently replacing evidence. Adjust limits only between batches and record the change.
 
 ## Measurements
