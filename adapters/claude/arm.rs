@@ -23,7 +23,7 @@ pub const HOST_TOOLS: &[(&str, &str, &str)] = &[
     (
         "ack",
         r#"{"milestone":"string"}"#,
-        "{milestone} -> acknowledge a delivered task development before working on it.",
+        "{milestone: the development's id} -> acknowledge a delivered task development before working on it.",
     ),
     (
         "check",
