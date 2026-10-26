@@ -1259,8 +1259,8 @@ fn an_insertion_unrelated_by_owner_is_not_uncertain() {
 #[test]
 fn an_edit_to_a_depended_symbol_is_uncertain_until_reviewed() {
     let (_dir, engine, alice, bob) = symbolic();
-    let renamed = RECORD.replace("Name string", "Name string\n\tSize int");
-    applied(&engine, &alice, "size", "producer.go", &renamed);
+    let widened = RECORD.replace("Name string", "Name string\n\tSize int");
+    applied(&engine, &alice, "size", "producer.go", &widened);
     assert!(unreviewed(&engine.recommend(&alice).unwrap().signals));
     settle(&engine, &bob, "consumer", Decision::Keep);
     assert!(!unreviewed(&engine.recommend(&alice).unwrap().signals));

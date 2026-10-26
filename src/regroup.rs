@@ -479,7 +479,7 @@ impl Engine {
                     params![agent as i64, o.scope.id, o.reviewed as i64],
                 )?;
                 let relevant = analysis::closure(&o.scope.relevant(), &sides);
-                let related = causes.is_empty()
+                let uncertain = causes.is_empty()
                     || causes.iter().any(|cause| match cause {
                         Body::Message(Message {
                             kind: Kind::LiveEdit,
@@ -492,7 +492,7 @@ impl Engine {
                         }
                         _ => true,
                     });
-                if !related {
+                if !uncertain {
                     continue;
                 }
                 signals.uncertain.push(format!(
