@@ -140,10 +140,6 @@ fn on_event(app: &AppHandle, wait: &Shared, ev: Value) {
                 eprintln!("guess {}", question(&ev));
                 let _ = app.emit("guess", question(&ev));
                 show(app);
-                // test hook for runs without a person at the keyboard
-                if let Ok(g) = std::env::var("V0_TEST_GUESS") {
-                    wait.lock().unwrap().guess = Some(g);
-                }
             }
         }
         "PostToolUse" => {

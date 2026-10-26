@@ -8,5 +8,3 @@ Run the panel:
 Run Claude Code with the hooks, from any project:
 
     claude --settings /Users/danielrispler/work/Falinks/.claude/worktrees/issue-315-studio-prototype-the-guess/apps/studio/v0-spike/hook/settings.json
-
-`V0_TEST_GUESS=<text>` submits a guess automatically, for tests with nobody at the keyboard.
