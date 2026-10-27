@@ -808,10 +808,10 @@ const USAGE: &str = "usage: falinks-eval <command>
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
-  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t] [--fixtures NAME[,NAME]]
+  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6] [--fixtures NAME[,NAME]]
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
-  report --runs DIR [--runs DIR]... [--schedule track-t] [--show-code]
+  report --runs DIR [--runs DIR]... [--schedule track-t|step-6] [--show-code]
   timing RUN_DIR";
 
 struct Args {
@@ -928,9 +928,13 @@ fn run() -> Result<i32> {
             Path::new(args.required("runs")?),
             args.get("after-pilot").map(Path::new),
             match args.get("schedule") {
-                None => false,
-                Some("track-t") if args.get("after-pilot").is_none() => true,
-                Some(_) => bail!("--schedule takes track-t, without --after-pilot\n{USAGE}"),
+                None => None,
+                Some(name @ ("track-t" | "step-6")) if args.get("after-pilot").is_none() => {
+                    Some(name)
+                }
+                Some(_) => {
+                    bail!("--schedule takes track-t or step-6, without --after-pilot\n{USAGE}")
+                }
             },
             &match args.get("fixtures") {
                 Some(list) => list.split(',').collect(),
@@ -944,7 +948,8 @@ fn run() -> Result<i32> {
             let summary = match args.get("schedule") {
                 None => report::report(&runs, args.get("show-code").is_some()),
                 Some("track-t") => report::track_t_report(&runs),
-                Some(_) => bail!("--schedule takes track-t\n{USAGE}"),
+                Some("step-6") => report::step_6_report(&runs),
+                Some(_) => bail!("--schedule takes track-t or step-6\n{USAGE}"),
             };
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(0)

@@ -912,7 +912,8 @@ fn usage_is_complete_only_with_final_results_inside_the_drain_window() {
 }
 
 /// `timing` on synthetic stream-json transcripts (`tests/timing/`), checked against values
-/// computed by hand. Times are seconds after 2026-10-21T10:00:00Z.
+/// computed by hand. Times are seconds after 2026-10-21T10:00:00Z. Step 6's overhead figures
+/// (#316): tool seconds and acts by Falinks operation, and edit-gate seconds per accepted edit.
 #[test]
 fn timing_reports_hand_computed_figures() {
     let figures = |run: &str| {
@@ -936,6 +937,8 @@ fn timing_reports_hand_computed_figures() {
         };
     let none = json!({"refusals": 0, "unresolved": 0, "round_trips": 0, "model_seconds": 0.0});
     let recovery = |content: &Value| json!({"content": content, "replace": none, "from": none});
+    let op = |acts: u64, refused: u64, seconds: f64| json!({"acts": acts, "refused": refused, "tool_seconds": seconds});
+    let gate = |accepted: u64, seconds: f64, per: Value| json!({"accepted": accepted, "seconds": seconds, "per_accepted_seconds": per});
 
     // Git: the clock starts at 0.5 (to the millisecond) and stops at 20.5.
     let git = figures("git");
@@ -970,6 +973,9 @@ fn timing_reports_hand_computed_figures() {
             "changed_bytes": 5,
             "results": 2,
             "usage_reports": 1,
+            // No Falinks call, so no edit gate.
+            "operations": {},
+            "edit_gate": gate(0, 0.0, Value::Null),
         })
     );
     assert_eq!(
@@ -977,7 +983,7 @@ fn timing_reports_hand_computed_figures() {
         json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
             "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
-            "usage_reports": 1})
+            "usage_reports": 1, "operations": {}, "edit_gate": gate(0, 0.0, Value::Null)})
     );
 
     // Falinks: the clock starts at 0 (to the second) and stops at 10; agent-0 resumes once.
@@ -991,7 +997,7 @@ fn timing_reports_hand_computed_figures() {
     assert_eq!(falinks["slowest_agent"], "agent-0");
     assert_eq!(
         falinks["round_trips"],
-        json!({"count": 4, "model_seconds": 4.0})
+        json!({"count": 5, "model_seconds": 4.25})
     );
     assert_eq!(
         falinks["agents"]["agent-0"],
@@ -1014,14 +1020,25 @@ fn timing_reports_hand_computed_figures() {
             "changed_bytes": 7,
             "results": 2,
             "usage_reports": 2,
+            // e1 2.5-3.0 accepted, e2 4.0-4.5 refused, y1 9.0-9.25.
+            "operations": {"edit": op(2, 1, 1.0), "ready": op(1, 0, 0.25)},
+            // Only e1 passed the gate.
+            "edit_gate": gate(1, 0.5, json!(0.5)),
         })
     );
     assert_eq!(
         falinks["agents"]["agent-1"],
         json!({"busy_seconds": 3.0, "launch_seconds": 2.0, "waiting_on_peer_seconds": 5.0,
-            "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (1, 1.0), (0, 0.0)),
-            "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 1.0, "output_bytes": 0, "changed_bytes": 0, "results": 1,
-            "usage_reports": 1})
+            // g1 3.0-2.0; g3 4.25-4.0; g2, text only, 5.0-4.75.
+            "model_seconds": 1.5,
+            // g3 is an accepted apply_job with a post: an edit.
+            "round_trips": trips((1, 0.25), (0, 0.0), (1, 1.0), (0, 0.0)),
+            "refusal_recovery": recovery(&none), "request_key_refusals": {},
+            // b1 1.0, j1 0.25 and p1 0.5, in parallel with j1.
+            "tool_seconds": 1.75, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "usage_reports": 1,
+            "operations": {"apply_job": op(1, 0, 0.25), "post": op(1, 0, 0.5)},
+            "edit_gate": gate(1, 0.25, json!(0.25))})
     );
 }
 

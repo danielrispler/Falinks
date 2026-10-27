@@ -5,7 +5,7 @@
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
     FIXTURES, Result, bail, git, read,
-    report::{report, track_t_report},
+    report::{report, step_6_report, track_t_report},
     root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
 use serde_json::{Value, json};
@@ -106,6 +106,25 @@ pub fn track_t_slots() -> Vec<Value> {
     slots
 }
 
+/// Step 6's slots (#185, #316): `go-indep-4` five times in each of three arms, one agent, two
+/// Git agents and two Falinks agents. Each repetition runs every arm once, and the order rotates
+/// across repetitions, so each arm runs first, second and third at least once. Unscored.
+pub fn step_6_slots() -> Vec<Value> {
+    let mut arms = [("git", 1), ("git", 2), ("falinks", 2)];
+    let mut slots = vec![];
+    for repetition in 1..=5 {
+        for (order, (arm, size)) in arms.into_iter().enumerate() {
+            slots.push(
+                json!({"slot": format!("go-indep-4-{repetition}-{arm}-{size}"),
+                "pair": format!("go-indep-4-{repetition}"), "fixture": "go-indep-4", "arm": arm,
+                "order": order, "scored": false, "team_size": size}),
+            );
+        }
+        arms.rotate_left(1);
+    }
+    slots
+}
+
 fn pause(ledger: &mut Value, path: &Path, reason: String) -> Result<i32> {
     ledger["pauses"]
         .as_array_mut()
@@ -198,12 +217,13 @@ fn one_worktree(list: &str) -> Result<()> {
 }
 
 /// `after_pilot` names the completed pilot batch directory; without it this is the pilot,
-/// unless `track_t` runs the team-size schedule instead. `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
+/// unless `schedule` names a track-T schedule instead: `track-t` (team sizes) or `step-6`
+/// (three arms). `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
 pub fn batch(
     config_path: &Path,
     runs: &Path,
     after_pilot: Option<&Path>,
-    track_t: bool,
+    schedule: Option<&str>,
     fixtures: &[&str],
 ) -> Result<i32> {
     if let Some(name) = fixtures.iter().find(|f| !FIXTURES.contains(f)) {
@@ -228,7 +248,7 @@ pub fn batch(
     {
         bail!("gate_command must check the same runtime_binary as the runs");
     }
-    let pilot = after_pilot.is_none() && !track_t;
+    let pilot = after_pilot.is_none() && schedule.is_none();
     if let Some(dir) = after_pilot {
         // Scoring follows a completed unscored pilot pair.
         let ledger = read(dir.join("batch.json"))?;
@@ -274,10 +294,11 @@ pub fn batch(
     {
         bail!("Run configuration changed inside this batch; record a new batch directory");
     }
-    let slots: Vec<Value> = if track_t {
-        track_t_slots()
-    } else {
-        slots(pilot)
+    let slots: Vec<Value> = match schedule {
+        None => slots(pilot),
+        Some("track-t") => track_t_slots(),
+        Some("step-6") => step_6_slots(),
+        Some(other) => bail!("Unknown schedule {other}"),
     }
     .into_iter()
     .filter(|s| fixtures.contains(&s["fixture"].as_str().unwrap()))
@@ -299,7 +320,7 @@ pub fn batch(
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": track_t,
+    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": schedule.is_some(), "schedule": schedule,
         "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config,
         "commit": commit, "go": go, "worktrees": worktrees}));
     let mut gated = false;
@@ -508,10 +529,10 @@ pub fn batch(
     }
     write(&ledger_path, &ledger)?;
     let results = results(&runs)?;
-    let summary = if track_t {
-        track_t_report(&results)
-    } else {
-        report(&results, false)
+    let summary = match schedule {
+        Some("track-t") => track_t_report(&results),
+        Some(_) => step_6_report(&results),
+        None => report(&results, false),
     };
     write(runs.join("report.json"), &summary)?;
     println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -683,6 +704,42 @@ mod tests {
         assert_eq!(scored[0]["slot"], "rust-errors-1-git");
         assert_eq!(scored[2]["slot"], "rust-errors-2-falinks");
         assert_eq!(scored[1]["order"], 1);
+    }
+
+    #[test]
+    fn step_6_runs_each_arm_in_every_position_over_five_rotations() {
+        let slots = step_6_slots();
+        assert_eq!(slots.len(), 15);
+        let arm = |s: &Value| format!("{}-{}", s["arm"].as_str().unwrap(), s["team_size"]);
+        for (index, rotation) in slots.chunks(3).enumerate() {
+            let pair = format!("go-indep-4-{}", index + 1);
+            let mut arms: Vec<String> = rotation.iter().map(arm).collect();
+            for (order, slot) in rotation.iter().enumerate() {
+                assert_eq!(slot["slot"], format!("{pair}-{}", arms[order]));
+                assert_eq!(
+                    (&slot["pair"], &slot["order"]),
+                    (&json!(pair), &json!(order))
+                );
+                assert_eq!(
+                    (&slot["fixture"], &slot["scored"]),
+                    (&json!("go-indep-4"), &json!(false))
+                );
+            }
+            arms.sort();
+            assert_eq!(arms, ["falinks-2", "git-1", "git-2"]);
+        }
+        let first: Vec<String> = slots.iter().step_by(3).map(arm).collect();
+        assert_eq!(first, ["git-1", "git-2", "falinks-2", "git-1", "git-2"]);
+        for name in ["git-1", "git-2", "falinks-2"] {
+            let mut orders: Vec<u64> = slots
+                .iter()
+                .filter(|s| arm(s) == name)
+                .map(|s| s["order"].as_u64().unwrap())
+                .collect();
+            orders.sort();
+            orders.dedup();
+            assert_eq!(orders, [0, 1, 2], "{name}");
+        }
     }
 
     /// Writes a batch directory of successful `slots`: Git 1000 s; Falinks 900 s on go-page, else 700 s.

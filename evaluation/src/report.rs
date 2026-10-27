@@ -55,6 +55,47 @@ const TRACK_T_METRICS: [&str; 7] = [
 ];
 /// Track T runs five repetitions per cell (#182), so its chance figures are for n = 5.
 const TRACK_T_NOTE: &str = "consistent: every repetition of one team size is below every repetition of the other, with no data missing; mixed: the ranges overlap; incomplete: a repetition lacks the metric; n/a: the fixture has no milestones, so no development arrives. Chance alone gives consistent 2/252 of the time per cell at n = 5, and five paired differences of one sign 2/32; neither is proof of a meaningful or generalizable advantage.";
+/// Step 6's arms (#185, #316), each an arm and a team size: one agent, two Git agents and two
+/// Falinks agents.
+const STEP_6_ARMS: [&str; 3] = ["git-1", "git-2", "falinks-2"];
+/// Every pair of step 6's arms; each paired difference is the second minus the first.
+const STEP_6_PAIRS: [(&str, &str); 3] = [
+    ("git-1", "git-2"),
+    ("git-1", "falinks-2"),
+    ("git-2", "falinks-2"),
+];
+const STEP_6_NOTE: &str = "consistent: every repetition of one arm is below every repetition of the other, with no data missing; mixed: the ranges overlap; incomplete: a repetition lacks the metric; n/a: the fixture has no milestones, so no development arrives. Chance alone gives consistent 2/252 of the time per pair of arms at n = 5, and five paired differences of one sign 2/32; neither is proof of a meaningful or generalizable advantage.";
+/// The rows of #178's outcome table that three arms on one fixture can show: the row, what it
+/// supports and what it does not support.
+const OUTCOMES: [[&str; 3]; 5] = [
+    [
+        "One agent wins on every class, including `go-indep-4` at its calibrated size",
+        "QA no at the tested scale and coupling, even with Git's coordination",
+        "\"Never parallel\": larger and mixed tasks are untested",
+    ],
+    [
+        "Two Git agents win on `go-indep-4`; two Falinks agents ≤ one agent",
+        "Parallelism pays, but Falinks's overhead consumes it: track P first",
+        "Team sizing as the fix",
+    ],
+    [
+        "Two Falinks agents beat one but lose to two Git agents",
+        "Falinks keeps part of the gain; its overhead (step 6's C_fixed and r) is the gap",
+        "Falinks being competitive at this size",
+    ],
+    [
+        "Two agents win everywhere",
+        "A fixed size of 2 is adequate for these classes",
+        "That 2 is the best size",
+    ],
+    [
+        "Mixed or inconclusive",
+        "Only the measured cells",
+        "Any conclusion for or against sizing",
+    ],
+];
+const OUTCOME_NOTE: &str = "Read from completion time against #178's outcome table; a guide, not a verdict (#5 amendment). Win, beat and lose mean a consistent label; ≤ means not consistently below; incomplete means an arm lacks a repetition. The decision is written on the ticket after every dimension.";
+const OVERHEAD_NOTE: &str = "Per Falinks run and agent (#178, step 6). C_fixed: coordination round-trips with their model seconds, and protocol acts by operation. Per-edit tool overhead: tool seconds by Falinks operation, and the edit gate: the tool seconds of accepted edit, retry, incorporate and apply_job calls, with the mean per accepted call. Per-edit model overhead: output bytes against changed bytes. Tool seconds run from a call's emission to its result, so calls made in parallel in one message overlap and these figures are approximate. They come from the transcripts, not from host or edit-gate instrumentation (I-2, track P).";
 /// Printed with the cost lines (#5 amendments, decision 3).
 const COST_LABEL: &str = "API-equivalent list price, not billed cost";
 const SANDBOX_LABEL: &str = "API-equivalent list price, not billed cost; estimate ±15%";
@@ -183,20 +224,27 @@ fn stats(values: &[Option<f64>]) -> Value {
         "n": present.len(), "missing": values.len() - present.len()})
 }
 
+/// Every repetition's value, or None when one lacks it or there are none.
+fn complete(values: &[Option<f64>]) -> Option<Vec<f64>> {
+    values
+        .iter()
+        .copied()
+        .collect::<Option<Vec<f64>>>()
+        .filter(|v| !v.is_empty())
+}
+
+/// Every repetition of `a` is below every repetition of `b`, and neither lacks a value.
+fn below(a: &[Option<f64>], b: &[Option<f64>]) -> bool {
+    complete(a)
+        .zip(complete(b))
+        .is_some_and(|(a, b)| a.iter().all(|x| b.iter().all(|y| x < y)))
+}
+
 /// The evidence label of one metric on one fixture (#5 amendment, decision 5).
 fn label(git: &[Option<f64>], falinks: &[Option<f64>]) -> &'static str {
-    let complete = |values: &[Option<f64>]| {
-        values
-            .iter()
-            .copied()
-            .collect::<Option<Vec<f64>>>()
-            .filter(|v| !v.is_empty())
-    };
-    let (Some(git), Some(falinks)) = (complete(git), complete(falinks)) else {
-        return "incomplete";
-    };
-    let below = |a: &[f64], b: &[f64]| a.iter().all(|x| b.iter().all(|y| x < y));
-    if below(&git, &falinks) || below(&falinks, &git) {
+    if complete(git).is_none() || complete(falinks).is_none() {
+        "incomplete"
+    } else if below(git, falinks) || below(falinks, git) {
         "consistent"
     } else {
         "mixed"
@@ -808,6 +856,204 @@ pub fn track_t_report(runs: &[Value]) -> Value {
     })
 }
 
+/// Step-6 report (#185, #316): one agent, two Git agents and two Falinks agents, per fixture.
+/// Each metric gives every rotation's value per arm with the median, range and n, and for each
+/// pair of arms the evidence label and the paired difference per rotation. Completion time
+/// selects a row of #178's outcome table, and every Falinks run lists its overhead figures and
+/// run identity apart. Like `report`, it computes no winner.
+pub fn step_6_report(runs: &[Value]) -> Value {
+    let replaced: Vec<&Value> = runs.iter().filter_map(|r| r.get("replaces")).collect();
+    let current: Vec<&Value> = runs
+        .iter()
+        .filter(|r| !replaced.contains(&&r["run_id"]))
+        .collect();
+    let arm = |r: &Value| {
+        Some(format!(
+            "{}-{}",
+            r["arm"].as_str()?,
+            r["team_size"].as_u64()?
+        ))
+    };
+    let mut fixtures = serde_json::Map::new();
+    let mut gaps = Vec::new();
+    for fixture in FIXTURES {
+        let mut rotations: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
+        for run in current.iter().filter(|r| r["fixture"] == fixture) {
+            let (Some(pair), Some(arm)) = (run["pair"].as_str(), arm(run)) else {
+                continue;
+            };
+            rotations.entry(pair).or_default().insert(arm, run);
+        }
+        if rotations.is_empty() {
+            continue;
+        }
+        // Each rotation's run per arm: None when it is absent or interrupted.
+        let slots: BTreeMap<&str, Vec<Option<&Value>>> = STEP_6_ARMS
+            .map(|a| {
+                let slots = rotations
+                    .values()
+                    .map(|arms| arms.get(a).copied().filter(|r| !replaceable(r)));
+                (a, slots.collect())
+            })
+            .into();
+        let whole = (0..rotations.len())
+            .filter(|&i| STEP_6_ARMS.iter().all(|a| slots[a][i].is_some()))
+            .count();
+        if whole < 5 {
+            gaps.push(format!("{fixture}: {whole} of 5 complete rotations"));
+        }
+        let no_milestones = crate::fixture(fixture)
+            .is_ok_and(|f| f["milestones"].as_array().is_some_and(Vec::is_empty));
+        let values = |a: &str, metric: &str| -> Vec<Option<f64>> {
+            slots[a]
+                .iter()
+                .map(|r| r.and_then(|r| value(r, metric)))
+                .collect()
+        };
+        let names = METRICS
+            .iter()
+            .chain(&TRACK_T_METRICS)
+            .map(|m| m.to_string())
+            .chain(CLASSES.iter().map(|c| format!("tokens_{c}")));
+        let mut metrics = serde_json::Map::new();
+        for metric in names {
+            let mut entry: serde_json::Map<String, Value> = STEP_6_ARMS
+                .iter()
+                .map(|a| (a.to_string(), stats(&values(a, &metric))))
+                .collect();
+            let pairs: serde_json::Map<String, Value> = STEP_6_PAIRS
+                .iter()
+                .map(|(a, b)| {
+                    let (a_values, b_values) = (values(a, &metric), values(b, &metric));
+                    let paired: Vec<Option<f64>> = a_values
+                        .iter()
+                        .zip(&b_values)
+                        .map(|(a, b)| Some(b.as_ref()? - a.as_ref()?))
+                        .collect();
+                    // Without milestones the host never delivers a development (#257).
+                    let label = if no_milestones && metric.contains("development") {
+                        "n/a"
+                    } else {
+                        label(&a_values, &b_values)
+                    };
+                    let entry = json!({"label": label, "paired_differences": paired});
+                    (format!("{b} - {a}"), entry)
+                })
+                .collect();
+            entry.insert("pairs".into(), pairs.into());
+            metrics.insert(metric, entry.into());
+        }
+        let time = |a: &str| values(a, "completion_seconds");
+        let lower = |a: &str, b: &str| below(&time(a), &time(b));
+        let (one, git, falinks) = ("git-1", "git-2", "falinks-2");
+        let row = if STEP_6_ARMS.iter().any(|a| complete(&time(a)).is_none()) {
+            None
+        } else if lower(one, git) && lower(one, falinks) {
+            Some(0)
+        } else if lower(git, one) && !lower(falinks, one) {
+            Some(1)
+        } else if lower(falinks, one) && lower(git, falinks) {
+            Some(2)
+        } else if lower(git, one) && lower(falinks, one) {
+            Some(3)
+        } else {
+            Some(4)
+        };
+        let outcome = match row.map(|i| OUTCOMES[i]) {
+            None => json!({"row": "incomplete", "note": OUTCOME_NOTE}),
+            Some([row, supports, against]) => json!({"row": row, "supports": supports,
+                "does_not_support": against, "note": OUTCOME_NOTE}),
+        };
+        let variation: serde_json::Map<String, Value> = STEP_6_ARMS
+            .iter()
+            .map(|a| (a.to_string(), json!(variation(&time(a)))))
+            .collect();
+        let successes: BTreeMap<&str, u64> = STEP_6_ARMS
+            .map(|a| {
+                let ok = slots[a]
+                    .iter()
+                    .flatten()
+                    .filter(|r| r["outcome"] == "success");
+                (a, ok.count() as u64)
+            })
+            .into();
+        // Every run of an arm, failed, interrupted and replaced runs included.
+        let costs: serde_json::Map<String, Value> = STEP_6_ARMS
+            .iter()
+            .map(|a| {
+                let all: Vec<&Value> = runs
+                    .iter()
+                    .filter(|r| r["fixture"] == fixture && arm(r).as_deref() == Some(*a))
+                    .collect();
+                (a.to_string(), cost(&all, successes[a]))
+            })
+            .collect();
+        let overhead: Vec<Value> = slots["falinks-2"]
+            .iter()
+            .flatten()
+            .map(|r| {
+                let agents = r["transcript"]["agents"].as_object().into_iter().flatten();
+                let agents: serde_json::Map<String, Value> = agents
+                    .map(|(name, a)| {
+                        let figures = json!({"coordination": a["round_trips"]["coordination"],
+                            "operations": a["operations"], "edit_gate": a["edit_gate"],
+                            "output_bytes": a["output_bytes"], "changed_bytes": a["changed_bytes"]});
+                        (name.clone(), figures)
+                    })
+                    .collect();
+                json!({"run_id": r["run_id"], "pair": r["pair"], "outcome": r["outcome"],
+                    "identity": r["identity"], "agents": agents})
+            })
+            .collect();
+        fixtures.insert(
+            fixture.into(),
+            json!({
+                "rotations": rotations.iter().map(|(pair, arms)| json!({"pair": pair,
+                    "arms": arms.iter().map(|(a, r)| (a.clone(), json!({"run_id": r["run_id"],
+                        "order": r["order"], "outcome": r["outcome"],
+                        "elapsed_seconds": r["timing"]["elapsed_seconds"],
+                        "slowest_agent": r["transcript"]["slowest_agent"],
+                        "agents": r["transcript"]["agents"], "usage_status": r["usage"]["status"],
+                        "developments": r["developments"]})))
+                        .collect::<serde_json::Map<_, _>>()}))
+                    .collect::<Vec<_>>(),
+                "complete_rotations": whole, "successes": successes,
+                "completion_variation": variation,
+                "metrics": metrics, "label_note": STEP_6_NOTE,
+                "outcome": outcome,
+                "overhead": overhead, "overhead_note": OVERHEAD_NOTE,
+                "cost": costs,
+            }),
+        );
+    }
+    for run in current.iter().filter(|r| replaceable(r)) {
+        let outcome = run["outcome"].as_str().unwrap_or("infrastructure_failure");
+        let id = run["run_id"].as_str().unwrap_or_default();
+        gaps.push(format!("unreplaced interruption {id}: {outcome}"));
+    }
+    for run in runs.iter().filter(|r| r["outcome"] == "run_invalid") {
+        let id = run["run_id"].as_str().unwrap_or_default();
+        gaps.push(format!("invalid run {id}: nested agent"));
+    }
+    // Runs a nested agent made invalid (#178 C7), per arm.
+    let nested: serde_json::Map<String, Value> = STEP_6_ARMS
+        .iter()
+        .map(|a| {
+            let hits = runs
+                .iter()
+                .filter(|r| arm(r).as_deref() == Some(*a) && !r["nested_agent"].is_null());
+            (a.to_string(), json!(hits.count()))
+        })
+        .collect();
+    json!({
+        "qualification": "Exploratory: five rotations of one agent, two Git agents and two Falinks agents, and no p-values. No winner is computed; the outcome row is a reading guide, and the decision is written on the ticket. Cost is API-equivalent list price, not billed cost.",
+        "fixtures": fixtures,
+        "gaps": gaps,
+        "nested_agent_hits": nested,
+        "replaced_runs": replaced,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -870,6 +1116,128 @@ mod tests {
             }
         }
         runs
+    }
+
+    /// Five step-6 rotations on go-indep-4; `secs` are (one agent, two Git agents, two Falinks
+    /// agents) per rotation.
+    fn step_6_runs(secs: [(f64, f64, f64); 5]) -> Vec<Value> {
+        let mut runs = vec![];
+        for (rep, (one, git, falinks)) in secs.into_iter().enumerate() {
+            for (arm, size, secs) in [("git", 1, one), ("git", 2, git), ("falinks", 2, falinks)] {
+                let id = format!("go-indep-4-{}-{arm}-{size}", rep + 1);
+                let mut run = run(&id, "go-indep-4", rep as u32 + 1, arm, "success", secs);
+                run["scored"] = json!(false);
+                run["team_size"] = json!(size);
+                runs.push(run);
+            }
+        }
+        runs
+    }
+
+    /// #316: each pair of arms gets its label and paired differences per rotation, completion
+    /// time selects a row of #178's outcome table, and each Falinks run lists its overhead.
+    #[test]
+    fn step_6_compares_every_pair_of_arms_and_reads_the_outcome_table() {
+        // Two Falinks agents lie between one agent and two Git agents in every rotation.
+        let mut runs = step_6_runs([
+            (300.0, 200.0, 250.0),
+            (310.0, 190.0, 260.0),
+            (290.0, 210.0, 240.0),
+            (305.0, 205.0, 255.0),
+            (295.0, 195.0, 245.0),
+        ]);
+        let falinks = find(&mut runs, "go-indep-4-1-falinks-2");
+        let identity =
+            json!({"manifest_version": 41, "adapter_commit": "c0ffee", "tool_sha256": "f00d"});
+        falinks["identity"] = identity.clone();
+        let agent = json!({"round_trips": {"coordination": {"count": 4, "model_seconds": 6.5}},
+            "operations": {"post": {"acts": 2, "refused": 0, "tool_seconds": 0.5}},
+            "edit_gate": {"accepted": 3, "seconds": 1.5, "per_accepted_seconds": 0.5},
+            "output_bytes": 900, "changed_bytes": 600, "busy_seconds": 100.0});
+        falinks["transcript"] = json!({"agents": {"agent-0": agent}});
+        let out = step_6_report(&runs);
+        let fixture = &out["fixtures"]["go-indep-4"];
+        let time = &fixture["metrics"]["completion_seconds"];
+        assert_eq!(
+            (
+                &time["git-1"]["median"],
+                &time["git-2"]["median"],
+                &time["falinks-2"]["median"]
+            ),
+            (&json!(300.0), &json!(200.0), &json!(250.0))
+        );
+        let pair = |name: &str| &time["pairs"][name];
+        assert_eq!(
+            pair("git-2 - git-1")["paired_differences"],
+            json!([-100.0, -120.0, -80.0, -100.0, -100.0])
+        );
+        assert_eq!(
+            pair("falinks-2 - git-1")["paired_differences"],
+            json!(vec![-50.0; 5])
+        );
+        assert_eq!(
+            pair("falinks-2 - git-2")["paired_differences"],
+            json!([50.0, 70.0, 30.0, 50.0, 50.0])
+        );
+        for name in ["git-2 - git-1", "falinks-2 - git-1", "falinks-2 - git-2"] {
+            assert_eq!(pair(name)["label"], "consistent", "{name}");
+        }
+        assert_eq!(
+            fixture["outcome"]["row"],
+            "Two Falinks agents beat one but lose to two Git agents"
+        );
+        assert_eq!(out["gaps"], json!([]));
+        // Every Falinks run's overhead, apart, with its identity.
+        let overhead = fixture["overhead"].as_array().unwrap();
+        assert_eq!(overhead.len(), 5);
+        assert_eq!(overhead[0]["run_id"], "go-indep-4-1-falinks-2");
+        assert_eq!(overhead[0]["identity"], identity);
+        let figures = &overhead[0]["agents"]["agent-0"];
+        assert_eq!(
+            figures["coordination"],
+            json!({"count": 4, "model_seconds": 6.5})
+        );
+        assert_eq!(figures["operations"], agent["operations"]);
+        assert_eq!(figures["edit_gate"]["per_accepted_seconds"], 0.5);
+        assert_eq!(
+            (&figures["output_bytes"], &figures["changed_bytes"]),
+            (&json!(900), &json!(600))
+        );
+        assert!(figures.get("busy_seconds").is_none());
+
+        // Two Falinks agents overlap one agent: Falinks's overhead consumes the gain.
+        let out = step_6_report(&step_6_runs([
+            (300.0, 200.0, 290.0),
+            (310.0, 190.0, 320.0),
+            (290.0, 210.0, 280.0),
+            (305.0, 205.0, 310.0),
+            (295.0, 195.0, 300.0),
+        ]));
+        let fixture = &out["fixtures"]["go-indep-4"];
+        assert_eq!(
+            fixture["metrics"]["completion_seconds"]["pairs"]["falinks-2 - git-1"]["label"],
+            "mixed"
+        );
+        assert_eq!(
+            fixture["outcome"]["row"],
+            "Two Git agents win on `go-indep-4`; two Falinks agents ≤ one agent"
+        );
+
+        // A missing run leaves its pairs incomplete, and the outcome with them.
+        runs.retain(|r| r["run_id"] != "go-indep-4-3-falinks-2");
+        let out = step_6_report(&runs);
+        let fixture = &out["fixtures"]["go-indep-4"];
+        let time = &fixture["metrics"]["completion_seconds"];
+        assert_eq!(time["pairs"]["git-2 - git-1"]["label"], "consistent");
+        for name in ["falinks-2 - git-1", "falinks-2 - git-2"] {
+            assert_eq!(time["pairs"][name]["label"], "incomplete", "{name}");
+            assert_eq!(time["pairs"][name]["paired_differences"][2], Value::Null);
+        }
+        assert_eq!(fixture["outcome"]["row"], "incomplete");
+        assert_eq!(
+            out["gaps"],
+            json!(["go-indep-4: 4 of 5 complete rotations"])
+        );
     }
 
     #[test]

@@ -23,6 +23,10 @@
 //!   recovery the transcript ends in is `unresolved`; its round-trips still count.
 //! - **Request-key refusals** (#206 decision 2), per Falinks op: results whose reason starts
 //!   `request keys:`, the adapter's refusal of unknown or missing request keys.
+//! - **Operations** (#316), per Falinks op: its calls (acts), refused results and tool time.
+//!   The **edit gate** is the tool time of accepted source writes, with its mean per accepted
+//!   write. Both are transcript-side, so parallel calls make them approximate too; host and
+//!   edit-gate instrumentation (#178's I-2) is not read.
 use crate::{Result, bail, fixture, read};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -504,6 +508,29 @@ fn agent(
         .iter()
         .filter_map(|c| Some(c.result?.0 - c.emitted))
         .sum();
+    // Acts, refusals and tool seconds per Falinks op; accepted source writes and their seconds.
+    let mut operations = BTreeMap::<&str, (u64, u64, f64)>::new();
+    let (mut accepted, mut gate) = (0u64, 0.0);
+    for call in &calls {
+        let Some(op) = call.name.strip_prefix(FALINKS) else {
+            continue;
+        };
+        let entry = operations.entry(op).or_default();
+        entry.0 += 1;
+        if let Some((at, refused)) = call.result {
+            (entry.1, entry.2) = (entry.1 + u64::from(refused), entry.2 + at - call.emitted);
+            if !refused && SOURCE_WRITES.contains(&op) {
+                (accepted, gate) = (accepted + 1, gate + at - call.emitted);
+            }
+        }
+    }
+    let operations: Map<String, Value> = operations
+        .into_iter()
+        .map(|(op, (acts, refused, seconds))| {
+            let entry = json!({"acts": acts, "refused": refused, "tool_seconds": rounded(seconds)});
+            (op.to_string(), entry)
+        })
+        .collect();
     json!({
         "busy_seconds": rounded(busy),
         "model_seconds": rounded(messages.iter().map(model).sum()),
@@ -516,6 +543,9 @@ fn agent(
         "output_bytes": output,
         "changed_bytes": changed,
         "results": events.iter().filter(|e| e["type"] == "result").count(),
+        "operations": operations,
+        "edit_gate": {"accepted": accepted, "seconds": rounded(gate),
+            "per_accepted_seconds": (accepted > 0).then(|| rounded(gate / accepted as f64))},
     })
 }
 
