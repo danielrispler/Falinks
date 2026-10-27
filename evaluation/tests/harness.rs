@@ -973,9 +973,6 @@ fn timing_reports_hand_computed_figures() {
             "changed_bytes": 5,
             "results": 2,
             "usage_reports": 1,
-            // No Falinks call, so no edit gate.
-            "operations": {},
-            "edit_gate": gate(0, 0.0, Value::Null),
         })
     );
     assert_eq!(
@@ -983,7 +980,7 @@ fn timing_reports_hand_computed_figures() {
         json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
             "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
-            "usage_reports": 1, "operations": {}, "edit_gate": gate(0, 0.0, Value::Null)})
+            "usage_reports": 1})
     );
 
     // Falinks: the clock starts at 0 (to the second) and stops at 10; agent-0 resumes once.

@@ -405,8 +405,8 @@ it as `usage_limit`.
     output form, the refusals, the round-trips and model seconds from a refused edit to the
     agent's next accepted one, and the refusals never followed by one (`unresolved`). Its
     `request_key_refusals` counts, per Falinks op, the results refused with `request keys:`.
-    Its `operations` give, per Falinks op, the calls (`acts`), the refused results and the
-    tool seconds; its `edit_gate` gives the tool seconds of accepted `edit`, `retry`,
+    For a Falinks agent, its `operations` give, per op, the calls (`acts`), the refused
+    results and the tool seconds; its `edit_gate` gives the tool seconds of accepted `edit`, `retry`,
     `incorporate` and `apply_job` calls, their count and the mean per accepted call (#316).
     Tool seconds of calls made in parallel in one message overlap, so these are approximate.
     The definitions and heuristics are in

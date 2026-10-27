@@ -23,7 +23,8 @@
 //!   recovery the transcript ends in is `unresolved`; its round-trips still count.
 //! - **Request-key refusals** (#206 decision 2), per Falinks op: results whose reason starts
 //!   `request keys:`, the adapter's refusal of unknown or missing request keys.
-//! - **Operations** (#316), per Falinks op: its calls (acts), refused results and tool time.
+//! - **Operations** (#316), per Falinks op of a Falinks agent: its calls (acts), refused results
+//!   and tool time.
 //!   The **edit gate** is the tool time of accepted source writes, with its mean per accepted
 //!   write. Both are transcript-side, so parallel calls make them approximate too; host and
 //!   edit-gate instrumentation (#178's I-2) is not read.
@@ -510,7 +511,7 @@ fn agent(
         .sum();
     // Acts, refusals and tool seconds per Falinks op; accepted source writes and their seconds.
     let mut operations = BTreeMap::<&str, (u64, u64, f64)>::new();
-    let (mut accepted, mut gate) = (0u64, 0.0);
+    let (mut accepted, mut gate_seconds) = (0u64, 0.0);
     for call in &calls {
         let Some(op) = call.name.strip_prefix(FALINKS) else {
             continue;
@@ -518,9 +519,11 @@ fn agent(
         let entry = operations.entry(op).or_default();
         entry.0 += 1;
         if let Some((at, refused)) = call.result {
-            (entry.1, entry.2) = (entry.1 + u64::from(refused), entry.2 + at - call.emitted);
+            entry.1 += u64::from(refused);
+            entry.2 += at - call.emitted;
             if !refused && SOURCE_WRITES.contains(&op) {
-                (accepted, gate) = (accepted + 1, gate + at - call.emitted);
+                accepted += 1;
+                gate_seconds += at - call.emitted;
             }
         }
     }
@@ -531,7 +534,7 @@ fn agent(
             (op.to_string(), entry)
         })
         .collect();
-    json!({
+    let mut figures = json!({
         "busy_seconds": rounded(busy),
         "model_seconds": rounded(messages.iter().map(model).sum()),
         "tool_seconds": rounded(tool),
@@ -543,10 +546,14 @@ fn agent(
         "output_bytes": output,
         "changed_bytes": changed,
         "results": events.iter().filter(|e| e["type"] == "result").count(),
-        "operations": operations,
-        "edit_gate": {"accepted": accepted, "seconds": rounded(gate),
-            "per_accepted_seconds": (accepted > 0).then(|| rounded(gate / accepted as f64))},
-    })
+    });
+    // A Git agent makes no Falinks call, so its figures stay as they were before #316.
+    if !bash_writes_source {
+        figures["operations"] = operations.into();
+        figures["edit_gate"] = json!({"accepted": accepted, "seconds": rounded(gate_seconds),
+            "per_accepted_seconds": (accepted > 0).then(|| rounded(gate_seconds / accepted as f64))});
+    }
+    figures
 }
 
 fn jsonl(path: &Path) -> Result<Vec<Value>> {
