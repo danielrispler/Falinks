@@ -405,6 +405,10 @@ it as `usage_limit`.
     output form, the refusals, the round-trips and model seconds from a refused edit to the
     agent's next accepted one, and the refusals never followed by one (`unresolved`). Its
     `request_key_refusals` counts, per Falinks op, the results refused with `request keys:`.
+    For a Falinks agent, its `operations` give, per op, the calls (`acts`), the refused
+    results and the tool seconds; its `edit_gate` gives the tool seconds of accepted `edit`, `retry`,
+    `incorporate` and `apply_job` calls, their count and the mean per accepted call (#316).
+    Tool seconds of calls made in parallel in one message overlap, so these are approximate.
     The definitions and heuristics are in
     `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
     Runs before #179 record their start to the second only (`start_precision`), so their
@@ -455,6 +459,29 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/track-t --s
   sample coefficient of variation per team size (standard deviation with n − 1, over the
   mean). Each pair lists the per-agent `timing` figures, the slowest agent, the usage status
   and the developments; nested-agent hits are counted per team size. No winner is computed.
+
+Step 6 (#185) adds two Falinks agents on `go-indep-4`. Its method is frozen before any run
+(#316):
+
+```sh
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/step-6 --schedule step-6
+evaluation/target/release/falinks-eval report --runs /private/tmp/ev/step-6 --schedule step-6
+```
+
+- **Schedule**: `go-indep-4` five times in each of three arms: one agent (`git-1`), two Git
+  agents (`git-2`) and two Falinks agents (`falinks-2`), 15 slots. Each repetition is a
+  rotation that runs every arm once, and the order rotates by one each time, so each arm
+  runs first, second and third at least once. Batch isolation, the gate, the ledger and the
+  pause rules apply to every slot.
+- **Report** (`report --schedule step-6`, also the batch's `report.json`): the track-T
+  metrics per arm, keyed by arm and team size, and for each pair of arms the label and the
+  paired difference per rotation (the second arm minus the first). Completion time selects a
+  row of #178's outcome table, including "Two Falinks agents beat one but lose to two Git
+  agents"; it is a reading guide, not a verdict. Each Falinks run then lists, per agent, its
+  overhead apart: C_fixed (coordination round-trips, their model seconds and `operations`
+  acts), per-edit tool overhead (`operations` tool seconds and `edit_gate`) and per-edit
+  model overhead (output against changed bytes), with the run's `identity`. These come from
+  the transcripts, not the host's edit-gate timing (#178's I-2, track P).
 
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and

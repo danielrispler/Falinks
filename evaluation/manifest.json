@@ -26,17 +26,17 @@
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
     "result-schema.json": "52d5b0fad30a40dbf2ce27c8a526a668bc000f01aab640ea66b1cf7f76a0bdd8",
     "src/baseline.rs": "38c80504ecde134ca4e726fee02e05dfbb22b2081a5d87b0d2b694416c77417e",
-    "src/batch.rs": "593a516c5cf11b00f741b6f10ce41caaae1fcff858320632646d214ba1007389",
+    "src/batch.rs": "c24dc9e3f6f9bb58eda9d5e1c7f5b8c4f4cd3d88926e51c25670f1daff4f7eae",
     "src/bin/claude-worker.rs": "c6e206e6e5d21c96b937bfda1f9040f320aef6c1c613f386f9ab9a07906675a1",
     "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
     "src/bin/falinks-eval-contain.rs": "c5c53fad8087a3b8d6cf3f31f04b96ae2946dfa530093d9b902c307871513a10",
     "src/bin/scripted-worker.rs": "2719aacfee76e1ed9a227a7c6feaac831aafafdd4d6f9d36543e21bb0f96deac",
     "src/judge.rs": "97d757145098a4d234e33a6892ebc56ed66aae7163d3019ec9df72bf67a2cb5c",
     "src/known_answer.rs": "572dd86fc5e3c36e66ba48238abec5335234d138d296bd9b1c32eea43bcd4e08",
-    "src/main.rs": "980a3535ff13e0800516a57d5886f2380abde5aa9edc5242d0675a3796ea9f76",
+    "src/main.rs": "c64a0434502c65f627c7a2cd4038626ddc081508fbcd5daaa78380b2a197a265",
     "src/quality.rs": "231d5aa450782eff53e559bfbd0950e3eef51656526c0c7185a5c4ae5bc7ad14",
-    "src/report.rs": "835689c4a6e7fcb0b75a9c72dd8e962c69f5c750f6fa3609017ba37def5786f3",
-    "src/timing.rs": "695d537b61af5d961ce50767e29b98d6d1904e1fcefbaf9e51010c812397f66d",
+    "src/report.rs": "e03c6e2d218325cb2354a7f42f795023c295952b65bafafb4d67904aa42a94bb",
+    "src/timing.rs": "8169072d16d1679800b87f676937ccbdb260bf0faf82ed8a8b388ba2080e1879",
     "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
   },
   "initial_commits": {
@@ -46,5 +46,5 @@
     "go-relationships": "3b763e9b0f3d0fe5edcad1c65ecdb249bd159f03",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 40
+  "version": 41
 }

@@ -657,7 +657,10 @@ fn setup(
         tool.with_file_name("falinks-claude-shell"),
         dir.join("worker-tools/falinks-claude-shell"),
     )?;
-    evidence["tool_sha256"] = file_hash(&tool)?.into();
+    let tool_sha256 = file_hash(&tool)?;
+    let built = tool.parent().ok_or("worker tool has no directory")?;
+    evidence["identity"] = identity(&manifest, built, &tool_sha256)?;
+    evidence["tool_sha256"] = tool_sha256.into();
     for agent in 0..2 {
         for part in ["scratch", "controller"] {
             fs::create_dir_all(dir.join(agent_name(agent)).join(part))?;
@@ -718,6 +721,22 @@ fn setup(
         run.start(agent, text)?;
     }
     Ok(run)
+}
+
+/// Run identity (#185): the manifest version, the commit of the checkout the adapter was built
+/// in (`built`, its binaries' directory), which the manifest does not cover, and the tool hash.
+fn identity(manifest: &Value, built: &Path, tool_sha256: &str) -> Result<Value> {
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(built)
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    require(
+        head.status.success(),
+        "the adapter must run from the Git checkout it was built in",
+    )?;
+    Ok(json!({"manifest_version": manifest["version"],
+        "adapter_commit": String::from_utf8(head.stdout)?.trim(), "tool_sha256": tool_sha256}))
 }
 
 /// After the clock stops (#179): every mediated call is refused while the host waits up to the
@@ -829,9 +848,31 @@ fn drive(run: &mut Run, deadline: Instant) -> Result<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn the_idle_nudge_says_check_then_offer() {
         assert!(super::IDLE_NUDGE.contains("check, then offer again"));
         assert!(super::IDLE_NUDGE.contains("falinks_ready"));
+    }
+
+    /// #316: a Falinks run records the manifest version, its checkout's commit and the tool hash.
+    #[test]
+    fn run_identity_names_the_manifest_version_commit_and_tool_hash() {
+        let built = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let head = Command::new("git")
+            .arg("-C")
+            .arg(built)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let commit = String::from_utf8(head.stdout).unwrap();
+        assert_eq!(
+            identity(&json!({"version": 41}), built, "f00d").unwrap(),
+            json!({"manifest_version": 41, "adapter_commit": commit.trim(), "tool_sha256": "f00d"})
+        );
+        // Outside a checkout there is no commit to record, and the run cannot start.
+        let outside = tempfile::tempdir().unwrap();
+        assert!(identity(&json!({"version": 41}), outside.path(), "f00d").is_err());
     }
 }
