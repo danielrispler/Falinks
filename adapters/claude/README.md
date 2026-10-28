@@ -84,7 +84,7 @@ Real agents make every tool call; the host sets turn order, barriers and faults:
 
 1. **controls**: both workers at once. The sandbox probe passes through the real Bash tool against the production layout (live root, scratch, engine state, own and peer controller). A native Read of the engine ledger is denied. Scopes are registered.
 2. **drafts**: unfinished but compiling edits in two files of the shared workspace. Agent 1's early offer holds a team candidate that still needs agent 0.
-3. **split**: the engine recommends a split; both agents agree. Agent 1 is resumed with `--resume` against `space1`. Its draft moves with it and its early offer stays bound to the old candidate.
+3. **split**: agent 0 drafts again, so agent 1's early offer is no longer pending. The engine recommends a split; both agents agree. Agent 1 is resumed with `--resume` against `space1`. Its draft moves with it and its early offer stays bound to the old candidate.
 4. **checks_while_drafting**: agent 1's exact offer queues checks. The validator is held while agent 0 drafts newer work, then publishes exactly the offered candidate.
 5. **join**: agent 1 registers work that depends on agent 0's and proposes a join; both agree; agent 1 resumes in `space0`.
 6. **steering**: after agent 1's draft, only agent 0 is stepped until its non-compiling draft commits. Agent 1's next mediated call waits, so the obligation notice is presented in the same turn. Agent 1 sees the incomplete peer draft through a native Read. Its related write must first come back `Unreviewed`, and it applies only after an engine-accepted review. A two-file request bound to an old version is then rejected whole and retained (**stale**).

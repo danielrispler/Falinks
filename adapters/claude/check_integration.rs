@@ -32,6 +32,7 @@ use std::{
 
 const PRICE: &str = "package gate\n\nfunc Net(gross int) int {\n\treturn gross - Discount(gross)\n}\n\nfunc Discount(gross int) int {\n\treturn 0\n}\n";
 const DISCOUNT_DRAFT: &str = "package gate\n\nfunc Net(gross int) int {\n\treturn gross - Discount(gross)\n}\n\nfunc Discount(gross int) int {\n\treturn gross / 20\n}\n";
+const DISCOUNT_REDRAFT: &str = "package gate\n\nfunc Net(gross int) int {\n\treturn gross - Discount(gross)\n}\n\nfunc Discount(gross int) int {\n\treturn gross / 25\n}\n";
 const DISCOUNT_BROKEN: &str = "package gate\n\nfunc Net(gross int) int {\n\treturn gross - Discount(gross)\n}\n\nfunc Discount(gross int) int {\n\treturn gross /\n}\n";
 const DISCOUNT_FINAL: &str = "package gate\n\nfunc Net(gross int) int {\n\treturn gross - Discount(gross)\n}\n\nfunc Discount(gross int) int {\n\treturn gross / 10\n}\n";
 const LABEL: &str = "package gate\n\nfunc Label(name string) string {\n\treturn name\n}\n";
@@ -654,6 +655,12 @@ fn drafts(gate: &mut Gate) -> Result<()> {
 
 /// Phase 3: engine-recommended split, agreed by both real agents; agent 1 resumes elsewhere.
 fn split(gate: &mut Gate) -> Result<()> {
+    // Agent 0 drafts on, so agent 1's early offer is no longer pending and allows a split (#305).
+    let steps = format!(
+        "1. falinks_capture with input {{\"paths\": [\"price.go\"]}}.\n2. {} — use the price.go version step 1 returned instead of VERSION.",
+        edit_step("discount-redraft", "price.go", DISCOUNT_REDRAFT, "VERSION")
+    );
+    gate.run(&[(0, steps)])?;
     gate.engine().add_workspace(&space(&gate.dir, 1))?;
     let proposal = gate.engine().reconsider()?;
     require(
