@@ -1,7 +1,7 @@
 // v0 for #315: the guess-and-card loop.
 // Tails ../hook/events.jsonl (written by event-hook.sh). At most one guess per wait (prompt to Stop):
 // the first Bash, Edit/Write or ExitPlanMode opens it, and ExitPlanMode replaces a guess not yet submitted.
-// The card is written once the guess is in and the tool's PostToolUse result has arrived.
+// The card is written once the guess is in and the tool's PostToolUse or PostToolUseFailure result has arrived.
 // CARD_WRITER=claude uses `claude -p`; anything else shows a fixed fake card.
 use serde_json::{json, Value};
 use std::{
@@ -91,12 +91,20 @@ fn claude_card(tool: &Value, guess: &str, result: &Value) -> Value {
          Tool call: {}\nResult: {}\nDeveloper's guess: {}",
         tool["tool_input"], result, guess
     );
-    let out = Command::new("claude").args(["-p", &prompt]).output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    // without the API-key variables and without --bare, `claude` uses the subscription login
+    let out = Command::new("claude")
+        .args(["-p", &prompt])
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .output();
+    let (text, err) = match out {
+        Ok(o) => (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned()),
+        Err(e) => (String::new(), e.to_string()),
+    };
     // the model may wrap the JSON in a fence; take the outermost braces
     let body = text.find('{').zip(text.rfind('}')).map(|(a, b)| &text[a..=b]).unwrap_or("");
     serde_json::from_str(body).unwrap_or_else(|_| {
-        json!({ "title": "כותב הכרטיסים נכשל", "code": [{ "line": text, "label": "" }], "unchecked": "" })
+        json!({ "title": "כותב הכרטיסים נכשל", "code": [{ "line": format!("{text}{err}"), "label": "" }], "unchecked": "" })
     })
 }
 
@@ -142,10 +150,11 @@ fn on_event(app: &AppHandle, wait: &Shared, ev: Value) {
                 show(app);
             }
         }
-        "PostToolUse" => {
+        // a failed tool (a Bash exit code other than 0, a rejected Edit) fires PostToolUseFailure with `error`
+        "PostToolUse" | "PostToolUseFailure" => {
             let mut w = wait.lock().unwrap();
             if w.tool.as_ref().is_some_and(|t| t["tool_use_id"] == ev["tool_use_id"]) {
-                w.result = Some(ev["tool_response"].clone());
+                w.result = Some(if ev["error"].is_null() { ev["tool_response"].clone() } else { json!({ "error": ev["error"] }) });
                 drop(w);
                 let _ = app.emit("result-in", ());
                 try_card(app, wait);
