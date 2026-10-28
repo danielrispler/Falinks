@@ -1,7 +1,7 @@
 // v0 for #315: the guess-and-card loop.
-// Tails ../hook/events.jsonl (written by event-hook.sh). At most one guess per wait (prompt to Stop):
+// Tails ../hook/events.jsonl (written by event-hook.sh). At most one guess per wait, which a new prompt resets:
 // the first Bash, Edit/Write or ExitPlanMode opens it, and ExitPlanMode replaces a guess not yet submitted.
-// Edits and Writes to plan files (~/.claude/plans/) never open one.
+// Edits and Writes to plan files (any path containing /.claude/plans/) never open one.
 // The card is written once the guess is in and the tool's PostToolUse or PostToolUseFailure result has arrived.
 // CARD_WRITER=claude uses `claude -p`; anything else shows a fixed fake card.
 use serde_json::{json, Value};
@@ -158,7 +158,6 @@ fn on_event(app: &AppHandle, wait: &Shared, ev: Value) {
             if w.tool.as_ref().is_some_and(|t| t["tool_use_id"] == ev["tool_use_id"]) {
                 w.result = Some(if ev["error"].is_null() { ev["tool_response"].clone() } else { json!({ "error": ev["error"] }) });
                 drop(w);
-                let _ = app.emit("result-in", ());
                 try_card(app, wait);
             }
         }
