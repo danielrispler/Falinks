@@ -38,7 +38,7 @@ To rerun one engine test, filter by name: `cargo nextest run <name>`. For one ev
 
 ## Evaluation sources
 
-`evaluation/` is hash-frozen in `evaluation/manifest.json`. Read "Freeze and setup budget" in [evaluation/README.md](evaluation/README.md) before editing anything there.
+`evaluation/` is hash-frozen in `evaluation/manifest.json`. Read "Freeze and setup ledger" in [evaluation/README.md](evaluation/README.md) before editing anything there.
 
 ## Pull requests
 

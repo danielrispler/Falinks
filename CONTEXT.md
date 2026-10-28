@@ -128,7 +128,7 @@ The isolation applied to a worker runtime's own tool commands, which must refuse
 _Avoid_: Sandbox (alone), containment
 
 **Freeze**:
-The hash pinning of evaluation materials in `evaluation/manifest.json`. Changing frozen material needs a versioned re-freeze; the procedure is in `evaluation/README.md`, "Freeze and setup budget".
+The hash pinning of evaluation materials in `evaluation/manifest.json`. Changing frozen material needs a versioned re-freeze; the procedure is in `evaluation/README.md`, "Freeze and setup ledger".
 
 **Final snapshot**:
 The exact candidate a run's final oracle checked. Code-quality metrics measure the change from the frozen initial commit to it.
