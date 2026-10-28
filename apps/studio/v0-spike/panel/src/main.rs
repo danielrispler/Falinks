@@ -1,6 +1,7 @@
 // v0 for #315: the guess-and-card loop.
 // Tails ../hook/events.jsonl (written by event-hook.sh). At most one guess per wait (prompt to Stop):
 // the first Bash, Edit/Write or ExitPlanMode opens it, and ExitPlanMode replaces a guess not yet submitted.
+// Edits and Writes to plan files (~/.claude/plans/) never open one.
 // The card is written once the guess is in and the tool's PostToolUse or PostToolUseFailure result has arrived.
 // CARD_WRITER=claude uses `claude -p`; anything else shows a fixed fake card.
 use serde_json::{json, Value};
@@ -34,8 +35,9 @@ struct Wait {
 
 type Shared = Arc<Mutex<Wait>>;
 
-fn eligible(tool: &str) -> bool {
-    matches!(tool, "Bash" | "Edit" | "Write" | "ExitPlanMode")
+fn eligible(ev: &Value) -> bool {
+    let plan_file = ev["tool_input"]["file_path"].as_str().is_some_and(|p| p.contains("/.claude/plans/"));
+    matches!(ev["tool_name"].as_str(), Some("Bash" | "Edit" | "Write" | "ExitPlanMode")) && !plan_file
 }
 
 fn file_name(input: &Value) -> String {
@@ -137,7 +139,7 @@ fn on_event(app: &AppHandle, wait: &Shared, ev: Value) {
     let tool = ev["tool_name"].as_str().unwrap_or("");
     match ev["hook_event_name"].as_str().unwrap_or("") {
         "UserPromptSubmit" => *wait.lock().unwrap() = Wait::default(),
-        "PreToolUse" if eligible(tool) => {
+        "PreToolUse" if eligible(&ev) => {
             let mut w = wait.lock().unwrap();
             let pending = w.tool.as_ref().map(|t| t["tool_name"] == "ExitPlanMode");
             let open = !w.done && w.guess.is_none() && (pending.is_none() || (pending == Some(false) && tool == "ExitPlanMode"));
