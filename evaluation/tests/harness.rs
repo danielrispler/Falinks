@@ -960,10 +960,13 @@ fn usage_is_complete_only_with_final_results_inside_the_drain_window() {
 /// `timing` on synthetic stream-json transcripts (`tests/timing/`), checked against values
 /// computed by hand. Times are seconds after 2026-10-21T10:00:00Z. Step 6's overhead figures
 /// (#316): tool seconds and acts by Falinks operation, and edit-gate seconds per accepted edit.
-/// Changed bytes come from each arm's records (#325), for writes the transcript misreads.
+/// Changed bytes come from each arm's records (#325), for writes the transcript misreads, and
+/// count only the lines each agent introduced: in each arm, one agent's write carries a file
+/// its peer wrote.
 #[test]
 fn timing_reports_hand_computed_figures() {
-    // Git's records are A's two shares, committed over the fixture's initial files.
+    // Git's records: A's two shares, then B's two, committed over the fixture's initial files.
+    // B's second share merges A's and extends A's store/store.go.
     let tmp = tmp("falinks-timing-");
     let git_run = tmp.path().join("git");
     let copied = Command::new("cp")
@@ -974,43 +977,71 @@ fn timing_reports_hand_computed_figures() {
         .unwrap();
     assert!(copied.success());
     let repo = git_run.join("agents/repo");
+    fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let identity = [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+        ];
+        let out = Command::new("git")
+            .args(identity)
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
     let initial = read(root().join("fixtures/go-relationships.json"))["files"].clone();
-    for (name, content) in initial.as_object().unwrap() {
-        fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
-        fs::write(repo.join(name), content.as_str().unwrap()).unwrap();
-    }
-    let init = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&repo)
-        .status();
-    assert!(init.unwrap().success());
-    commit(&repo, "Frozen initial task");
-    let shares: [&[(&str, &str)]; 2] = [
+    let mut events = String::new();
+    let mut share = |agent: &str, message: &str, files: &[(&str, &str)]| {
+        for (name, content) in files {
+            fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
+            fs::write(repo.join(name), content).unwrap();
+        }
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", message]);
+        let commit = git(&["rev-parse", "HEAD"]);
+        if !agent.is_empty() {
+            let event = json!({"kind": "draft_shared", "agent": agent, "commit": commit});
+            events += &format!("{event}\n");
+        }
+        commit
+    };
+    git(&["init", "-q"]);
+    let files: Vec<(&str, &str)> = initial
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str().unwrap()))
+        .collect();
+    let root_commit = share("", "Frozen initial task", &files);
+    let consumer =
+        "package fixture\n\nfunc Consume(records []string) []string {\n    return records\n}\n";
+    let store = "package store\n\nfunc Get() int { return 1 }\n";
+    share(
+        "A",
+        "A draft 1",
         &[
             ("producer.go", "package fixture\n"),
             ("store/store.go", "package store\n\nfunc Get() {}\n"),
         ],
-        &[(
-            "store/store.go",
-            "package store\n\nfunc Get() int { return 1 }\n",
-        )],
-    ];
-    let mut events = String::new();
-    for (n, files) in shares.iter().enumerate() {
-        for (name, content) in *files {
-            fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
-            fs::write(repo.join(name), content).unwrap();
-        }
-        commit(&repo, &format!("A draft {}", n + 1));
-        let head = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&repo)
-            .output()
-            .unwrap();
-        let commit = String::from_utf8(head.stdout).unwrap();
-        let event = json!({"kind": "draft_shared", "agent": "A", "commit": commit.trim()});
-        events += &format!("{event}\n");
-    }
+    );
+    let a2 = share("A", "A draft 2", &[("store/store.go", store)]);
+    git(&["checkout", "-q", "-b", "B", &root_commit]);
+    share("B", "B draft 1", &[("consumer.go", consumer)]);
+    git(&["merge", "-q", "--no-edit", &a2]);
+    share(
+        "B",
+        "B draft 2",
+        &[("store/store.go", &format!("{store}func Put() {{}}\n"))],
+    );
     fs::write(git_run.join("controller/events.jsonl"), events).unwrap();
     let figures = |run: &str| {
         let dir = match run {
@@ -1079,7 +1110,10 @@ fn timing_reports_hand_computed_figures() {
         git["agents"]["B"],
         json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
-            "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 0.5, "output_bytes": 0,
+            // B's own commits only: consumer.go "    return records\n" 19 and store/store.go
+            // "func Put() {}\n" 14. The merge carries A's store/store.go lines, which stay A's.
+            "changed_bytes": 33, "results": 1,
             "usage_reports": 1})
     );
 
@@ -1135,7 +1169,10 @@ fn timing_reports_hand_computed_figures() {
             "round_trips": trips((1, 0.25), (0, 0.0), (1, 1.0), (0, 0.0)),
             "refusal_recovery": recovery(&none), "request_key_refusals": {},
             // b1 1.0, j1 0.25 and p1 0.5, in parallel with j1.
-            "tool_seconds": 1.75, "output_bytes": 0, "changed_bytes": 0, "results": 1,
+            "tool_seconds": 1.75, "output_bytes": 0,
+            // j1's job rewrote agent-0's producer.go whole: "// new\n" is carried, agent-0's,
+            // and only "// one\n" 7 is agent-1's.
+            "changed_bytes": 7, "results": 1,
             "usage_reports": 1,
             "operations": {"apply_job": op(1, 0, 0.25), "post": op(1, 0, 0.5)},
             "edit_gate": gate(1, 0.25, json!(0.25))})
