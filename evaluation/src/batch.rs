@@ -89,7 +89,8 @@ pub fn slots(pilot: bool) -> Vec<Value> {
 /// and outside the scored schedule.
 pub fn track_t_slots() -> Vec<Value> {
     let mut slots = vec![];
-    for (index, name) in FIXTURES.iter().enumerate() {
+    // Track T's five fixtures, whatever `FIXTURES` gains (#205's go-invoice is sealed).
+    for (index, name) in FIXTURES[..5].iter().enumerate() {
         for repetition in 1..=5 {
             let sizes = if (index + repetition) % 2 == 1 {
                 [1, 2]
@@ -115,8 +116,6 @@ pub fn step_6_slots() -> Vec<Value> {
 
 /// #205's `large-spec` slots (M1): `go-invoice` eight times in each of step 6's three arms,
 /// rotating the same way, so each arm runs first two or three times. Scored, with no pilot pair.
-/// `batch` runs only registered fixtures, so this schedule has no slot to run until
-/// `go-invoice` is registered (#332).
 pub fn large_spec_slots() -> Vec<Value> {
     rotations("go-invoice", 8, true)
 }
@@ -749,6 +748,14 @@ mod tests {
         assert_eq!(scored[1]["order"], 1);
     }
 
+    /// #205's scored fixture is sealed until its pilots, so no track-T slot may reach it.
+    #[test]
+    fn track_t_keeps_its_fifty_slots_without_go_invoice() {
+        let slots = track_t_slots();
+        assert_eq!(slots.len(), 50);
+        assert!(slots.iter().all(|s| s["fixture"] != "go-invoice"));
+    }
+
     #[test]
     fn step_6_runs_each_arm_in_every_position_over_five_rotations() {
         let slots = step_6_slots();
@@ -819,11 +826,11 @@ mod tests {
                 "git-2"
             ]
         );
-        // Until go-invoice is registered, the default fixture filter leaves no slot to run.
+        // go-invoice is registered (#332), so the default fixture filter keeps every slot.
         assert!(
             slots
                 .iter()
-                .all(|s| !FIXTURES.contains(&s["fixture"].as_str().unwrap()))
+                .all(|s| FIXTURES.contains(&s["fixture"].as_str().unwrap()))
         );
     }
 

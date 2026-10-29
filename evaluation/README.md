@@ -462,7 +462,8 @@ evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.j
 evaluation/target/release/falinks-eval report --runs /private/tmp/ev/track-t --schedule track-t
 ```
 
-- **Schedule**: every fixture, five repetitions per team size (#182), each repetition a
+- **Schedule**: track T's five fixtures, `rust-errors` to `go-indep-4`, never #205's sealed
+  `go-invoice`; five repetitions per team size (#182), each repetition a
   pair that alternates which size runs first. There is no pilot; every invocation renews
   the gate.
 - **Report** (`report --schedule track-t`, also the batch's `report.json`): per fixture and
@@ -512,8 +513,6 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/large-spec 
 - **Schedule**: `go-invoice` eight times in each of step 6's three arms, 24 scored slots
   and no pilot pair. The order rotates as in step 6, so each arm runs first two or three
   times. Batch isolation, the gate, the ledger and the pause rules apply to every slot.
-  `batch` runs registered fixtures only, so the schedule has no slot until `go-invoice` is
-  registered.
 - **Report** (`report --schedule large-spec`, also the batch's `report.json`):
   - **P1–P3** compare `falinks-2` with `git-2` only, each exact and one-sided at 2.5%. P1 is
     Fisher's exact test on success counts (at n = 8: 8–3, 7–2, 6–1 and 5–0 pass). P2

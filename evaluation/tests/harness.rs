@@ -172,6 +172,7 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
         [
             "go-indep-2",
             "go-indep-4",
+            "go-invoice",
             "go-page",
             "go-relationships",
             "go-tasks",
@@ -198,37 +199,39 @@ fn setup_ledger_totals_match_its_sessions() {
         .sum();
     assert_eq!(ledger["charged_total_seconds"], charged);
 
-    // Track T's own budget (#178): each session's charge is its run (with the usage drain) and
-    // preparation time; implementation is recorded but not charged (Daniel, 2026-10-22, #180).
-    // Usage comes from complete runs only.
-    let track = &ledger["team_size_research"];
-    let sessions = track["sessions"].as_array().unwrap();
-    let parts = [
-        "implementation_seconds",
-        "run_seconds",
-        "preparation_seconds",
-    ];
-    for session in sessions {
-        let charged: i64 = parts[1..]
-            .iter()
-            .map(|p| session[p].as_i64().unwrap())
-            .sum();
-        assert_eq!(session["charged_seconds"], charged, "{session}");
-    }
-    let totals = &track["totals"];
-    let sum = |value: &dyn Fn(&Value) -> &Value| -> i64 {
-        sessions.iter().map(|s| value(s).as_i64().unwrap()).sum()
-    };
-    for part in parts.iter().chain(&["charged_seconds"]) {
-        assert_eq!(totals[part], sum(&|s| &s[part]), "totals.{part}");
-    }
-    for key in totals["complete_usage"].as_object().unwrap().keys() {
-        let key = key.as_str();
-        let summed = sum(&|s| &s["complete_usage"][key]);
-        assert_eq!(
-            totals["complete_usage"][key], summed,
-            "totals.complete_usage.{key}"
-        );
+    // Track T's own budget (#178), and #205's (B1) charged the same way: each session's charge
+    // is its run (with the usage drain) and preparation time; implementation is recorded but not
+    // charged (Daniel, 2026-10-22, #180). Usage comes from complete runs only.
+    for section in ["team_size_research", "large_spec_research"] {
+        let track = &ledger[section];
+        let sessions = track["sessions"].as_array().unwrap();
+        let parts = [
+            "implementation_seconds",
+            "run_seconds",
+            "preparation_seconds",
+        ];
+        for session in sessions {
+            let charged: i64 = parts[1..]
+                .iter()
+                .map(|p| session[p].as_i64().unwrap())
+                .sum();
+            assert_eq!(session["charged_seconds"], charged, "{session}");
+        }
+        let totals = &track["totals"];
+        let sum = |value: &dyn Fn(&Value) -> &Value| -> i64 {
+            sessions.iter().map(|s| value(s).as_i64().unwrap()).sum()
+        };
+        for part in parts.iter().chain(&["charged_seconds"]) {
+            assert_eq!(totals[part], sum(&|s| &s[part]), "{section}.totals.{part}");
+        }
+        for key in totals["complete_usage"].as_object().unwrap().keys() {
+            let key = key.as_str();
+            let summed = sum(&|s| &s["complete_usage"][key]);
+            assert_eq!(
+                totals["complete_usage"][key], summed,
+                "{section}.totals.complete_usage.{key}"
+            );
+        }
     }
 }
 
