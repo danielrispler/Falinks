@@ -161,15 +161,14 @@ fn a_prompt_whose_result_never_comes_closes_when_the_turn_ends() {
     assert_eq!(studio.session(SESSION).unwrap().guess, None);
 }
 
-/// The first wait, a passing check, with its command replaced by `command`, which must need no JSON
-/// escapes.
+/// The first wait, a passing check, with its command replaced by `command`, as JSON spells it.
 fn first_wait(command: &str) -> String {
     let lines: Vec<&str> = CHECKS.lines().take(5).collect();
     lines.join("\n").replace(COMMAND, command)
 }
 
 #[test]
-fn the_exit_code_counts_only_without_a_pipe_or_with_pipefail() {
+fn the_exit_code_counts_only_when_nothing_after_the_check_can_mask_it() {
     let exit_passed = |command| {
         let [card] = &cards(&first_wait(command))[..] else {
             panic!("one card on `{command}`");
@@ -184,6 +183,10 @@ fn the_exit_code_counts_only_without_a_pipe_or_with_pipefail() {
     );
     // `tail` exits 0 even when the tests fail, so only the card writer can tell.
     assert_eq!(exit_passed("cargo test 2>&1 | tail -5"), None);
+    // So do `true` after `||`, `echo` after `;` and a later line (JSON-escaped here).
+    assert_eq!(exit_passed("cargo test || true"), None);
+    assert_eq!(exit_passed("cargo test; echo $?"), None);
+    assert_eq!(exit_passed(r"cargo test\necho done"), None);
 }
 
 #[test]

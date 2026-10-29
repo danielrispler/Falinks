@@ -119,8 +119,8 @@ pub struct CardRequest {
 pub struct Check {
     /// Daniel's tap: whether he guessed it would pass. `None` when he did not tap before the result.
     pub guess: Option<bool>,
-    /// Whether the command exited 0, when that says whether the check passed: the command has no
-    /// pipe or sets `pipefail`, and it ran. `None` otherwise.
+    /// Whether the command exited 0, when that says whether the check passed: nothing in the command
+    /// masks the check's exit code (`exit_code_counts`), and it ran. `None` otherwise.
     pub exit_passed: Option<bool>,
 }
 
@@ -293,10 +293,11 @@ fn output(response: &Value, error: &str) -> String {
     streams.collect::<Vec<_>>().join("\n")
 }
 
-/// Whether a check's exit code says whether it passed (#328, module 4): only when the command has no
-/// pipe or sets `pipefail`, since a pipe exits with its last command's code. `||` is no pipe.
+/// Whether a check's exit code says whether it passed (#328, module 4). A pipe, a `;` or a later line
+/// exits with its last command's code, and `|| true` with 0, so only when the command has no `||`
+/// and either sets `pipefail` or has none of `|`, `;` and a newline.
 fn exit_code_counts(command: &str) -> bool {
-    command.contains("pipefail") || !command.replace("||", "").contains('|')
+    !command.contains("||") && (command.contains("pipefail") || !command.contains(['|', ';', '\n']))
 }
 
 /// The folder whose worktree the shell fingerprints (#328, module 5) when it reads this line live,
