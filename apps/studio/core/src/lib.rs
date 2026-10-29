@@ -13,6 +13,8 @@ pub struct Studio {
     prompted_last: Option<String>,
     /// Sessions in a wait that has not had its card step yet.
     awaiting_card: HashSet<String>,
+    /// Steps that already have a card in the card store, by `tool_use_id`.
+    carded: HashSet<String>,
     card_writer_folder: Option<String>,
 }
 
@@ -471,6 +473,7 @@ impl Studio {
                 } else if (!failed || tool == "Bash")
                     && let Some(change) =
                         card_change(&tool, input, &event.tool_response, worktree_change)
+                            .or_else(|| self.carded.remove(&event.tool_use_id).then(String::new))
                     && self.awaiting_card.remove(&event.session_id)
                 {
                     Some((change, None))
@@ -515,6 +518,13 @@ impl Studio {
     /// come from the writer's own `claude -p` sessions and are dropped.
     pub fn set_card_writer_folder(&mut self, folder: &str) {
         self.card_writer_folder = Some(folder.into());
+    }
+
+    /// The steps that already have a card in the card store, by `tool_use_id`, a fact from the shell
+    /// at start. A replayed Bash step gets no fingerprint, so this is how one that had its card still
+    /// takes its wait's card step, and a restart mid-wait gives no second card.
+    pub fn set_carded_steps(&mut self, tool_use_ids: impl IntoIterator<Item = String>) {
+        self.carded.extend(tool_use_ids);
     }
 
     /// Daniel's tap, yes or no, on the guess prompt of check `tool_use_id`, a fact from the shell. A

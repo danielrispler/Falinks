@@ -92,6 +92,35 @@ fn a_replayed_bash_step_requests_no_card() {
 }
 
 #[test]
+fn a_restart_after_the_waits_carded_bash_step_gives_the_wait_no_second_card() {
+    let lines: Vec<&str> = LOG.lines().collect();
+    // A successful Edit, moved into this wait.
+    let edit: Vec<String> = include_str!("fixtures/first-edit.jsonl")
+        .lines()
+        .skip(5)
+        .take(2)
+        .map(|line| {
+            line.replace(
+                "5b9e3d71-0c2a-4f8e-b6d4-8a1c3e5f7092",
+                "e4a7c2f9-3b6d-4e1a-8c5f-2d9b7e0a6c13",
+            )
+        })
+        .collect();
+    // Replays the wait up to its `cargo fmt`'s result, then gets the Edit live.
+    let edit_cards = |stored: &[&str]| {
+        let mut studio = Studio::default();
+        studio.set_carded_steps(stored.iter().map(|id| id.to_string()));
+        lines[..7].iter().for_each(|line| studio.replay(line));
+        let outputs = edit.iter().flat_map(|line| studio.apply(line));
+        outputs.filter(|o| matches!(o, Output::Card(_))).count()
+    };
+
+    // A replayed Bash step gets no fingerprint; the card store says it had its card.
+    assert_eq!(edit_cards(&[FORMAT]), 0);
+    assert_eq!(edit_cards(&[]), 1);
+}
+
+#[test]
 fn a_failed_bash_step_that_changed_the_worktree_gets_its_card() {
     let log = include_str!("fixtures/failing-bash.jsonl").replace("ls does-not-exist", "sh gen.sh");
     // The script wrote half its output before it failed.
