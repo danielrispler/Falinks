@@ -14,7 +14,20 @@ fn init(workspace: &Path) -> Value {
         "plugins":[{"name":"cc-plugin-agents-md","path":"builtin","source":"cc-plugin-agents-md@builtin"},
             {"name":"cc-plugin-telemetry","path":"builtin","source":"cc-plugin-telemetry@builtin"},
             {"name":"cc-plugin-plugin-authoring","path":"builtin","source":"cc-plugin-plugin-authoring@builtin"}],
-        "skills":[],"slash_commands":[],"apiKeySource":"none"})
+        "skills":[],"slash_commands":[],"apiKeySource":"none",
+        "memory_paths":{"auto":project(workspace).join("memory/")}})
+}
+/// The runtime's session folder, which `init` names through `memory_paths`.
+fn project(workspace: &Path) -> std::path::PathBuf {
+    workspace.with_file_name("project")
+}
+/// One line of the runtime's session file (`~/.claude/projects/<cwd>/<session>.jsonl`).
+fn entry(model: &str, effort: Option<&str>) -> String {
+    let mut line = json!({"type":"assistant","message":{"model":model}});
+    if let Some(effort) = effort {
+        line["effort"] = json!(effort);
+    }
+    format!("{line}\n")
 }
 fn result() -> Value {
     json!({"type":"result","subtype":"success","session_id":SESSION,"permission_denials":[],
@@ -43,6 +56,12 @@ fn fixture_with(notice: Option<&'static str>) -> Fixture {
     std::fs::create_dir(&workspace).unwrap();
     std::fs::create_dir(dir.path().join("controller")).unwrap();
     std::fs::create_dir(dir.path().join("scratch")).unwrap();
+    std::fs::create_dir(project(&workspace)).unwrap();
+    std::fs::write(
+        project(&workspace).join(format!("{SESSION}.jsonl")),
+        entry(MODEL, Some("medium")),
+    )
+    .unwrap();
     let calls = Rc::new(RefCell::new(vec![]));
     let seen = Rc::clone(&calls);
     let engine = Box::new(move |envelope: &Value| {
@@ -287,16 +306,10 @@ fn a_nested_agent_latches_failure_and_is_recorded() {
     }
 
     let mut f = fixture();
-    let project = f.workspace.with_file_name("project");
-    std::fs::create_dir(&project).unwrap();
-    std::fs::write(project.join(format!("{SESSION}.jsonl")), "").unwrap();
     f.session.line(&init(&f.workspace)).unwrap();
-    // init sets `project` from memory_paths, absent here.
-    f.session.project = Some(project.clone());
     f.session.line(&result()).unwrap();
-    std::fs::write(project.join("0000-foreign.jsonl"), "").unwrap();
+    std::fs::write(project(&f.workspace).join("0000-foreign.jsonl"), "").unwrap();
     f.session.line(&init(&f.workspace)).unwrap();
-    f.session.project = Some(project);
     assert!(f.session.line(&result()).is_err());
     assert_eq!(
         f.session.nested_agents,
@@ -305,31 +318,57 @@ fn a_nested_agent_latches_failure_and_is_recorded() {
 }
 
 /// The runtime records each request's effort in its session file, not the stream. Another
-/// effort there invalidates the run, like another model (#205 E1).
+/// effort there invalidates the run, like another model (#205 E1). The folder comes from
+/// `init`'s `memory_paths`, as the real runtime reports it.
 #[test]
 fn a_session_at_another_effort_latches_failure() {
     let mut f = fixture();
-    let project = f.workspace.with_file_name("project");
-    std::fs::create_dir(&project).unwrap();
-    let file = project.join(format!("{SESSION}.jsonl"));
-    let entry = |effort: &str| {
-        format!(
-            "{}\n",
-            json!({"type":"assistant","effort":effort,"perTurnEffort":effort})
-        )
-    };
-    std::fs::write(&file, entry("medium")).unwrap();
+    let file = project(&f.workspace).join(format!("{SESSION}.jsonl"));
     f.session.line(&init(&f.workspace)).unwrap();
-    f.session.project = Some(project.clone());
     f.session.line(&result()).unwrap();
-    std::fs::write(&file, entry("medium") + &entry("high")).unwrap();
+    std::fs::write(
+        &file,
+        entry(MODEL, Some("medium")) + &entry(MODEL, Some("high")),
+    )
+    .unwrap();
     f.session.line(&init(&f.workspace)).unwrap();
-    f.session.project = Some(project);
     let error = f.session.line(&result()).unwrap_err().to_string();
-    assert!(
-        error.contains("effort") && error.contains("run invalid"),
-        "{error}"
+    assert_eq!(
+        error,
+        "session effort \"high\" is not \"medium\"; run invalid"
     );
+    assert!(f.session.gate.failed);
+}
+
+/// The runtime's own `<synthetic>` replies ("No response requested.") carry no effort; #185's
+/// Falinks runs hold one mid-session, and they stay valid. A model reply without it still fails.
+#[test]
+fn a_synthetic_reply_without_effort_is_skipped() {
+    let mut f = fixture();
+    let file = project(&f.workspace).join(format!("{SESSION}.jsonl"));
+    let medium = entry(MODEL, Some("medium"));
+    std::fs::write(
+        &file,
+        medium.clone() + &entry("<synthetic>", None) + &medium,
+    )
+    .unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    f.session.line(&result()).unwrap();
+    assert!(!f.session.gate.failed);
+    std::fs::write(&file, entry(MODEL, None)).unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    let error = f.session.line(&result()).unwrap_err().to_string();
+    assert_eq!(error, "session effort null is not \"medium\"; run invalid");
+}
+
+/// Without its session file a run's effort cannot be verified, so the run is invalid.
+#[test]
+fn a_missing_session_file_leaves_effort_unrecorded() {
+    let mut f = fixture();
+    std::fs::remove_file(project(&f.workspace).join(format!("{SESSION}.jsonl"))).unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    let error = f.session.line(&result()).unwrap_err().to_string();
+    assert_eq!(error, "session effort unrecorded; run invalid");
     assert!(f.session.gate.failed);
 }
 

@@ -21,16 +21,19 @@
 //!   detected by that peer share.
 //! - **Broken combined check**, both arms: a failed check holding both agents' work. When lines
 //!   it held were removed before the next passing check, it is rework; otherwise it is a
-//!   premature check (not a collision) when work was added before that pass, else no fault.
+//!   premature check (not a collision) when the peer of the agent that asked for it added work
+//!   before that pass (its half did not exist yet), else no fault.
 //! - **Duplicate work**: Daniel's classifications of the pairs `duplicates` proposes: one
 //!   function of each agent with one name, in files one requirement names, or with similar
 //!   bodies. A pair's waste is the later copy's lines when the final tree holds both, else the
 //!   lines of each copy written and then discarded; a copy only in a refused request counts 0.
 //!
 //! Each collision lists its files and where each agent detected it, for #337's handling cost.
+//! Lines are credited by `authorship`, the model `timing`'s changed bytes use, and each
+//! written line counts once per run.
+use crate::authorship::{self, Blame, Line, agent_name, applied, lines, matches, text};
 use crate::{
-    Result, bail, blobs, command, fixture, git, git_env, quality::changed, read, sha256, strings,
-    timing::unix,
+    Result, bail, command, fixture, git, git_env, jsonl, read, sha256, strings, timing::unix,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,36 +48,30 @@ use std::time::Duration;
 /// one development (0.74 to 0.86).
 pub const SIMILARITY: f64 = 0.75;
 pub const CLASSES: [&str; 4] = ["line_conflict", "duplicate_work", "rework", "no_fault"];
+/// The classes a signal reaches, with a handling cost (#337): duplicate work is never signalled.
+pub const HANDLED: [&str; 3] = [CLASSES[0], CLASSES[2], CLASSES[3]];
 /// Written into `discarded_or_rewritten_work`.
 const SOURCE: &str = "collisions (#334): falinks-eval collisions RUN_DIR";
 
-fn lines(text: &str) -> Vec<&str> {
-    text.lines().collect()
-}
-
-/// For each line of `new`, the line of `old` (0-based) it keeps, or None when it is added.
-fn align(old: &[&str], new: &[&str]) -> Vec<Option<usize>> {
-    let (removed, added) = changed(old, new);
-    let (removed, added): (BTreeSet<usize>, BTreeSet<usize>) =
-        (removed.into_iter().collect(), added.into_iter().collect());
-    let mut kept = (1..=old.len())
-        .filter(|i| !removed.contains(i))
-        .map(|i| i - 1);
-    (1..=new.len())
-        .map(|j| {
-            if added.contains(&j) {
-                None
-            } else {
-                kept.next()
-            }
-        })
-        .collect()
-}
-
-/// The lines of `old` (0-based) that `new` does not keep.
+/// The lines of `old` (0-based) that `new` does not keep, by `authorship`'s line diff.
 fn dropped(old: &[&str], new: &[&str]) -> Vec<usize> {
-    let kept: BTreeSet<usize> = align(old, new).into_iter().flatten().collect();
+    let kept: BTreeSet<usize> = matches(old, new).into_iter().flatten().collect();
     (0..old.len()).filter(|i| !kept.contains(i)).collect()
+}
+
+/// The fixture's initial files, `authorship`'s initial lines; none when it is unknown.
+fn initial_files(result: &Value) -> Map<String, Value> {
+    let fixture = fixture(result["fixture"].as_str().unwrap_or_default());
+    fixture
+        .ok()
+        .and_then(|f| f["files"].as_object().cloned())
+        .unwrap_or_default()
+}
+
+/// Lines of `lines[start..=end]` as one text, without the last line ending.
+fn body(lines: &[&str], start: usize, end: usize) -> String {
+    let text = lines[start..=end].concat();
+    text.strip_suffix('\n').unwrap_or(&text).to_string()
 }
 
 type Region = (usize, usize);
@@ -84,7 +81,7 @@ type Region = (usize, usize);
 fn regions(old: &[&str], new: &[&str]) -> (Vec<Region>, Vec<Option<Region>>) {
     let (mut out, mut fills, mut start, mut pending) =
         (vec![], vec![None; new.len()], 0, Vec::new());
-    for (j, kept) in align(old, new)
+    for (j, kept) in matches(old, new)
         .into_iter()
         .chain([Some(old.len())])
         .enumerate()
@@ -138,7 +135,7 @@ fn measure(run: &Path, result: &Value, classified: &Value) -> Result<Value> {
     let requirements = requirements(result);
     let (mut events, premature, candidates, unclassified) = match result["arm"].as_str() {
         Some("falinks") => {
-            let ledger = Ledger::read(run)?;
+            let ledger = Ledger::read(run, result)?;
             let mut used = BTreeSet::new();
             let (mut events, premature) = ledger.collisions(result, &mut used);
             let functions = ledger.functions(result);
@@ -215,7 +212,7 @@ pub fn candidates(run: &Path, result: &Value) -> Result<Vec<Value>> {
         return Ok(vec![]);
     }
     let functions = match result["arm"].as_str() {
-        Some("falinks") => Ledger::read(run)?.functions(result),
+        Some("falinks") => Ledger::read(run, result)?.functions(result),
         Some("git") => Repo::read(run, result)?.functions(result)?,
         other => bail!("unknown arm {other:?}"),
     };
@@ -530,20 +527,6 @@ fn duplicate_events(
     Ok(unclassified)
 }
 
-/// The text of a history file value, `{"bytes": [...]}`; a deleted file is None.
-fn text(file: &Value) -> Option<String> {
-    let bytes: Vec<u8> = file["bytes"]
-        .as_array()?
-        .iter()
-        .map(|b| b.as_u64().map(|b| b as u8))
-        .collect::<Option<_>>()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn applied(record: &Value) -> bool {
-    record["outcome"].get("Applied").is_some() && record["proposed"].is_object()
-}
-
 fn writes(record: &Value, path: &str) -> bool {
     record["request"]["output"]
         .as_object()
@@ -569,22 +552,31 @@ fn intended(output: &Value, expected: &str) -> Option<String> {
     Some(result)
 }
 
-fn agent_name(agent: usize) -> String {
-    format!("agent-{agent}")
+/// A written line an applied operation removed: its path and the line.
+type Removal = (String, Line);
+
+/// Written lines already counted as waste, each once per run.
+type Used = BTreeSet<(String, Line)>;
+
+/// Counts `line` of `path` for its agent, once per run; false for an initial or unowned line
+/// and for one already counted.
+fn count(used: &mut Used, path: &str, line: &Line, waste: &mut BTreeMap<String, u64>) -> bool {
+    let Some((agent, _)) = line.agent() else {
+        return false;
+    };
+    let counted = used.insert((path.to_string(), line.clone()));
+    if counted {
+        *waste.entry(agent.to_string()).or_default() += 1;
+    }
+    counted
 }
 
-/// A written line: its agent and operation; None for initial or engine-written lines.
-type Author = Option<(usize, u64)>;
-
-/// A line an applied operation removed: its path, the old version, its index there and author.
-type Removal = (String, u64, usize, Author);
-
-/// A Falinks run's history with each file version's text and line authors.
+/// A Falinks run's history with each file version's text, and its line authorship.
 #[derive(Default)]
 struct Ledger {
     records: Vec<Value>,
     texts: BTreeMap<(String, u64), String>,
-    authors: BTreeMap<(String, u64), Vec<Author>>,
+    blame: Blame,
     /// The agent and operation that wrote each file version.
     writer: BTreeMap<(String, u64), (usize, u64)>,
     removed: BTreeMap<u64, Vec<Removal>>,
@@ -592,13 +584,15 @@ struct Ledger {
 }
 
 impl Ledger {
-    fn read(run: &Path) -> Result<Self> {
+    fn read(run: &Path, result: &Value) -> Result<Self> {
         let history = read(run.join("controller/history.json"))?;
+        let records = history
+            .as_array()
+            .ok_or("history.json must list operations")?;
+        let (blame, _) = authorship::falinks(records, &initial_files(result));
         let mut ledger = Ledger {
-            records: history
-                .as_array()
-                .ok_or("history.json must list operations")?
-                .clone(),
+            records: records.clone(),
+            blame,
             ..Default::default()
         };
         ledger.records.sort_by_key(|r| r["operation"].as_u64());
@@ -625,90 +619,62 @@ impl Ledger {
         for record in ledger.records.iter().filter(|r| applied(r)) {
             let agent = record["agent"].as_u64().unwrap_or(0) as usize;
             let op = record["operation"].as_u64().unwrap_or(0);
-            for (path, after) in record["proposed"]["files"]
+            for path in record["request"]["output"]
                 .as_object()
                 .into_iter()
-                .flatten()
+                .flat_map(|o| o.keys())
             {
                 let old_version = record["before"]["files"][path]["version"].as_u64();
-                let Some(version) = after["version"].as_u64() else {
+                let Some(version) = record["proposed"]["files"][path]["version"].as_u64() else {
                     continue;
                 };
                 let key = (path.clone(), version);
-                if old_version == Some(version) || ledger.authors.contains_key(&key) {
+                if old_version == Some(version) || ledger.writer.contains_key(&key) {
                     continue;
                 }
-                let old_key = old_version.map(|v| (path.clone(), v));
-                let old_text = old_key.as_ref().and_then(|k| ledger.texts.get(k));
-                let old = lines(old_text.map_or("", String::as_str));
-                let new_text = ledger.texts.get(&key).cloned().unwrap_or_default();
-                let new = lines(&new_text);
-                let old_authors = old_key
-                    .and_then(|k| ledger.authors.get(&k).cloned())
-                    .unwrap_or_else(|| vec![None; old.len()]);
-                let by = |i: usize| old_authors.get(i).copied().flatten();
-                let removals = dropped(&old, &new)
-                    .into_iter()
-                    .map(|i| (path.clone(), old_version.unwrap_or(0), i, by(i)));
+                let old = old_version.map_or(&[][..], |v| ledger.lines_of(path, v));
+                let old_text = old_version.and_then(|v| ledger.texts.get(&(path.clone(), v)));
+                let new_text = ledger.texts.get(&key).map_or("", String::as_str);
+                let removals = dropped(
+                    &lines(old_text.map_or("", String::as_str)),
+                    &lines(new_text),
+                )
+                .into_iter()
+                .filter_map(|i| Some((path.clone(), old.get(i)?.clone())))
+                .collect::<Vec<_>>();
                 ledger.removed.entry(op).or_default().extend(removals);
-                let mut authors: Vec<Author> = align(&old, &new)
-                    .into_iter()
-                    .map(|kept| kept.map_or(Some((agent, op)), by))
-                    .collect();
-                // An incorporation installs the peer's published lines: they keep its authors.
-                let peer = ledger
-                    .writer
-                    .iter()
-                    .filter(|((p, _), (a, o))| p == path && *a != agent && *o < op)
-                    .max_by_key(|(_, (_, o))| *o);
-                if let (true, Some((theirs, _))) = (record["incorporates"].is_u64(), peer) {
-                    let their_text = ledger.texts.get(theirs).map_or("", String::as_str);
-                    let their_authors = &ledger.authors[theirs];
-                    for (j, kept) in align(&lines(their_text), &new).into_iter().enumerate() {
-                        if let Some(i) = kept.filter(|_| authors[j] == Some((agent, op))) {
-                            authors[j] = their_authors[i];
-                        }
-                    }
-                }
-                ledger.authors.insert(key.clone(), authors);
                 ledger.writer.insert(key, (agent, op));
             }
         }
         Ok(ledger)
     }
 
+    /// The lines of `path` at `version`; empty for a version the history does not hold.
+    fn lines_of(&self, path: &str, version: u64) -> &[Line] {
+        let text = self.texts.get(&(path.to_string(), version));
+        text.map_or(&[], |text| self.blame.lines(path, text))
+    }
+
     /// Counts the lines operation `op` removed that `keep` selects, once per run, by author.
     fn take(
         &self,
-        used: &mut BTreeSet<(String, u64, usize)>,
+        used: &mut Used,
         op: u64,
-        keep: impl Fn(&Removal) -> bool,
+        keep: impl Fn(&str, &Line) -> bool,
         waste: &mut BTreeMap<String, u64>,
     ) -> BTreeSet<String> {
         let mut files = BTreeSet::new();
-        for removal in self
-            .removed
-            .get(&op)
-            .into_iter()
-            .flatten()
-            .filter(|r| keep(r))
-        {
-            if let Some((agent, _)) = removal.3
-                && used.insert((removal.0.clone(), removal.1, removal.2))
-            {
-                *waste.entry(agent_name(agent)).or_default() += 1;
-                files.insert(removal.0.clone());
+        let removed = self.removed.get(&op).into_iter().flatten();
+        for (path, line) in removed.filter(|(path, line)| keep(path, line)) {
+            if count(used, path, line, waste) {
+                files.insert(path.clone());
             }
         }
         files
     }
 
     /// The run's collisions, and how many failed combined checks were premature.
-    fn collisions(
-        &self,
-        result: &Value,
-        used: &mut BTreeSet<(String, u64, usize)>,
-    ) -> (Vec<Value>, u64) {
+    fn collisions(&self, result: &Value, used: &mut Used) -> (Vec<Value>, u64) {
         let mut out = vec![];
         for (n, record) in self.records.iter().enumerate() {
             let Some(conflicts) = record["outcome"]["Stale"]["conflicts"].as_object() else {
@@ -740,7 +706,7 @@ impl Ledger {
                 };
                 if peer != agent && touch(&ours, &regions(&old, &lines(&theirs)).0) {
                     files.insert(path.clone());
-                    peers.insert(peer);
+                    peers.insert(agent_name(peer));
                 }
             }
             if files.is_empty() {
@@ -752,8 +718,8 @@ impl Ledger {
             });
             if let Some(next) = next {
                 let op = next["operation"].as_u64().unwrap_or(0);
-                let peer_line = |r: &Removal| {
-                    files.contains(&r.0) && r.3.is_some_and(|(a, _)| peers.contains(&a))
+                let peer_line = |path: &str, line: &Line| {
+                    files.contains(path) && line.agent().is_some_and(|(a, _)| peers.contains(a))
                 };
                 self.take(used, op, peer_line, &mut waste);
             }
@@ -803,16 +769,23 @@ impl Ledger {
             let mut waste = BTreeMap::new();
             let mut files = BTreeSet::new();
             for op in &later {
-                let held_line = |r: &Removal| r.3.is_some_and(|(_, o)| held.contains(&o));
+                let held_line =
+                    |_: &str, line: &Line| line.agent().is_some_and(|(_, o)| held.contains(&o));
                 files.extend(self.take(used, *op, held_line, &mut waste));
             }
-            let class = match (waste.is_empty(), later.is_empty()) {
+            // Premature only when the peer's half arrived before the pass.
+            let by = check["requested_by"].as_str().unwrap_or_default();
+            let peer_work = self.records.iter().filter(|r| applied(r)).any(|r| {
+                r["operation"].as_u64().is_some_and(|o| later.contains(&o))
+                    && agent_name(&r["agent"]) != by
+            });
+            let class = match (waste.is_empty(), peer_work) {
                 (false, _) => "rework",
-                (true, false) => {
+                (true, true) => {
                     premature += 1;
                     continue;
                 }
-                (true, true) => "no_fault",
+                (true, false) => "no_fault",
             };
             let detected = json!({"agent": check["requested_by"], "signal": "broken_check",
                 "check": check["number"], "revision": check["revision"]});
@@ -838,24 +811,23 @@ impl Ledger {
                 .get(&(path.to_string(), version))
                 .cloned()
                 .unwrap_or_default();
-            let authors = self.authors.get(&(path.to_string(), version));
+            let authors = self.lines_of(path, version);
             for (name, start, end) in go_functions(path, &text) {
-                let Some(Some((agent, _))) = authors.and_then(|a| a.get(start)) else {
+                let Some((agent, _)) = authors.get(start).and_then(Line::agent) else {
                     continue;
                 };
                 if initial(path).contains(&name) {
                     continue;
                 }
-                let key = (agent_name(*agent), path.to_string(), name.clone());
+                let key = (agent.to_string(), path.to_string(), name.clone());
                 let first = found.get(&key).map_or(op as f64, |f| f.first);
-                let body = lines(&text)[start..=end].join("\n");
                 found.insert(
                     key.clone(),
                     Function {
                         agent: key.0,
                         file: key.1,
                         name,
-                        body,
+                        body: body(&lines(&text), start, end),
                         state,
                         at: version.to_string(),
                         start,
@@ -904,7 +876,7 @@ impl Ledger {
             r["outcome"].get("Stale").is_some() || r["outcome"].get("Unreviewed").is_some()
         });
         for record in refused {
-            let agent = agent_name(record["agent"].as_u64().unwrap_or(0) as usize);
+            let agent = agent_name(record["agent"].as_u64().unwrap_or(0));
             let op = record["operation"].as_u64().unwrap_or(0);
             for (path, output) in record["request"]["output"]
                 .as_object()
@@ -923,13 +895,12 @@ impl Ledger {
                     if had.contains(&name) || initial(path).contains(&name) {
                         continue;
                     }
-                    let body = lines(&text)[start..=end].join("\n");
                     let key = (agent.clone(), path.clone(), name.clone());
                     found.entry(key).or_insert(Function {
                         agent: agent.clone(),
                         file: path.clone(),
                         name,
-                        body,
+                        body: body(&lines(&text), start, end),
                         state: "stopped",
                         at: String::new(),
                         start,
@@ -943,24 +914,13 @@ impl Ledger {
     }
 
     /// The lines of a discarded function's last version, by author, once per run.
-    fn discard(
-        &self,
-        f: &Function,
-        used: &mut BTreeSet<(String, u64, usize)>,
-    ) -> BTreeMap<String, u64> {
+    fn discard(&self, f: &Function, used: &mut Used) -> BTreeMap<String, u64> {
         let version: u64 = f.at.parse().unwrap_or(0);
-        let authors = self
-            .authors
-            .get(&(f.file.clone(), version))
-            .cloned()
-            .unwrap_or_default();
+        let authors = self.lines_of(&f.file, version);
         let mut waste = BTreeMap::new();
-        for i in f.start..=f.end {
-            if let Some(Some((agent, _))) = authors.get(i)
-                && agent_name(*agent) == f.agent
-                && used.insert((f.file.clone(), version, i))
-            {
-                *waste.entry(f.agent.clone()).or_default() += 1;
+        for line in authors.get(f.start..=f.end).into_iter().flatten() {
+            if line.agent().is_some_and(|(a, _)| a == f.agent) {
+                count(used, &f.file, line, &mut waste);
             }
         }
         waste
@@ -976,7 +936,7 @@ impl Ledger {
     /// An `incorporate` resolves the files both split workspaces drafted: a line conflict whose
     /// waste is the lines the operation removed and the lines of the peer's latest version of
     /// each file that the resolution dropped.
-    fn incorporation(&self, record: &Value, used: &mut BTreeSet<(String, u64, usize)>) -> Value {
+    fn incorporation(&self, record: &Value, used: &mut Used) -> Value {
         let agent = record["agent"].as_u64().unwrap_or(0) as usize;
         let op = record["operation"].as_u64().unwrap_or(0);
         let files: BTreeSet<String> = record["request"]["output"]
@@ -984,7 +944,7 @@ impl Ledger {
             .map(|o| o.keys().cloned().collect())
             .unwrap_or_default();
         let mut waste = BTreeMap::new();
-        self.take(used, op, |r| files.contains(&r.0), &mut waste);
+        self.take(used, op, |path, _| files.contains(path), &mut waste);
         for path in &files {
             let peer = self
                 .writer
@@ -1002,13 +962,11 @@ impl Ledger {
                     .unwrap_or_default()
             };
             let (theirs, ours) = (text(*version), text(resolved));
-            let authors = &self.authors[&(path.clone(), *version)];
+            let authors = self.lines_of(path, *version);
             for i in dropped(&lines(&theirs), &lines(&ours)) {
-                if let Some((a, _)) = authors[i]
-                    && a != agent
-                    && used.insert((path.clone(), *version, i))
-                {
-                    *waste.entry(agent_name(a)).or_default() += 1;
+                let Some(line) = authors.get(i) else { continue };
+                if line.agent().is_some_and(|(a, _)| a != agent_name(agent)) {
+                    count(used, path, line, &mut waste);
                 }
             }
         }
@@ -1031,16 +989,6 @@ fn conflict_files(text: &str) -> BTreeSet<String> {
     names.filter(|n| !n.is_empty()).collect()
 }
 
-fn jsonl(path: &Path) -> Vec<Value> {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    text.lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect()
-}
-
-/// A line a Git agent wrote: its agent, share number, file and index in that share.
-type LineId = (String, usize, String, usize);
-
 /// A Git line conflict: its files, detections and the merge commits that resolved it.
 type Conflict = (BTreeSet<String>, Vec<Value>, Vec<String>);
 
@@ -1050,59 +998,44 @@ struct Repo {
     /// Per agent, its shares in order: commit and elapsed seconds.
     shares: BTreeMap<String, Vec<(String, f64)>>,
     initial: String,
-    trees: BTreeMap<String, BTreeMap<String, String>>,
+    lines: authorship::Repo,
     ancestors: BTreeMap<(String, String), bool>,
-    ids: BTreeMap<(String, String), Vec<Option<LineId>>>,
-    /// Lines already counted as waste.
-    used: BTreeSet<LineId>,
+    used: Used,
 }
 
 impl Repo {
     fn read(run: &Path, result: &Value) -> Result<Self> {
+        let initial = result["initial_snapshot"]
+            .as_str()
+            .ok_or("the run records no initial_snapshot")?
+            .into();
+        let list = authorship::shares(run)?;
         let mut shares: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
-        for row in jsonl(&run.join("controller/events.jsonl")) {
-            if let (true, Some(agent), Some(commit), Some(at)) = (
-                row["kind"] == "draft_shared",
-                row["agent"].as_str(),
-                row["commit"].as_str(),
-                row["elapsed"].as_f64(),
-            ) {
-                shares
-                    .entry(agent.into())
-                    .or_default()
-                    .push((commit.into(), at));
-            }
+        // A share without a recorded time traces authorship but is never placed in time.
+        for (agent, commit, at) in list.iter().filter_map(|(a, c, t)| Some((a, c, (*t)?))) {
+            shares
+                .entry(agent.clone())
+                .or_default()
+                .push((commit.clone(), at));
         }
         Ok(Repo {
             dir: run.join("agents/repo"),
             shares,
-            initial: result["initial_snapshot"]
-                .as_str()
-                .ok_or("the run records no initial_snapshot")?
-                .into(),
-            trees: BTreeMap::new(),
+            initial,
+            lines: authorship::Repo::new(run, &list, &initial_files(result))?,
             ancestors: BTreeMap::new(),
-            ids: BTreeMap::new(),
             used: BTreeSet::new(),
         })
     }
 
     fn text(&mut self, commit: &str, path: &str) -> Result<String> {
-        if !self.trees.contains_key(commit) {
-            let tree = blobs(&self.dir, commit)?
-                .into_iter()
-                .map(|(p, b)| (p, String::from_utf8_lossy(&b).into_owned()))
-                .collect();
-            self.trees.insert(commit.into(), tree);
-        }
-        Ok(self.trees[commit].get(path).cloned().unwrap_or_default())
+        Ok(self.lines.file(commit, path)?.0)
     }
 
     fn paths(&mut self, commits: &[&str]) -> Result<BTreeSet<String>> {
         let mut paths = BTreeSet::new();
         for commit in commits {
-            self.text(commit, "")?;
-            paths.extend(self.trees[*commit].keys().cloned());
+            paths.extend(self.lines.tree(commit)?.keys().cloned());
         }
         Ok(paths)
     }
@@ -1138,69 +1071,21 @@ impl Repo {
             .collect()
     }
 
-    fn share(&self, agent: &str, number: usize) -> Option<&(String, f64)> {
-        self.shares.get(agent)?.get(number.checked_sub(1)?)
+    /// The lines of `path` at `commit`, by `authorship`.
+    fn line_ids(&mut self, commit: &str, path: &str) -> Result<Vec<Line>> {
+        Ok(self.lines.file(commit, path)?.1)
     }
 
-    /// Who wrote each line of `path` at `commit`. A share inherits its previous share's lines
-    /// and owns the rest; any other commit takes each line from the shares it holds.
-    // shortcut: peer lines an agent copied into its own worktree count as its own; read the
-    // transcripts' merges into agent worktrees if agents start doing that.
-    fn line_ids(&mut self, commit: &str, path: &str) -> Result<Vec<Option<LineId>>> {
-        let key = (commit.to_string(), path.to_string());
-        if let Some(ids) = self.ids.get(&key) {
-            return Ok(ids.clone());
-        }
-        let text = self.text(commit, path)?;
-        let new = lines(&text);
-        let share = self.shares.iter().find_map(|(agent, list)| {
-            let n = list.iter().position(|(s, _)| s == commit)?;
-            Some((agent.clone(), n + 1))
-        });
-        let ids = if commit == self.initial {
-            vec![None; new.len()]
-        } else if let Some((agent, n)) = share {
-            let previous = match self.share(&agent, n - 1) {
-                Some((s, _)) => s.clone(),
-                None => self.initial.clone(),
-            };
-            let (old_ids, old_text) =
-                (self.line_ids(&previous, path)?, self.text(&previous, path)?);
-            let align = align(&lines(&old_text), &new);
-            let own = |j| Some((agent.clone(), n, path.to_string(), j));
-            align
-                .into_iter()
-                .enumerate()
-                .map(|(j, kept)| kept.map_or_else(|| own(j), |i| old_ids[i].clone()))
-                .collect()
-        } else {
-            let mut ids = vec![None; new.len()];
-            for (agent, n) in self.side(commit) {
-                let Some((share, _)) = self.share(&agent, n).cloned() else {
-                    continue;
-                };
-                let (share_ids, share_text) =
-                    (self.line_ids(&share, path)?, self.text(&share, path)?);
-                for (j, kept) in align(&lines(&share_text), &new).into_iter().enumerate() {
-                    if let (None, Some(i)) = (&ids[j], kept) {
-                        ids[j] = share_ids[i].clone();
-                    }
-                }
-            }
-            ids
-        };
-        self.ids.insert(key, ids.clone());
-        Ok(ids)
-    }
-
-    /// Counts each line once per run, by its agent.
-    fn count(&mut self, id: &Option<LineId>, waste: &mut BTreeMap<String, u64>) -> bool {
-        let Some(id) = id else { return false };
-        let counted = self.used.insert(id.clone());
-        if counted {
-            *waste.entry(id.0.clone()).or_default() += 1;
-        }
-        counted
+    /// Counts line `j` of `ids` at `path` once per run, by its agent.
+    fn count(
+        &mut self,
+        path: &str,
+        ids: &[Line],
+        j: usize,
+        waste: &mut BTreeMap<String, u64>,
+    ) -> bool {
+        ids.get(j)
+            .is_some_and(|line| count(&mut self.used, path, line, waste))
     }
 
     /// The files whose merge of `a` and `b` conflicts. The merge's objects go to a temporary
@@ -1256,7 +1141,8 @@ impl Repo {
                 .filter(|k| k.len() == 2 && k.iter().all(|n| *n > 0))
         };
         for agent in self.shares.keys().cloned().collect::<Vec<_>>() {
-            let events = jsonl(&run.join(format!("agents/{agent}/scratch/claude-events.jsonl")));
+            let transcript = run.join(format!("agents/{agent}/scratch/claude-events.jsonl"));
+            let events = jsonl(&transcript).unwrap_or_default();
             for event in events.iter().filter(|e| e["type"] == "user") {
                 let Some(stamp) = event["timestamp"].as_str() else {
                     continue;
@@ -1339,7 +1225,7 @@ impl Repo {
                     for parent in &parents {
                         let side = self.text(parent, &path)?;
                         let (old, ours) = (lines(&base_text), lines(&side));
-                        let added: BTreeSet<usize> = align(&old, &ours)
+                        let added: BTreeSet<usize> = matches(&old, &ours)
                             .iter()
                             .enumerate()
                             .filter(|(_, kept)| kept.is_none())
@@ -1350,7 +1236,7 @@ impl Repo {
                             .into_iter()
                             .filter(|j| added.contains(j))
                         {
-                            self.count(&ids[j], &mut waste);
+                            self.count(&path, &ids, j, &mut waste);
                         }
                     }
                 }
@@ -1397,27 +1283,26 @@ impl Repo {
                 let text = self.text(&commit, &path)?;
                 let ids = self.line_ids(&commit, &path)?;
                 for (name, start, end) in go_functions(&path, &text) {
-                    let Some(Some(id)) = ids.get(start) else {
+                    let Some((agent, _)) = ids.get(start).and_then(Line::agent) else {
                         continue;
                     };
                     if had.contains(&name) {
                         continue;
                     }
-                    let key = (id.0.clone(), path.clone(), name.clone());
+                    let key = (agent.to_string(), path.clone(), name.clone());
                     let first = found.get(&key).map_or(at, |f| f.first);
-                    let state = if is_final || stands.as_ref() == Some(&id.0) {
+                    let state = if is_final || stands.as_deref() == Some(agent) {
                         "final"
                     } else {
                         "discarded"
                     };
-                    let body = lines(&text)[start..=end].join("\n");
                     found.insert(
                         key.clone(),
                         Function {
                             agent: key.0,
                             file: path.clone(),
                             name,
-                            body,
+                            body: body(&lines(&text), start, end),
                             state,
                             at: commit.clone(),
                             start,
@@ -1435,9 +1320,13 @@ impl Repo {
     fn discard(&mut self, f: &Function) -> Result<BTreeMap<String, u64>> {
         let ids = self.line_ids(&f.at, &f.file)?;
         let mut waste = BTreeMap::new();
-        for id in &ids[f.start..=f.end] {
-            if id.as_ref().is_some_and(|id| id.0 == f.agent) {
-                self.count(id, &mut waste);
+        for j in f.start..=f.end {
+            if ids
+                .get(j)
+                .and_then(Line::agent)
+                .is_some_and(|(a, _)| a == f.agent)
+            {
+                self.count(&f.file, &ids, j, &mut waste);
             }
         }
         Ok(waste)
@@ -1445,7 +1334,7 @@ impl Repo {
 
     /// Each check attempt with the agent that asked for it and when.
     fn checks(&self, run: &Path, result: &Value) -> Vec<(Value, String, f64)> {
-        let rows = jsonl(&run.join("controller/events.jsonl"));
+        let rows = jsonl(&run.join("controller/events.jsonl")).unwrap_or_default();
         let asked: Vec<&Value> = rows
             .iter()
             .filter(|r| r["kind"] == "validation" || r["kind"] == "final_validation")
@@ -1487,20 +1376,22 @@ impl Repo {
                 .iter()
                 .find(|(a, ..)| a["passed"] == true)
                 .and_then(|(a, ..)| a["candidate"].as_str().map(String::from));
-            let (mut waste, mut files, mut later) = (BTreeMap::new(), BTreeSet::new(), false);
+            // Premature only when the peer's half arrived before the pass.
+            let (mut waste, mut files, mut peer_work) = (BTreeMap::new(), BTreeSet::new(), false);
             if let Some(next) = &next {
-                later = self.side(next).iter().any(|(a, n)| *n > held[a]);
+                let side = self.side(next);
+                peer_work = side.iter().any(|(a, n)| a != agent && *n > held[a]);
                 for path in self.paths(&[candidate, next])? {
                     let (ours, theirs) = (self.text(candidate, &path)?, self.text(next, &path)?);
                     let ids = self.line_ids(candidate, &path)?;
                     for i in dropped(&lines(&ours), &lines(&theirs)) {
-                        if self.count(&ids[i], &mut waste) {
+                        if self.count(&path, &ids, i, &mut waste) {
                             files.insert(path.clone());
                         }
                     }
                 }
             }
-            let class = match (waste.is_empty(), later) {
+            let class = match (waste.is_empty(), peer_work) {
                 (false, _) => "rework",
                 (true, true) => {
                     premature += 1;
@@ -1537,9 +1428,12 @@ impl Repo {
                     let filled = regions(&lines(&base), &lines(&ours)).1;
                     let ids = self.line_ids(before, &path)?;
                     for i in dropped(&lines(&ours), &lines(&next)) {
-                        let own = ids[i].as_ref().is_some_and(|id| id.0 == agent);
+                        let own = ids
+                            .get(i)
+                            .and_then(Line::agent)
+                            .is_some_and(|(a, _)| a == agent);
                         let beside = filled[i].is_some_and(|r| touch(&[r], &changed));
-                        if own && beside && self.count(&ids[i], &mut waste) {
+                        if own && beside && self.count(&path, &ids, i, &mut waste) {
                             files.insert(path.clone());
                         }
                     }
@@ -1661,8 +1555,8 @@ mod tests {
     }
 
     /// agent-0 writes a.go, agent-1 writes b.go, then agent-1 changes b.go to `later`. Checks
-    /// are (number, passed, revision).
-    fn broken_check_run(later: &str, checks: &[(u64, bool, u64)]) -> Value {
+    /// are (number, passed, revision), all requested `by` one agent.
+    fn broken_check_run(later: &str, by: &str, checks: &[(u64, bool, u64)]) -> Value {
         let (a, b) = (
             "package p\nfunc A() int {\n    return 1\n}\n",
             "package p\nfunc B() int {\n    x := 2\n    return x\n}\n",
@@ -1695,7 +1589,7 @@ mod tests {
         ]);
         let attempts: Vec<Value> = checks
             .iter()
-            .map(|(n, passed, r)| json!({"number": n, "passed": passed, "revision": r, "requested_by": "agent-0", "conflict": null}))
+            .map(|(n, passed, r)| json!({"number": n, "passed": passed, "revision": r, "requested_by": by, "conflict": null}))
             .collect();
         let (dir, result) = falinks_run(history, json!(attempts));
         collisions(dir.path(), &result, &Value::Null)
@@ -1705,7 +1599,11 @@ mod tests {
     fn a_broken_combined_check_is_rework_premature_or_no_fault_by_what_followed_it() {
         // Its two lines of b.go are rewritten before the next pass: rework.
         let rewritten = "package p\nfunc B() int {\n    return 2\n}\n";
-        let found = broken_check_run(rewritten, &[(1, false, 1), (2, false, 2), (3, true, 3)]);
+        let found = broken_check_run(
+            rewritten,
+            "agent-0",
+            &[(1, false, 1), (2, false, 2), (3, true, 3)],
+        );
         assert_eq!(
             found["events"],
             json!([{"class": "rework", "files": ["b.go"], "lines": 2, "waste": {"agent-1": 2},
@@ -1713,13 +1611,21 @@ mod tests {
             "a check holding one agent's work is not combined"
         );
         assert_eq!(found["premature_checks"], 0);
-        // Only additions before the pass: the peer's half did not exist yet.
+        // Only the peer's additions before the pass: its half did not exist yet.
         let added = "package p\nfunc B() int {\n    x := 2\n    return x\n}\nfunc C() {}\n";
-        let found = broken_check_run(added, &[(1, false, 2), (2, true, 3)]);
+        let found = broken_check_run(added, "agent-0", &[(1, false, 2), (2, true, 3)]);
         assert_eq!(found["events"], json!([]));
         assert_eq!(found["premature_checks"], 1);
+        // The requester's own additions: its half was missing, not the peer's.
+        let found = broken_check_run(added, "agent-1", &[(1, false, 2), (2, true, 3)]);
+        assert_eq!(found["premature_checks"], 0);
+        assert_eq!(
+            found["events"],
+            json!([{"class": "no_fault", "files": [], "lines": 0, "waste": {},
+                "detected": [{"agent": "agent-1", "signal": "broken_check", "check": 1, "revision": 2}]}])
+        );
         // Nothing changed before the pass.
-        let found = broken_check_run(added, &[(1, false, 2), (2, true, 2)]);
+        let found = broken_check_run(added, "agent-0", &[(1, false, 2), (2, true, 2)]);
         assert_eq!(
             found["events"],
             json!([{"class": "no_fault", "files": [], "lines": 0, "waste": {},
@@ -1884,9 +1790,27 @@ mod tests {
         );
     }
 
+    /// Waste credits lines as changed bytes do (`authorship`): a peer's line merged into an
+    /// agent's share stays the peer's, so removing it is not that agent's rework.
+    #[test]
+    fn a_peer_line_merged_into_a_share_stays_the_peers() {
+        let mut run = GitRun::new(&[("h.go", V0), ("g.go", "package p\n")]);
+        let initial = run.initial.clone();
+        let with_b = "package p\nfunc H() {\n    b := 2\n    return\n}\n";
+        let b = run.share("B", &initial, &[("h.go", with_b)], 10.0);
+        let own = run.commit(Some(&initial), &[("g.go", "package p\nfunc G() {}\n")], "A");
+        let merged = run.merge(&own, &b, &[]);
+        run.events
+            .push(json!({"kind": "draft_shared", "agent": "A", "commit": merged, "elapsed": 20.0}));
+        let dropped = run.share("A", &merged, &[("h.go", V0)], 30.0);
+        let found = run.measure(&[("A", &dropped, true, 40.0)]);
+        assert_eq!(found["status"], "complete", "{found}");
+        assert_eq!(found["events"], json!([]), "B's line is not A's own");
+    }
+
     /// A shares a.go and B b.go; their merge fails a check; B then shares `later`, whose merge
-    /// passes.
-    fn git_broken_check(later: &str) -> Value {
+    /// passes. Agent `by` asked for the failed check.
+    fn git_broken_check(later: &str, by: &str) -> Value {
         let mut run = GitRun::new(&[("a.go", "package p\n"), ("b.go", "package p\n")]);
         let initial = run.initial.clone();
         let a = run.share(
@@ -1907,22 +1831,30 @@ mod tests {
         let failed = run.merge(&a, &b1, &[]);
         let b2 = run.share("B", &b1, &[("b.go", later)], 40.0);
         let passed = run.merge(&a, &b2, &[]);
-        run.measure(&[("A", &failed, false, 30.0), ("B", &passed, true, 50.0)])
+        run.measure(&[(by, &failed, false, 30.0), ("B", &passed, true, 50.0)])
     }
 
     #[test]
     fn a_failed_check_of_both_shares_is_rework_when_its_lines_are_rewritten_else_premature() {
-        let found = git_broken_check("package p\nfunc B() int {\n    return 2\n}\n");
+        let found = git_broken_check("package p\nfunc B() int {\n    return 2\n}\n", "A");
         assert_eq!(
             found["events"],
             json!([{"class": "rework", "files": ["b.go"], "lines": 2, "waste": {"B": 2},
                 "detected": [{"agent": "A", "signal": "broken_check", "check": 1, "elapsed": 30.0}]}])
         );
-        let found = git_broken_check(
-            "package p\nfunc B() int {\n    x := 2\n    return x\n}\nfunc C() {}\n",
-        );
+        // Only the peer's share follows: its half did not exist yet.
+        let added = "package p\nfunc B() int {\n    x := 2\n    return x\n}\nfunc C() {}\n";
+        let found = git_broken_check(added, "A");
         assert_eq!(found["events"], json!([]));
         assert_eq!(found["premature_checks"], 1);
+        // The requester's own share follows: not premature.
+        let found = git_broken_check(added, "B");
+        assert_eq!(found["premature_checks"], 0);
+        assert_eq!(
+            found["events"],
+            json!([{"class": "no_fault", "files": [], "lines": 0, "waste": {},
+                "detected": [{"agent": "B", "signal": "broken_check", "check": 1, "elapsed": 30.0}]}])
+        );
     }
 
     const NET_A: &str = "package p\nfunc NetA(q, p int) int {\n    n := q * p\n    return n\n}\n";

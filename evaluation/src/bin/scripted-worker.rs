@@ -10,7 +10,8 @@
 //! text in `$FALINKS_FAKE_JUDGE/replies.json`, where `null` is a failed call;
 //! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge; copied
 //! as `launches-PROGRAM`, its first turn runs `PROGRAM` through Bash (a nested agent); copied
-//! as `effort-LEVEL`, its session file records `LEVEL` whatever `--effort` says;
+//! as `effort-LEVEL`, its session file records `LEVEL` whatever `--effort` says; copied as
+//! `unrecorded`, it writes no session file;
 //! `scripted-worker <fixture> --output DIR ...` impersonates the Falinks-arm runner for batches;
 //! `FALINKS_FAKE_NESTED=COMMAND` records that command as a nested agent.
 use serde_json::{Value, json};
@@ -382,7 +383,8 @@ fn fake_claude(argv: &[String]) {
     let effort = name
         .strip_prefix("effort-")
         .map_or(flag("--effort"), String::from);
-    let session = env::var_os("HOME").map(|home| {
+    let home = env::var_os("HOME").filter(|_| name != "unrecorded");
+    let session = home.map(|home| {
         let folder: String = env::current_dir()
             .unwrap()
             .to_string_lossy()

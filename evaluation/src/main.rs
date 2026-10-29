@@ -1,4 +1,5 @@
 //! Frozen fixture checks and a one- or two-process communicating Git-worktree baseline.
+mod authorship;
 mod baseline;
 mod batch;
 mod collisions;
@@ -6,6 +7,7 @@ mod judge;
 mod known_answer;
 mod quality;
 mod report;
+mod significance;
 mod timing;
 mod tokens;
 
@@ -36,6 +38,8 @@ pub const FIXTURES: [&str; 7] = [
     "go-tasks",
     "go-invoice",
 ];
+/// #205's sealed scored fixture (#332), the `large-spec` schedule's only one.
+pub const LARGE_SPEC_FIXTURE: &str = "go-invoice";
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
 pub const SCORED_FIXTURES: [&str; 3] = ["rust-errors", "go-page", "go-relationships"];
 pub const FIXED_ENV: [(&str, &str); 10] = [
@@ -60,6 +64,16 @@ pub fn read(path: impl AsRef<Path>) -> Result<Value> {
     let path = path.as_ref();
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(serde_json::from_str(&text)?)
+}
+
+/// A JSON-lines file, blank lines skipped; a malformed line is an error.
+pub fn jsonl(path: &Path) -> Result<Vec<Value>> {
+    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?)
 }
 
 pub fn write(path: impl AsRef<Path>, data: &Value) -> Result<()> {
