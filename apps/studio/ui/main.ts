@@ -22,7 +22,8 @@ type Card = {
   why_it_matters: string;
   not_checked: string;
 };
-// The store also records how the guess settled; the pane never shows it.
+// The store also records when the question showed and how the guess settled; the pane never shows
+// either, nor any rate.
 type StoredCard = { request: CardRequest; card: Card; revealed_at: number | null; passed: boolean | null };
 
 const stateLabels: Record<SessionState, string> = {
@@ -142,6 +143,19 @@ function cardElement({ request, card, revealed_at, passed }: StoredCard): HTMLEl
   return details;
 }
 
+// Closed cards whose question the pane drew while the window was hidden. A question counts as shown
+// when it is drawn in a visible window, or when the window next becomes visible; the store keeps the
+// first time, which the weekly rates measure reveals from.
+const unshown = new Set<string>();
+
+function markShown() {
+  if (document.visibilityState !== "visible") return;
+  for (const toolUseId of unshown) window.__TAURI__.core.invoke("shown", { toolUseId });
+  unshown.clear();
+}
+
+document.addEventListener("visibilitychange", markShown);
+
 // Each card is a <details>: its question shows, and a tap reveals the rest. Cards already drawn are
 // kept, keyed by their step's tool_use_id, so one Daniel opened stays open on the next event.
 function showCards(cards: StoredCard[]) {
@@ -150,12 +164,17 @@ function showCards(cards: StoredCard[]) {
   const drawn = new Set<string>();
   for (const node of [...list.children] as HTMLElement[]) {
     if (ids.has(node.dataset.id!)) drawn.add(node.dataset.id!);
-    else node.remove();
+    else {
+      node.remove();
+      unshown.delete(node.dataset.id!);
+    }
   }
   for (const stored of cards) {
     if (drawn.has(stored.request.tool_use_id)) continue;
     list.prepend(cardElement(stored));
+    if (stored.revealed_at === null) unshown.add(stored.request.tool_use_id);
   }
+  markShown();
   element("cards-title").hidden = cards.length === 0;
 }
 

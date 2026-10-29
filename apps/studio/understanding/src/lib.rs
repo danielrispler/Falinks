@@ -1,5 +1,5 @@
 //! The understanding layer's I/O, which the core leaves to the shell: the card writer (#328,
-//! module 4), the worktree fingerprint (module 5) and the card store (module 6).
+//! module 4), the worktree fingerprint (module 5), and the card store and its weekly rates (module 6).
 
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, process::Command};
@@ -7,8 +7,10 @@ use studio_core::CardRequest;
 
 mod fingerprint;
 mod store;
+mod week;
 pub use fingerprint::Fingerprints;
 pub use store::{CardStore, Outcome, StoredCard};
+pub use week::{Rate, Week, week};
 
 /// A card on one step, in Hebrew; code stays in English, and code inside the Hebrew text is in
 /// backticks. It opens with the question; the rest shows when Daniel taps.

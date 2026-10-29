@@ -3301,6 +3301,7 @@ dependencies = [
  "serde_json",
  "similar",
  "studio-core",
+ "studio-hook",
  "tempfile",
 ]
 

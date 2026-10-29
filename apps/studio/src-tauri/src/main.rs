@@ -43,13 +43,25 @@ fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<StoredCard> {
         .collect()
 }
 
+/// The pane drew the question of the card on step `tool_use_id` in a visible window.
+#[tauri::command]
+fn shown(tool_use_id: String, cards: State<Cards>) {
+    if let Err(e) = cards.lock().unwrap().show(&tool_use_id, millis()) {
+        eprintln!("studio: save the card store: {e}");
+    }
+}
+
 /// Daniel revealed the answer of the card on step `tool_use_id`.
 #[tauri::command]
 fn reveal(tool_use_id: String, cards: State<Cards>) {
-    let at = UNIX_EPOCH.elapsed().unwrap_or_default().as_millis() as u64;
-    if let Err(e) = cards.lock().unwrap().reveal(&tool_use_id, at) {
+    if let Err(e) = cards.lock().unwrap().reveal(&tool_use_id, millis()) {
         eprintln!("studio: save the card store: {e}");
     }
+}
+
+/// Now, in Unix milliseconds, as the card store's records keep time.
+fn millis() -> u64 {
+    UNIX_EPOCH.elapsed().unwrap_or_default().as_millis() as u64
 }
 
 /// Daniel tapped yes or no on "Will it pass?" for check `tool_use_id`.
@@ -83,7 +95,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(studio))
         .manage(Cards::new(store))
-        .invoke_handler(tauri::generate_handler![now, cards, reveal, guess])
+        .invoke_handler(tauri::generate_handler![now, cards, shown, reveal, guess])
         .setup(move |app| {
             let app = app.handle().clone();
             thread::spawn(move || follow(&app, &log, &writer));
@@ -137,7 +149,11 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                             let Some(card) = writer.write(&request) else {
                                 return;
                             };
-                            let added = app.state::<Cards>().lock().unwrap().add(request, card);
+                            let added =
+                                app.state::<Cards>()
+                                    .lock()
+                                    .unwrap()
+                                    .add(request, card, millis());
                             if let Err(e) = added {
                                 eprintln!("studio: save the card store: {e}");
                             }

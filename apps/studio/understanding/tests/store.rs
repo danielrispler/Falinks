@@ -26,7 +26,7 @@ fn a_reopened_store_keeps_the_cards_and_which_ones_daniel_revealed() {
         edit("toolu_01B", "README.md"),
     ] {
         let card = FakeWriter.write(&request).unwrap();
-        store.add(request, card).unwrap();
+        store.add(request, card, 1_761_743_990_000).unwrap();
     }
     store.reveal("toolu_01A", 1_761_744_000_000).unwrap();
     // Opening it again later keeps the first reveal.
@@ -65,7 +65,7 @@ fn settled(request: CardRequest, passed: Option<bool>) -> (Option<bool>, Option<
     let mut store = CardStore::open(data.path().join("cards.json")).unwrap();
     let mut card = FakeWriter.write(&request).unwrap();
     card.passed = passed;
-    store.add(request, card).unwrap();
+    store.add(request, card, 1_761_743_990_000).unwrap();
     let reopened = CardStore::open(data.path().join("cards.json")).unwrap();
     (reopened.cards()[0].passed, reopened.cards()[0].outcome)
 }
@@ -101,6 +101,47 @@ fn an_exit_code_that_counts_settles_the_guess_and_a_missing_tap_is_not_counted()
 }
 
 #[test]
+fn each_card_records_when_it_was_added_when_its_question_showed_and_when_it_was_revealed() {
+    let data = tempfile::tempdir().unwrap();
+    let path = data.path().join("cards.json");
+    let mut store = CardStore::open(path.clone()).unwrap();
+    for request in [
+        edit("toolu_01A", "src/lib.rs"),
+        edit("toolu_01B", "README.md"),
+    ] {
+        let card = FakeWriter.write(&request).unwrap();
+        store.add(request, card, 1_761_743_990_000).unwrap();
+    }
+    store.show("toolu_01A", 1_761_744_000_000).unwrap();
+    // The pane draws it again after a restart; the first time stays.
+    store.show("toolu_01A", 1_761_744_050_000).unwrap();
+    store.reveal("toolu_01A", 1_761_744_004_000).unwrap();
+    // A card revealed before its question time was kept, as in a store from before this record,
+    // gets none, so a reveal never comes before its question.
+    store.reveal("toolu_01B", 1_761_744_060_000).unwrap();
+    store.show("toolu_01B", 1_761_744_070_000).unwrap();
+
+    let reopened = CardStore::open(path).unwrap();
+
+    let records: Vec<_> = reopened
+        .cards()
+        .iter()
+        .map(|kept| (kept.added_at, kept.shown_at, kept.revealed_at))
+        .collect();
+    assert_eq!(
+        records,
+        [
+            (
+                Some(1_761_743_990_000),
+                Some(1_761_744_000_000),
+                Some(1_761_744_004_000)
+            ),
+            (Some(1_761_743_990_000), None, Some(1_761_744_060_000)),
+        ]
+    );
+}
+
+#[test]
 fn a_store_written_before_checks_existed_still_opens() {
     let data = tempfile::tempdir().unwrap();
     let path = data.path().join("cards.json");
@@ -120,6 +161,7 @@ fn a_store_written_before_checks_existed_still_opens() {
         (None, None, None)
     );
     assert_eq!(kept.revealed_at, Some(1_761_744_000_000));
+    assert_eq!((kept.added_at, kept.shown_at), (None, None));
 }
 
 #[test]

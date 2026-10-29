@@ -1,5 +1,5 @@
-//! The card store (#328, module 6): the cards and their reveal state, on disk in the studio's data
-//! directory, so a restart neither loses nor re-shows them.
+//! The card store (#328, module 6): the cards, their reveal state and their records, on disk in the
+//! studio's data directory, so a restart neither loses nor re-shows them.
 
 use crate::Card;
 use serde::{Deserialize, Serialize};
@@ -10,13 +10,22 @@ use std::{
 };
 use studio_core::CardRequest;
 
-/// A card in the store, with the step it explains and when Daniel first revealed its answer. The
-/// card and its step go through serde whole, so fields added to them need no change here.
+/// A card in the store, with the step it explains and its record: when it was added, when its
+/// question showed, when Daniel first revealed its answer, his tap (`request.check`'s guess) and how
+/// the check settled. The card and its step go through serde whole, so fields added to them need no
+/// change here. Times are Unix milliseconds; stores from before a time existed load it as `None`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredCard {
     pub request: CardRequest,
     pub card: Card,
-    /// Unix milliseconds; `None` while the card shows only its question.
+    /// When the card reached the store, which places it in a week.
+    #[serde(default)]
+    pub added_at: Option<u64>,
+    /// When the pane first drew its question in a visible window; `None` until then.
+    #[serde(default)]
+    pub shown_at: Option<u64>,
+    /// `None` while the card shows only its question.
+    #[serde(default)]
     pub revealed_at: Option<u64>,
     /// For a check: whether it passed, as settled; `None` when unknown, and for other steps.
     #[serde(default)]
@@ -61,10 +70,10 @@ impl CardStore {
         &self.cards
     }
 
-    /// Adds a new card, which shows its question first, and saves the store. A check's card settles
-    /// its guess: the exit code says whether it passed when it counts, and otherwise the card
-    /// writer's `passed` does.
-    pub fn add(&mut self, request: CardRequest, card: Card) -> io::Result<()> {
+    /// Adds a new card at `at`, in Unix milliseconds, which shows its question first, and saves the
+    /// store. A check's card settles its guess: the exit code says whether it passed when it counts,
+    /// and otherwise the card writer's `passed` does.
+    pub fn add(&mut self, request: CardRequest, card: Card, at: u64) -> io::Result<()> {
         let check = request.check.as_ref();
         let passed = check.and_then(|check| check.exit_passed.or(card.passed));
         let outcome = check.map(|check| match (check.guess, passed) {
@@ -75,11 +84,28 @@ impl CardStore {
         self.cards.push(StoredCard {
             request,
             card,
+            added_at: Some(at),
+            shown_at: None,
             revealed_at: None,
             passed,
             outcome,
         });
         self.save()
+    }
+
+    /// Marks the question of the card on step `tool_use_id` shown at `at`, in Unix milliseconds, and
+    /// saves the store. A card keeps its first time, and one revealed before gets none, so a reveal
+    /// never comes before its question.
+    pub fn show(&mut self, tool_use_id: &str, at: u64) -> io::Result<()> {
+        let mut cards = self.cards.iter_mut();
+        if let Some(kept) = cards.find(|kept| kept.request.tool_use_id == tool_use_id)
+            && kept.shown_at.is_none()
+            && kept.revealed_at.is_none()
+        {
+            kept.shown_at = Some(at);
+            return self.save();
+        }
+        Ok(())
     }
 
     /// Marks the card on step `tool_use_id` revealed at `at`, in Unix milliseconds, and saves the

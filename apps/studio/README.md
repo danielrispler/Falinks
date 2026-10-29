@@ -11,7 +11,7 @@ The pane also shows the session's state: working, your turn, or needs you, the o
 - `plugin/`: the Claude Code plugin. On ten hook events it runs `studio-hook`.
 - `hook/`: `studio-hook`, which appends each hook payload as one line to the event log, and the log's path.
 - `core/`: the studio core, plain Rust with no I/O. The app replays the whole log through it at start, then feeds it each new line live. Only live lines request cards and notifications.
-- `understanding/`: the understanding layer's I/O: the card writer interface, the `claude -p` writer and a fake, and the card store.
+- `understanding/`: the understanding layer's I/O: the card writer interface, the `claude -p` writer and a fake, the card store, and `weekly`, the command that prints the week's rates.
 - `src-tauri/`: the app's Rust shell. `ui/`: its TypeScript pane.
 
 ## Build
@@ -24,7 +24,7 @@ Needs Node and the Rust toolchain.
 
 This builds `target/release/bundle/macos/Studio.app` with an ad-hoc signature (`codesign -dv` shows `Signature=adhoc`), and `target/release/studio-hook`, which the plugin runs. Open the app with `open target/release/bundle/macos/Studio.app`.
 
-`cargo test` runs the core's replay tests and the card store's tests. It leaves out the shell, which needs `dist/` from `npm run build`.
+`cargo test` runs the core's replay tests, and the card store's and weekly rates' tests. It leaves out the shell, which needs `dist/` from `npm run build`.
 
 ## Load the plugin
 
@@ -49,4 +49,21 @@ The log is never rotated. It holds tool inputs and results, file contents includ
 
 ## The card store
 
-`cards.json` beside the event log: each card with the step it explains and `revealed_at`, when you first opened it (Unix milliseconds, `null` until then). A check's card also keeps your tap (`request.check.guess`, `null` when you did not tap before the result), `passed` and `outcome` (`right`, `wrong` or `not_counted`). `passed` comes from the exit code when the command has no pipe or sets `pipefail`, and otherwise from the card writer, which can answer unknown (`null`); an unknown verdict is not counted. A missing store starts empty. The app writes it whole to a temporary file and renames it into place, so a crash mid-write keeps the previous store.
+`cards.json` beside the event log: each card with the step it explains and its record, in Unix milliseconds: `added_at`, when the card arrived; `shown_at`, when the pane first drew its question while the window was visible; and `revealed_at`, when you first opened it. Each is `null` until then, and in stores written before it existed. A check's card also keeps your tap (`request.check.guess`, `null` when you did not tap before the result), `passed` and `outcome` (`right`, `wrong` or `not_counted`). `passed` comes from the exit code when the command has no pipe or sets `pipefail`, and otherwise from the card writer, which can answer unknown (`null`); an unknown verdict is not counted. A missing store starts empty. The app writes it whole to a temporary file and renames it into place, so a crash mid-write keeps the previous store.
+
+## The weekly rates
+
+The app shows no rate, score or tally. Once a week, print the rates of the cards that arrived in the last 7 days:
+
+    cd apps/studio
+    cargo run --bin weekly
+
+- thinking rate: of the cards you opened, the share you opened 3 s or more after their question showed;
+- surprise rate: of the guesses that settled, the share that were wrong; no tap and an unknown verdict do not settle;
+- unknown rate: of the check cards, the share whose `passed` was unknown. A high rate argues for a `pipefail` instruction to agents.
+
+A rate with nothing to count prints `n/a`. To record your one-line verdict on the questions, add it after `--`:
+
+    cargo run --bin weekly -- the questions made me stop twice, the rest I clicked through
+
+This appends the rates and your verdict to `weekly.txt` beside the event log. If you mostly click through the questions, or call them a chore, they go and plain cards stay. The thresholds are starting guesses.
