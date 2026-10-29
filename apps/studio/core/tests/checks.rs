@@ -22,7 +22,7 @@ fn prompt(tool_use_id: &str) -> GuessPrompt {
             tool: "Bash".into(),
             detail: Some(COMMAND.into()),
         },
-        tap: None,
+        guess: None,
     }
 }
 
@@ -141,7 +141,7 @@ fn the_session_shows_the_prompt_and_its_tap_until_the_result_arrives() {
 
     studio.guess("toolu_01Rt5Gb8Nc2Vk7Lp4Xs9Dq3W", false);
     let tapped = open(&studio).expect("still open");
-    assert_eq!(tapped.tap, Some(false));
+    assert_eq!(tapped.guess, Some(false));
 
     // A restart mid-check keeps the prompt; the result, live, closes it and still gets the card.
     let outputs = studio.apply(lines[3]);

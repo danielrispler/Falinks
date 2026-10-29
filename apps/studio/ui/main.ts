@@ -4,7 +4,7 @@
 
 type Step = { tool: string; detail: string | null };
 type SessionState = "working" | "needs_you" | "your_turn";
-type GuessPrompt = { session_id: string; tool_use_id: string; step: Step; tap: boolean | null };
+type GuessPrompt = { session_id: string; tool_use_id: string; step: Step; guess: boolean | null };
 type Session = {
   id: string;
   cwd: string;
@@ -51,15 +51,15 @@ const taps = [
   ["guess-no", false],
 ] as const;
 
-function showGuess(guess: GuessPrompt | null) {
-  openGuess = guess;
-  element("guess").hidden = guess === null;
-  if (guess === null) return;
-  element("guess-command").textContent = guess.step.detail ?? "";
+function showGuess(prompt: GuessPrompt | null) {
+  openGuess = prompt;
+  element("guess").hidden = prompt === null;
+  if (prompt === null) return;
+  element("guess-command").textContent = prompt.step.detail ?? "";
   for (const [id, willPass] of taps) {
     const button = element(id) as HTMLButtonElement;
-    button.disabled = guess.tap !== null;
-    button.setAttribute("aria-pressed", String(guess.tap === willPass));
+    button.disabled = prompt.guess !== null;
+    button.setAttribute("aria-pressed", String(prompt.guess === willPass));
   }
 }
 

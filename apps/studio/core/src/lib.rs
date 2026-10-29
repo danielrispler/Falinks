@@ -115,7 +115,7 @@ pub struct GuessPrompt {
     /// The check's command, which the prompt shows.
     pub step: Step,
     /// Daniel's tap: whether he guessed the check will pass. `None` until he taps.
-    pub tap: Option<bool>,
+    pub guess: Option<bool>,
 }
 
 /// A finished card step, with what the card writer needs: the step's change, not the whole payload.
@@ -415,7 +415,7 @@ impl Studio {
                         session_id: event.session_id.clone(),
                         tool_use_id: event.tool_use_id.clone(),
                         step,
-                        tap: None,
+                        guess: None,
                     };
                     session.guess = Some(prompt.clone());
                     outputs.push(Output::Guess(prompt));
@@ -466,7 +466,7 @@ impl Studio {
                     let command = input["command"].as_str().unwrap_or_default();
                     let ran = !failed || event.error.starts_with("Exit code");
                     let check = Check {
-                        guess: prompt.tap,
+                        guess: prompt.guess,
                         exit_passed: (ran && exit_code_counts(command)).then_some(!failed),
                     };
                     Some((output(&event.tool_response, &event.error), Some(check)))
@@ -534,7 +534,7 @@ impl Studio {
     pub fn guess(&mut self, tool_use_id: &str, will_pass: bool) {
         let open = self.sessions.values_mut().filter_map(|s| s.guess.as_mut());
         for prompt in open.filter(|p| p.tool_use_id == tool_use_id) {
-            prompt.tap.get_or_insert(will_pass);
+            prompt.guess.get_or_insert(will_pass);
         }
     }
 
