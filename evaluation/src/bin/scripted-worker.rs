@@ -453,6 +453,8 @@ fn fake_claude(argv: &[String]) {
         send(json!({"type": "assistant", "message": {"model": "scripted",
             "content": [{"type": "thinking", "thinking": "hidden"}, {"type": "text", "text": "done"}]}}));
         if let Some(session) = &session {
+            // The real runtime creates its own project folder; only a runtime home pre-creates it.
+            fs::create_dir_all(session.parent().unwrap()).unwrap();
             let mut file = fs::OpenOptions::new()
                 .create(true)
                 .append(true)
