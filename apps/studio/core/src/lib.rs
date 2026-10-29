@@ -41,7 +41,7 @@ struct Event {
 
 /// The tool input that says what a step works on: a command's first line, a path relative to the
 /// session's folder, or a search pattern, URL, query or task description.
-fn detail(input: &Value, cwd: &str) -> Option<String> {
+fn step_detail(input: &Value, cwd: &str) -> Option<String> {
     if let Some(command) = input["command"].as_str() {
         return command.lines().next().map(Into::into);
     }
@@ -75,7 +75,7 @@ impl Studio {
         match event.hook_event_name.as_str() {
             "UserPromptSubmit" => self.prompted_last = Some(event.session_id),
             "PreToolUse" => {
-                let detail = detail(&event.tool_input, &event.cwd);
+                let detail = step_detail(&event.tool_input, &event.cwd);
                 session.last_step = Some(Step {
                     tool: event.tool_name.unwrap_or_default(),
                     detail,

@@ -42,18 +42,17 @@ fn follow(app: &AppHandle, log: &Path) {
         {
             let mut reader = BufReader::new(file);
             let mut line = Vec::new();
-            let mut changed = false;
+            let read_from = read_to;
+            let state = app.state::<Mutex<Studio>>();
+            let mut studio = state.lock().unwrap();
             while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 && line.ends_with(b"\n") {
                 read_to += line.len() as u64;
-                app.state::<Mutex<Studio>>()
-                    .lock()
-                    .unwrap()
-                    .apply(&String::from_utf8_lossy(&line));
+                studio.apply(&String::from_utf8_lossy(&line));
                 line.clear();
-                changed = true;
             }
-            if changed {
-                let _ = app.emit("now", now(app.state()));
+            drop(studio);
+            if read_to > read_from {
+                let _ = app.emit("now", now(state));
             }
         }
         thread::sleep(Duration::from_millis(200));
