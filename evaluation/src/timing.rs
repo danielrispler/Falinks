@@ -14,8 +14,11 @@
 //!   `Write`, `Edit` or a `Bash` here-document redirected outside scratch; a `Bash` command
 //!   naming `FALINKS_HOST` is coordination.
 //! - **Output bytes** are the file content the model wrote, scratch included. **Changed bytes**
-//!   are the lines of each source file's last write that a line diff against its initial
-//!   content does not match.
+//!   are the lines of the agent's last version of each source file that a line diff against
+//!   its initial content does not match, read from the arm's records, not the transcript
+//!   (#325). A line in both agents' last versions of a file counts for each, and a line one
+//!   agent wrote and the other overwrote still counts for its writer. Unreadable records leave
+//!   them missing.
 //! - **Refusal recovery** (#193 decision 9), per output form of a refused Falinks `edit`,
 //!   `retry` or `incorporate`: the round-trips after it, and their model seconds, up to and
 //!   including the agent's next accepted one. Refusals inside an open recovery belong to it, so
@@ -28,7 +31,7 @@
 //!   The **edit gate** is the tool time of accepted source writes, with its mean per accepted
 //!   write. Both are transcript-side, so parallel calls make them approximate too; host and
 //!   edit-gate instrumentation (#178's I-2) is not read.
-use crate::{Result, bail, fixture, read};
+use crate::{Result, bail, blobs, fixture, read};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -162,8 +165,8 @@ enum Write {
         new: String,
         all: bool,
     },
-    /// A Falinks `from` output: the whole file, read from this scratch path.
-    From(String),
+    /// A Falinks `from` output: the whole file, read from a scratch path.
+    From,
 }
 
 /// The file writes in one tool call, with the bytes the model emitted for each.
@@ -210,7 +213,7 @@ fn writes(call: &Call, bash_writes_source: bool) -> Vec<(String, Write, bool)> {
                             })
                             .collect()
                     } else if file["from"].is_string() {
-                        vec![Write::From(text(&file["from"]))]
+                        vec![Write::From]
                     } else {
                         vec![Write::Replace(text(&file["content"]))]
                     };
@@ -293,12 +296,7 @@ pub fn changed_bytes(old: &str, new: &str) -> usize {
 }
 
 /// One agent's figures from its stream-json events, sessions concatenated.
-fn agent(
-    events: &[Value],
-    files: &Map<String, Value>,
-    bash_writes_source: bool,
-    clock: (Option<f64>, Option<f64>),
-) -> Value {
+fn agent(events: &[Value], bash_writes_source: bool, clock: (Option<f64>, Option<f64>)) -> Value {
     let (mut turns, mut messages, mut calls) = (Vec::<(Option<f64>, f64)>::new(), vec![], vec![]);
     let (mut ids, mut tool_ids) = (BTreeMap::new(), BTreeMap::new());
     let mut key_refusals = BTreeMap::<String, u64>::new();
@@ -428,74 +426,15 @@ fn agent(
         })
         .collect();
 
-    // Initial content of the source files, keyed by fixture path; other source writes start empty.
-    let mut contents: BTreeMap<String, (String, String)> = BTreeMap::new();
-    // The last applied text of each path written outside Falinks, for `from` outputs.
-    let mut scratches: BTreeMap<String, String> = BTreeMap::new();
-    let mut output = 0;
-    for call in &calls {
-        let applied = !call.result.is_some_and(|(_, refused)| refused);
-        for (path, write, source) in writes(call, bash_writes_source) {
-            output += match &write {
-                Write::Replace(text) | Write::Append(text) => text.len(),
-                Write::Patch { new, .. } => new.len(),
-                // Its bytes were counted when the model wrote the scratch file.
-                Write::From(_) => 0,
-            };
-            if applied && !call.name.starts_with(FALINKS) {
-                let current = scratches.entry(path.clone()).or_default();
-                match &write {
-                    Write::Replace(text) => *current = text.clone(),
-                    Write::Append(text) => *current += text,
-                    Write::Patch {
-                        old,
-                        new,
-                        all: true,
-                    } => *current = current.replace(old, new),
-                    Write::Patch { old, new, .. } => *current = current.replacen(old, new, 1),
-                    Write::From(_) => {}
-                }
-            }
-            if !applied || !source || scratch(&path) {
-                continue;
-            }
-            let key = files
-                .keys()
-                .find(|f| path == **f || path.ends_with(&format!("/{f}")))
-                .cloned()
-                .unwrap_or(path);
-            let initial = files
-                .get(&key)
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let (_, current) = contents
-                .entry(key)
-                .or_insert_with(|| (initial.clone(), initial));
-            match write {
-                Write::Replace(text) => *current = text,
-                Write::Append(text) => *current += &text,
-                Write::Patch { old, new, all } if all => *current = current.replace(&old, &new),
-                Write::Patch { old, new, .. } => *current = current.replacen(&old, &new, 1),
-                // shortcut: a scratch file the transcript never wrote leaves the file unchanged,
-                // so its bytes count as unchanged; read the run's scratch directory if that matters.
-                Write::From(from) => {
-                    // Agents run in their scratch directory, so relative writes resolve there.
-                    let named = |p: &&String| {
-                        **p == from
-                            || **p == format!("scratch/{from}")
-                            || p.ends_with(&format!("/scratch/{from}"))
-                    };
-                    if let Some(text) = scratches.keys().find(named).map(|p| &scratches[p]) {
-                        *current = text.clone();
-                    }
-                }
-            }
-        }
-    }
-    let changed: usize = contents
-        .values()
-        .map(|(initial, last)| changed_bytes(initial, last))
+    let output: usize = calls
+        .iter()
+        .flat_map(|call| writes(call, bash_writes_source))
+        .map(|(_, write, _)| match write {
+            Write::Replace(text) | Write::Append(text) => text.len(),
+            Write::Patch { new, .. } => new.len(),
+            // Its bytes were counted when the model wrote the scratch file.
+            Write::From => 0,
+        })
         .sum();
 
     let (start, stop) = clock;
@@ -544,7 +483,6 @@ fn agent(
         "refusal_recovery": recovery,
         "request_key_refusals": key_refusals,
         "output_bytes": output,
-        "changed_bytes": changed,
         "results": events.iter().filter(|e| e["type"] == "result").count(),
     });
     // A Git agent makes no Falinks call, so its figures stay as they were before #316.
@@ -554,6 +492,55 @@ fn agent(
             "per_accepted_seconds": (accepted > 0).then(|| rounded(gate_seconds / accepted as f64))});
     }
     figures
+}
+
+/// Per agent, the changed bytes of its last version of every file it changed, read from the
+/// arm's records (#325), not the transcript. A Falinks agent's versions are its applied
+/// operations in `controller/history.json`, each output path's resolved bytes after the
+/// operation. A Git agent's are its last shared commit (`controller/events.jsonl`) in
+/// `agents/repo`; work it never shared counts nothing.
+fn changed(run: &Path, arm: &str, files: &Map<String, Value>) -> Result<BTreeMap<String, usize>> {
+    let mut last = BTreeMap::<(String, String), Vec<u8>>::new();
+    if arm == "git" {
+        let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
+        let mut shares = BTreeMap::new();
+        for event in jsonl(&run.join("controller/events.jsonl"))? {
+            if event["kind"] == "draft_shared" {
+                shares.insert(text(&event["agent"]), text(&event["commit"]));
+            }
+        }
+        for (agent, commit) in shares {
+            for (path, bytes) in blobs(&run.join("agents/repo"), &commit)? {
+                last.insert((agent.clone(), path), bytes);
+            }
+        }
+    } else {
+        let history = read(run.join("controller/history.json"))?;
+        for record in history.as_array().into_iter().flatten() {
+            if record["outcome"].get("Applied").is_none() {
+                continue;
+            }
+            let agent = format!("agent-{}", record["agent"]);
+            for (path, _) in record["request"]["output"]
+                .as_object()
+                .into_iter()
+                .flatten()
+            {
+                // A deleted path has no file in the proposed revision: it ends empty.
+                let bytes = record["proposed"]["files"][path]["file"]["bytes"].as_array();
+                let bytes = bytes.into_iter().flatten().filter_map(Value::as_u64);
+                let bytes = bytes.map(|b| b as u8).collect();
+                last.insert((agent.clone(), path.clone()), bytes);
+            }
+        }
+    }
+    let mut changed = BTreeMap::new();
+    for ((agent, path), bytes) in last {
+        let initial = files.get(&path).and_then(Value::as_str).unwrap_or("");
+        *changed.entry(agent).or_insert(0) +=
+            changed_bytes(initial, &String::from_utf8_lossy(&bytes));
+    }
+    Ok(changed)
 }
 
 fn jsonl(path: &Path) -> Result<Vec<Value>> {
@@ -612,9 +599,12 @@ pub fn timing(run: &Path) -> Result<Value> {
         .as_object()
         .cloned()
         .unwrap_or_default();
+    // Unreadable records leave changed bytes missing, never zero.
+    let changed = changed(run, arm, &files).ok();
     let mut figures = Map::new();
     for (name, events) in &agents {
-        let mut figure = agent(events, &files, arm == "git", (start, stop));
+        let mut figure = agent(events, arm == "git", (start, stop));
+        figure["changed_bytes"] = json!(changed.as_ref().map(|c| c.get(name).map_or(0, |n| *n)));
         let reports = &result["usage"]["agents"][name.as_str()];
         figure["usage_reports"] = reports.as_array().map_or(0, Vec::len).into();
         figures.insert(name.clone(), figure);
@@ -714,7 +704,7 @@ mod tests {
             call("m4", 11, &edit, "replace"),
             result("m4", 12, false),
         ];
-        let figures = agent(&events, &Map::new(), false, (None, None));
+        let figures = agent(&events, false, (None, None));
         let recovery = &figures["refusal_recovery"];
         // m2 (3 to 5) and m3 (6 to 9) follow m1's refusal; m4's refusal is never recovered.
         assert_eq!(
@@ -740,7 +730,6 @@ mod tests {
                 "tool_use_id": id, "content": json!({"accepted": accepted}).to_string()}]}})
         };
         let edit = format!("{FALINKS}edit");
-        let files = json!({"a.go": "a\nb\n", "b.go": "x\n"});
         let figures = |wrap: fn(Value) -> Value| {
             let events = [
                 json!({"type": "system", "subtype": "init"}),
@@ -771,7 +760,7 @@ mod tests {
                 ),
                 result("m3", 6, true),
             ];
-            agent(&events, files.as_object().unwrap(), false, (None, None))
+            agent(&events, false, (None, None))
         };
         let flat = figures(|request| request);
         assert_eq!(flat, figures(|request| json!({"request": request})));
@@ -781,8 +770,6 @@ mod tests {
         );
         // Heredoc "c\n" 2, refused "bb" 2, "bc" 2, "y\n" 2; `from` emits no file bytes.
         assert_eq!(flat["output_bytes"], 8);
-        // a.go "a\nbc\n" 3, b.go "y\n" 2, c.go "c\n" from scratch 2.
-        assert_eq!(flat["changed_bytes"], 7);
         assert_eq!(
             flat["refusal_recovery"]["replace"],
             json!({"refusals": 1, "unresolved": 0, "round_trips": 1, "model_seconds": 1.0})
@@ -812,7 +799,7 @@ mod tests {
             call("m4", "edit"),
             result("m4", "a.go: hunk 1: old text matches 0 places"),
         ];
-        let figures = agent(&events, &Map::new(), false, (None, None));
+        let figures = agent(&events, false, (None, None));
         assert_eq!(
             figures["request_key_refusals"],
             json!({"ack": 1, "handle": 2})
