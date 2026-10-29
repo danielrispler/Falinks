@@ -12,7 +12,9 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 use studio_core::{Output, Session, Studio};
-use studio_understanding::{CardStore, CardWriter, ClaudeWriter, FakeWriter, StoredCard};
+use studio_understanding::{
+    CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, StoredCard,
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
@@ -84,11 +86,13 @@ fn main() {
 
 /// Reads the log from its start, then from where it stopped. A line counts once it ends in a newline,
 /// so a line the hook is still writing waits for the next read. The lines there at start are
-/// replayed, so steps that ran while the app was down get no cards and no notifications.
+/// replayed, so steps that ran while the app was down get no cards and no notifications. Live lines
+/// get the worktree fingerprint the core asks for; replayed ones get none.
 // shortcut: polls every 200 ms; switch to file-system events if the delay or the wake-ups matter.
 fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
     let mut read_to = 0;
     let mut live = false;
+    let mut fingerprints = Fingerprints::default();
     loop {
         if let Ok(mut file) = File::open(log)
             && file.seek(SeekFrom::Start(read_to)).is_ok()
@@ -103,7 +107,11 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 read_to += line.len() as u64;
                 let text = String::from_utf8_lossy(&line);
                 if live {
-                    outputs.extend(studio.apply(&text));
+                    // shortcut: fingerprints when the line is read, up to one poll after the step, so
+                    // a step that starts in between counts toward this one; fine at agent speed.
+                    let folder = studio_core::fingerprint_folder(&text);
+                    let change = folder.and_then(|folder| fingerprints.take(Path::new(&folder)));
+                    outputs.extend(studio.apply_with_change(&text, change));
                 } else {
                     studio.replay(&text);
                 }
