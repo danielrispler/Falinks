@@ -10,4 +10,8 @@ code { font: 13px ui-monospace, Menlo, monospace; background: var(--code); borde
        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 code:empty { display: none; }
 .empty { color: var(--muted); margin: 0; }
+.cards-title { margin-top: 20px; }
+.card { background: var(--code); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; }
+.card summary { font-weight: 600; cursor: pointer; }
+.answer { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 [hidden] { display: none !important; }

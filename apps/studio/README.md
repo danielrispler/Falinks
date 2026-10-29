@@ -1,10 +1,11 @@
 # Studio
 
-The control room's app (map #266, spec #328), for macOS. This version shows one line in its pane: the last step of the Claude Code session you prompted last, live.
+The control room's app (map #266, spec #328), for macOS. This version's pane follows the Claude Code session you prompted last: its last step, live, and a card on the first Edit or Write of each wait. A card shows its question; tap it for the answer. A fake card writer writes the cards for now, and they are kept only until the app quits.
 
 - `plugin/`: the Claude Code plugin. On ten hook events it runs `studio-hook`.
 - `hook/`: `studio-hook`, which appends each hook payload as one line to the event log, and the log's path.
-- `core/`: the studio core, plain Rust with no I/O. The app replays the whole log through it at start, then feeds it each new line.
+- `core/`: the studio core, plain Rust with no I/O. The app replays the whole log through it at start, then feeds it each new line live. Only live lines request cards.
+- `understanding/`: the understanding layer's I/O: the card writer interface and its fake.
 - `src-tauri/`: the app's Rust shell. `ui/`: its TypeScript pane.
 
 ## Build

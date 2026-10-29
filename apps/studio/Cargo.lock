@@ -2887,6 +2887,7 @@ version = "0.0.0"
 dependencies = [
  "studio-core",
  "studio-hook",
+ "studio-understanding",
  "tauri",
  "tauri-build",
 ]
@@ -2904,6 +2905,14 @@ name = "studio-hook"
 version = "0.0.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "studio-understanding"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "studio-core",
 ]
 
 [[package]]

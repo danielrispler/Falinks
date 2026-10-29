@@ -1,8 +1,10 @@
-// The side pane: the "now" line of the session Daniel prompted last. The core decides what it shows;
-// this file only draws what the shell sends, on load and on each "now" event.
+// The side pane: the "now" line of the session Daniel prompted last, and its cards. The core decides
+// what it shows; this file only draws what the shell sends, on load and on each "now" or "cards" event.
 
 type Step = { tool: string; detail: string | null };
 type Session = { id: string; cwd: string; last_step: Step | null };
+type CardRequest = { session_id: string; tool_use_id: string; step: Step; change: string };
+type Card = { question: string; answer: string };
 
 declare global {
   interface Window {
@@ -26,7 +28,35 @@ function show(session: Session | null) {
   element("detail").textContent = session.last_step?.detail ?? "";
 }
 
+// Each card is a <details>: its question shows, and a tap reveals the answer. Cards already drawn are
+// kept, keyed by their step's tool_use_id, so one Daniel opened stays open on the next event.
+function showCards(cards: [CardRequest, Card][]) {
+  const list = element("cards");
+  const ids = new Set(cards.map(([request]) => request.tool_use_id));
+  const drawn = new Set<string>();
+  for (const node of [...list.children] as HTMLElement[]) {
+    if (ids.has(node.dataset.id!)) drawn.add(node.dataset.id!);
+    else node.remove();
+  }
+  for (const [request, card] of cards) {
+    if (drawn.has(request.tool_use_id)) continue;
+    const details = document.createElement("details");
+    details.className = "card";
+    details.dataset.id = request.tool_use_id;
+    const question = document.createElement("summary");
+    question.textContent = card.question;
+    const answer = document.createElement("p");
+    answer.className = "answer";
+    answer.textContent = card.answer;
+    details.append(question, answer);
+    list.prepend(details);
+  }
+  element("cards-title").hidden = cards.length === 0;
+}
+
 window.__TAURI__.event.listen<Session | null>("now", (event) => show(event.payload));
 window.__TAURI__.core.invoke<Session | null>("now").then(show);
+window.__TAURI__.event.listen<[CardRequest, Card][]>("cards", (event) => showCards(event.payload));
+window.__TAURI__.core.invoke<[CardRequest, Card][]>("cards").then(showCards);
 
 export {};
