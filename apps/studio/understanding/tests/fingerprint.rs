@@ -103,6 +103,21 @@ fn a_session_in_a_subfolder_shares_its_worktree_record() {
 }
 
 #[test]
+fn a_file_over_1_mib_is_compared_by_size_and_time_and_named_without_its_diff() {
+    let (dir, mut prints) = repo();
+    let dump = dir.path().join("dump.txt");
+    fs::write(&dump, "row\n".repeat(300_000)).unwrap();
+
+    let named = "Large file dump.txt changed\n";
+    assert_eq!(prints.take(dir.path()).as_deref(), Some(named));
+    assert_eq!(prints.take(dir.path()), None);
+
+    fs::write(&dump, "row\n".repeat(300_001)).unwrap();
+
+    assert_eq!(prints.take(dir.path()).as_deref(), Some(named));
+}
+
+#[test]
 fn a_folder_outside_git_has_no_fingerprint() {
     let dir = tempfile::tempdir().unwrap();
     let mut prints = Fingerprints::default();

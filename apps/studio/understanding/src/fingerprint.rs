@@ -1,7 +1,8 @@
 //! The worktree fingerprint (#328, module 5): the files `git status --porcelain` lists in a
 //! worktree, with their content. A step changed the worktree when a file listed before or after it
 //! has other content, or now exists or is gone. Ignored files are never listed, and a commit alone
-//! leaves every file's content as it was.
+//! leaves every file's content as it was. A file over 1 MiB is compared by size and modification
+//! time, and its diff is one line that names it, so neither the record nor the card writer gets it.
 
 use similar::TextDiff;
 use std::{
@@ -9,11 +10,31 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    time::SystemTime,
 };
 
 /// The files `git status` listed, by path from the worktree's root, with their content: `None` for
 /// a file that is gone.
-type Record = BTreeMap<String, Option<Vec<u8>>>;
+type Record = BTreeMap<String, Option<Content>>;
+
+/// A file's content, or a large file's size and modification time.
+#[derive(Clone, PartialEq)]
+enum Content {
+    Bytes(Vec<u8>),
+    Large(u64, Option<SystemTime>),
+}
+
+/// The size above which a file counts as large: 1 MiB.
+const LARGE: usize = 1 << 20;
+
+/// The file at `path`, or `None` when it is gone.
+fn read(path: &Path) -> Option<Content> {
+    let meta = fs::metadata(path).ok()?;
+    if meta.len() > LARGE as u64 {
+        return Some(Content::Large(meta.len(), meta.modified().ok()));
+    }
+    fs::read(path).ok().map(Content::Bytes)
+}
 
 /// Each worktree's latest record, by the worktree's root.
 #[derive(Default)]
@@ -42,7 +63,7 @@ impl Fingerprints {
             .filter_map(|entry| entry.get(3..))
             .map(|path| {
                 let path = String::from_utf8_lossy(path).into_owned();
-                let content = fs::read(root.join(&path)).ok();
+                let content = read(&root.join(&path));
                 (path, content)
             })
             .collect();
@@ -53,12 +74,11 @@ impl Fingerprints {
             .into_iter()
             .filter_map(|path| {
                 // A file one record does not list was clean then: committed before, on disk now.
-                let before = previous
-                    .get(path)
-                    .cloned()
-                    .unwrap_or_else(|| git(&root, &["show", &format!("HEAD:{path}")]));
+                let before = previous.get(path).cloned().unwrap_or_else(|| {
+                    git(&root, &["show", &format!("HEAD:{path}")]).map(Content::Bytes)
+                });
                 let after = record.get(path).cloned();
-                let after = after.unwrap_or_else(|| fs::read(root.join(path)).ok());
+                let after = after.unwrap_or_else(|| read(&root.join(path)));
                 (before != after).then(|| unified(path, before, after))
             })
             .collect();
@@ -79,8 +99,16 @@ fn git(folder: &Path, args: &[&str]) -> Option<Vec<u8>> {
 }
 
 /// One file's change as a unified diff, as `git diff` shows it.
-fn unified(path: &str, before: Option<Vec<u8>>, after: Option<Vec<u8>>) -> String {
-    let (before, after) = (before.unwrap_or_default(), after.unwrap_or_default());
+fn unified(path: &str, before: Option<Content>, after: Option<Content>) -> String {
+    // A large committed file reaches here as its bytes, from `git show`.
+    let bytes = |content: Option<Content>| match content {
+        None => Some(Vec::new()),
+        Some(Content::Bytes(bytes)) if bytes.len() <= LARGE => Some(bytes),
+        Some(_) => None,
+    };
+    let (Some(before), Some(after)) = (bytes(before), bytes(after)) else {
+        return format!("Large file {path} changed\n");
+    };
     let (Ok(before), Ok(after)) = (str::from_utf8(&before), str::from_utf8(&after)) else {
         return format!("Binary file {path} changed\n");
     };
