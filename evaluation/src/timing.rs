@@ -16,9 +16,13 @@
 //! - **Output bytes** are the file content the model wrote, scratch included. **Changed bytes**
 //!   are the lines of the agent's last version of each source file that a line diff against
 //!   its initial content does not match, read from the arm's records, not the transcript
-//!   (#325). A line in both agents' last versions of a file counts for each, and a line one
-//!   agent wrote and the other overwrote still counts for its writer. Unreadable records leave
-//!   them missing.
+//!   (#325). A changed line counts only for the agent whose operation or commit introduced
+//!   it, traced through each version's base by the same diff. A peer's lines carried in a
+//!   whole-file write, a merge or a byte-identical copy of the peer's earlier version stay
+//!   the peer's, and a merge or conflict resolution introduces no one's. A line one agent wrote and the other rewrote counts twice: the
+//!   original for its writer, in the writer's last version, and the rewrite for the rewriter.
+//!   A changed line traced to the initial file (a moved line) is the holder's. Unreadable
+//!   records leave changed bytes missing.
 //! - **Refusal recovery** (#193 decision 9), per output form of a refused Falinks `edit`,
 //!   `retry` or `incorporate`: the round-trips after it, and their model seconds, up to and
 //!   including the agent's next accepted one. Refusals inside an open recovery belong to it, so
@@ -31,7 +35,7 @@
 //!   The **edit gate** is the tool time of accepted source writes, with its mean per accepted
 //!   write. Both are transcript-side, so parallel calls make them approximate too; host and
 //!   edit-gate instrumentation (#178's I-2) is not read.
-use crate::{Result, bail, blobs, fixture, read};
+use crate::{Result, bail, blobs, fixture, git, read};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -266,11 +270,13 @@ fn scratch(path: &str) -> bool {
     path.split('/').any(|part| part == "scratch")
 }
 
-/// Bytes of the lines in `new` that a longest-common-subsequence line diff leaves unmatched
-/// in `old`.
-pub fn changed_bytes(old: &str, new: &str) -> usize {
-    let a: Vec<&str> = old.split_inclusive('\n').collect();
-    let b: Vec<&str> = new.split_inclusive('\n').collect();
+fn lines(text: &str) -> Vec<&str> {
+    text.split_inclusive('\n').collect()
+}
+
+/// For each line of `b`, the line of `a` that a longest-common-subsequence line diff matches
+/// it to.
+fn matches(a: &[&str], b: &[&str]) -> Vec<Option<usize>> {
     let mut lcs = vec![vec![0usize; b.len() + 1]; a.len() + 1];
     for i in (0..a.len()).rev() {
         for j in (0..b.len()).rev() {
@@ -281,18 +287,66 @@ pub fn changed_bytes(old: &str, new: &str) -> usize {
             };
         }
     }
-    let (mut i, mut j, mut changed) = (0, 0, 0);
+    let (mut i, mut j, mut matched) = (0, 0, vec![None; b.len()]);
     while j < b.len() {
         if i < a.len() && a[i] == b[j] {
+            matched[j] = Some(i);
             (i, j) = (i + 1, j + 1);
         } else if i < a.len() && lcs[i + 1][j] >= lcs[i][j + 1] {
             i += 1;
         } else {
-            changed += b[j].len();
             j += 1;
         }
     }
-    changed
+    matched
+}
+
+/// The changed lines of `new`, by index: those a longest-common-subsequence line diff leaves
+/// unmatched in `old`. Changed bytes are their bytes.
+fn changed_lines<'a>(old: &str, new: &'a str) -> Vec<(usize, &'a str)> {
+    let new = lines(new);
+    let matched = matches(&lines(old), &new);
+    new.into_iter()
+        .enumerate()
+        .zip(matched)
+        .filter_map(|(line, m)| m.is_none().then_some(line))
+        .collect()
+}
+
+/// Who introduced a line.
+#[derive(Clone, Debug, PartialEq)]
+enum Origin {
+    Initial,
+    Agent(String),
+    /// A merge or conflict resolution, or a base no record shows.
+    Nobody,
+}
+
+/// The origin of each line of every file version seen, keyed by path and text.
+#[derive(Default)]
+struct Blame(BTreeMap<(String, String), Vec<Origin>>);
+
+impl Blame {
+    /// `text` at `path`, written by `author` over `bases`: a line the diff matches in a base
+    /// keeps that line's origin, the first base first; every other line is the author's. A
+    /// text seen before keeps its first origins, so a whole copy of a peer's file is the peer's.
+    fn version(&mut self, path: &str, author: Origin, bases: &[String], text: String) {
+        let key = |text: &String| (path.to_string(), text.clone());
+        if self.0.contains_key(&key(&text)) {
+            return;
+        }
+        let new = lines(&text);
+        let mut origins = vec![author; new.len()];
+        for base in bases.iter().rev() {
+            let known = self.0.get(&key(base));
+            for (j, i) in matches(&lines(base), &new).into_iter().enumerate() {
+                if let Some(i) = i {
+                    origins[j] = known.map_or(Origin::Nobody, |k| k[i].clone());
+                }
+            }
+        }
+        self.0.insert(key(&text), origins);
+    }
 }
 
 /// One agent's figures from its stream-json events, sessions concatenated.
@@ -494,27 +548,86 @@ fn agent(events: &[Value], bash_writes_source: bool, clock: (Option<f64>, Option
     figures
 }
 
-/// Per agent, the changed bytes of its last version of every file it changed, read from the
-/// arm's records (#325), not the transcript. A Falinks agent's versions are its applied
-/// operations in `controller/history.json`, each output path's resolved bytes after the
-/// operation. A Git agent's are its last shared commit (`controller/events.jsonl`) in
-/// `agents/repo`; work it never shared counts nothing.
+/// Per agent, the changed bytes of its last version of every file it changed that it
+/// introduced itself, read from the arm's records (#325), not the transcript.
+///
+/// - A Falinks agent's versions are its applied operations in `controller/history.json`: each
+///   output path's resolved file in the operation's exact `before` and `proposed` revisions.
+/// - A Git agent's last version is its last shared commit (`controller/events.jsonl`) in
+///   `agents/repo`; work it never shared counts nothing. Its own commits are those on the
+///   first-parent line of its shares, first sharer first. A merge introduces no one's lines,
+///   so a conflict resolution counts for no one; an integration commit reached only through
+///   a merge has no author.
 fn changed(run: &Path, arm: &str, files: &Map<String, Value>) -> Result<BTreeMap<String, usize>> {
-    let mut last = BTreeMap::<(String, String), Vec<u8>>::new();
+    let mut blame = Blame::default();
+    for (path, text) in files {
+        blame.version(
+            path,
+            Origin::Initial,
+            &[],
+            text.as_str().unwrap_or("").into(),
+        );
+    }
+    let mut last = BTreeMap::<(String, String), String>::new();
     if arm == "git" {
+        let repo = run.join("agents/repo");
         let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
-        let mut shares = BTreeMap::new();
-        for event in jsonl(&run.join("controller/events.jsonl"))? {
-            if event["kind"] == "draft_shared" {
-                shares.insert(text(&event["agent"]), text(&event["commit"]));
+        let shares: Vec<(String, String)> = jsonl(&run.join("controller/events.jsonl"))?
+            .iter()
+            .filter(|event| event["kind"] == "draft_shared")
+            .map(|event| (text(&event["agent"]), text(&event["commit"])))
+            .collect();
+        let mut owners = BTreeMap::new();
+        for (agent, share) in &shares {
+            for commit in git(&repo, &["rev-list", "--first-parent", share], None)?.lines() {
+                owners.entry(commit.to_string()).or_insert(agent.clone());
             }
         }
-        for (agent, commit) in shares {
-            for (path, bytes) in blobs(&run.join("agents/repo"), &commit)? {
-                last.insert((agent.clone(), path), bytes);
+        let mut trees = BTreeMap::<String, BTreeMap<String, String>>::new();
+        // Share by share, in order, so a text shared earlier keeps its authorship.
+        let mut commits = vec![];
+        for (_, share) in &shares {
+            let args = ["rev-list", "--topo-order", "--reverse", "--parents", share];
+            commits.extend(git(&repo, &args, None)?.lines().map(String::from));
+        }
+        for line in &commits {
+            let (commit, parents) = line.split_once(' ').unwrap_or((line, ""));
+            let parents: Vec<&str> = parents.split_whitespace().collect();
+            if trees.contains_key(commit) {
+                continue;
+            }
+            // The initial commit has no parent; a merge introduces no one's lines.
+            let author = match (parents.len(), owners.get(commit)) {
+                (0, _) => Origin::Initial,
+                (1, Some(agent)) => Origin::Agent(agent.clone()),
+                _ => Origin::Nobody,
+            };
+            let tree: BTreeMap<String, String> = blobs(&repo, commit)?
+                .into_iter()
+                .map(|(path, bytes)| (path, String::from_utf8_lossy(&bytes).into_owned()))
+                .collect();
+            for (path, text) in &tree {
+                let bases: Vec<String> = parents
+                    .iter()
+                    .map(|p| trees[*p].get(path).cloned().unwrap_or_default())
+                    .collect();
+                blame.version(path, author.clone(), &bases, text.clone());
+            }
+            trees.insert(commit.to_string(), tree);
+        }
+        let last_shares: BTreeMap<String, String> = shares.into_iter().collect();
+        for (agent, share) in last_shares {
+            for (path, text) in &trees[&share] {
+                last.insert((agent.clone(), path.clone()), text.clone());
             }
         }
     } else {
+        // A path absent from a revision, or deleted, is empty.
+        let file = |v: &Value| {
+            let bytes = v["file"]["bytes"].as_array().into_iter().flatten();
+            let bytes: Vec<u8> = bytes.filter_map(Value::as_u64).map(|b| b as u8).collect();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
         let history = read(run.join("controller/history.json"))?;
         for record in history.as_array().into_iter().flatten() {
             if record["outcome"].get("Applied").is_none() {
@@ -526,19 +639,28 @@ fn changed(run: &Path, arm: &str, files: &Map<String, Value>) -> Result<BTreeMap
                 .into_iter()
                 .flatten()
             {
-                // A deleted path has no file in the proposed revision: it ends empty.
-                let bytes = record["proposed"]["files"][path]["file"]["bytes"].as_array();
-                let bytes = bytes.into_iter().flatten().filter_map(Value::as_u64);
-                let bytes = bytes.map(|b| b as u8).collect();
-                last.insert((agent.clone(), path.clone()), bytes);
+                let base = file(&record["before"]["files"][path]);
+                let text = file(&record["proposed"]["files"][path]);
+                blame.version(path, Origin::Agent(agent.clone()), &[base], text.clone());
+                last.insert((agent.clone(), path.clone()), text);
             }
         }
     }
     let mut changed = BTreeMap::new();
-    for ((agent, path), bytes) in last {
+    for ((agent, path), text) in last {
         let initial = files.get(&path).and_then(Value::as_str).unwrap_or("");
-        *changed.entry(agent).or_insert(0) +=
-            changed_bytes(initial, &String::from_utf8_lossy(&bytes));
+        let origins = &blame.0[&(path, text.clone())];
+        // A changed line traced to the initial file is the holder's: no peer wrote it.
+        let own: usize = changed_lines(initial, &text)
+            .into_iter()
+            .filter(|(j, _)| match &origins[*j] {
+                Origin::Initial => true,
+                Origin::Agent(author) => *author == agent,
+                Origin::Nobody => false,
+            })
+            .map(|(_, line)| line.len())
+            .sum();
+        *changed.entry(agent).or_insert(0) += own;
     }
     Ok(changed)
 }
@@ -673,10 +795,32 @@ mod tests {
 
     #[test]
     fn changed_bytes_count_unmatched_new_lines() {
+        let changed_bytes = |old: &str, new: &str| -> usize {
+            changed_lines(old, new).iter().map(|(_, l)| l.len()).sum()
+        };
         assert_eq!(changed_bytes("a\nb\nc\n", "a\nb\nc\n"), 0);
         assert_eq!(changed_bytes("a\nb\nc\n", "a\nx\nc\nd\n"), 4);
         assert_eq!(changed_bytes("", "abc"), 3);
         assert_eq!(changed_bytes("a\nb\n", ""), 0);
+    }
+
+    #[test]
+    fn a_copied_version_keeps_its_first_authorship() {
+        let mut blame = Blame::default();
+        let b = Origin::Agent("B".into());
+        blame.version("a.go", Origin::Initial, &[], "a\n".into());
+        blame.version("a.go", b.clone(), &["a\n".into()], "a\nb\n".into());
+        // A copies B's file whole, with no merge: "b\n" stays B's.
+        blame.version(
+            "a.go",
+            Origin::Agent("A".into()),
+            &["a\n".into()],
+            "a\nb\n".into(),
+        );
+        assert_eq!(
+            blame.0[&("a.go".into(), "a\nb\n".into())],
+            [Origin::Initial, b]
+        );
     }
 
     #[test]

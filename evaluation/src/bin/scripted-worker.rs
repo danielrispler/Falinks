@@ -73,9 +73,10 @@ fn main() {
             fake_judge(&args)
         }
         Some("-p") => fake_claude(&args),
-        Some("rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4") => {
-            fake_arm(&args)
-        }
+        Some(
+            "rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4"
+            | "go-tasks",
+        ) => fake_arm(&args),
         other => panic!("unknown mode {other:?}"),
     }
 }
@@ -452,6 +453,8 @@ fn fake_claude(argv: &[String]) {
         send(json!({"type": "assistant", "message": {"model": "scripted",
             "content": [{"type": "thinking", "thinking": "hidden"}, {"type": "text", "text": "done"}]}}));
         if let Some(session) = &session {
+            // The real runtime creates its own project folder; only a runtime home pre-creates it.
+            fs::create_dir_all(session.parent().unwrap()).unwrap();
             let mut file = fs::OpenOptions::new()
                 .create(true)
                 .append(true)

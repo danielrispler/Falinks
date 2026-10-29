@@ -416,8 +416,14 @@ the agent's session file, checked at every `result`, since only that file record
     lines of its last version of each file that a line diff against the initial content
     does not match. A Falinks agent's last version is its last applied operation's
     (`controller/history.json`); a Git agent's is its last shared commit
-    (`controller/events.jsonl`, `agents/repo`). A line in both agents' last versions counts
-    for each, and a line one agent wrote and the other overwrote counts for its writer.
+    (`controller/events.jsonl`, `agents/repo`). A changed line counts only for the agent
+    whose operation (each applied operation's exact `before` and `proposed` revisions) or
+    commit (its own, on its shares' first-parent line) introduced it. A peer's lines carried
+    in a whole-file write, a merge or a byte-identical copy of the peer's earlier version
+    count only for the peer; a merge or conflict resolution introduces no one's lines. A line one agent wrote and the other rewrote counts for both:
+    the original for its writer, in the writer's last version, and the rewrite for the
+    rewriter. A changed line traced to the initial file (a moved line) counts for the agent
+    whose version holds it.
     Tool seconds of calls made in parallel in one message overlap, so these are approximate.
     The definitions and heuristics are in
     `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
