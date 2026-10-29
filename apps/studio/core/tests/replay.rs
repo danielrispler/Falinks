@@ -7,7 +7,7 @@ use studio_core::{Step, Studio};
 fn replay(log: &str) -> Studio {
     let mut studio = Studio::default();
     for line in log.lines() {
-        studio.apply(line);
+        studio.replay(line);
     }
     studio
 }
