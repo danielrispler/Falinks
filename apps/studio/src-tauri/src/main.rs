@@ -1,20 +1,20 @@
 //! The studio app's shell (#328, module 9). At start it replays the whole event log through the
 //! core, then feeds it each new line live and hands the core's card requests to the card writer. The
 //! pane shows the session Daniel prompted last, the guess prompt on its check, and its cards, which
-//! the card store keeps on disk; a
-//! session that newly needs Daniel gets a macOS notification while the window is not focused.
+//! the card store keeps on disk; a session that newly needs Daniel gets a macOS notification while
+//! the window is not focused.
 
 use std::{
     fs::{self, File},
-    io::{BufRead, BufReader, Seek, SeekFrom},
+    io::{self, BufRead, BufReader, Seek, SeekFrom},
     path::Path,
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, UNIX_EPOCH},
+    time::Duration,
 };
 use studio_core::{Output, Session, Studio};
 use studio_understanding::{
-    CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, StoredCard, find_claude,
+    CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, StoredCard, find_claude, millis,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -46,22 +46,20 @@ fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<StoredCard> {
 /// The pane drew the question of the card on step `tool_use_id` in a visible window.
 #[tauri::command]
 fn shown(tool_use_id: String, cards: State<Cards>) {
-    if let Err(e) = cards.lock().unwrap().show(&tool_use_id, millis()) {
-        eprintln!("studio: save the card store: {e}");
-    }
+    unsaved(cards.lock().unwrap().show(&tool_use_id, millis()));
 }
 
 /// Daniel revealed the answer of the card on step `tool_use_id`.
 #[tauri::command]
 fn reveal(tool_use_id: String, cards: State<Cards>) {
-    if let Err(e) = cards.lock().unwrap().reveal(&tool_use_id, millis()) {
-        eprintln!("studio: save the card store: {e}");
-    }
+    unsaved(cards.lock().unwrap().reveal(&tool_use_id, millis()));
 }
 
-/// Now, in Unix milliseconds, as the card store's records keep time.
-fn millis() -> u64 {
-    UNIX_EPOCH.elapsed().unwrap_or_default().as_millis() as u64
+/// Logs a card store change that could not be saved; it stays in memory until the next save.
+fn unsaved(saved: io::Result<()>) {
+    if let Err(e) = saved {
+        eprintln!("studio: save the card store: {e}");
+    }
 }
 
 /// Daniel tapped yes or no on "Will it pass?" for check `tool_use_id`.
@@ -79,7 +77,7 @@ type Writer = Arc<dyn CardWriter + Send + Sync>;
 fn main() {
     let log = studio_hook::event_log(&std::env::home_dir().expect("a home directory"));
     // The store sits beside the log, in the studio's data directory.
-    let store = CardStore::open(log.with_file_name("cards.json")).expect("read the card store");
+    let store = CardStore::open_beside(&log).expect("read the card store");
     // The card writer's neutral folder, beside the log. Claude Code reports `cwd` with symlinks
     // resolved, so the core gets the folder resolved too.
     let folder = log.with_file_name("card-writer");
@@ -131,22 +129,23 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
             let mut outputs = Vec::new();
             let read_from = read_to;
             let state = app.state::<Mutex<Studio>>();
-            let mut studio = state.lock().unwrap();
+            // The core is locked per line, and not while the fingerprint runs `git`, so the pane's
+            // commands do not wait on it.
             while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 && line.ends_with(b"\n") {
                 read_to += line.len() as u64;
                 let text = String::from_utf8_lossy(&line);
                 if live {
                     // shortcut: fingerprints when the line is read, up to one poll after the step, so
-                    // a step that starts in between counts toward this one; fine at agent speed.
+                    // a step that starts in between counts toward this one; take the fingerprint in
+                    // the hook if a card ever explains the wrong step.
                     let folder = studio_core::fingerprint_folder(&text);
                     let change = folder.and_then(|folder| fingerprints.take(Path::new(&folder)));
-                    outputs.extend(studio.apply_with_change(&text, change));
+                    outputs.extend(state.lock().unwrap().apply_with_change(&text, change));
                 } else {
-                    studio.replay(&text);
+                    state.lock().unwrap().replay(&text);
                 }
                 line.clear();
             }
-            drop(studio);
             for output in outputs {
                 match output {
                     // `claude -p` takes seconds, so each card is written on its own thread and shown
@@ -157,14 +156,8 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                             let Some(card) = writer.write(&request) else {
                                 return;
                             };
-                            let added =
-                                app.state::<Cards>()
-                                    .lock()
-                                    .unwrap()
-                                    .add(request, card, millis());
-                            if let Err(e) = added {
-                                eprintln!("studio: save the card store: {e}");
-                            }
+                            let store = app.state::<Cards>();
+                            unsaved(store.lock().unwrap().add(request, card, millis()));
                             let _ = app.emit("cards", cards(app.state(), app.state()));
                         });
                     }

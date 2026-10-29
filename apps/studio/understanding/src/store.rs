@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
 };
 use studio_core::CardRequest;
 
@@ -45,6 +46,11 @@ pub enum Outcome {
     NotCounted,
 }
 
+/// Now, in Unix milliseconds, as the store's records keep time.
+pub fn millis() -> u64 {
+    UNIX_EPOCH.elapsed().unwrap_or_default().as_millis() as u64
+}
+
 /// The store's cards, kept in memory and written to its file on each change.
 // shortcut: rewrites the whole file on each change, which suits a few cards a day; switch to
 // appended lines if it grows to thousands of cards.
@@ -63,6 +69,11 @@ impl CardStore {
             Err(e) => return Err(e),
         };
         Ok(CardStore { path, cards })
+    }
+
+    /// Reads the store the app keeps beside the event log `log`, in the studio's data directory.
+    pub fn open_beside(log: &Path) -> io::Result<Self> {
+        Self::open(log.with_file_name("cards.json"))
     }
 
     /// The cards, oldest first.
