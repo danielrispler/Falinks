@@ -18,6 +18,22 @@ pub struct StoredCard {
     pub card: Card,
     /// Unix milliseconds; `None` while the card shows only its question.
     pub revealed_at: Option<u64>,
+    /// For a check: whether it passed, as settled; `None` when unknown, and for other steps.
+    #[serde(default)]
+    pub passed: Option<bool>,
+    /// For a check: how Daniel's guess settled. Recorded, never shown.
+    #[serde(default)]
+    pub outcome: Option<Outcome>,
+}
+
+/// How a guess settled (#328, module 4, "Settling a guess").
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Right,
+    Wrong,
+    /// No tap before the result, or a check whose verdict is unknown.
+    NotCounted,
 }
 
 /// The store's cards, kept in memory and written to its file on each change.
@@ -45,12 +61,23 @@ impl CardStore {
         &self.cards
     }
 
-    /// Adds a new card, which shows its question first, and saves the store.
+    /// Adds a new card, which shows its question first, and saves the store. A check's card settles
+    /// its guess: the exit code says whether it passed when it counts, and otherwise the card
+    /// writer's `passed` does.
     pub fn add(&mut self, request: CardRequest, card: Card) -> io::Result<()> {
+        let check = request.check.as_ref();
+        let passed = check.and_then(|check| check.exit_passed.or(card.passed));
+        let outcome = check.map(|check| match (check.guess, passed) {
+            (Some(guess), Some(passed)) if guess == passed => Outcome::Right,
+            (Some(_), Some(_)) => Outcome::Wrong,
+            _ => Outcome::NotCounted,
+        });
         self.cards.push(StoredCard {
             request,
             card,
             revealed_at: None,
+            passed,
+            outcome,
         });
         self.save()
     }

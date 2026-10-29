@@ -6,7 +6,7 @@ use std::{path::PathBuf, process::Command};
 use studio_core::CardRequest;
 
 mod store;
-pub use store::{CardStore, StoredCard};
+pub use store::{CardStore, Outcome, StoredCard};
 
 /// A card on one step, in Hebrew; code stays in English, and code inside the Hebrew text is in
 /// backticks. It opens with the question; the rest shows when Daniel taps.
@@ -25,6 +25,15 @@ pub struct Card {
     pub why_it_matters: String,
     #[serde(default)]
     pub not_checked: String,
+    /// For a check: whether its output shows it passed. `None` when the writer answers "unknown",
+    /// and for other steps.
+    #[serde(default, deserialize_with = "verdict")]
+    pub passed: Option<bool>,
+}
+
+/// `true` or `false`; anything else, such as `"unknown"`, is no verdict.
+fn verdict<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<bool>, D::Error> {
+    Ok(serde_json::Value::deserialize(value)?.as_bool())
 }
 
 impl Card {
@@ -59,6 +68,7 @@ impl CardWriter for FakeWriter {
             code: request.change.clone(),
             why_it_matters: "כאן יופיע למה הצעד חשוב, עם קוד בתוך הטקסט כמו `if a <= b {`.".into(),
             not_checked: "לא נבדק: כלום, זה כרטיס לדוגמה.".into(),
+            passed: None,
         })
     }
 }
@@ -79,8 +89,13 @@ impl ClaudeWriter {
     pub fn command(&self, request: &CardRequest) -> Command {
         let step = &request.step;
         let detail = step.detail.as_deref().unwrap_or_default();
+        // A check's input is its command and its result, not a change.
+        let (check, input) = match request.check {
+            Some(_) => (CHECK, "Result"),
+            None => ("", "Change"),
+        };
         let prompt = format!(
-            "{PROMPT}\nStep: {} {detail}\nChange:\n{}",
+            "{PROMPT}{check}\nStep: {} {detail}\n{input}:\n{}",
             step.tool, request.change
         );
         let mut command = Command::new("claude");
@@ -123,4 +138,10 @@ Reply with one JSON object and nothing else:
 - code: the lines of the change that matter most, copied from it, at most 12.
 - why_it_matters: what the step changes for the code, in one or two sentences.
 - not_checked: one thing the step's result does not show.
+"#;
+
+/// What the card writer adds for a check: its verdict, which settles Daniel's guess (#328, module 4).
+const CHECK: &str = r#"
+This step is a check: a command that tests the code. The input below is its command and its output, not a change. For paths, give the files the output names; for code, the output lines that matter most.
+Add one more key, "passed": true if the output shows the check passed, false if it shows it failed, or "unknown" if it shows neither.
 "#;

@@ -23,6 +23,8 @@ pub struct Session {
     pub cwd: String,
     pub last_step: Option<Step>,
     pub state: State,
+    /// The open guess prompt: its check started and its result has not arrived.
+    pub guess: Option<GuessPrompt>,
     /// The tool calls whose `PreToolUse` landed and whose `PostToolUse` has not.
     #[serde(skip)]
     running: Vec<Call>,
@@ -78,8 +80,22 @@ pub struct Step {
 pub enum Output {
     /// A card step finished; ask the card writer.
     Card(CardRequest),
+    /// A check that is the wait's card step started: ask "Will it pass?".
+    Guess(GuessPrompt),
     /// A session newly needs Daniel.
     NeedsYou { session_id: String },
+}
+
+/// "Will it pass?" on a check that is the wait's card step (#328, module 3, "Guesses"). It is open
+/// from the check's `PreToolUse` until its result arrives.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GuessPrompt {
+    pub session_id: String,
+    pub tool_use_id: String,
+    /// The check's command, which the prompt shows.
+    pub step: Step,
+    /// Daniel's tap: whether he guessed the check will pass. `None` until he taps.
+    pub tap: Option<bool>,
 }
 
 /// A finished card step, with what the card writer needs: the step's change, not the whole payload.
@@ -90,8 +106,21 @@ pub struct CardRequest {
     /// The step's tool call, which names the card.
     pub tool_use_id: String,
     pub step: Step,
-    /// The diff lines of an edit, or a new file's content as added lines.
+    /// The diff lines of an edit, or a new file's content as added lines; a check's output.
     pub change: String,
+    /// What settles the guess on a check, with the card writer's verdict; `None` for other steps.
+    #[serde(default)]
+    pub check: Option<Check>,
+}
+
+/// A check's guess and exit code (#328, module 4, "Settling a guess").
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Check {
+    /// Daniel's tap: whether he guessed it would pass. `None` when he did not tap before the result.
+    pub guess: Option<bool>,
+    /// Whether the command exited 0, when that says whether the check passed: the command has no
+    /// pipe or sets `pipefail`, and it ran. `None` otherwise.
+    pub exit_passed: Option<bool>,
 }
 
 /// One tool call: its `tool_use_id`, and its tool and input, which are all `PermissionRequest`
@@ -117,6 +146,9 @@ struct Event {
     tool_use_id: String,
     #[serde(default)]
     tool_response: Value,
+    /// A failed call's error, which for a command that ran holds its exit code and output.
+    #[serde(default)]
+    error: String,
     #[serde(default)]
     last_assistant_message: String,
     #[serde(default)]
@@ -177,6 +209,41 @@ fn is_card_step(tool: &str, input: &Value) -> bool {
     matches!(tool, "Edit" | "Write") && !plan_file
 }
 
+/// A command that runs a check from the check list (#328, module 3): `cargo
+/// test|nextest|clippy|check|build`, `ci-checks`, `go test|vet`. Quoted text is not run, so a PR
+/// body that names `cargo test` is no check.
+// shortcut: every session uses the Falinks list; take each project's list from the shell once
+// projects exist.
+fn is_check(command: &str) -> bool {
+    let mut quote = None;
+    let unquoted: String = command
+        .chars()
+        .map(|c| {
+            match quote {
+                None if c == '\'' || c == '"' => quote = Some(c),
+                None => return c,
+                Some(open) if c == open => quote = None,
+                Some(_) => {}
+            }
+            ' '
+        })
+        .collect();
+    let words: Vec<&str> = unquoted
+        .split(|c: char| c.is_whitespace() || ";&|()".contains(c))
+        .filter(|word| !word.is_empty())
+        .collect();
+    words
+        .iter()
+        .any(|word| word.rsplit('/').next() == Some("ci-checks"))
+        || words.windows(2).any(|pair| {
+            matches!(
+                pair,
+                ["cargo", "test" | "nextest" | "clippy" | "check" | "build"]
+                    | ["go", "test" | "vet"]
+            )
+        })
+}
+
 /// An edit's change from its result: the patch's hunks, or a new file's content, which has none.
 fn change(response: &Value) -> String {
     let hunks = response["structuredPatch"].as_array().into_iter().flatten();
@@ -198,6 +265,24 @@ fn change(response: &Value) -> String {
     content.map(|line| format!("+{line}\n")).collect()
 }
 
+/// A finished command's output, or its error when it failed.
+fn output(response: &Value, error: &str) -> String {
+    if !error.is_empty() {
+        return error.into();
+    }
+    let streams = [&response["stdout"], &response["stderr"]];
+    let streams = streams
+        .iter()
+        .filter_map(|s| s.as_str().filter(|s| !s.is_empty()));
+    streams.collect::<Vec<_>>().join("\n")
+}
+
+/// Whether a check's exit code says whether it passed (#328, module 4): only when the command has no
+/// pipe or sets `pipefail`, since a pipe exits with its last command's code. `||` is no pipe.
+fn exit_code_counts(command: &str) -> bool {
+    command.contains("pipefail") || !command.replace("||", "").contains('|')
+}
+
 impl Studio {
     /// Takes one live event log line and returns what the shell must do. A line that is not a hook
     /// event is skipped.
@@ -216,6 +301,7 @@ impl Studio {
                 cwd: String::new(),
                 last_step: None,
                 state: State::Working,
+                guess: None,
                 running: Vec::new(),
                 blocks: Vec::new(),
                 asked: false,
@@ -235,9 +321,12 @@ impl Studio {
                 self.prompted_last = Some(event.session_id.clone());
                 session.unblock();
                 session.turn_ended = false;
+                session.guess = None;
             }
+            // A turn that ended ran all its calls, so a prompt still open lost its result.
             "Stop" => {
                 self.awaiting_card.remove(&event.session_id);
+                session.guess = None;
                 // The order on `Stop`: clear every block first, then ask if the message asks.
                 session.unblock();
                 session.turn_ended = true;
@@ -249,13 +338,30 @@ impl Studio {
             "SessionEnd" => {
                 session.unblock();
                 session.turn_ended = true;
+                session.guess = None;
             }
             "PreToolUse" => {
-                let detail = step_detail(&event.tool_input, &event.cwd);
-                session.last_step = Some(Step {
+                let step = Step {
                     tool: tool.clone(),
-                    detail,
-                });
+                    detail: step_detail(&event.tool_input, &event.cwd),
+                };
+                session.last_step = Some(step.clone());
+                // A check is the wait's card step from its start, so its prompt comes before its
+                // result.
+                let command = event.tool_input["command"].as_str().unwrap_or_default();
+                if tool == "Bash"
+                    && is_check(command)
+                    && self.awaiting_card.remove(&event.session_id)
+                {
+                    let prompt = GuessPrompt {
+                        session_id: event.session_id.clone(),
+                        tool_use_id: event.tool_use_id.clone(),
+                        step,
+                        tap: None,
+                    };
+                    session.guess = Some(prompt.clone());
+                    outputs.push(Output::Guess(prompt));
+                }
                 let call = Call {
                     id,
                     tool,
@@ -308,17 +414,37 @@ impl Studio {
             "PostToolUse" | "PostToolUseFailure" => {
                 session.running.retain(|c| c.id != id);
                 session.blocks.retain(|c| c.id != id);
-                // Only a step that succeeded counts: a failed Edit or Write changed nothing.
-                if event.hook_event_name == "PostToolUse"
+                let failed = event.hook_event_name == "PostToolUseFailure";
+                let guessed = session
+                    .guess
+                    .take_if(|p| p.tool_use_id == event.tool_use_id);
+                // A check gets its card whether it passed or failed. A denied or interrupted
+                // command did not run, and its error has no exit code.
+                let card = if let Some(prompt) = guessed {
+                    let command = event.tool_input["command"].as_str().unwrap_or_default();
+                    let ran = !failed || event.error.starts_with("Exit code");
+                    let check = Check {
+                        guess: prompt.tap,
+                        exit_passed: (ran && exit_code_counts(command)).then_some(!failed),
+                    };
+                    Some((output(&event.tool_response, &event.error), Some(check)))
+                // Only an edit that succeeded counts: a failed Edit or Write changed nothing.
+                } else if !failed
                     && is_card_step(&tool, &event.tool_input)
                     && self.awaiting_card.remove(&event.session_id)
                 {
+                    Some((change(&event.tool_response), None))
+                } else {
+                    None
+                };
+                if let Some((change, check)) = card {
                     let detail = step_detail(&event.tool_input, &event.cwd);
                     outputs.push(Output::Card(CardRequest {
                         session_id: event.session_id.clone(),
                         tool_use_id: event.tool_use_id,
                         step: Step { tool, detail },
-                        change: change(&event.tool_response),
+                        change,
+                        check,
                     }));
                 }
             }
@@ -349,6 +475,16 @@ impl Studio {
     /// come from the writer's own `claude -p` sessions and are dropped.
     pub fn set_card_writer_folder(&mut self, folder: &str) {
         self.card_writer_folder = Some(folder.into());
+    }
+
+    /// Daniel's tap, yes or no, on the guess prompt of check `tool_use_id`, a fact from the shell. A
+    /// tap after the check's result arrived finds no open prompt, so that guess stays none. The
+    /// first tap counts.
+    pub fn guess(&mut self, tool_use_id: &str, will_pass: bool) {
+        let open = self.sessions.values_mut().filter_map(|s| s.guess.as_mut());
+        for prompt in open.filter(|p| p.tool_use_id == tool_use_id) {
+            prompt.tap.get_or_insert(will_pass);
+        }
     }
 
     pub fn session(&self, id: &str) -> Option<&Session> {

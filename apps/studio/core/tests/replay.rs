@@ -121,6 +121,7 @@ fn a_waits_first_edit_gets_a_card_and_its_later_edits_do_not() {
                 "+    [\"pattern\", \"url\", \"query\", \"description\", \"prompt\"]\n",
             )
             .into(),
+            check: None,
         }]
     );
 }

@@ -4,8 +4,16 @@
 
 type Step = { tool: string; detail: string | null };
 type SessionState = "working" | "needs_you" | "your_turn";
-type Session = { id: string; cwd: string; last_step: Step | null; state: SessionState };
-type CardRequest = { session_id: string; tool_use_id: string; step: Step; change: string };
+type GuessPrompt = { session_id: string; tool_use_id: string; step: Step; tap: boolean | null };
+type Session = {
+  id: string;
+  cwd: string;
+  last_step: Step | null;
+  state: SessionState;
+  guess: GuessPrompt | null;
+};
+type Check = { guess: boolean | null; exit_passed: boolean | null };
+type CardRequest = { session_id: string; tool_use_id: string; step: Step; change: string; check: Check | null };
 type Card = {
   question: string;
   answer: string;
@@ -14,7 +22,8 @@ type Card = {
   why_it_matters: string;
   not_checked: string;
 };
-type StoredCard = { request: CardRequest; card: Card; revealed_at: number | null };
+// The store also records how the guess settled; the pane never shows it.
+type StoredCard = { request: CardRequest; card: Card; revealed_at: number | null; passed: boolean | null };
 
 const stateLabels: Record<SessionState, string> = {
   working: "Working",
@@ -33,7 +42,34 @@ declare global {
 
 const element = (id: string) => document.getElementById(id)!;
 
+// "Will it pass?" on the check that is the wait's card step, open until its result arrives. After a
+// tap it shows which answer Daniel gave, never whether he was right.
+let openGuess: GuessPrompt | null = null;
+const taps = [
+  ["guess-yes", true],
+  ["guess-no", false],
+] as const;
+
+function showGuess(guess: GuessPrompt | null) {
+  openGuess = guess;
+  element("guess").hidden = guess === null;
+  if (guess === null) return;
+  element("guess-command").textContent = guess.step.detail ?? "";
+  for (const [id, willPass] of taps) {
+    const button = element(id) as HTMLButtonElement;
+    button.disabled = guess.tap !== null;
+    button.setAttribute("aria-pressed", String(guess.tap === willPass));
+  }
+}
+
+for (const [id, willPass] of taps) {
+  element(id).addEventListener("click", () => {
+    if (openGuess) window.__TAURI__.core.invoke("guess", { toolUseId: openGuess.tool_use_id, willPass });
+  });
+}
+
 function show(session: Session | null) {
+  showGuess(session?.guess ?? null);
   element("empty").hidden = session !== null;
   element("session").hidden = session === null;
   element("state").hidden = session === null;
@@ -63,10 +99,16 @@ function hebrew(tag: string, text: string): HTMLElement {
   return node;
 }
 
-// A card in Hebrew, right to left: the question, then, on a tap, the answer, the file paths, the code
-// left to right, why the step matters and what was not checked. The shell keeps each reveal in the
-// card store, so after a restart a revealed card is drawn open.
-function cardElement({ request, card, revealed_at }: StoredCard): HTMLElement {
+// Whether a check passed, as settled from its exit code or the card writer's verdict.
+function verdict(passed: boolean | null): string {
+  if (passed === null) return "הפלט לא מראה אם הבדיקה עברה.";
+  return passed ? "הבדיקה עברה." : "הבדיקה נכשלה.";
+}
+
+// A card in Hebrew, right to left: the question, then, on a tap, whether a check passed, the answer,
+// the file paths, the code left to right, why the step matters and what was not checked. The shell
+// keeps each reveal in the card store, so after a restart a revealed card is drawn open.
+function cardElement({ request, card, revealed_at, passed }: StoredCard): HTMLElement {
   const details = document.createElement("details");
   details.className = "card";
   details.dir = "rtl";
@@ -84,8 +126,11 @@ function cardElement({ request, card, revealed_at }: StoredCard): HTMLElement {
   const source = document.createElement("pre");
   source.dir = "ltr";
   source.textContent = card.code;
+  const result = hebrew("p", verdict(passed));
+  result.className = "verdict";
   details.append(
     hebrew("summary", card.question),
+    ...(request.check ? [result] : []),
     answer,
     paths,
     source,

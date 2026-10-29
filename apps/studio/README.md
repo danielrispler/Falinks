@@ -1,6 +1,6 @@
 # Studio
 
-The control room's app (map #266, spec #328), for macOS. This version's pane follows the Claude Code session you prompted last: its last step, live, and a card on the first Edit or Write of each wait. A card shows its question; tap it for the answer. The card store keeps the cards, and which ones you opened, across restarts; steps that ran while the app was down get no cards.
+The control room's app (map #266, spec #328), for macOS. This version's pane follows the Claude Code session you prompted last: its last step, live, and a card on the first check, Edit or Write of each wait. A check is a command from the Falinks check list: `cargo test|nextest|clippy|check|build`, `ci-checks`, `go test|vet`. When the card goes to a check, the pane asks "Will it pass?" as soon as it starts; tap yes or no before its result arrives. The check's card says whether it passed. Your guess is recorded, never shown as a score. A card shows its question; tap it for the answer. The card store keeps the cards, and which ones you opened, across restarts; steps that ran while the app was down get no cards.
 
 The card writer runs `claude -p` on your subscription, with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed from its environment, in `card-writer/` beside the event log. It writes the card in Hebrew, right to left, with code left to right. A step whose card does not parse gets no card and one line on the app's stderr; `open --stderr <file>` keeps it. The studio ignores the hook events of the card writer's own sessions. To run the app with a fake writer instead of `claude -p`:
 
@@ -49,4 +49,4 @@ The log is never rotated. It holds tool inputs and results, file contents includ
 
 ## The card store
 
-`cards.json` beside the event log: each card with the step it explains and `revealed_at`, when you first opened it (Unix milliseconds, `null` until then). A missing store starts empty. The app writes it whole to a temporary file and renames it into place, so a crash mid-write keeps the previous store.
+`cards.json` beside the event log: each card with the step it explains and `revealed_at`, when you first opened it (Unix milliseconds, `null` until then). A check's card also keeps your tap (`request.check.guess`, `null` when you did not tap before the result), `passed` and `outcome` (`right`, `wrong` or `not_counted`). `passed` comes from the exit code when the command has no pipe or sets `pipefail`, and otherwise from the card writer, which can answer unknown (`null`); an unknown verdict is not counted. A missing store starts empty. The app writes it whole to a temporary file and renames it into place, so a crash mid-write keeps the previous store.

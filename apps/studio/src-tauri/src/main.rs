@@ -1,6 +1,7 @@
 //! The studio app's shell (#328, module 9). At start it replays the whole event log through the
 //! core, then feeds it each new line live and hands the core's card requests to the card writer. The
-//! pane shows the session Daniel prompted last and its cards, which the card store keeps on disk; a
+//! pane shows the session Daniel prompted last, the guess prompt on its check, and its cards, which
+//! the card store keeps on disk; a
 //! session that newly needs Daniel gets a macOS notification while the window is not focused.
 
 use std::{
@@ -49,6 +50,14 @@ fn reveal(tool_use_id: String, cards: State<Cards>) {
     }
 }
 
+/// Daniel tapped yes or no on "Will it pass?" for check `tool_use_id`.
+#[tauri::command]
+fn guess(tool_use_id: String, will_pass: bool, app: AppHandle) {
+    let studio = app.state::<Mutex<Studio>>();
+    studio.lock().unwrap().guess(&tool_use_id, will_pass);
+    let _ = app.emit("now", now(studio));
+}
+
 /// The card writer: `claude -p`, or the fake when `STUDIO_CARD_WRITER=fake`, for checks that must
 /// not run `claude -p`.
 type Writer = Arc<dyn CardWriter + Send + Sync>;
@@ -72,7 +81,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(studio))
         .manage(Cards::new(store))
-        .invoke_handler(tauri::generate_handler![now, cards, reveal])
+        .invoke_handler(tauri::generate_handler![now, cards, reveal, guess])
         .setup(move |app| {
             let app = app.handle().clone();
             thread::spawn(move || follow(&app, &log, &writer));
@@ -127,6 +136,9 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                             let _ = app.emit("cards", cards(app.state(), app.state()));
                         });
                     }
+                    // The pane draws the open prompt from the session, which the "now" event below
+                    // carries, so it also closes when the result arrives.
+                    Output::Guess(_) => {}
                     Output::NeedsYou { session_id } => notify(app, &session_id),
                 }
             }

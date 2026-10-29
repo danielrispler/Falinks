@@ -2,7 +2,7 @@
 //! running it, and the cards come from its reply.
 
 use std::{ffi::OsStr, path::Path};
-use studio_core::{CardRequest, Step};
+use studio_core::{CardRequest, Check, Step};
 use studio_understanding::{Card, ClaudeWriter};
 
 fn edit() -> CardRequest {
@@ -19,6 +19,7 @@ fn edit() -> CardRequest {
             "+.unchecked { font-size:15px; }\n",
         )
         .into(),
+        check: None,
     }
 }
 
@@ -73,8 +74,52 @@ fn a_reply_with_one_json_object_gives_the_card_even_in_a_code_fence() {
             code: "-.unchecked { font-size:12px; }\n+.unchecked { font-size:15px; }".into(),
             why_it_matters: "טקסט משני ב־`12px` היה קטן מדי לקריאה בזמן המתנה.".into(),
             not_checked: "לא נבדק אם הכרטיס עדיין נכנס בחלונית צרה.".into(),
+            // A reply without `passed`, like an edit's, still parses.
+            passed: None,
         })
     );
+}
+
+fn check() -> CardRequest {
+    CardRequest {
+        session_id: "a3e6c9f2-1b4d-4e7a-8c0f-5d2b9e6a3c18".into(),
+        tool_use_id: "toolu_01Uy4Ka9Lo3Pv6Bs1Dc8Fh5R".into(),
+        step: Step {
+            tool: "Bash".into(),
+            detail: Some("cargo test 2>&1 | tail -5".into()),
+        },
+        change: "test result: FAILED. 11 passed; 1 failed; 0 ignored".into(),
+        check: Some(Check {
+            guess: Some(true),
+            exit_passed: None,
+        }),
+    }
+}
+
+#[test]
+fn a_checks_card_writer_gets_its_command_and_result_and_says_whether_it_passed() {
+    let folder = Path::new("/h/Library/Application Support/dev.falinks.studio/card-writer");
+    let command = ClaudeWriter::new(folder.into()).command(&check());
+
+    let prompt = command.get_args().nth(1).unwrap().to_str().unwrap();
+    assert!(prompt.contains("Bash cargo test 2>&1 | tail -5\nResult:\n"));
+    assert!(prompt.contains(&check().change));
+    assert!(prompt.contains(r#""passed""#));
+    // Daniel's guess is never part of the writer's input.
+    assert!(!prompt.contains("guess"));
+}
+
+#[test]
+fn a_checks_card_says_passed_failed_or_unknown() {
+    let passed = |value: &str| {
+        let reply = format!(r#"{{"question": "למה?", "answer": "כי.", "passed": {value}}}"#);
+        Card::from_reply(&reply).expect(value).passed
+    };
+
+    assert_eq!(passed("true"), Some(true));
+    assert_eq!(passed("false"), Some(false));
+    assert_eq!(passed(r#""unknown""#), None);
+    assert_eq!(passed("null"), None);
 }
 
 #[test]
