@@ -232,19 +232,22 @@ pub fn verify_init(init: &Value, scratch: &Path, session: &str, tools: &[String]
     )
 }
 
-/// The first effort other than `effort` on an assistant entry of a runtime session file, where
-/// the runtime records it (the stream does not); a missing field counts (#205 E1). The Git arm's
-/// `claude-worker` keeps a copy.
+/// Why a runtime session file does not show `effort` on every model reply (#205 E1): the runtime
+/// records effort there, not in the stream, and a reply without the field counts. Its own
+/// `<synthetic>` replies ("No response requested.") carry none and are skipped. A missing file
+/// leaves the effort unverifiable. The Git arm's `claude-worker` keeps a copy.
 /// shortcut: entries written after the last turn's `result` stay unchecked; check again after
 /// shutdown if a run ever ends on one.
-pub fn other_effort(file: &Path, effort: &str) -> Option<Value> {
-    fs::read_to_string(file)
-        .unwrap_or_default()
-        .lines()
+pub fn effort_failure(file: Option<&Path>, effort: &str) -> Option<String> {
+    let Some(text) = file.and_then(|f| fs::read_to_string(f).ok()) else {
+        return Some("session effort unrecorded; run invalid".into());
+    };
+    text.lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|entry| entry["type"] == "assistant")
+        .filter(|entry| entry["type"] == "assistant" && entry["message"]["model"] != "<synthetic>")
         .map(|entry| entry["effort"].clone())
         .find(|recorded| recorded != effort)
+        .map(|recorded| format!("session effort {recorded} is not {effort:?}; run invalid"))
 }
 
 /// Whether a Bash command starts a nested agent (#178 C7): a command's first word, after shell
@@ -520,10 +523,8 @@ impl Session {
                     .project
                     .as_ref()
                     .map(|p| p.join(format!("{}.jsonl", self.session)));
-                if let Some(effort) = file.and_then(|f| other_effort(&f, EFFORT)) {
-                    return Err(
-                        format!("session effort {effort} is not {EFFORT:?}; run invalid").into(),
-                    );
+                if let Some(failure) = effort_failure(file.as_deref(), EFFORT) {
+                    return Err(failure.into());
                 }
                 self.gate.record("model_identity", true)
             }

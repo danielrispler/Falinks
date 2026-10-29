@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -482,6 +483,56 @@ fn claude_bridge_fails_a_session_at_another_effort() {
         stderr.contains("session effort \"high\" is not \"none\"; run invalid"),
         "{stderr}"
     );
+}
+
+/// Without its session file a run's effort cannot be verified (#205 E1). The scripted runtime
+/// copied as `unrecorded` writes none; with no `runtime_home`, the runtime's home is scratch.
+#[test]
+fn claude_bridge_fails_a_session_without_its_file() {
+    let tmp = tmp("falinks-claude-unrecorded-test-");
+    let base = tmp.path();
+    let runtime = base.join("unrecorded");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        runtime.to_str().unwrap(),
+    );
+    let run = base.join("run");
+    assert!(!baseline("go-relationships", &config, &run).status.success());
+    let stderr: String = ["A", "B"]
+        .map(|a| fs::read_to_string(run.join(format!("controller/{a}.stderr"))).unwrap())
+        .concat();
+    assert!(
+        stderr.contains("session effort unrecorded; run invalid"),
+        "{stderr}"
+    );
+}
+
+/// The bridge never passes `--effort ""`: a start without the effort is refused at once.
+#[test]
+fn claude_bridge_refuses_a_start_without_effort() {
+    let tmp = tmp("falinks-claude-no-effort-test-");
+    for model in [
+        json!({"model": "scripted"}),
+        json!({"model": "scripted", "reasoning": ""}),
+    ] {
+        let mut child = Command::new(CLAUDE_WORKER)
+            .current_dir(tmp.path())
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = json!({"model": model});
+        writeln!(child.stdin.take().unwrap(), "{start}").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "the start names no reasoning effort\n"
+        );
+    }
 }
 
 #[test]

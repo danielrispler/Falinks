@@ -201,8 +201,9 @@ finding 9 and E1). When a message hits that tool-call cap,
 the host sends a continuation. Host events are written at once and presented at the next
 tool-result boundary or as a new turn. An idle, unfinished agent with no new events gets a
 reminder after two minutes. Any `system/init` mismatch, model refusal fallback or other
-model in `modelUsage` invalidates the run. So does another effort on an assistant entry of
-the agent's session file, checked at every `result`, since only that file records it. A
+model in `modelUsage` invalidates the run. So does another effort on a model reply in the
+agent's session file, or no such file, checked at every `result`, since only that file records
+it; the runtime's own `<synthetic>` replies carry no effort and are skipped. A
 `rate_limit_event` with status `rejected` ends it as `usage_limit`.
 
 - **Git arm** (`baseline` with `worker_script` = `claude-worker`): the worker runs in
