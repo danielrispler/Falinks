@@ -15,7 +15,6 @@ pub struct Studio {
     awaiting_card: HashSet<String>,
     /// Steps that already have a card in the card store, by `tool_use_id`.
     carded: HashSet<String>,
-    card_writer_folder: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -60,8 +59,10 @@ impl Session {
     }
 
     /// Clears every block (#328, module 3, "Needs you": `UserPromptSubmit`, `Stop`, `SessionEnd`).
+    /// The turn's calls end with it, so a call that never reported back takes no later block.
     fn unblock(&mut self) {
         self.blocks.clear();
+        self.running.clear();
         self.asked = false;
     }
 }
@@ -197,8 +198,12 @@ fn asks(message: &str) -> bool {
         let prose = prose
             .trim()
             .trim_end_matches([' ', '\t', '*', '_', ')', '"', '\'', '”', '’']);
+        // A heading is `#`s and a space, so a line that opens with an issue number such as `#341` is
+        // prose.
+        let heading = prose.starts_with('#') && prose.trim_start_matches('#').starts_with(' ');
         !in_fence
-            && !prose.starts_with(['>', '#', '|'])
+            && !heading
+            && !prose.starts_with(['>', '|'])
             && prose.split_whitespace().any(|word| word.ends_with('?'))
     })
 }
@@ -246,8 +251,9 @@ fn card_change(
 }
 
 /// A command that runs a check from the check list (#328, module 3): `cargo
-/// test|nextest|clippy|check|build`, `ci-checks`, `go test|vet`. Quoted text is not run, so a PR
-/// body that names `cargo test` is no check.
+/// test|nextest|clippy|check|build`, `ci-checks`, `go test|vet`, with any flags or toolchain before
+/// the subcommand (`cargo +nightly test`). Quoted text is not run, so a PR body that names `cargo
+/// test` is no check.
 // shortcut: every session uses the Falinks list; take each project's list from the shell once
 // projects exist.
 fn is_check(command: &str) -> bool {
@@ -271,13 +277,24 @@ fn is_check(command: &str) -> bool {
     words
         .iter()
         .any(|word| word.rsplit('/').next() == Some("ci-checks"))
-        || words.windows(2).any(|pair| {
+        || words.iter().enumerate().any(|(i, word)| {
+            let subcommand = words[i + 1..].iter().find(|w| !w.starts_with(['-', '+']));
             matches!(
-                pair,
-                ["cargo", "test" | "nextest" | "clippy" | "check" | "build"]
-                    | ["go", "test" | "vet"]
+                (*word, subcommand.copied()),
+                (
+                    "cargo",
+                    Some("test" | "nextest" | "clippy" | "check" | "build")
+                ) | ("go", Some("test" | "vet"))
             )
         })
+}
+
+/// Whether a tool call runs a check in the foreground. A background command's result arrives as soon
+/// as it starts, before the check has run.
+fn runs_check(tool: &str, input: &Value) -> bool {
+    tool == "Bash"
+        && input["run_in_background"] != true
+        && is_check(input["command"].as_str().unwrap_or_default())
 }
 
 /// An edit's change from its result: the patch's hunks, or a new file's content, which has none.
@@ -313,24 +330,53 @@ fn output(response: &Value, error: &str) -> String {
     streams.collect::<Vec<_>>().join("\n")
 }
 
-/// Whether a check's exit code says whether it passed (#328, module 4). A pipe, a `;` or a later line
-/// exits with its last command's code, and `|| true` with 0, so only when the command has no `||`
-/// and either sets `pipefail` or has none of `|`, `;` and a newline.
+/// Whether a check's exit code says whether it passed (#328, module 4). A command exits with its
+/// last statement's code, so the check must be the last statement, and nothing in it may mask the
+/// code: `|| true` exits 0, `!` flips it, `&` runs the check in the background, and a pipe exits
+/// with its last command's code unless an earlier `set` turns on `pipefail`.
 fn exit_code_counts(command: &str) -> bool {
-    !command.contains("||") && (command.contains("pipefail") || !command.contains(['|', ';', '\n']))
-}
-
-/// The folder whose worktree the shell fingerprints (#328, module 5) when it reads this line live,
-/// or `None`. It takes one at every step's end, so a Bash step is compared with the step before it,
-/// and at a prompt, so the wait's first step is compared with the worktree as Daniel left it rather
-/// than with what he changed himself since the last wait.
-pub fn fingerprint_folder(line: &str) -> Option<String> {
-    let event = serde_json::from_str::<Event>(line).ok()?;
-    let at = ["UserPromptSubmit", "PostToolUse", "PostToolUseFailure"];
-    (at.contains(&event.hook_event_name.as_str()) && !event.cwd.is_empty()).then_some(event.cwd)
+    let statements = command.split([';', '\n']).map(str::trim);
+    let Some(last) = statements.clone().rfind(|s| !s.is_empty()) else {
+        return false;
+    };
+    let pipefail = statements
+        .flat_map(|s| s.split("&&"))
+        .any(|s| s.trim().starts_with("set ") && s.contains("pipefail"));
+    let background = ["&&", ">&", "&>"]
+        .iter()
+        .fold(last.to_string(), |rest, and| rest.replace(and, ""))
+        .contains('&');
+    is_check(last)
+        && !last.contains("||")
+        && !last.starts_with('!')
+        && !background
+        && (pipefail || !last.contains('|'))
 }
 
 impl Studio {
+    /// The folder whose worktree the shell fingerprints (#328, module 5) before it applies this live
+    /// line, or `None`. It takes one at a prompt, so the wait's first step is compared with the
+    /// worktree as Daniel left it rather than with what he changed himself since the last wait, and
+    /// at each step's end while the wait has not had its card step, so a Bash step is compared with
+    /// the step before it.
+    pub fn fingerprint_folder(&self, line: &str) -> Option<String> {
+        let event = serde_json::from_str::<Event>(line).ok()?;
+        let at = match event.hook_event_name.as_str() {
+            "UserPromptSubmit" => true,
+            "PostToolUse" | "PostToolUseFailure" => self.awaiting_card.contains(&event.session_id),
+            _ => false,
+        };
+        (at && !event.cwd.is_empty()).then_some(event.cwd)
+    }
+
+    /// The folders of the sessions in a wait that has not had its card step. After a replay the
+    /// shell fingerprints them once, so a restart mid-wait leaves the wait's next Bash step a record
+    /// to compare with.
+    pub fn waiting_folders(&self) -> impl Iterator<Item = &str> {
+        let waiting = self.awaiting_card.iter();
+        waiting.filter_map(|id| Some(self.sessions.get(id)?.cwd.as_str()))
+    }
+
     /// Takes one live event log line that the shell took no fingerprint for, and returns what the
     /// shell must do.
     pub fn apply(&mut self, line: &str) -> Vec<Output> {
@@ -348,9 +394,6 @@ impl Studio {
         let Ok(event) = serde_json::from_str::<Event>(line) else {
             return Vec::new();
         };
-        if self.card_writer_folder.as_ref() == Some(&event.cwd) {
-            return Vec::new();
-        }
         let session = self
             .sessions
             .entry(event.session_id.clone())
@@ -394,6 +437,7 @@ impl Studio {
             // shortcut: a closed session shows "your turn"; drop closed sessions once the board
             // lists sessions.
             "SessionEnd" => {
+                self.awaiting_card.remove(&event.session_id);
                 session.unblock();
                 session.turn_ended = true;
                 session.guess = None;
@@ -406,9 +450,7 @@ impl Studio {
                 session.last_step = Some(step.clone());
                 // A check is the wait's card step from its start, so its prompt comes before its
                 // result.
-                let command = event.tool_input["command"].as_str().unwrap_or_default();
-                if tool == "Bash"
-                    && is_check(command)
+                if runs_check(&tool, &event.tool_input)
                     && self.awaiting_card.remove(&event.session_id)
                 {
                     let prompt = GuessPrompt {
@@ -440,8 +482,10 @@ impl Studio {
                 }
                 session.running.push(call);
             }
-            // It has no `tool_use_id`, so it names its call by tool and input.
+            // It has no `tool_use_id`, so it names its call by tool and input. The prompt's
+            // Notification may have landed first (the hooks are async), and its block names no call.
             "PermissionRequest" if !ASKING_TOOLS.contains(&tool.as_str()) => {
+                session.blocks.retain(|b| b.tool != "Notification");
                 session.block(tool, event.tool_input);
             }
             // A sandboxed command's network request fires no `PermissionRequest`; any other
@@ -457,24 +501,32 @@ impl Studio {
                 session.blocks.retain(|c| c.id != id);
                 let input = &event.tool_input;
                 let failed = event.hook_event_name == "PostToolUseFailure";
+                // A denied or interrupted call, or a failed Edit or Write, changed nothing: only a
+                // command that ran and failed has its exit code in its error.
+                let ran = !failed || event.error.starts_with("Exit code");
                 let guessed = session
                     .guess
                     .take_if(|p| p.tool_use_id == event.tool_use_id);
-                // A check gets its card whether it passed or failed. A denied or interrupted
-                // command did not run, and its error has no exit code.
-                let card = if let Some(prompt) = guessed {
+                let card = if !ran {
+                    // A check that did not run leaves the wait's card step to a later step.
+                    if guessed.is_some() {
+                        self.awaiting_card.insert(event.session_id.clone());
+                    }
+                    None
+                // A check gets its card whether it passed or failed. The hooks are async, so a fast
+                // check's result can land before its start: it takes the card step with no guess.
+                } else if guessed.is_some()
+                    || (runs_check(&tool, input) && self.awaiting_card.remove(&event.session_id))
+                {
                     let command = input["command"].as_str().unwrap_or_default();
-                    let ran = !failed || event.error.starts_with("Exit code");
                     let check = Check {
-                        guess: prompt.guess,
-                        exit_passed: (ran && exit_code_counts(command)).then_some(!failed),
+                        guess: guessed.and_then(|prompt| prompt.guess),
+                        exit_passed: exit_code_counts(command).then_some(!failed),
                     };
                     Some((output(&event.tool_response, &event.error), Some(check)))
-                // A failed Edit or Write changed nothing; a failed command may have.
-                } else if (!failed || tool == "Bash")
-                    && let Some(change) =
-                        card_change(&tool, input, &event.tool_response, worktree_change)
-                            .or_else(|| self.carded.remove(&event.tool_use_id).then(String::new))
+                } else if let Some(change) =
+                    card_change(&tool, input, &event.tool_response, worktree_change)
+                        .or_else(|| self.carded.remove(&event.tool_use_id).then(String::new))
                     && self.awaiting_card.remove(&event.session_id)
                 {
                     Some((change, None))
@@ -513,12 +565,6 @@ impl Studio {
     /// requests nothing, so steps that ran while the app was down get no cards and no notices.
     pub fn replay(&mut self, line: &str) {
         self.apply(line);
-    }
-
-    /// The card writer's neutral folder, a fact from the shell. Events whose `cwd` is this folder
-    /// come from the writer's own `claude -p` sessions and are dropped.
-    pub fn set_card_writer_folder(&mut self, folder: &str) {
-        self.card_writer_folder = Some(folder.into());
     }
 
     /// The steps that already have a card in the card store, by `tool_use_id`, a fact from the shell

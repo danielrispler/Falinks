@@ -110,6 +110,42 @@ fn a_permission_prompt_that_lands_before_its_tool_call_still_ends_when_the_tool_
 }
 
 #[test]
+fn a_permission_prompts_notification_that_lands_before_its_request_ends_with_the_tool() {
+    let lines: Vec<&str> = include_str!("fixtures/permission-write.jsonl")
+        .lines()
+        .collect();
+    let log = [lines[0], lines[1], lines[3], lines[2], lines[4]].join("\n");
+
+    // UserPromptSubmit, PreToolUse, Notification, PermissionRequest, PostToolUse.
+    let expected = [Working, Working, NeedsYou, NeedsYou, Working].map(Some);
+    assert_eq!(states(&log, PROBE), expected);
+    assert_eq!(live(&log), [notice(PROBE)]);
+}
+
+#[test]
+fn a_command_that_never_reported_back_holds_no_block_in_the_next_turn() {
+    let lines: Vec<&str> = include_str!("fixtures/sandbox-network.jsonl")
+        .lines()
+        .collect();
+    let next = |line: &str| line.replace("toolu_01Pq5Rs7Tu9Vw1Xy3Za5Bc7D", "toolu_01Next");
+    // The first turn's command never reports back. In the next turn, the network request lands
+    // before its own command's PreToolUse.
+    let log = [
+        lines[0].into(),
+        lines[1].into(),
+        lines[2].into(),
+        lines[4].into(),
+        lines[0].into(),
+        lines[2].into(),
+        next(lines[1]),
+        next(lines[3]),
+    ]
+    .join("\n");
+
+    assert_eq!(states(&log, PROBE).last(), Some(&Some(Working)));
+}
+
+#[test]
 fn a_background_agents_events_leave_the_main_agents_block_in_place() {
     let log = include_str!("fixtures/background-agent.jsonl");
 
@@ -289,4 +325,10 @@ Only in `hook/src/main.rs`: the hook copies it from its environment into each ev
 So Claude Code never waits for them. Two events that fire within a few milliseconds can land in either order.";
     assert_eq!(after_stop(quote), YourTurn);
     assert_eq!(after_stop(heading), YourTurn);
+}
+
+#[test]
+fn a_question_on_a_line_that_opens_with_an_issue_number_needs_you() {
+    let message = "#341 is done and its PR is green. Should I open the next ticket?";
+    assert_eq!(after_stop(message), NeedsYou);
 }

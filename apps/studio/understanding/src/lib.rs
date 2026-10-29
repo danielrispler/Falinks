@@ -48,6 +48,7 @@ impl Card {
     /// it does not parse, the error is one line for the log.
     pub fn from_reply(reply: &str) -> Result<Card, String> {
         let object = reply.find('{').zip(reply.rfind('}'));
+        let object = object.filter(|(start, end)| start < end);
         let object = object.map_or("", |(start, end)| &reply[start..=end]);
         serde_json::from_str(object).map_err(|error| {
             let head: String = reply.chars().take(300).collect();
@@ -111,7 +112,9 @@ impl ClaudeWriter {
     }
 
     /// The `claude -p` run for one step. Without the two variables and without `--bare`, `claude`
-    /// uses the subscription login (#320, "Fact"); the studio never reads that login itself.
+    /// uses the subscription login (#320, "Fact"); the studio never reads that login itself. The
+    /// change is untrusted text, so the run has no tools and no MCP servers, whatever Daniel's
+    /// settings allow. It also runs without the studio plugin, so its session sends no hook events.
     pub fn command(&self, request: &CardRequest) -> Command {
         let step = &request.step;
         let detail = step.detail.as_deref().unwrap_or_default();
@@ -120,15 +123,23 @@ impl ClaudeWriter {
             Some(_) => (CHECK, "Result"),
             None => ("", "Change"),
         };
+        let change = &request.change;
+        let kept = &change[..change.floor_char_boundary(MAX_CHANGE)];
+        let cut = match change.len() - kept.len() {
+            0 => String::new(),
+            bytes => format!("\n[{bytes} more bytes cut]"),
+        };
         let prompt = format!(
-            "{PROMPT}{check}\nStep: {} {detail}\n{input}:\n{}",
-            step.tool, request.change
+            "{PROMPT}{check}\nStep: {} {detail}\n{input}:\n{kept}{cut}",
+            step.tool
         );
         let mut command = Command::new(&self.program);
         command
-            .args(["-p", &prompt])
+            // `--tools` takes several values, so an option must follow it.
+            .args(["--tools", "", "--strict-mcp-config", "-p", &prompt])
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove("ANTHROPIC_AUTH_TOKEN")
+            .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
             .current_dir(&self.folder);
         command
     }
@@ -147,6 +158,10 @@ impl CardWriter for ClaudeWriter {
             .ok()
     }
 }
+
+/// The most of a step's change the writer gets: 64 KiB. The lines that matter fit, a huge new file
+/// or log costs no more, and the prompt stays far under macOS's 1 MiB limit on a command's arguments.
+const MAX_CHANGE: usize = 64 << 10;
 
 /// The card writer's instructions. Its input is only the step and its change, not the whole payload
 /// (v0 note, proposal 8).

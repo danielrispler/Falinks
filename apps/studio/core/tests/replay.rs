@@ -184,25 +184,3 @@ fn a_restart_mid_wait_gives_no_second_card_and_a_replay_gives_none() {
     assert_eq!(carded(7), []);
     assert_eq!(carded(5), [edit]);
 }
-
-#[test]
-fn the_card_writers_own_sessions_are_dropped() {
-    let mut studio = Studio::default();
-    studio.set_card_writer_folder(
-        "/Users/danielrispler/Library/Application Support/dev.falinks.studio/card-writer",
-    );
-    let log = include_str!("fixtures/card-writer.jsonl");
-    let outputs: Vec<Output> = log.lines().flat_map(|line| studio.apply(line)).collect();
-
-    let now = studio.prompted_last().expect("a session was prompted");
-    assert_eq!(now.id, "2c7a9f14-6e3b-4d58-a1c9-0f8e2b7d4a63");
-    assert_eq!(studio.session("e81b4c06-3f7d-4a92-b5e1-9c0d2a6f8b37"), None);
-    // The writer's reply ends its turn with a `?`, which gives no "needs you" notice either.
-    let [Output::Card(card)] = &outputs[..] else {
-        panic!("one card and no notice: {outputs:?}");
-    };
-    assert_eq!(
-        Some(card.step.clone()),
-        step("Edit", Some("apps/studio/ui/style.css"))
-    );
-}

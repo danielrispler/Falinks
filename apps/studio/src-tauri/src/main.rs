@@ -78,13 +78,10 @@ fn main() {
     let log = studio_hook::event_log(&std::env::home_dir().expect("a home directory"));
     // The store sits beside the log, in the studio's data directory.
     let store = CardStore::open_beside(&log).expect("read the card store");
-    // The card writer's neutral folder, beside the log. Claude Code reports `cwd` with symlinks
-    // resolved, so the core gets the folder resolved too.
+    // The card writer's neutral folder, beside the log.
     let folder = log.with_file_name("card-writer");
     fs::create_dir_all(&folder).expect("create the card writer's folder");
-    let folder = fs::canonicalize(folder).expect("resolve the card writer's folder");
     let mut studio = Studio::default();
-    studio.set_card_writer_folder(&folder.to_string_lossy());
     let carded = store
         .cards()
         .iter()
@@ -120,6 +117,7 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
     let mut read_to = 0;
     let mut live = false;
     let mut fingerprints = Fingerprints::default();
+    let mut followed = None;
     loop {
         if let Ok(mut file) = File::open(log)
             && file.seek(SeekFrom::Start(read_to)).is_ok()
@@ -138,13 +136,26 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                     // shortcut: fingerprints when the line is read, up to one poll after the step, so
                     // a step that starts in between counts toward this one; take the fingerprint in
                     // the hook if a card ever explains the wrong step.
-                    let folder = studio_core::fingerprint_folder(&text);
+                    let folder = state.lock().unwrap().fingerprint_folder(&text);
                     let change = folder.and_then(|folder| fingerprints.take(Path::new(&folder)));
                     outputs.extend(state.lock().unwrap().apply_with_change(&text, change));
                 } else {
                     state.lock().unwrap().replay(&text);
                 }
                 line.clear();
+            }
+            // A worktree's first fingerprint only records it, so the waits still open after the
+            // replay get theirs now, and their next Bash step has something to compare with.
+            if !live {
+                let waiting: Vec<String> = state
+                    .lock()
+                    .unwrap()
+                    .waiting_folders()
+                    .map(Into::into)
+                    .collect();
+                for folder in waiting {
+                    fingerprints.take(Path::new(&folder));
+                }
             }
             for output in outputs {
                 match output {
@@ -168,8 +179,13 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 }
             }
             if read_to > read_from {
+                let session = state.lock().unwrap().prompted_last().map(|s| s.id.clone());
                 let _ = app.emit("now", now(state));
-                let _ = app.emit("cards", cards(app.state(), app.state()));
+                // A new card emits the cards itself, so they change here only with the session.
+                if session != followed {
+                    followed = session;
+                    let _ = app.emit("cards", cards(app.state(), app.state()));
+                }
             }
         }
         live = true;

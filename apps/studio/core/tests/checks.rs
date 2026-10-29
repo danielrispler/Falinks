@@ -187,6 +187,78 @@ fn the_exit_code_counts_only_when_nothing_after_the_check_can_mask_it() {
     assert_eq!(exit_passed("cargo test || true"), None);
     assert_eq!(exit_passed("cargo test; echo $?"), None);
     assert_eq!(exit_passed(r"cargo test\necho done"), None);
+    // `pipefail` covers the pipe, not a later statement, and only when a `set` turns it on.
+    assert_eq!(
+        exit_passed(r"set -euo pipefail\ncargo test 2>&1 | tail -20"),
+        Some(true)
+    );
+    assert_eq!(
+        exit_passed("set -o pipefail && cargo test | tail"),
+        Some(true)
+    );
+    assert_eq!(
+        exit_passed("set -o pipefail; cargo test | tail; echo done"),
+        None
+    );
+    assert_eq!(exit_passed("cargo test pipefail_cases | tail"), None);
+    // `!` flips the code, and `&` runs the check in the background.
+    assert_eq!(exit_passed("! cargo test"), None);
+    assert_eq!(exit_passed("cargo test & wait"), None);
+}
+
+/// The first wait's lines, with its check's result changed by `result`.
+fn first_wait_lines(result: impl Fn(&mut serde_json::Value)) -> Vec<String> {
+    let mut lines: Vec<String> = CHECKS.lines().take(5).map(Into::into).collect();
+    let mut post: serde_json::Value = serde_json::from_str(&lines[3]).unwrap();
+    result(&mut post);
+    lines[3] = post.to_string();
+    lines
+}
+
+#[test]
+fn a_check_that_did_not_run_gets_no_card_and_leaves_the_card_step_open() {
+    let lines = first_wait_lines(|post| {
+        post["hook_event_name"] = "PostToolUseFailure".into();
+        post["error"] = "The user doesn't want to proceed with this tool use.".into();
+    });
+    let passed = CHECKS.lines().nth(3).unwrap();
+    // The prompt, the denied check, then the agent runs the same check again and it passes.
+    let [prompt, start, denied] = [&lines[1], &lines[2], &lines[3]].map(String::as_str);
+    let log = [prompt, start, denied, start, passed].join("\n");
+    let outputs: Vec<Output> = live(&log).into_iter().flatten().collect();
+
+    let [Output::Guess(_), Output::Guess(_), Output::Card(card)] = &outputs[..] else {
+        panic!("two prompts, then one card: {outputs:?}");
+    };
+    assert_eq!(card.check.as_ref().unwrap().exit_passed, Some(true));
+}
+
+#[test]
+fn a_check_whose_result_lands_before_its_start_gets_its_card_and_no_prompt() {
+    let lines: Vec<&str> = CHECKS.lines().collect();
+    // The hooks are async: the result, then the start.
+    let log = [lines[1], lines[3], lines[2], lines[4]].join("\n");
+    let outputs: Vec<Output> = live(&log).into_iter().flatten().collect();
+
+    let [Output::Card(card)] = &outputs[..] else {
+        panic!("one card and no prompt: {outputs:?}");
+    };
+    let untapped = Check {
+        guess: None,
+        exit_passed: Some(true),
+    };
+    assert_eq!(card.check, Some(untapped));
+}
+
+#[test]
+fn a_check_run_in_the_background_is_no_check() {
+    let log = first_wait(COMMAND).replace(
+        &format!(r#""command":"{COMMAND}""#),
+        &format!(r#""command":"{COMMAND}","run_in_background":true"#),
+    );
+
+    assert_eq!(log.matches("run_in_background").count(), 2);
+    assert_eq!(live(&log).concat(), []);
 }
 
 #[test]
@@ -201,6 +273,9 @@ fn the_check_list_names_which_commands_are_checks() {
         "cargo check",
         "cargo build --release",
         "cargo run --bin ci-checks -- --all",
+        "cargo +nightly test",
+        "cargo -q clippy --workspace",
+        "cargo --locked build",
         "cd tests/go && go vet ./...",
         "RUST_BACKTRACE=1 go test ./... 2>&1 | tail -20",
     ];

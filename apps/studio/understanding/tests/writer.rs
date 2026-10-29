@@ -31,7 +31,8 @@ fn the_real_writer_runs_claude_on_the_subscription_in_its_neutral_folder() {
     let command = ClaudeWriter::new(CLAUDE.into(), folder.into()).command(&edit());
 
     assert_eq!(command.get_program(), CLAUDE);
-    // Both variables would take precedence over the subscription login; nothing else is passed.
+    // Both keys would take precedence over the subscription login, and without the plugin the
+    // writer's session sends no hook events; nothing else is passed.
     let mut env: Vec<_> = command.get_envs().collect();
     env.sort();
     assert_eq!(
@@ -39,19 +40,36 @@ fn the_real_writer_runs_claude_on_the_subscription_in_its_neutral_folder() {
         [
             (OsStr::new("ANTHROPIC_API_KEY"), None),
             (OsStr::new("ANTHROPIC_AUTH_TOKEN"), None),
+            (OsStr::new("CLAUDE_CODE_PLUGIN_DIRS"), None),
         ]
     );
     let args: Vec<_> = command
         .get_args()
         .map(|arg| arg.to_str().unwrap())
         .collect();
-    assert_eq!(args[0], "-p");
+    // The change is untrusted text: no tools and no MCP servers.
+    assert_eq!(args[..4], ["--tools", "", "--strict-mcp-config", "-p"]);
     assert!(!args.contains(&"--bare"));
-    let prompt = args[1];
+    let prompt = args[4];
     assert!(prompt.contains("why the agent took this step"));
     assert!(prompt.contains("Edit apps/studio/ui/style.css"));
     assert!(prompt.contains(&edit().change));
     assert_eq!(command.get_current_dir(), Some(folder));
+}
+
+#[test]
+fn a_huge_change_is_cut_so_the_prompt_stays_small() {
+    let folder = Path::new("/h/Library/Application Support/dev.falinks.studio/card-writer");
+    // A new file of 100 000 two-byte letters, as added lines.
+    let request = CardRequest {
+        change: format!("+{}\n", "א".repeat(100_000)),
+        ..edit()
+    };
+    let command = ClaudeWriter::new(CLAUDE.into(), folder.into()).command(&request);
+
+    let prompt = command.get_args().last().unwrap().to_str().unwrap();
+    assert!(prompt.len() < 70 << 10, "{}", prompt.len());
+    assert!(prompt.ends_with(" more bytes cut]"));
 }
 
 /// A stand-in login shell named `name`, which runs `script` and never `claude`.
@@ -130,7 +148,7 @@ fn a_checks_card_writer_gets_its_command_and_result_and_says_whether_it_passed()
     let folder = Path::new("/h/Library/Application Support/dev.falinks.studio/card-writer");
     let command = ClaudeWriter::new(CLAUDE.into(), folder.into()).command(&check());
 
-    let prompt = command.get_args().nth(1).unwrap().to_str().unwrap();
+    let prompt = command.get_args().last().unwrap().to_str().unwrap();
     assert!(prompt.contains("Bash cargo test 2>&1 | tail -5\nResult:\n"));
     assert!(prompt.contains(&check().change));
     assert!(prompt.contains(r#""passed""#));
@@ -157,6 +175,8 @@ fn a_reply_that_does_not_parse_gives_no_card_and_one_log_line() {
         "",
         "I can't write a card without the file.\nShall I read it?",
         r#"{"question": "למה?", "why_it_matters": "כי."}"#,
+        // A `}` before the first `{`.
+        "Sorry :} I need {more context",
     ];
 
     for reply in replies {

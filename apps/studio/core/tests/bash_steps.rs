@@ -29,7 +29,7 @@ fn restart_after(replayed: usize, changed: &[(&str, &str)]) -> Vec<CardRequest> 
     lines[replayed..]
         .iter()
         .flat_map(|line| {
-            let fingerprinted = studio_core::fingerprint_folder(line).is_some();
+            let fingerprinted = studio.fingerprint_folder(line).is_some();
             let change = changed
                 .iter()
                 .find(|(id, _)| fingerprinted && line.contains(id))
@@ -143,21 +143,48 @@ fn a_failed_bash_step_that_changed_the_worktree_gets_its_card() {
     assert_eq!(card.change, half);
 }
 
-#[test]
-fn the_shell_fingerprints_at_each_prompt_and_each_steps_end() {
-    let fingerprinted = |log: &str| -> Vec<usize> {
-        let lines = log.lines().enumerate();
-        let at = lines.filter(|(_, line)| studio_core::fingerprint_folder(line).is_some());
-        at.map(|(index, _)| index).collect()
-    };
+/// The lines of `log` the shell fingerprints, when the fingerprint finds a change only after the
+/// step `changed`.
+fn fingerprinted(log: &str, changed: &str) -> Vec<usize> {
+    let mut studio = Studio::default();
+    let lines = log.lines().enumerate();
+    let at = lines.filter(|(_, line)| {
+        let at = studio.fingerprint_folder(line).is_some();
+        let change = (at && line.contains(changed)).then(|| FORMAT_DIFF.into());
+        studio.apply_with_change(line, change);
+        at
+    });
+    at.map(|(index, _)| index).collect()
+}
 
-    assert_eq!(fingerprinted(LOG), [0, 2, 4, 6, 8]);
+const WORKTREE: &str = "/Users/danielrispler/work/Falinks/.claude/worktrees/issue-344-bash";
+
+#[test]
+fn the_shell_fingerprints_at_each_prompt_and_each_steps_end_until_the_card_step() {
+    assert_eq!(fingerprinted(LOG, "no step"), [0, 2, 4, 6, 8]);
+    assert_eq!(fingerprinted(LOG, FORMAT), [0, 2, 4, 6]);
     assert_eq!(
-        fingerprinted(include_str!("fixtures/failing-bash.jsonl")),
+        fingerprinted(include_str!("fixtures/failing-bash.jsonl"), "no step"),
         [1, 3]
     );
     assert_eq!(
-        studio_core::fingerprint_folder(LOG.lines().next().unwrap()).as_deref(),
-        Some("/Users/danielrispler/work/Falinks/.claude/worktrees/issue-344-bash")
+        Studio::default()
+            .fingerprint_folder(LOG.lines().next().unwrap())
+            .as_deref(),
+        Some(WORKTREE)
     );
+}
+
+#[test]
+fn after_a_replay_the_shell_fingerprints_the_waits_still_open() {
+    let waiting = |replayed: usize| -> Vec<String> {
+        let mut studio = Studio::default();
+        LOG.lines()
+            .take(replayed)
+            .for_each(|line| studio.replay(line));
+        studio.waiting_folders().map(Into::into).collect()
+    };
+
+    assert_eq!(waiting(7), [WORKTREE]);
+    assert_eq!(waiting(LOG.lines().count()), [] as [&str; 0]);
 }
