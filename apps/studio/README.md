@@ -1,8 +1,14 @@
 # Studio
 
-The control room's app (map #266, spec #328), for macOS. This version's pane follows the Claude Code session you prompted last: its last step, live, and a card on the first check, Edit or Write of each wait. A check is a command from the Falinks check list: `cargo test|nextest|clippy|check|build`, `ci-checks`, `go test|vet`. When the card goes to a check, the pane asks "Will it pass?" as soon as it starts; tap yes or no before its result arrives. The check's card says whether it passed. Your guess is recorded, never shown as a score. A card shows its question; tap it for the answer. The card store keeps the cards, and which ones you opened, across restarts; steps that ran while the app was down get no cards.
+The control room's app (map #266, spec #328), for macOS. This version's pane follows the Claude Code session you prompted last: its last step, live, and a card on each wait's first card step. A card step is a check; an Edit or Write outside a `.claude/plans/` folder, where plans are kept; or a Bash command that does not start with `git` and changed the worktree, whether it succeeded or failed. A check is a command from the Falinks check list: `cargo test|nextest|clippy|check|build`, `ci-checks`, `go test|vet`. When the card goes to a check, the pane asks "Will it pass?" as soon as it starts; tap yes or no before its result arrives. The check's card says whether it passed. Your guess is recorded, never shown as a score. A card shows its question; tap it for the answer. The card store keeps the cards, and which ones you opened, across restarts; steps that ran while the app was down get no cards.
 
-The card writer runs `claude -p` on your subscription, with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed from its environment, in `card-writer/` beside the event log. It writes the card in Hebrew, right to left, with code left to right. A step whose card does not parse gets no card and one line on the app's stderr; `open --stderr <file>` keeps it. The studio ignores the hook events of the card writer's own sessions. To run the app with a fake writer instead of `claude -p`:
+To tell whether a Bash command changed the worktree, the app fingerprints the session's git worktree at each prompt and after each step: the files `git status` lists, with their content. Ignored files do not count, and a commit alone changes nothing. A file over 1 MiB is compared by its size and modification time, and the card writer gets one line that names it instead of its diff.
+
+The card writer runs `claude -p` on your subscription, with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed from its environment, in `card-writer/` beside the event log. It writes the card in Hebrew, right to left, with code left to right. A step whose card does not parse gets no card and one line on the app's stderr; `open --stderr <file>` keeps it. The studio ignores the hook events of the card writer's own sessions.
+
+An app opened from Finder or `open` does not get your shell's `PATH`, so at start the app asks your login shell where `claude` is: `$SHELL -lc 'command -v claude'`, with `/bin/zsh` when `SHELL` is unset. Only the path comes back; the writer keeps the app's own environment. A login shell that is not interactive reads `~/.zprofile` but not `~/.zshrc`, so the line that puts `claude` on your `PATH` must be in the first. With no answer, the app runs `claude` from its own `PATH`.
+
+To run the app with a fake writer instead of `claude -p`:
 
     open --env STUDIO_CARD_WRITER=fake target/release/bundle/macos/Studio.app
 
@@ -11,7 +17,7 @@ The pane also shows the session's state: working, your turn, or needs you, the o
 - `plugin/`: the Claude Code plugin. On ten hook events it runs `studio-hook`.
 - `hook/`: `studio-hook`, which appends each hook payload as one line to the event log, and the log's path.
 - `core/`: the studio core, plain Rust with no I/O. The app replays the whole log through it at start, then feeds it each new line live. Only live lines request cards and notifications.
-- `understanding/`: the understanding layer's I/O: the card writer interface, the `claude -p` writer and a fake, the card store, and `weekly`, the command that prints the week's rates.
+- `understanding/`: the understanding layer's I/O: the card writer interface, the `claude -p` writer and a fake, the worktree fingerprint, the card store, and `weekly`, the command that prints the week's rates.
 - `src-tauri/`: the app's Rust shell. `ui/`: its TypeScript pane.
 
 ## Build
@@ -24,7 +30,13 @@ Needs Node and the Rust toolchain.
 
 This builds `target/release/bundle/macos/Studio.app` with an ad-hoc signature (`codesign -dv` shows `Signature=adhoc`), and `target/release/studio-hook`, which the plugin runs. Open the app with `open target/release/bundle/macos/Studio.app`.
 
-`cargo test` runs the core's replay tests, and the card store's and weekly rates' tests. It leaves out the shell, which needs `dist/` from `npm run build`.
+`cargo test` runs:
+
+- `core/tests/`: hook events replayed through the core: what the pane shows (`replay`), needs you (`needs_you`), checks and guesses (`checks`), and Bash card steps (`bash_steps`);
+- `understanding/tests/`: the `claude -p` command, built but never run, the `claude` lookup with a stand-in shell, and the writer's replies (`writer`); the fingerprint against real `git` in temporary repositories (`fingerprint`); the card store (`store`); the weekly rates (`week`);
+- the unit tests of the event log's path (`hook`) and of the weekly rates' dates (`understanding`).
+
+It leaves out the shell, which needs `dist/` from `npm run build`.
 
 ## Load the plugin
 
@@ -49,7 +61,7 @@ The log is never rotated. It holds tool inputs and results, file contents includ
 
 ## The card store
 
-`cards.json` beside the event log: each card with the step it explains and its record, in Unix milliseconds: `added_at`, when the card arrived; `shown_at`, when the pane first drew its question while the window was visible; and `revealed_at`, when you first opened it. Each is `null` until then, and in stores written before it existed. A check's card also keeps your tap (`request.check.guess`, `null` when you did not tap before the result), `passed` and `outcome` (`right`, `wrong` or `not_counted`). `passed` comes from the exit code when the command has no pipe or sets `pipefail`, and otherwise from the card writer, which can answer unknown (`null`); an unknown verdict is not counted. A missing store starts empty. The app writes it whole to a temporary file and renames it into place, so a crash mid-write keeps the previous store.
+`cards.json` beside the event log: each card with the step it explains and its record, in Unix milliseconds: `added_at`, when the card arrived; `shown_at`, when the pane first drew its question while the window was visible; and `revealed_at`, when you first opened it. Each is `null` until then, and in stores written before it existed. A check's card also keeps your tap (`request.check.guess`, `null` when you did not tap before the result), `passed` and `outcome` (`right`, `wrong` or `not_counted`). `passed` comes from the exit code when nothing in the command can mask it: the command has no `||`, and it sets `pipefail` or has no `|`, `;` or second line. Otherwise it comes from the card writer, which can answer unknown (`null`); an unknown verdict is not counted. A missing store starts empty. The app writes it whole to a temporary file and renames it into place, so a crash mid-write keeps the previous store.
 
 ## The weekly rates
 
