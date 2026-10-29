@@ -716,14 +716,19 @@ const COLLISION_NOTE: &str = "Collision waste (#334): lines an agent wrote and l
 
 /// Per arm (any arms, each a list of repetition slots): collision waste per run, collisions per
 /// class and premature checks, with the waste's evidence label when both `git` and `falinks`
-/// are given. A team of one has no collisions, so its cells are missing.
+/// are given. An arm of teams of one has no peer, so it prints `n/a`.
 pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
-    let waste = |r: &Value| r["discarded_or_rewritten_work"]["lines"].as_f64();
+    let waste = |r: &Value| collision_waste(r);
     let per_run = |runs: &[Option<&Value>],
                    f: &dyn Fn(&Value) -> Option<f64>|
      -> Vec<Option<f64>> { runs.iter().map(|r| r.and_then(f)).collect() };
     let mut out = serde_json::Map::new();
     for (arm, runs) in slots {
+        let alone = |r: &Option<&Value>| r.is_some_and(|r| r["collisions"]["status"] == "n/a");
+        if !runs.is_empty() && runs.iter().all(alone) {
+            out.insert(arm.to_string(), "n/a".into());
+            continue;
+        }
         let classes: serde_json::Map<String, Value> = crate::collisions::CLASSES
             .iter()
             .map(|c| {
@@ -929,13 +934,7 @@ pub fn track_t_report(runs: &[Value]) -> Value {
 /// run identity apart. Like `report`, it computes no winner.
 pub fn step_6_report(runs: &[Value]) -> Value {
     let (replaced, current) = unreplaced(runs);
-    let arm = |r: &Value| {
-        Some(format!(
-            "{}-{}",
-            r["arm"].as_str()?,
-            r["team_size"].as_u64()?
-        ))
-    };
+    let arm = team;
     let mut fixtures = serde_json::Map::new();
     let mut gaps = Vec::new();
     for fixture in FIXTURES {
@@ -1111,6 +1110,1004 @@ pub fn step_6_report(runs: &[Value]) -> Value {
         "nested_agent_hits": nested,
         "replaced_runs": replaced,
     })
+}
+
+/// #205's scored fixture (#332); it reaches `FIXTURES` only once registered.
+const LARGE_SPEC_FIXTURE: &str = "go-invoice";
+/// The one-sided level of every large-spec test (#5 decision).
+const LEVEL: f64 = 0.025;
+/// P1–P3 compare these two arms only (#205, "Arms").
+const PAYBACK_ARMS: [&str; 2] = ["falinks-2", "git-2"];
+
+/// A run's arm and team size, as step 6 and large-spec key them.
+fn team(run: &Value) -> Option<String> {
+    Some(format!(
+        "{}-{}",
+        run["arm"].as_str()?,
+        run["team_size"].as_u64()?
+    ))
+}
+
+/// The binomial coefficient, exact.
+fn choose(n: u64, k: u64) -> u128 {
+    if k > n {
+        return 0;
+    }
+    (0..k).fold(1, |c, i| c * u128::from(n - i) / u128::from(i + 1))
+}
+
+/// Fisher's exact test, one-sided: the chance that `a` of `n` runs succeed or more, given
+/// `a + b` successes among the `n + m` runs of both arms.
+fn fisher(a: u64, n: u64, b: u64, m: u64) -> f64 {
+    let k = a + b;
+    let hits: u128 = (a..=k.min(n))
+        .map(|x| choose(n, x) * choose(m, k - x))
+        .sum();
+    hits as f64 / choose(n + m, k) as f64
+}
+
+/// Each arm's p of having more successes than the other, and the arm that passes at `LEVEL`.
+fn success_test(a: (&str, &[&Value]), b: (&str, &[&Value])) -> Value {
+    let ok = |runs: &[&Value]| runs.iter().filter(|r| r["outcome"] == "success").count() as u64;
+    let ((a, a_runs), (b, b_runs)) = (a, b);
+    let (x, n, y, m) = (
+        ok(a_runs),
+        a_runs.len() as u64,
+        ok(b_runs),
+        b_runs.len() as u64,
+    );
+    let p = [(a, fisher(x, n, y, m)), (b, fisher(y, m, x, n))];
+    json!({"successes": {a: format!("{x}/{n}"), b: format!("{y}/{m}")},
+        "p": {a: p[0].1, b: p[1].1}, "passes_for": p.iter().find(|(_, p)| *p <= LEVEL).map(|(arm, _)| arm)})
+}
+
+/// The Mann–Whitney U of `a` below `b`: the pairs in which `a`'s value is lower, ties as half.
+fn wins(a: &[f64], b: &[f64]) -> f64 {
+    let pair = |x: &f64, y: &f64| match () {
+        _ if x < y => 1.0,
+        _ if x == y => 0.5,
+        _ => 0.0,
+    };
+    a.iter()
+        .map(|x| b.iter().map(|y| pair(x, y)).sum::<f64>())
+        .sum()
+}
+
+/// The exact one-sided permutation p that `a` ranks below `b`: the share of the ways to split
+/// the pooled values into groups of their sizes whose U is at least the observed one.
+fn rank_p(a: &[f64], b: &[f64]) -> f64 {
+    let pooled: Vec<f64> = a.iter().chain(b).copied().collect();
+    let observed = wins(a, b);
+    let (mut hits, mut splits) = (0u64, 0u64);
+    // shortcut: walks all 2^n subsets, instant at the batch's 16 runs; walk k-subsets past ~24.
+    for mask in 0u64..1 << pooled.len() {
+        if mask.count_ones() as usize != a.len() {
+            continue;
+        }
+        let side = |inside: bool| -> Vec<f64> {
+            let chosen = pooled.iter().enumerate();
+            chosen
+                .filter(|(i, _)| (mask >> i & 1 == 1) == inside)
+                .map(|(_, v)| *v)
+                .collect()
+        };
+        splits += 1;
+        hits += u64::from(wins(&side(true), &side(false)) >= observed);
+    }
+    hits as f64 / splits as f64
+}
+
+/// The rank test of one per-run measure between two arms: each arm's values (with
+/// `stats`), U of the first below the second, each arm's p of ranking below the other, and the
+/// arm that passes at `LEVEL`. A run lacking the value leaves p null and is counted `missing`.
+fn rank_test(a: (&str, &[Option<f64>]), b: (&str, &[Option<f64>])) -> Value {
+    let ((a, x), (b, y)) = (a, b);
+    let missing = x.iter().chain(y).filter(|v| v.is_none()).count();
+    let finite = |v: &[Option<f64>]| -> Vec<Option<f64>> {
+        v.iter().map(|v| v.filter(|v| v.is_finite())).collect()
+    };
+    let mut out = json!({a: stats(&finite(x)), b: stats(&finite(y)), "missing": missing,
+        "u": null, "p": null, "passes_for": null});
+    if let (Some(x), Some(y)) = (complete(x), complete(y)) {
+        let p = [(a, rank_p(&x, &y)), (b, rank_p(&y, &x))];
+        out["u"] = wins(&x, &y).into();
+        out["p"] = json!({a: p[0].1, b: p[1].1});
+        out["passes_for"] = json!(p.iter().find(|(_, p)| *p <= LEVEL).map(|(arm, _)| arm));
+    }
+    out
+}
+
+/// Simulated trials per power figure; the figure is good to about half a point.
+const POWER_TRIALS: u32 = 20_000;
+
+/// The chance that the rank test passes at `LEVEL` for a real 20% advantage (one arm's values
+/// 0.8 times the other's), simulated as for the #5 decision's table: log-normal values with
+/// `sigma` in both arms, `n` and `m` runs, and a fixed seed, to two decimals.
+fn power(n: usize, m: usize, sigma: f64) -> f64 {
+    // Continuous values never tie, so p ≤ LEVEL exactly when U reaches the critical value of
+    // U's distribution over every split of n + m distinct ranks.
+    let mut null: Vec<usize> = (0u64..1 << (n + m))
+        .filter(|s| s.count_ones() as usize == n)
+        .map(|s| {
+            let above = |i: usize| (i + 1..n + m).filter(|j| s >> j & 1 == 0).count();
+            (0..n + m).filter(|i| s >> i & 1 == 1).map(above).sum()
+        })
+        .collect();
+    null.sort_unstable_by(|a, b| b.cmp(a));
+    let tail = |u: usize| null.partition_point(|&v| v >= u) as f64 / null.len() as f64;
+    let Some(critical) = null
+        .iter()
+        .copied()
+        .take_while(|&u| tail(u) <= LEVEL)
+        .last()
+    else {
+        return 0.0;
+    };
+    // SplitMix64 and Box–Muller: deterministic, standard library only.
+    let mut state: u64 = 205;
+    let mut uniform = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut normal =
+        || (-2.0 * (1.0 - uniform()).ln()).sqrt() * (std::f64::consts::TAU * uniform()).cos();
+    let mut passed = 0;
+    for _ in 0..POWER_TRIALS {
+        let a: Vec<f64> = (0..n).map(|_| 0.8f64.ln() + sigma * normal()).collect();
+        let b: Vec<f64> = (0..m).map(|_| sigma * normal()).collect();
+        passed += u32::from(wins(&a, &b) >= critical as f64);
+    }
+    (f64::from(passed) / f64::from(POWER_TRIALS) * 100.0).round() / 100.0
+}
+
+/// The sum of squared deviations of the logs of the finite positive values, and their count.
+fn log_spread(values: &[Option<f64>]) -> (f64, usize) {
+    let logs: Vec<f64> = values
+        .iter()
+        .flatten()
+        .filter(|v| v.is_finite() && **v > 0.0)
+        .map(|v| v.ln())
+        .collect();
+    let mean = logs.iter().sum::<f64>() / logs.len() as f64;
+    (logs.iter().map(|x| (x - mean).powi(2)).sum(), logs.len())
+}
+
+/// The observed σ of one primary (the sample standard deviation of log values, the #5
+/// decision's σ) per arm and pooled, and the power the pooled σ implies at the observed n.
+fn sigma(a: (&str, &[Option<f64>]), b: (&str, &[Option<f64>])) -> Value {
+    let ((a, x), (b, y)) = (a, b);
+    let ((ss_a, n_a), (ss_b, n_b)) = (log_spread(x), log_spread(y));
+    let sd = |ss: f64, n: usize| (n >= 2).then(|| (ss / (n - 1) as f64).sqrt());
+    let pooled = (n_a + n_b >= 3).then(|| ((ss_a + ss_b) / (n_a + n_b - 2) as f64).sqrt());
+    let power = pooled.map(|s| power(x.len(), y.len(), s));
+    json!({a: sd(ss_a, n_a), b: sd(ss_b, n_b), "pooled": pooled, "power": power,
+        "planning_sigma": 0.15})
+}
+
+/// What each reading leads to (#5 decision, "Payback criteria for #205").
+const NEXT_EVIDENCE: &str = "Payback with mechanism evidence: the real-repository trial follows.";
+const NEXT_NO_EVIDENCE: &str =
+    "Payback without mechanism evidence: a grilling ticket asks why before any trial.";
+const NEXT_MECHANISM_MISSING: &str = "Payback; mechanism evidence is missing until collision waste is measured, so the next step waits for it.";
+const NEXT_NO_PAYBACK: &str = "No payback: the cost acceptance lapses, and #5's redesign option opens as a grilling ticket: redesign, narrow the claim, or stop.";
+const NEXT_NOT_SHOWN: &str = "Not shown: inspect the largest bottleneck and run one bounded improvement batch at the same n, read fresh against these criteria without pooling; its result is final: payback, or else no payback.";
+const NEXT_INCOMPLETE: &str = "Incomplete: no primary passed for Falinks, and a primary lacks a run's value, so payback cannot be ruled out until it is measured.";
+const NEXT_NO_READING: &str = "No reading: a safety failure fails #5's precondition, so P1–P3 are not read; everything is reported.";
+/// Printed with every reading (#5 decision).
+const FALSE_PAYBACK: &str = "The chance of a false payback is about 7% per batch (three primaries, each at most 2.5%) and about 14% across this batch and an improvement batch (#5 decision).";
+const POWER_NOTE: &str = "σ is the sample standard deviation (n − 1) of the log values per arm, pooled over both arms; P3's uses successes only. Power is the chance of detecting a real 20% Falinks advantage under the 2.5% rank rule at the pooled σ and these n, simulated as for the #5 decision's table (log-normal, equal σ in both arms); the batch was planned at σ 0.15 (76% at n = 8).";
+
+/// The `git-1` reading's fixed sentences (#205, "Arms").
+const ONE_AGENT_CAVEAT: &str = "The payback reading compares two Falinks agents with two Git agents only, and stands as computed. It does not show that two agents are the right choice for this task.";
+const NOT_ESTABLISHED: &str = "One agent against two-agent teams: not established";
+const ONE_AGENT_FAILURES: &str =
+    "One agent's failures are counted in its speed and per-success cost.";
+const ONE_AGENT_ARM: &str = "This research advises that the trial include a one-agent arm.";
+
+/// `git-1` against each two-agent arm (#205, "Arms"): success by P1's test both ways,
+/// completion seconds by P3's and cold-start cost by P2's, each read in the fixed sentences that
+/// begin with the success counts.
+fn one_agent(arms: [(&str, &[&Value]); 3]) -> Value {
+    let [(_, one), two @ ..] = arms;
+    let per_run = |runs: &[&Value], f: fn(&Value) -> Option<f64>| -> Vec<Option<f64>> {
+        runs.iter().map(|r| f(r)).collect()
+    };
+    let comparisons: serde_json::Map<String, Value> = two
+        .iter()
+        .map(|&(arm, runs)| {
+            let test = |f: fn(&Value) -> Option<f64>| {
+                rank_test(("git-1", &per_run(one, f)), (arm, &per_run(runs, f)))
+            };
+            let entry = json!({"success": success_test(("git-1", one), (arm, runs)),
+                "completion_seconds": test(completion), "cold_start_cost_usd": test(cold_start)});
+            (arm.to_string(), entry)
+        })
+        .collect();
+    let ok = |runs: &[&Value]| runs.iter().filter(|r| r["outcome"] == "success").count();
+    let counts = arms
+        .map(|(arm, runs)| format!("{arm} {}/{}", ok(runs), runs.len()))
+        .join(", ");
+    let fewer = two
+        .iter()
+        .any(|(arm, _)| comparisons[*arm]["success"]["passes_for"] == *arm);
+    let read = |key: &str, won: &str, paid: &str, medians: &str, format: fn(f64) -> String| {
+        // The arm whose side of the test passes against each two-agent arm: always `winner`.
+        let all = |winner: fn(&str) -> &str| {
+            two.iter()
+                .all(|(a, _)| comparisons[*a][key]["passes_for"] == winner(a))
+        };
+        let body = if all(|_| "git-1") {
+            format!("On this fixture one agent {won} both two-agent teams. {ONE_AGENT_CAVEAT}")
+        } else if all(|a| a) {
+            paid.to_string()
+        } else {
+            let median = |arm: &str| {
+                let of = if arm == "git-1" { two[0].0 } else { arm };
+                comparisons[of][key][arm]["median"]
+                    .as_f64()
+                    .map_or("missing".into(), format)
+            };
+            let medians_text = arms.map(|(a, _)| format!("{a} {}", median(a))).join(", ");
+            format!("{NOT_ESTABLISHED} ({medians}: {medians_text}).")
+        };
+        let failures = if fewer {
+            format!(" {ONE_AGENT_FAILURES}")
+        } else {
+            String::new()
+        };
+        format!("Successes: {counts}. {body}{failures}")
+    };
+    let speed = read(
+        "completion_seconds",
+        "finished faster than",
+        "Parallel work paid on this fixture in both arms.",
+        "median completion seconds",
+        |s| format!("{s:.1}"),
+    );
+    let cost = read(
+        "cold_start_cost_usd",
+        "cost less than",
+        "Parallel work cost less on this fixture in both arms.",
+        "median cold-start cost per run",
+        |d| format!("${d:.3}"),
+    );
+    let faster = two
+        .iter()
+        .all(|(a, _)| comparisons[*a]["completion_seconds"]["passes_for"] == "git-1");
+    json!({"comparisons": comparisons, "speed": speed, "cost": cost, "faster_than_both": faster})
+}
+
+/// P3's per-run completion seconds: a success's time; an oracle failure or a timeout ranks
+/// slower than every success and ties with every other failure.
+fn completion(run: &Value) -> Option<f64> {
+    match run["outcome"].as_str() {
+        Some("success") => run["timing"]["elapsed_seconds"].as_f64(),
+        _ => Some(f64::INFINITY),
+    }
+}
+
+/// One run's collision waste: `discarded_or_rewritten_work.lines` once `collisions::waste` marks
+/// it `complete` (#334). None while a duplicate-work candidate is unclassified, when the records
+/// are unreadable, and for a team of one (`n/a`).
+fn collision_waste(run: &Value) -> Option<f64> {
+    let work = &run["discarded_or_rewritten_work"];
+    work["lines"]
+        .as_f64()
+        .filter(|_| work["status"] == "complete")
+}
+
+/// #205's scored fixture has nine tickets; per-ticket overhead divides by them.
+const TICKETS: f64 = 9.0;
+/// The Git host's requests that the harness, not the agent, sends.
+const HARNESS_REQUESTS: [&str; 2] = ["usage", "limit"];
+const PER_ARM_NOTE: &str = "Per arm, over every ranked run, failures included. Per-ticket overhead (#205, descriptive): the run's coordination overhead (the round-trips and model seconds of timing's coordination category, summed over agents) and its protocol acts (a Falinks agent's Falinks calls other than source writes; a Git team's requests to its host other than the harness's usage reports), each divided by the fixture's 9 tickets. Waiting on peer: seconds after an agent's first turn that it spent idle, summed over agents. Load balance: the busiest agent's busy seconds over the mean.";
+
+/// One run's cold-start cost (#223), P2's measure.
+fn cold_start(run: &Value) -> Option<f64> {
+    run["tokens"]["cold_start_cost_usd"].as_f64()
+}
+
+/// One run's coordination overhead: round-trips and model seconds of `timing`'s
+/// `coordination` category, summed over agents. Every per-ticket figure reads it here, so #337
+/// widens it in one place (`refused_edit`, Git's `integration`, the Falinks review estimate).
+fn coordination_overhead(run: &Value) -> Option<[f64; 2]> {
+    Some([
+        sum(run, "/round_trips/coordination/count")?,
+        sum(run, "/round_trips/coordination/model_seconds")?,
+    ])
+}
+
+/// One run's protocol acts: its Falinks agents' Falinks calls other than source writes, or
+/// the requests its Git agents sent their host (`batch` counts them from the run's events).
+fn protocol_acts(run: &Value) -> Option<f64> {
+    let acts = |calls: &serde_json::Map<String, Value>, not: &[&str]| -> f64 {
+        let counted = calls
+            .iter()
+            .filter(|(name, _)| !not.contains(&name.as_str()));
+        counted
+            .filter_map(|(_, c)| c.as_f64().or_else(|| c["acts"].as_f64()))
+            .sum()
+    };
+    if run["arm"] != "falinks" {
+        return Some(acts(run["worker_requests"].as_object()?, &HARNESS_REQUESTS));
+    }
+    let agents = run["transcript"]["agents"].as_object()?;
+    let operations = agents.values().map(|a| a["operations"].as_object());
+    operations
+        .map(|ops| Some(acts(ops?, &crate::timing::SOURCE_WRITES)))
+        .sum()
+}
+
+/// Large-spec report (#205, #333): `go-invoice`'s eight scored rotations of one agent, two Git
+/// agents and two Falinks agents, read by the #5 decision's fixed payback criteria: P1–P3 and
+/// the mechanism compare two Falinks agents with two Git agents only; `git-1` is descriptive.
+/// Every run is listed, and each arm's per-ticket overhead and idle time are reported apart.
+pub fn large_spec_report(runs: &[Value]) -> Value {
+    let (replaced, current) = unreplaced(runs);
+    let current: Vec<&Value> = current
+        .into_iter()
+        .filter(|r| r["fixture"] == LARGE_SPEC_FIXTURE && r["scored"] == true)
+        .collect();
+    // Each arm's ranked runs: never an interruption (#5 decision: never ranked).
+    let ranked = |arm: &str| -> Vec<&Value> {
+        let arm_runs = current.iter().copied();
+        arm_runs
+            .filter(|r| team(r).as_deref() == Some(arm) && !replaceable(r))
+            .collect()
+    };
+    let [falinks, git] = PAYBACK_ARMS.map(&ranked);
+    let one = ranked("git-1");
+    let arms = [
+        ("git-1", &one[..]),
+        ("git-2", &git[..]),
+        ("falinks-2", &falinks[..]),
+    ];
+    let git_1 = one_agent(arms);
+    let per_run = |runs: &[&Value], f: fn(&Value) -> Option<f64>| -> Vec<Option<f64>> {
+        runs.iter().map(|r| f(r)).collect()
+    };
+    let between = |f: fn(&Value) -> Option<f64>| {
+        rank_test(
+            ("falinks-2", &per_run(&falinks, f)),
+            ("git-2", &per_run(&git, f)),
+        )
+    };
+    let mut p3 = between(completion);
+    for (arm, runs) in [("falinks-2", &falinks), ("git-2", &git)] {
+        p3[arm]["failures"] = runs
+            .iter()
+            .filter(|r| r["outcome"] != "success")
+            .count()
+            .into();
+    }
+    let mut mechanism = between(collision_waste);
+    mechanism["status"] = if mechanism["missing"] == 0 {
+        "measured"
+    } else {
+        "missing"
+    }
+    .into();
+    // Higher waste in Git: Falinks ranks below it.
+    mechanism["evidence"] = (mechanism["passes_for"] == "falinks-2").into();
+    let primaries = [
+        ("P1", success_test(("falinks-2", &falinks), ("git-2", &git))),
+        ("P2", between(cold_start)),
+        ("P3", p3),
+    ];
+    let passed: Vec<&str> = primaries
+        .iter()
+        .filter(|(_, t)| t["passes_for"] == "falinks-2")
+        .map(|(name, _)| *name)
+        .collect();
+    let unsafe_runs: Vec<&Value> = runs
+        .iter()
+        .filter(|r| r["outcome"] == "safety_failure")
+        .map(|r| &r["run_id"])
+        .collect();
+    let evidence = match &mechanism {
+        m if m["status"] == "missing" => "missing",
+        m if m["evidence"] == true => "evidence",
+        _ => "no evidence",
+    };
+    let (result, next_step) = if !unsafe_runs.is_empty() {
+        ("no reading", NEXT_NO_READING.to_string())
+    } else if !passed.is_empty() {
+        let next = match evidence {
+            // #205's consequence fixed now: the trial follows, with one agent if it beat both.
+            "evidence" if git_1["faster_than_both"] == true => {
+                format!("{NEXT_EVIDENCE} {ONE_AGENT_ARM}")
+            }
+            "evidence" => NEXT_EVIDENCE.into(),
+            "no evidence" => NEXT_NO_EVIDENCE.into(),
+            _ => NEXT_MECHANISM_MISSING.into(),
+        };
+        ("payback", next)
+    } else if primaries.iter().any(|(_, t)| t["p"].is_null()) {
+        ("incomplete", NEXT_INCOMPLETE.into())
+    } else if primaries[2].1["passes_for"] == "git-2" {
+        ("no payback", NEXT_NO_PAYBACK.into())
+    } else {
+        ("not shown", NEXT_NOT_SHOWN.into())
+    };
+    let successes = |runs: &[&Value]| -> Vec<Option<f64>> {
+        runs.iter()
+            .map(|r| completion(r).filter(|s| s.is_finite()))
+            .collect()
+    };
+    let reading = json!({"result": result, "passed_for_falinks": passed, "mechanism": evidence,
+        "next_step": next_step, "safety_failures": unsafe_runs,
+        "sigma": {
+            "P2": sigma(("falinks-2", &per_run(&falinks, cold_start)), ("git-2", &per_run(&git, cold_start))),
+            "P3": sigma(("falinks-2", &successes(&falinks)), ("git-2", &successes(&git))),
+            "note": POWER_NOTE,
+        },
+        "false_payback": FALSE_PAYBACK});
+    let per_ticket = |f: fn(&Value) -> Option<f64>| move |r: &Value| Some(f(r)? / TICKETS);
+    let per_arm: serde_json::Map<String, Value> = arms
+        .iter()
+        .map(|&(arm, runs)| {
+            let figure = |f: &dyn Fn(&Value) -> Option<f64>| {
+                stats(&runs.iter().map(|r| f(r)).collect::<Vec<_>>())
+            };
+            let entry = json!({
+                "per_ticket": {
+                    "coordination_round_trips": figure(&per_ticket(|r| Some(coordination_overhead(r)?[0]))),
+                    "coordination_model_seconds": figure(&per_ticket(|r| Some(coordination_overhead(r)?[1]))),
+                    "protocol_acts": figure(&per_ticket(protocol_acts)),
+                },
+                "waiting_on_peer_seconds": figure(&|r| sum(r, "/waiting_on_peer_seconds")),
+                "load_balance": figure(&|r| value(r, "load_balance")),
+            });
+            (arm.to_string(), entry)
+        })
+        .collect();
+    let mut rotations: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
+    for run in &current {
+        if let (Some(pair), Some(arm)) = (run["pair"].as_str(), team(run)) {
+            rotations.entry(pair).or_default().insert(arm, run);
+        }
+    }
+    let complete = rotations
+        .values()
+        .filter(|arms| {
+            STEP_6_ARMS
+                .iter()
+                .all(|a| arms.get(*a).is_some_and(|r| !replaceable(r)))
+        })
+        .count();
+    let mut gaps = vec![];
+    if complete < 8 {
+        gaps.push(format!(
+            "{LARGE_SPEC_FIXTURE}: {complete} of 8 complete rotations"
+        ));
+    }
+    gaps.extend(run_gaps(runs, &current));
+    let ok = |runs: &[&Value]| runs.iter().filter(|r| r["outcome"] == "success").count() as u64;
+    // Every run of an arm, failed, interrupted and replaced runs included.
+    let costs: serde_json::Map<String, Value> = arms
+        .iter()
+        .map(|&(arm, ranked)| {
+            let all: Vec<&Value> = runs
+                .iter()
+                .filter(|r| r["fixture"] == LARGE_SPEC_FIXTURE && team(r).as_deref() == Some(arm))
+                .collect();
+            (arm.to_string(), cost(&all, ok(ranked)))
+        })
+        .collect();
+    let mut git_1 = git_1;
+    git_1["cost_per_success_usd"] = costs
+        .iter()
+        .map(|(arm, c)| {
+            let both = json!({"measured": c["cost_per_success_usd"],
+                "cold_start": c["cold_start_cost_per_success_usd"], "label": COST_LABEL});
+            (arm.clone(), both)
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    let nested = |arm: &str| {
+        let hits = runs.iter().filter(|r| team(r).as_deref() == Some(arm));
+        hits.filter(|r| !r["nested_agent"].is_null()).count()
+    };
+    json!({
+        "qualification": "Scored: #205's eight rotations, read by the #5 decision's fixed payback criteria, which the decision may not amend. P1–P3 and the mechanism compare two Falinks agents with two Git agents only; one agent is descriptive. Judge cells, size metrics and cross-batch ratios are not payback. Cost is API-equivalent list price, not billed cost.",
+        "fixture": LARGE_SPEC_FIXTURE,
+        "rotations": rotations.iter().map(|(pair, arms)| json!({"pair": pair,
+            "arms": arms.iter().map(|(a, r)| (a.clone(), json!({"run_id": r["run_id"],
+                "order": r["order"], "outcome": r["outcome"],
+                "elapsed_seconds": r["timing"]["elapsed_seconds"]})))
+                .collect::<serde_json::Map<_, _>>()}))
+            .collect::<Vec<_>>(),
+        "complete_rotations": complete,
+        "successes": arms.iter().map(|(a, runs)| (a.to_string(), json!(ok(runs)))).collect::<serde_json::Map<_, _>>(),
+        "primaries": primaries.into_iter().map(|(n, t)| (n.to_string(), t)).collect::<serde_json::Map<_, _>>(),
+        "primaries_note": "Exact one-sided tests at 2.5%. P1: Fisher's exact test on success counts. P2 (per-run cold-start cost, failed runs at their actual cost) and P3 (per-run completion seconds): permutation rank tests over every split of the pooled runs, U counting ties as half; an oracle failure or a timeout ranks slower than every success and ties with the others, and a replaced interruption is never ranked. p is each arm's chance of ranking below (P1: of more successes than) the other; null when a run lacks the value.",
+        "mechanism": mechanism,
+        "collisions": collision_cells(&arms.iter().map(|(a, runs)| (*a, runs.iter().map(|r| Some(*r)).collect())).collect()),
+        "reading": reading,
+        "git_1": git_1,
+        "per_arm": per_arm, "per_arm_note": PER_ARM_NOTE,
+        "cost": costs,
+        "gaps": gaps,
+        "nested_agent_hits": STEP_6_ARMS.iter().map(|a| (a.to_string(), json!(nested(a)))).collect::<serde_json::Map<_, _>>(),
+        "replaced_runs": replaced,
+    })
+}
+
+#[cfg(test)]
+mod large_spec_tests {
+    use super::*;
+
+    /// Eight scored large-spec rotations on go-invoice, every run a success; `secs` are
+    /// (one agent, two Git agents, two Falinks agents) per rotation, and each run's cold-start
+    /// cost is its seconds over 1000 dollars.
+    fn runs(secs: [(f64, f64, f64); 8]) -> Vec<Value> {
+        let mut runs = vec![];
+        for (rep, (one, git, falinks)) in secs.into_iter().enumerate() {
+            for (arm, size, secs) in [("git", 1, one), ("git", 2, git), ("falinks", 2, falinks)] {
+                let pair = format!("go-invoice-{}", rep + 1);
+                runs.push(json!({"run_id": format!("{pair}-{arm}-{size}"), "fixture": "go-invoice",
+                    "pair": pair, "arm": arm, "team_size": size, "scored": true, "outcome": "success",
+                    "timing": {"elapsed_seconds": secs}, "tokens": {"cold_start_cost_usd": secs / 1000.0}}));
+            }
+        }
+        runs
+    }
+
+    /// Every arm takes the same times, so no rank test passes.
+    fn even() -> Vec<Value> {
+        runs(std::array::from_fn(|i| {
+            let s = 500.0 + 10.0 * i as f64;
+            (s, s + 1.0, s + 2.0)
+        }))
+    }
+
+    fn fail(runs: &mut [Value], id: &str) {
+        let run = runs.iter_mut().find(|r| r["run_id"] == id).unwrap();
+        run["outcome"] = "task_failure".into();
+    }
+
+    /// P1 is Fisher's exact test, one-sided: 7 of 8 against 2 of 8 has p = 232/11440 for
+    /// Falinks and 11432/11440 for Git; 8 against 4 (p = 70/1820) does not pass.
+    #[test]
+    fn p1_is_fishers_exact_test_at_two_and_a_half_percent() {
+        let mut runs = even();
+        fail(&mut runs, "go-invoice-1-falinks-2");
+        for rep in 1..=6 {
+            fail(&mut runs, &format!("go-invoice-{rep}-git-2"));
+        }
+        let p1 = &large_spec_report(&runs)["primaries"]["P1"];
+        assert_eq!(p1["successes"], json!({"git-2": "2/8", "falinks-2": "7/8"}));
+        assert_eq!(p1["p"]["falinks-2"], 232.0 / 11440.0);
+        assert_eq!(p1["p"]["git-2"], 11432.0 / 11440.0);
+        assert_eq!(p1["passes_for"], "falinks-2");
+
+        let mut runs = even();
+        for rep in 1..=4 {
+            fail(&mut runs, &format!("go-invoice-{rep}-git-2"));
+        }
+        let p1 = &large_spec_report(&runs)["primaries"]["P1"];
+        assert_eq!(p1["p"]["falinks-2"], 70.0 / 1820.0);
+        assert_eq!(p1["passes_for"], Value::Null);
+    }
+
+    /// Ties count as half a pair, and the permutation p counts every split of the pooled runs:
+    /// of the six splits of {1, 2, ∞, ∞}, three give U ≥ 2.5.
+    #[test]
+    fn rank_test_counts_ties_as_half() {
+        let inf = f64::INFINITY;
+        assert_eq!(wins(&[1.0, inf], &[2.0, inf]), 2.5);
+        assert_eq!(rank_p(&[1.0, inf], &[2.0, inf]), 0.5);
+        assert_eq!(rank_p(&[1.0, 2.0], &[3.0, 4.0]), 1.0 / 6.0);
+    }
+
+    /// P2 and P3 are exact one-sided permutation rank tests over C(16, 8) = 12870 splits.
+    #[test]
+    fn p2_and_p3_rank_failures_slower_than_every_success() {
+        // Falinks below Git in every run: only one split is as extreme.
+        let separated = separated();
+        let out = large_spec_report(&separated);
+        for p in ["P2", "P3"] {
+            let test = &out["primaries"][p];
+            assert_eq!(test["u"], 64.0, "{p}");
+            assert_eq!(test["p"]["falinks-2"], 1.0 / 12870.0, "{p}");
+            assert_eq!(test["p"]["git-2"], 1.0, "{p}");
+            assert_eq!(test["passes_for"], "falinks-2", "{p}");
+        }
+        // One Falinks run swaps with Git's fastest: two splits reach U = 63.
+        let mut swapped = separated.clone();
+        let run = swapped
+            .iter_mut()
+            .find(|r| r["run_id"] == "go-invoice-8-falinks-2")
+            .unwrap();
+        run["timing"]["elapsed_seconds"] = json!(605.0);
+        let p3 = &large_spec_report(&swapped)["primaries"]["P3"];
+        assert_eq!(
+            (&p3["u"], &p3["p"]["falinks-2"]),
+            (&json!(63.0), &json!(2.0 / 12870.0))
+        );
+        // A failed Falinks run ranks slower than every Git success: U = 56, and the splits
+        // with at most eight inversions number p(0) + … + p(8) = 67 partitions.
+        let mut failed = separated;
+        fail(&mut failed, "go-invoice-1-falinks-2");
+        let p3 = &large_spec_report(&failed)["primaries"]["P3"];
+        assert_eq!(
+            (&p3["u"], &p3["p"]["falinks-2"]),
+            (&json!(56.0), &json!(67.0 / 12870.0))
+        );
+        assert_eq!(p3["falinks-2"]["failures"], 1);
+        assert_eq!(p3["falinks-2"]["values"][0], Value::Null);
+        // A replaced interruption is never ranked.
+        let mut replaced = failed.clone();
+        let mut replacement = replaced[2].clone();
+        replacement["outcome"] = "success".into();
+        replaced[2]["outcome"] = "infrastructure_failure".into();
+        replacement["run_id"] = "go-invoice-1-falinks-2-r1".into();
+        replacement["replaces"] = "go-invoice-1-falinks-2".into();
+        replaced.push(replacement);
+        let p3 = &large_spec_report(&replaced)["primaries"]["P3"];
+        assert_eq!(p3["p"]["falinks-2"], 1.0 / 12870.0);
+        // A run without its cost leaves P2 incomplete.
+        let mut costless = failed;
+        costless[5]["tokens"] = json!({});
+        let p2 = &large_spec_report(&costless)["primaries"]["P2"];
+        assert_eq!((&p2["p"], &p2["passes_for"]), (&Value::Null, &Value::Null));
+        assert_eq!(p2["missing"], 1);
+    }
+
+    /// The mechanism ranks collision waste: higher in Git means Falinks below it. Ties among
+    /// Falinks's zeros leave one split as extreme.
+    #[test]
+    fn mechanism_ranks_collision_waste_and_is_missing_without_it() {
+        let mut runs = even();
+        assert_eq!(large_spec_report(&runs)["mechanism"]["status"], "missing");
+        for (i, run) in runs.iter_mut().enumerate() {
+            let waste = if run["arm"] == "falinks" {
+                0.0
+            } else {
+                i as f64
+            };
+            run["discarded_or_rewritten_work"] = json!({"status": "complete", "lines": waste});
+        }
+        let mechanism = &large_spec_report(&runs)["mechanism"];
+        assert_eq!(mechanism["status"], "measured");
+        assert_eq!(mechanism["p"]["falinks-2"], 1.0 / 12870.0);
+        assert_eq!(mechanism["evidence"], true);
+    }
+
+    /// The mechanism and the per-arm collision cells read `collisions::waste`'s shape: lines
+    /// only once complete, and `n/a` for one agent, which has no peer.
+    #[test]
+    fn collision_waste_is_read_once_complete_and_is_na_for_one_agent() {
+        let mut runs = even();
+        for (i, run) in runs.iter_mut().enumerate() {
+            let (collisions, work) = match (run["arm"].as_str(), run["team_size"].as_u64()) {
+                (_, Some(1)) => (json!({"status": "n/a"}), json!({"status": "n/a"})),
+                (Some("falinks"), _) => (
+                    json!({"status": "complete", "premature_checks": 0, "by_class": {}}),
+                    json!({"status": "complete", "lines": 0}),
+                ),
+                _ => (
+                    json!({"status": "complete", "premature_checks": 0,
+                        "by_class": {"line_conflict": {"count": 1, "lines": i}}}),
+                    json!({"status": "complete", "lines": i}),
+                ),
+            };
+            run["collisions"] = collisions;
+            run["discarded_or_rewritten_work"] = work;
+        }
+        let out = large_spec_report(&runs);
+        assert_eq!(out["mechanism"]["status"], "measured");
+        assert_eq!(out["collisions"]["git-1"], "n/a");
+        assert_eq!(out["collisions"]["git-2"]["waste_lines"]["median"], 11.5);
+        assert_eq!(out["collisions"]["falinks-2"]["waste_lines"]["n"], 8);
+        assert_eq!(
+            out["collisions"]["git-2"]["collisions"]["line_conflict"]["median"],
+            1.0
+        );
+        // An unclassified duplicate-work pair leaves the run's waste, and the mechanism, missing.
+        let run = runs
+            .iter_mut()
+            .find(|r| r["run_id"] == "go-invoice-1-falinks-2")
+            .unwrap();
+        run["discarded_or_rewritten_work"] =
+            json!({"status": "partial", "lines": null, "counted_lines": 3});
+        let out = large_spec_report(&runs);
+        assert_eq!(out["mechanism"]["status"], "missing");
+        assert_eq!(out["collisions"]["falinks-2"]["waste_lines"]["missing"], 1);
+    }
+
+    /// The #5 decision's power table at n = 8 (simulated, log-normal, equal σ, a real 20%
+    /// advantage, the 2.5% rank rule): 98%, 76%, 52% and 35% at σ 0.10 to 0.25. This simulation
+    /// gives 98%, 77%, 53% and 37%: within the table's own simulation noise.
+    #[test]
+    fn power_reproduces_the_fifth_decisions_table() {
+        for (sigma, table) in [(0.10, 0.98), (0.15, 0.76), (0.20, 0.52), (0.25, 0.35)] {
+            let power = power(8, 8, sigma);
+            assert!((power - table).abs() < 0.025, "σ {sigma}: {power}");
+        }
+    }
+
+    fn waste(runs: &mut [Value], falinks: f64) {
+        for (i, run) in runs.iter_mut().enumerate() {
+            let lines = if run["arm"] == "falinks" {
+                falinks
+            } else {
+                i as f64
+            };
+            run["discarded_or_rewritten_work"] = json!({"status": "complete", "lines": lines});
+        }
+    }
+
+    fn reading(runs: &[Value]) -> Value {
+        large_spec_report(runs)["reading"].clone()
+    }
+
+    /// Falinks faster and cheaper than Git in every run: P2 and P3 pass for Falinks.
+    fn separated() -> Vec<Value> {
+        runs(std::array::from_fn(|i| {
+            let s = 400.0 + 10.0 * i as f64;
+            (s + 1.0, s + 200.0, s)
+        }))
+    }
+
+    /// Every reading the #5 decision defines, and the two that stop short of one.
+    #[test]
+    fn reading_is_payback_no_payback_or_not_shown() {
+        // Payback with mechanism evidence: the real-repository trial follows.
+        let mut runs = separated();
+        waste(&mut runs, 0.0);
+        let out = reading(&runs);
+        assert_eq!(out["result"], "payback");
+        assert_eq!(out["passed_for_falinks"], json!(["P2", "P3"]));
+        assert_eq!(out["mechanism"], "evidence");
+        assert_eq!(
+            out["next_step"],
+            "Payback with mechanism evidence: the real-repository trial follows."
+        );
+        // Payback without it (all waste equal): a grilling ticket asks why.
+        for run in runs.iter_mut() {
+            run["discarded_or_rewritten_work"] = json!({"status": "complete", "lines": 0});
+        }
+        let out = reading(&runs);
+        assert_eq!(
+            (&out["result"], &out["mechanism"]),
+            (&json!("payback"), &json!("no evidence"))
+        );
+        assert_eq!(
+            out["next_step"],
+            "Payback without mechanism evidence: a grilling ticket asks why before any trial."
+        );
+        // Payback while collision waste is unmeasured.
+        let out = reading(&separated());
+        assert_eq!(
+            (&out["result"], &out["mechanism"]),
+            (&json!("payback"), &json!("missing"))
+        );
+        // No payback: no primary passes for Falinks, and P3 passes for Git.
+        let mut slower = separated();
+        for run in slower.iter_mut().filter(|r| r["arm"] == "falinks") {
+            run["timing"]["elapsed_seconds"] = json!(900.0);
+            run["tokens"]["cold_start_cost_usd"] = json!(0.9);
+        }
+        let out = reading(&slower);
+        assert_eq!(
+            (&out["result"], &out["passed_for_falinks"]),
+            (&json!("no payback"), &json!([]))
+        );
+        assert!(out["next_step"].as_str().unwrap().contains("redesign"));
+        // Not shown: anything else.
+        let out = reading(&even());
+        assert_eq!(
+            (&out["result"], &out["passed_for_falinks"]),
+            (&json!("not shown"), &json!([]))
+        );
+        assert!(
+            out["next_step"]
+                .as_str()
+                .unwrap()
+                .contains("improvement batch")
+        );
+        assert!(
+            out["false_payback"]
+                .as_str()
+                .unwrap()
+                .contains("about 7% per batch")
+        );
+        // A primary without data cannot rule out payback.
+        let mut costless = even();
+        costless[5]["tokens"] = json!({});
+        assert_eq!(reading(&costless)["result"], "incomplete");
+        // A safety failure fails the precondition: no reading.
+        let mut unsafe_runs = separated();
+        unsafe_runs[4]["outcome"] = "safety_failure".into();
+        let out = reading(&unsafe_runs);
+        assert_eq!(out["result"], "no reading");
+        assert_eq!(out["safety_failures"], json!(["go-invoice-2-git-2"]));
+    }
+
+    const SUCCESSES: &str = "Successes: git-1 8/8, git-2 8/8, falinks-2 8/8.";
+    const CAVEAT: &str = "The payback reading compares two Falinks agents with two Git agents only, and stands as computed. It does not show that two agents are the right choice for this task.";
+
+    /// `git-1` is compared with each two-agent arm by P1's, P3's and P2's tests, and read in
+    /// the resolution's fixed sentences, each beginning with the success counts.
+    #[test]
+    fn one_agent_reading_uses_the_fixed_sentences() {
+        // One agent faster and cheaper than both teams; Falinks still beats Git, with evidence.
+        let mut ahead = runs(std::array::from_fn(|i| {
+            let s = 400.0 + 10.0 * i as f64;
+            (s, s + 300.0, s + 100.0)
+        }));
+        waste(&mut ahead, 0.0);
+        let out = large_spec_report(&ahead);
+        let one = &out["git_1"];
+        assert_eq!(
+            one["speed"],
+            format!(
+                "{SUCCESSES} On this fixture one agent finished faster than both two-agent teams. {CAVEAT}"
+            )
+        );
+        assert_eq!(
+            one["cost"],
+            format!(
+                "{SUCCESSES} On this fixture one agent cost less than both two-agent teams. {CAVEAT}"
+            )
+        );
+        let completion = &one["comparisons"]["falinks-2"]["completion_seconds"];
+        assert_eq!(completion["p"]["git-1"], 1.0 / 12870.0);
+        assert_eq!(
+            one["comparisons"]["git-2"]["success"]["p"],
+            json!({"git-1": 1.0, "git-2": 1.0})
+        );
+        // The trial follows, and this research advises it include a one-agent arm.
+        assert_eq!(
+            out["reading"]["next_step"],
+            format!(
+                "{NEXT_EVIDENCE} This research advises that the trial include a one-agent arm."
+            )
+        );
+
+        // Both teams faster and cheaper than one agent.
+        let both = large_spec_report(&runs(std::array::from_fn(|i| {
+            let s = 400.0 + 10.0 * i as f64;
+            (s + 300.0, s, s + 100.0)
+        })));
+        assert_eq!(
+            both["git_1"]["speed"],
+            format!("{SUCCESSES} Parallel work paid on this fixture in both arms.")
+        );
+        assert_eq!(
+            both["git_1"]["cost"],
+            format!("{SUCCESSES} Parallel work cost less on this fixture in both arms.")
+        );
+
+        // Otherwise not established, with the medians.
+        let out = large_spec_report(&even());
+        assert_eq!(
+            out["git_1"]["speed"],
+            format!(
+                "{SUCCESSES} One agent against two-agent teams: not established (median completion seconds: git-1 535.0, git-2 536.0, falinks-2 537.0)."
+            )
+        );
+        assert_eq!(
+            out["git_1"]["cost"],
+            format!(
+                "{SUCCESSES} One agent against two-agent teams: not established (median cold-start cost per run: git-1 $0.535, git-2 $0.536, falinks-2 $0.537)."
+            )
+        );
+        // Cost per successful task: $4.28 over 8 successes; no measured cost recorded.
+        let per_success = &out["git_1"]["cost_per_success_usd"]["git-1"];
+        assert_eq!(
+            (&per_success["cold_start"], &per_success["measured"]),
+            (&json!(0.535), &Value::Null)
+        );
+
+        // One agent's lower success (3/8 against 8/8: p = 56/4368) is named in both sentences.
+        let mut runs = even();
+        for rep in 1..=5 {
+            fail(&mut runs, &format!("go-invoice-{rep}-git-1"));
+        }
+        let out = large_spec_report(&runs);
+        let one = &out["git_1"];
+        assert_eq!(
+            one["comparisons"]["git-2"]["success"]["p"]["git-2"],
+            56.0 / 4368.0
+        );
+        for key in ["speed", "cost"] {
+            let sentence = one[key].as_str().unwrap();
+            assert!(
+                sentence.starts_with("Successes: git-1 3/8, git-2 8/8, falinks-2 8/8. "),
+                "{sentence}"
+            );
+            assert!(
+                sentence.ends_with(
+                    " One agent's failures are counted in its speed and per-success cost."
+                ),
+                "{sentence}"
+            );
+        }
+    }
+
+    /// Per arm: coordination overhead and protocol acts per ticket (÷ 9), waiting-on-peer
+    /// seconds and load balance, with each run listed and a missing rotation named.
+    #[test]
+    fn per_arm_figures_divide_overhead_by_nine_tickets() {
+        let mut runs = even();
+        let agent = |count: u64, seconds: f64, waiting: f64, busy: f64| {
+            json!({"round_trips": {"coordination": {"count": count, "model_seconds": seconds}},
+                "waiting_on_peer_seconds": waiting, "busy_seconds": busy})
+        };
+        let (mut a, mut b) = (agent(9, 18.0, 4.0, 30.0), agent(9, 9.0, 6.0, 10.0));
+        // Source writes are not protocol acts.
+        a["operations"] = json!({"handle": {"acts": 10}, "edit": {"acts": 5}});
+        b["operations"] = json!({"offer": {"acts": 8}});
+        runs[2]["transcript"] = json!({"agents": {"agent-0": a, "agent-1": b}});
+        let git = agent(4, 4.5, 1.0, 20.0);
+        runs[1]["transcript"] = json!({"agents": {"A": git, "B": git}});
+        // The Git host's usage and limit reports are the harness's, not the agents'.
+        runs[1]["worker_requests"] = json!({"share": 4, "check": 1, "message": 4, "usage": 9});
+        runs.retain(|r| r["run_id"] != "go-invoice-8-git-1");
+        let out = large_spec_report(&runs);
+        let first = |arm: &str, key: &str| out["per_arm"][arm][key]["values"][0].clone();
+        let falinks = [
+            "coordination_round_trips",
+            "coordination_model_seconds",
+            "protocol_acts",
+        ]
+        .map(|key| out["per_arm"]["falinks-2"]["per_ticket"][key]["values"][0].clone());
+        assert_eq!(falinks, [json!(2.0), json!(3.0), json!(2.0)]);
+        let git = [
+            "coordination_round_trips",
+            "coordination_model_seconds",
+            "protocol_acts",
+        ]
+        .map(|key| out["per_arm"]["git-2"]["per_ticket"][key]["values"][0].clone());
+        assert_eq!(git, [json!(8.0 / 9.0), json!(1.0), json!(1.0)]);
+        assert_eq!(first("falinks-2", "waiting_on_peer_seconds"), 10.0);
+        assert_eq!(first("falinks-2", "load_balance"), 1.5);
+        assert_eq!(out["per_arm"]["falinks-2"]["load_balance"]["missing"], 7);
+        assert_eq!(out["per_arm"]["git-1"]["waiting_on_peer_seconds"]["n"], 0);
+        assert_eq!(
+            out["rotations"][0]["arms"]["falinks-2"]["run_id"],
+            "go-invoice-1-falinks-2"
+        );
+        assert_eq!(
+            out["successes"],
+            json!({"git-1": 7, "git-2": 8, "falinks-2": 8})
+        );
+        assert_eq!(
+            out["gaps"],
+            json!(["go-invoice: 7 of 8 complete rotations"])
+        );
+    }
+
+    /// σ is the sample standard deviation of the log values per arm (P3: successes only), pooled
+    /// over both arms, with the power it implies at the observed n.
+    #[test]
+    fn reading_prints_the_observed_sigma_and_its_power() {
+        let runs = runs(std::array::from_fn(|i| {
+            let s = 500.0
+                * if i % 2 == 0 {
+                    0.1f64.exp()
+                } else {
+                    (-0.1f64).exp()
+                };
+            (s, s, s)
+        }));
+        let sigma = &reading(&runs)["sigma"]["P3"];
+        // Logs ±0.1 around their mean: √(8 × 0.01 / 7).
+        let expected = (0.08f64 / 7.0).sqrt();
+        for key in ["falinks-2", "git-2", "pooled"] {
+            assert!(
+                (sigma[key].as_f64().unwrap() - expected).abs() < 1e-12,
+                "{key}"
+            );
+        }
+        assert_eq!(sigma["power"], power(8, 8, expected));
+        assert_eq!(sigma["planning_sigma"], 0.15);
+    }
 }
 
 #[cfg(test)]
