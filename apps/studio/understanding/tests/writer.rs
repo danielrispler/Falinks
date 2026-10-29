@@ -1,9 +1,11 @@
 //! The card writer (#328, Testing Decisions): the real `claude -p` command is checked without
 //! running it, and the cards come from its reply.
 
-use std::{ffi::OsStr, path::Path};
+use std::{ffi::OsStr, fs, os::unix::fs::PermissionsExt, path::Path};
 use studio_core::{CardRequest, Check, Step};
-use studio_understanding::{Card, ClaudeWriter};
+use studio_understanding::{Card, ClaudeWriter, find_claude};
+
+const CLAUDE: &str = "/opt/homebrew/bin/claude";
 
 fn edit() -> CardRequest {
     CardRequest {
@@ -26,9 +28,9 @@ fn edit() -> CardRequest {
 #[test]
 fn the_real_writer_runs_claude_on_the_subscription_in_its_neutral_folder() {
     let folder = Path::new("/h/Library/Application Support/dev.falinks.studio/card-writer");
-    let command = ClaudeWriter::new(folder.into()).command(&edit());
+    let command = ClaudeWriter::new(CLAUDE.into(), folder.into()).command(&edit());
 
-    assert_eq!(command.get_program(), "claude");
+    assert_eq!(command.get_program(), CLAUDE);
     // Both variables would take precedence over the subscription login; nothing else is passed.
     let mut env: Vec<_> = command.get_envs().collect();
     env.sort();
@@ -50,6 +52,33 @@ fn the_real_writer_runs_claude_on_the_subscription_in_its_neutral_folder() {
     assert!(prompt.contains("Edit apps/studio/ui/style.css"));
     assert!(prompt.contains(&edit().change));
     assert_eq!(command.get_current_dir(), Some(folder));
+}
+
+/// A stand-in login shell named `name`, which runs `script` and never `claude`.
+fn shell(dir: &Path, name: &str, script: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn the_login_shell_finds_claude_and_without_its_answer_the_path_does() {
+    let dir = tempfile::tempdir().unwrap();
+    // A profile may print before the answer.
+    let answers = shell(
+        dir.path(),
+        "answers",
+        &format!(r#"[ "$1|$2" = "-lc|command -v claude" ] || exit 2; echo Welcome; echo {CLAUDE}"#),
+    );
+    let fails = shell(dir.path(), "fails", "exit 1");
+
+    assert_eq!(find_claude(&answers), Path::new(CLAUDE));
+    assert_eq!(find_claude(&fails), Path::new("claude"));
+    assert_eq!(
+        find_claude(&dir.path().join("missing")),
+        Path::new("claude")
+    );
 }
 
 #[test]
@@ -99,7 +128,7 @@ fn check() -> CardRequest {
 #[test]
 fn a_checks_card_writer_gets_its_command_and_result_and_says_whether_it_passed() {
     let folder = Path::new("/h/Library/Application Support/dev.falinks.studio/card-writer");
-    let command = ClaudeWriter::new(folder.into()).command(&check());
+    let command = ClaudeWriter::new(CLAUDE.into(), folder.into()).command(&check());
 
     let prompt = command.get_args().nth(1).unwrap().to_str().unwrap();
     assert!(prompt.contains("Bash cargo test 2>&1 | tail -5\nResult:\n"));

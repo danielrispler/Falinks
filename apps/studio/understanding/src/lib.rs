@@ -2,7 +2,10 @@
 //! module 4), the worktree fingerprint (module 5), and the card store and its weekly rates (module 6).
 
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 use studio_core::CardRequest;
 
 mod fingerprint;
@@ -80,12 +83,31 @@ impl CardWriter for FakeWriter {
 /// Writes the card with `claude -p` on Daniel's subscription, in a neutral folder that holds none of
 /// his projects, so it loads no repository's instructions and has nothing to wander into.
 pub struct ClaudeWriter {
+    /// The `claude` program, from `find_claude`.
+    program: PathBuf,
     folder: PathBuf,
 }
 
+/// The `claude` program, as login shell `shell` finds it, or `claude` when it answers no path. An
+/// app started from Finder or `open` gets launchd's `PATH`, which lacks Homebrew's folder. Only the
+/// path is kept: the shell's environment, which a profile may give the variables the writer removes,
+/// never reaches the writer.
+pub fn find_claude(shell: &Path) -> PathBuf {
+    let output = Command::new(shell)
+        .args(["-lc", "command -v claude"])
+        .output();
+    let stdout = output.ok().filter(|o| o.status.success()).map(|o| o.stdout);
+    let stdout = stdout.as_deref().map(String::from_utf8_lossy);
+    // A profile may print before the answer, which is the last line.
+    match stdout.as_deref().and_then(|out| out.lines().last()) {
+        Some(path) if path.starts_with('/') => path.into(),
+        _ => "claude".into(),
+    }
+}
+
 impl ClaudeWriter {
-    pub fn new(folder: PathBuf) -> Self {
-        Self { folder }
+    pub fn new(program: PathBuf, folder: PathBuf) -> Self {
+        Self { program, folder }
     }
 
     /// The `claude -p` run for one step. Without the two variables and without `--bare`, `claude`
@@ -102,7 +124,7 @@ impl ClaudeWriter {
             "{PROMPT}{check}\nStep: {} {detail}\n{input}:\n{}",
             step.tool, request.change
         );
-        let mut command = Command::new("claude");
+        let mut command = Command::new(&self.program);
         command
             .args(["-p", &prompt])
             .env_remove("ANTHROPIC_API_KEY")

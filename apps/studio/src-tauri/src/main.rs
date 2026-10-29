@@ -14,7 +14,7 @@ use std::{
 };
 use studio_core::{Output, Session, Studio};
 use studio_understanding::{
-    CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, StoredCard,
+    CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, StoredCard, find_claude,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -94,7 +94,10 @@ fn main() {
     studio.set_carded_steps(carded);
     let writer: Writer = match std::env::var("STUDIO_CARD_WRITER").as_deref() {
         Ok("fake") => Arc::new(FakeWriter),
-        _ => Arc::new(ClaudeWriter::new(folder)),
+        _ => {
+            let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
+            Arc::new(ClaudeWriter::new(find_claude(shell.as_ref()), folder))
+        }
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
