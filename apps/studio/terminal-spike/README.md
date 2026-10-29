@@ -24,9 +24,11 @@ The buttons:
 Right-click a tab to close it. On start the app reattaches to every daemon terminal, every tmux session and the Herdr
 session. The status line shows replay sizes and times, exits, and any OSC 7501 the terminal receives.
 
-`hook/settings.json` logs 31 of the 33 documented hook events to `hook/events.jsonl` (gitignored). It leaves out
-`WorktreeCreate` and `WorktreeRemove`, because a command hook on those replaces worktree creation. Each line carries the `STUDIO_TERMINAL_ID`, `TMUX_PANE` and `HERDR_*` values that the hook process inherited.
-Its command path is this worktree's absolute path.
+`hook/` is a local Claude Code plugin. It logs 31 of the 33 documented hook events to
+`~/.studio-terminal-spike/events.jsonl`. It leaves out `WorktreeCreate` and `WorktreeRemove`, because a command hook on
+those replaces worktree creation. Each line carries the `STUDIO_TERMINAL_ID`, `TMUX_PANE` and `HERDR_*` values that
+the hook process inherited. The app passes the plugin's path from the checkout it was built in; the status line shows
+the `claude --plugin-dir …` command for typing it by hand.
 
 ## Scripted check
 
