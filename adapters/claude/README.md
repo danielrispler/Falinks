@@ -35,6 +35,7 @@ Every turn's `system/init` must match the pinned version, model, `dontAsk` mode,
 - a `model_refusal_fallback`
 - an assistant message from another model
 - `modelUsage` naming anything but the pinned model
+- an assistant entry in the session's own file (`~/.claude/projects/<cwd>/<session>.jsonl`, the only place the runtime records effort) at an effort other than the pinned `medium`, checked at each `result`
 - a tool outside the list
 
 The failure latches the fresh `ControlGate`, engine calls stop, and the worker is shut down, so native tools stop too. Shutdown closes input and waits up to 20 s, then sends `SIGTERM` to the worker's process group so it can flush its session, waits up to 5 s, then sends `SIGKILL` to the group. Relocation and resume use the same shutdown. `require_supported` also checks that the process is alive and re-hashes the binary.

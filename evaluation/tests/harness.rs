@@ -445,6 +445,41 @@ fn codex_bridge_waits_for_peer_events_and_retains_all_usage() {
     }
 }
 
+/// Gives a scripted configuration a runtime home, where the runtime keeps its sessions.
+fn with_runtime_home(config: &Path, base: &Path) -> PathBuf {
+    let home = base.join("home");
+    let mut value = read(config);
+    value["runtime_home"] = json!(home);
+    fs::write(config, value.to_string()).unwrap();
+    home
+}
+
+/// A session that records another effort than the configured one invalidates the run, like
+/// another model (#205 E1). The scripted runtime copied as `effort-high` records `high`.
+#[test]
+fn claude_bridge_fails_a_session_at_another_effort() {
+    let tmp = tmp("falinks-claude-effort-test-");
+    let base = tmp.path();
+    let runtime = base.join("effort-high");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        runtime.to_str().unwrap(),
+    );
+    with_runtime_home(&config, base);
+    let run = base.join("run");
+    assert!(!baseline("go-relationships", &config, &run).status.success());
+    let stderr: String = ["A", "B"]
+        .map(|a| fs::read_to_string(run.join(format!("controller/{a}.stderr"))).unwrap())
+        .concat();
+    assert!(
+        stderr.contains("session effort \"high\" is not \"none\"; run invalid"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage() {
     let tmp = tmp("falinks-claude-bridge-test-");
@@ -458,9 +493,20 @@ fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage
         json!(["{worker}"]),
         runtime.to_str().unwrap(),
     );
+    let home = with_runtime_home(&config, base);
     let run = base.join("run");
     let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
     assert_eq!(evidence["usage"]["status"], "complete");
+    // The scripted runtime records the `--effort` it was given, as the real one does (#205 E1).
+    let sessions: Vec<String> = fs::read_dir(home.join(".claude/projects"))
+        .unwrap()
+        .flat_map(|folder| fs::read_dir(folder.unwrap().path()).unwrap())
+        .map(|file| fs::read_to_string(file.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(sessions.len(), 2);
+    for session in sessions {
+        assert!(session.contains("\"effort\":\"none\""), "{session}");
+    }
     for agent in ["A", "B"] {
         let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
         assert_eq!(reports[0]["subtype"], "error_max_turns");

@@ -304,6 +304,35 @@ fn a_nested_agent_latches_failure_and_is_recorded() {
     );
 }
 
+/// The runtime records each request's effort in its session file, not the stream. Another
+/// effort there invalidates the run, like another model (#205 E1).
+#[test]
+fn a_session_at_another_effort_latches_failure() {
+    let mut f = fixture();
+    let project = f.workspace.with_file_name("project");
+    std::fs::create_dir(&project).unwrap();
+    let file = project.join(format!("{SESSION}.jsonl"));
+    let entry = |effort: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"assistant","effort":effort,"perTurnEffort":effort})
+        )
+    };
+    std::fs::write(&file, entry("medium")).unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    f.session.project = Some(project.clone());
+    f.session.line(&result()).unwrap();
+    std::fs::write(&file, entry("medium") + &entry("high")).unwrap();
+    f.session.line(&init(&f.workspace)).unwrap();
+    f.session.project = Some(project);
+    let error = f.session.line(&result()).unwrap_err().to_string();
+    assert!(
+        error.contains("effort") && error.contains("run invalid"),
+        "{error}"
+    );
+    assert!(f.session.gate.failed);
+}
+
 /// Bash keeps its cwd across turns while it stays beneath scratch (#110).
 #[test]
 fn a_later_turn_may_start_beneath_scratch() {
@@ -403,6 +432,16 @@ fn only_the_pinned_claude_executable_is_accepted() {
         Err(_) => "unsupported platform",
     };
     assert!(error.contains(expected), "{error}");
+}
+
+/// Effort is passed explicitly, never the runtime's default (#205 E1), on resume too.
+#[test]
+fn the_launch_pins_effort_medium() {
+    for resume in [false, true] {
+        let args = falinks_claude::launch_args(Path::new("/c"), SESSION, resume);
+        let at = args.iter().position(|a| a == "--effort").unwrap();
+        assert_eq!(args[at + 1], "medium");
+    }
 }
 
 /// The launch flag and the per-turn `init` check name the same native tools.
