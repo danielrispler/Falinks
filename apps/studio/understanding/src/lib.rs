@@ -1,6 +1,9 @@
 //! The understanding layer's I/O, which the core leaves to the shell: the card writer (#328,
-//! module 4).
+//! module 4) and the worktree fingerprint (module 5).
 
+mod fingerprint;
+
+pub use fingerprint::Fingerprints;
 use serde::Serialize;
 use studio_core::CardRequest;
 
