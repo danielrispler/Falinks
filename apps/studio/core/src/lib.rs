@@ -106,7 +106,8 @@ pub struct CardRequest {
     /// The step's tool call, which names the card.
     pub tool_use_id: String,
     pub step: Step,
-    /// The diff lines of an edit, or a new file's content as added lines; a check's output.
+    /// The diff lines of an edit, a new file's content as added lines, the diff of the files a Bash
+    /// step changed, or a check's output.
     pub change: String,
     /// What settles the guess on a check, with the card writer's verdict; `None` for other steps.
     #[serde(default)]
@@ -201,12 +202,27 @@ fn step_detail(input: &Value, cwd: &str) -> Option<String> {
         .map(Into::into)
 }
 
-/// An Edit or Write outside the plan files (`~/.claude/plans/`): the card step this version knows.
-fn is_card_step(tool: &str, input: &Value) -> bool {
+/// A card step's change, or `None` for any other step. The card steps this version knows: an Edit
+/// or Write outside the plan files (`~/.claude/plans/`), and a Bash command that does not start with
+/// `git` and changed the worktree, which the shell's fingerprint tells. A check is the card step from
+/// its `PreToolUse` instead (`is_check`).
+fn card_change(
+    tool: &str,
+    input: &Value,
+    response: &Value,
+    worktree_change: Option<String>,
+) -> Option<String> {
     let plan_file = input["file_path"]
         .as_str()
         .is_some_and(|path| path.contains("/.claude/plans/"));
-    matches!(tool, "Edit" | "Write") && !plan_file
+    let git = input["command"]
+        .as_str()
+        .is_some_and(|command| command.split_whitespace().next() == Some("git"));
+    match tool {
+        "Edit" | "Write" if !plan_file => Some(change(response)),
+        "Bash" if !git => worktree_change,
+        _ => None,
+    }
 }
 
 /// A command that runs a check from the check list (#328, module 3): `cargo
@@ -283,10 +299,31 @@ fn exit_code_counts(command: &str) -> bool {
     command.contains("pipefail") || !command.replace("||", "").contains('|')
 }
 
+/// The folder whose worktree the shell fingerprints (#328, module 5) when it reads this line live,
+/// or `None`. It takes one at every step's end, so a Bash step is compared with the step before it,
+/// and at a prompt, so the wait's first step is compared with the worktree as Daniel left it rather
+/// than with what he changed himself since the last wait.
+pub fn fingerprint_folder(line: &str) -> Option<String> {
+    let event = serde_json::from_str::<Event>(line).ok()?;
+    let at = ["UserPromptSubmit", "PostToolUse", "PostToolUseFailure"];
+    (at.contains(&event.hook_event_name.as_str()) && !event.cwd.is_empty()).then_some(event.cwd)
+}
+
 impl Studio {
-    /// Takes one live event log line and returns what the shell must do. A line that is not a hook
-    /// event is skipped.
+    /// Takes one live event log line that the shell took no fingerprint for, and returns what the
+    /// shell must do.
     pub fn apply(&mut self, line: &str) -> Vec<Output> {
+        self.apply_with_change(line, None)
+    }
+
+    /// Takes one live event log line, with what the shell's fingerprint after it found: the diff of
+    /// the files that changed since the previous fingerprint, or `None` when nothing changed or the
+    /// shell took none. Returns what the shell must do. A line that is not a hook event is skipped.
+    pub fn apply_with_change(
+        &mut self,
+        line: &str,
+        worktree_change: Option<String>,
+    ) -> Vec<Output> {
         let Ok(event) = serde_json::from_str::<Event>(line) else {
             return Vec::new();
         };
@@ -414,6 +451,7 @@ impl Studio {
             "PostToolUse" | "PostToolUseFailure" => {
                 session.running.retain(|c| c.id != id);
                 session.blocks.retain(|c| c.id != id);
+                let input = &event.tool_input;
                 let failed = event.hook_event_name == "PostToolUseFailure";
                 let guessed = session
                     .guess
@@ -421,24 +459,25 @@ impl Studio {
                 // A check gets its card whether it passed or failed. A denied or interrupted
                 // command did not run, and its error has no exit code.
                 let card = if let Some(prompt) = guessed {
-                    let command = event.tool_input["command"].as_str().unwrap_or_default();
+                    let command = input["command"].as_str().unwrap_or_default();
                     let ran = !failed || event.error.starts_with("Exit code");
                     let check = Check {
                         guess: prompt.tap,
                         exit_passed: (ran && exit_code_counts(command)).then_some(!failed),
                     };
                     Some((output(&event.tool_response, &event.error), Some(check)))
-                // Only an edit that succeeded counts: a failed Edit or Write changed nothing.
+                // Only another step that succeeded counts: a failed Edit or Write changed nothing.
                 } else if !failed
-                    && is_card_step(&tool, &event.tool_input)
+                    && let Some(change) =
+                        card_change(&tool, input, &event.tool_response, worktree_change)
                     && self.awaiting_card.remove(&event.session_id)
                 {
-                    Some((change(&event.tool_response), None))
+                    Some((change, None))
                 } else {
                     None
                 };
                 if let Some((change, check)) = card {
-                    let detail = step_detail(&event.tool_input, &event.cwd);
+                    let detail = step_detail(input, &event.cwd);
                     outputs.push(Output::Card(CardRequest {
                         session_id: event.session_id.clone(),
                         tool_use_id: event.tool_use_id,
