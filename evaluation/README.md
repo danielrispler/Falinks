@@ -483,6 +483,46 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/step-6 --sc
   model overhead (output against changed bytes), with the run's `identity`. These come from
   the transcripts, not the host's edit-gate timing (#178's I-2, track P).
 
+#205's scored batch runs the `large-spec` schedule on `go-invoice` (#332) and reads it by the
+[#5 decision](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6387801654)'s
+fixed payback criteria (#333):
+
+```sh
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/large-spec --schedule large-spec
+evaluation/target/release/falinks-eval report --runs /private/tmp/ev/large-spec --schedule large-spec
+```
+
+- **Schedule**: `go-invoice` eight times in each of step 6's three arms, 24 scored slots
+  and no pilot pair. The order rotates as in step 6, so each arm runs first two or three
+  times. Batch isolation, the gate, the ledger and the pause rules apply to every slot.
+  `batch` runs registered fixtures only, so the schedule has no slot until `go-invoice` is
+  registered.
+- **Report** (`report --schedule large-spec`, also the batch's `report.json`):
+  - **P1–P3** compare `falinks-2` with `git-2` only, each exact and one-sided at 2.5%. P1 is
+    Fisher's exact test on success counts (at n = 8: 8–3, 7–2, 6–1 and 5–0 pass). P2
+    (per-run cold-start cost, failed runs at their actual cost) and P3 (per-run completion
+    seconds) are permutation rank tests over every split of the pooled runs, with ties
+    counted as half. An oracle failure or a timeout ranks slower than every success and ties
+    with the others; a replaced interruption is never ranked. Each test gives U, each arm's
+    p and the arm that passes; p is null when a run lacks the value.
+  - **Mechanism**: the same rank test on per-run collision waste
+    (`discarded_or_rewritten_work`), `missing` until that measure exists (#334).
+  - **Reading**: payback (a primary passes for Falinks, with or without mechanism evidence),
+    no payback (none does, and P3 passes for Git) or not shown, with the next step the #5
+    decision fixes. A safety failure gives no reading. A primary that lacks a run's value
+    gives `incomplete` unless another primary passed. The reading prints each primary's
+    observed σ (the sample standard deviation of log values per arm, and pooled; P3 over
+    successes only), the power that σ implies (simulated as for the #5 decision's table) and
+    the chance of a false payback.
+  - **`git-1`**: compared with each two-agent arm by P1's test in both directions, P3's and
+    P2's, and read in #205's fixed sentences for speed and cost, each beginning with the
+    success counts. Cost per successful task is given per arm.
+  - **Per arm**: per-ticket overhead (coordination round-trips and model seconds, and
+    protocol acts, each divided by the fixture's 9 tickets), waiting-on-peer seconds and load
+    balance. Protocol acts are a Falinks agent's Falinks calls other than source writes, and
+    a Git team's host requests other than the harness's usage reports
+    (`controller/events.jsonl`). Coordination overhead is `timing`'s `coordination` category.
+
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and
 session state need more `runtime_writable` paths under the host sandbox. Record any such
