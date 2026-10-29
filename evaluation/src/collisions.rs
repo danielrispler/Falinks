@@ -21,7 +21,8 @@
 //!   detected by that peer share.
 //! - **Broken combined check**, both arms: a failed check holding both agents' work. When lines
 //!   it held were removed before the next passing check, it is rework; otherwise it is a
-//!   premature check (not a collision) when work was added before that pass, else no fault.
+//!   premature check (not a collision) when the peer of the agent that asked for it added work
+//!   before that pass (its half did not exist yet), else no fault.
 //! - **Duplicate work**: Daniel's classifications of the pairs `duplicates` proposes: one
 //!   function of each agent with one name, in files one requirement names, or with similar
 //!   bodies. A pair's waste is the later copy's lines when the final tree holds both, else the
@@ -770,13 +771,19 @@ impl Ledger {
                     |_: &str, line: &Line| line.agent().is_some_and(|(_, o)| held.contains(&o));
                 files.extend(self.take(used, *op, held_line, &mut waste));
             }
-            let class = match (waste.is_empty(), later.is_empty()) {
+            // Premature only when the peer's half arrived before the pass.
+            let by = check["requested_by"].as_str().unwrap_or_default();
+            let peer_work = self.records.iter().filter(|r| applied(r)).any(|r| {
+                r["operation"].as_u64().is_some_and(|o| later.contains(&o))
+                    && agent_name(&r["agent"]) != by
+            });
+            let class = match (waste.is_empty(), peer_work) {
                 (false, _) => "rework",
-                (true, false) => {
+                (true, true) => {
                     premature += 1;
                     continue;
                 }
-                (true, true) => "no_fault",
+                (true, false) => "no_fault",
             };
             let detected = json!({"agent": check["requested_by"], "signal": "broken_check",
                 "check": check["number"], "revision": check["revision"]});
@@ -1366,9 +1373,11 @@ impl Repo {
                 .iter()
                 .find(|(a, ..)| a["passed"] == true)
                 .and_then(|(a, ..)| a["candidate"].as_str().map(String::from));
-            let (mut waste, mut files, mut later) = (BTreeMap::new(), BTreeSet::new(), false);
+            // Premature only when the peer's half arrived before the pass.
+            let (mut waste, mut files, mut peer_work) = (BTreeMap::new(), BTreeSet::new(), false);
             if let Some(next) = &next {
-                later = self.side(next).iter().any(|(a, n)| *n > held[a]);
+                let side = self.side(next);
+                peer_work = side.iter().any(|(a, n)| a != agent && *n > held[a]);
                 for path in self.paths(&[candidate, next])? {
                     let (ours, theirs) = (self.text(candidate, &path)?, self.text(next, &path)?);
                     let ids = self.line_ids(candidate, &path)?;
@@ -1379,7 +1388,7 @@ impl Repo {
                     }
                 }
             }
-            let class = match (waste.is_empty(), later) {
+            let class = match (waste.is_empty(), peer_work) {
                 (false, _) => "rework",
                 (true, true) => {
                     premature += 1;
@@ -1543,8 +1552,8 @@ mod tests {
     }
 
     /// agent-0 writes a.go, agent-1 writes b.go, then agent-1 changes b.go to `later`. Checks
-    /// are (number, passed, revision).
-    fn broken_check_run(later: &str, checks: &[(u64, bool, u64)]) -> Value {
+    /// are (number, passed, revision), all requested `by` one agent.
+    fn broken_check_run(later: &str, by: &str, checks: &[(u64, bool, u64)]) -> Value {
         let (a, b) = (
             "package p\nfunc A() int {\n    return 1\n}\n",
             "package p\nfunc B() int {\n    x := 2\n    return x\n}\n",
@@ -1577,7 +1586,7 @@ mod tests {
         ]);
         let attempts: Vec<Value> = checks
             .iter()
-            .map(|(n, passed, r)| json!({"number": n, "passed": passed, "revision": r, "requested_by": "agent-0", "conflict": null}))
+            .map(|(n, passed, r)| json!({"number": n, "passed": passed, "revision": r, "requested_by": by, "conflict": null}))
             .collect();
         let (dir, result) = falinks_run(history, json!(attempts));
         collisions(dir.path(), &result, &Value::Null)
@@ -1587,7 +1596,11 @@ mod tests {
     fn a_broken_combined_check_is_rework_premature_or_no_fault_by_what_followed_it() {
         // Its two lines of b.go are rewritten before the next pass: rework.
         let rewritten = "package p\nfunc B() int {\n    return 2\n}\n";
-        let found = broken_check_run(rewritten, &[(1, false, 1), (2, false, 2), (3, true, 3)]);
+        let found = broken_check_run(
+            rewritten,
+            "agent-0",
+            &[(1, false, 1), (2, false, 2), (3, true, 3)],
+        );
         assert_eq!(
             found["events"],
             json!([{"class": "rework", "files": ["b.go"], "lines": 2, "waste": {"agent-1": 2},
@@ -1595,13 +1608,21 @@ mod tests {
             "a check holding one agent's work is not combined"
         );
         assert_eq!(found["premature_checks"], 0);
-        // Only additions before the pass: the peer's half did not exist yet.
+        // Only the peer's additions before the pass: its half did not exist yet.
         let added = "package p\nfunc B() int {\n    x := 2\n    return x\n}\nfunc C() {}\n";
-        let found = broken_check_run(added, &[(1, false, 2), (2, true, 3)]);
+        let found = broken_check_run(added, "agent-0", &[(1, false, 2), (2, true, 3)]);
         assert_eq!(found["events"], json!([]));
         assert_eq!(found["premature_checks"], 1);
+        // The requester's own additions: its half was missing, not the peer's.
+        let found = broken_check_run(added, "agent-1", &[(1, false, 2), (2, true, 3)]);
+        assert_eq!(found["premature_checks"], 0);
+        assert_eq!(
+            found["events"],
+            json!([{"class": "no_fault", "files": [], "lines": 0, "waste": {},
+                "detected": [{"agent": "agent-1", "signal": "broken_check", "check": 1, "revision": 2}]}])
+        );
         // Nothing changed before the pass.
-        let found = broken_check_run(added, &[(1, false, 2), (2, true, 2)]);
+        let found = broken_check_run(added, "agent-0", &[(1, false, 2), (2, true, 2)]);
         assert_eq!(
             found["events"],
             json!([{"class": "no_fault", "files": [], "lines": 0, "waste": {},
@@ -1785,8 +1806,8 @@ mod tests {
     }
 
     /// A shares a.go and B b.go; their merge fails a check; B then shares `later`, whose merge
-    /// passes.
-    fn git_broken_check(later: &str) -> Value {
+    /// passes. Agent `by` asked for the failed check.
+    fn git_broken_check(later: &str, by: &str) -> Value {
         let mut run = GitRun::new(&[("a.go", "package p\n"), ("b.go", "package p\n")]);
         let initial = run.initial.clone();
         let a = run.share(
@@ -1807,22 +1828,30 @@ mod tests {
         let failed = run.merge(&a, &b1, &[]);
         let b2 = run.share("B", &b1, &[("b.go", later)], 40.0);
         let passed = run.merge(&a, &b2, &[]);
-        run.measure(&[("A", &failed, false, 30.0), ("B", &passed, true, 50.0)])
+        run.measure(&[(by, &failed, false, 30.0), ("B", &passed, true, 50.0)])
     }
 
     #[test]
     fn a_failed_check_of_both_shares_is_rework_when_its_lines_are_rewritten_else_premature() {
-        let found = git_broken_check("package p\nfunc B() int {\n    return 2\n}\n");
+        let found = git_broken_check("package p\nfunc B() int {\n    return 2\n}\n", "A");
         assert_eq!(
             found["events"],
             json!([{"class": "rework", "files": ["b.go"], "lines": 2, "waste": {"B": 2},
                 "detected": [{"agent": "A", "signal": "broken_check", "check": 1, "elapsed": 30.0}]}])
         );
-        let found = git_broken_check(
-            "package p\nfunc B() int {\n    x := 2\n    return x\n}\nfunc C() {}\n",
-        );
+        // Only the peer's share follows: its half did not exist yet.
+        let added = "package p\nfunc B() int {\n    x := 2\n    return x\n}\nfunc C() {}\n";
+        let found = git_broken_check(added, "A");
         assert_eq!(found["events"], json!([]));
         assert_eq!(found["premature_checks"], 1);
+        // The requester's own share follows: not premature.
+        let found = git_broken_check(added, "B");
+        assert_eq!(found["premature_checks"], 0);
+        assert_eq!(
+            found["events"],
+            json!([{"class": "no_fault", "files": [], "lines": 0, "waste": {},
+                "detected": [{"agent": "B", "signal": "broken_check", "check": 1, "elapsed": 30.0}]}])
+        );
     }
 
     const NET_A: &str = "package p\nfunc NetA(q, p int) int {\n    n := q * p\n    return n\n}\n";
