@@ -4,7 +4,7 @@
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
-    FIXTURES, Result, bail, collisions, git, read,
+    FIXTURES, LARGE_SPEC_FIXTURE, Result, bail, collisions, git, read,
     report::{large_spec_report, report, step_6_report, track_t_report},
     root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
@@ -117,7 +117,7 @@ pub fn step_6_slots() -> Vec<Value> {
 /// #205's `large-spec` slots (M1): `go-invoice` eight times in each of step 6's three arms,
 /// rotating the same way, so each arm runs first two or three times. Scored, with no pilot pair.
 pub fn large_spec_slots() -> Vec<Value> {
-    rotations("go-invoice", 8, true)
+    rotations(LARGE_SPEC_FIXTURE, 8, true)
 }
 
 /// `count` rotations of one agent, two Git agents and two Falinks agents on `fixture`, the
@@ -547,7 +547,8 @@ pub fn batch(
     let summary = match schedule {
         Some("track-t") => track_t_report(&results),
         Some("large-spec") => large_spec_report(&results),
-        Some(_) => step_6_report(&results),
+        Some("step-6") => step_6_report(&results),
+        Some(other) => bail!("Unknown schedule {other}"),
         None => report(&results, false),
     };
     write(runs.join("report.json"), &summary)?;

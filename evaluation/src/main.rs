@@ -7,6 +7,7 @@ mod judge;
 mod known_answer;
 mod quality;
 mod report;
+mod significance;
 mod timing;
 mod tokens;
 
@@ -37,6 +38,8 @@ pub const FIXTURES: [&str; 7] = [
     "go-tasks",
     "go-invoice",
 ];
+/// #205's sealed scored fixture (#332), the `large-spec` schedule's only one.
+pub const LARGE_SPEC_FIXTURE: &str = "go-invoice";
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
 pub const SCORED_FIXTURES: [&str; 3] = ["rust-errors", "go-page", "go-relationships"];
 pub const FIXED_ENV: [(&str, &str); 10] = [
