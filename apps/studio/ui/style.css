@@ -11,7 +11,17 @@ code { font: 13px ui-monospace, Menlo, monospace; background: var(--code); borde
 code:empty { display: none; }
 .empty { color: var(--muted); margin: 0; }
 .cards-title { margin-top: 20px; }
-.card { background: var(--code); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; }
+/* A card is Hebrew, right to left; its code is left to right. No text in it is smaller than 14px (v0's
+   secondary text was 12px). */
+.card { background: var(--code); border-radius: 8px; padding: 10px 12px; margin: 0 0 10px; font-size: 16px; }
 .card summary { font-weight: 600; cursor: pointer; }
-.answer { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.card p { margin: 8px 0 0; overflow-wrap: anywhere; }
+.answer { white-space: pre-wrap; }
+.card code { font-size: 14px; background: var(--bg); padding: 1px 5px; white-space: normal; overflow-wrap: anywhere;
+             unicode-bidi: isolate; }
+.paths { display: flex; flex-wrap: wrap; gap: 6px; }
+.card pre { font: 14px/1.6 ui-monospace, Menlo, monospace; background: var(--bg); border-radius: 6px; padding: 8px 10px;
+            margin: 10px 0 0; overflow-x: auto; }
+.card h2 { font-size: 14px; font-weight: 600; color: var(--muted); margin: 12px 0 0; }
+.card h2 + p { margin-top: 2px; }
 [hidden] { display: none !important; }

@@ -3,15 +3,15 @@
 //! pane shows the session Daniel prompted last and its cards.
 
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{BufRead, BufReader, Seek, SeekFrom},
     path::Path,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 use studio_core::{CardRequest, Output, Session, Studio};
-use studio_understanding::{Card, CardWriter, FakeWriter};
+use studio_understanding::{Card, CardWriter, ClaudeWriter, FakeWriter};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// The written cards, oldest first, each with the step it explains.
@@ -38,15 +38,30 @@ fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<(CardRequest,
         .collect()
 }
 
+/// The card writer: `claude -p`, or the fake when `STUDIO_CARD_WRITER=fake`, for checks that must
+/// not run `claude -p`.
+type Writer = Arc<dyn CardWriter + Send + Sync>;
+
 fn main() {
     let log = studio_hook::event_log(&std::env::home_dir().expect("a home directory"));
+    // The card writer's neutral folder, beside the log. Claude Code reports `cwd` with symlinks
+    // resolved, so the core gets the folder resolved too.
+    let folder = log.with_file_name("card-writer");
+    fs::create_dir_all(&folder).expect("create the card writer's folder");
+    let folder = fs::canonicalize(folder).expect("resolve the card writer's folder");
+    let mut studio = Studio::default();
+    studio.set_card_writer_folder(&folder.to_string_lossy());
+    let writer: Writer = match std::env::var("STUDIO_CARD_WRITER").as_deref() {
+        Ok("fake") => Arc::new(FakeWriter),
+        _ => Arc::new(ClaudeWriter::new(folder)),
+    };
     tauri::Builder::default()
-        .manage(Mutex::new(Studio::default()))
+        .manage(Mutex::new(studio))
         .manage(Cards::default())
         .invoke_handler(tauri::generate_handler![now, cards])
         .setup(move |app| {
             let app = app.handle().clone();
-            thread::spawn(move || follow(&app, &log));
+            thread::spawn(move || follow(&app, &log, &writer));
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -57,7 +72,7 @@ fn main() {
 /// so a line the hook is still writing waits for the next read. The lines there at start are
 /// replayed, so steps that ran while the app was down get no cards.
 // shortcut: polls every 200 ms; switch to file-system events if the delay or the wake-ups matter.
-fn follow(app: &AppHandle, log: &Path) {
+fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
     let mut read_to = 0;
     let mut live = false;
     loop {
@@ -83,12 +98,16 @@ fn follow(app: &AppHandle, log: &Path) {
             drop(studio);
             for output in outputs {
                 match output {
-                    // shortcut: writes on this thread, which suits the instant fake; the real writer
-                    // (#342) takes seconds and needs its own thread.
+                    // `claude -p` takes seconds, so each card is written on its own thread and shown
+                    // when it is done.
                     Output::Card(request) => {
-                        if let Some(card) = FakeWriter.write(&request) {
-                            app.state::<Cards>().lock().unwrap().push((request, card));
-                        }
+                        let (app, writer) = (app.clone(), writer.clone());
+                        thread::spawn(move || {
+                            if let Some(card) = writer.write(&request) {
+                                app.state::<Cards>().lock().unwrap().push((request, card));
+                                let _ = app.emit("cards", cards(app.state(), app.state()));
+                            }
+                        });
                     }
                 }
             }

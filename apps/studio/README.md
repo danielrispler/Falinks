@@ -1,11 +1,15 @@
 # Studio
 
-The control room's app (map #266, spec #328), for macOS. This version's pane follows the Claude Code session you prompted last: its last step, live, and a card on the first Edit or Write of each wait. A card shows its question; tap it for the answer. A fake card writer writes the cards for now, and they are kept only until the app quits.
+The control room's app (map #266, spec #328), for macOS. This version's pane follows the Claude Code session you prompted last: its last step, live, and a card on the first Edit or Write of each wait. A card shows its question; tap it for the answer. The cards are kept only until the app quits.
+
+The card writer runs `claude -p` on your subscription, with `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` removed from its environment, in `card-writer/` beside the event log. It writes the card in Hebrew, right to left, with code left to right. A step whose card does not parse gets no card and one line on the app's stderr; `open --stderr <file>` keeps it. The studio ignores the hook events of the card writer's own sessions. To run the app with a fake writer instead of `claude -p`:
+
+    open --env STUDIO_CARD_WRITER=fake target/release/bundle/macos/Studio.app
 
 - `plugin/`: the Claude Code plugin. On ten hook events it runs `studio-hook`.
 - `hook/`: `studio-hook`, which appends each hook payload as one line to the event log, and the log's path.
 - `core/`: the studio core, plain Rust with no I/O. The app replays the whole log through it at start, then feeds it each new line live. Only live lines request cards.
-- `understanding/`: the understanding layer's I/O: the card writer interface and its fake.
+- `understanding/`: the understanding layer's I/O: the card writer interface, the `claude -p` writer and a fake.
 - `src-tauri/`: the app's Rust shell. `ui/`: its TypeScript pane.
 
 ## Build

@@ -13,6 +13,7 @@ pub struct Studio {
     prompted_last: Option<String>,
     /// Sessions in a wait that has not had its card step yet.
     awaiting_card: HashSet<String>,
+    card_writer_folder: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -119,6 +120,9 @@ impl Studio {
         let Ok(event) = serde_json::from_str::<Event>(line) else {
             return Vec::new();
         };
+        if self.card_writer_folder.as_ref() == Some(&event.cwd) {
+            return Vec::new();
+        }
         let session = self
             .sessions
             .entry(event.session_id.clone())
@@ -166,6 +170,12 @@ impl Studio {
     /// requests nothing, so steps that ran while the app was down get no cards.
     pub fn replay(&mut self, line: &str) {
         self.apply(line);
+    }
+
+    /// The card writer's neutral folder, a fact from the shell. Events whose `cwd` is this folder
+    /// come from the writer's own `claude -p` sessions and are dropped.
+    pub fn set_card_writer_folder(&mut self, folder: &str) {
+        self.card_writer_folder = Some(folder.into());
     }
 
     pub fn session(&self, id: &str) -> Option<&Session> {
