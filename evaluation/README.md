@@ -446,7 +446,8 @@ evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.j
 evaluation/target/release/falinks-eval report --runs /private/tmp/ev/track-t --schedule track-t
 ```
 
-- **Schedule**: every fixture, five repetitions per team size (#182), each repetition a
+- **Schedule**: track T's five fixtures, `rust-errors` to `go-indep-4`, never #205's sealed
+  `go-invoice`; five repetitions per team size (#182), each repetition a
   pair that alternates which size runs first. There is no pilot; every invocation renews
   the gate.
 - **Report** (`report --schedule track-t`, also the batch's `report.json`): per fixture and

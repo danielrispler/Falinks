@@ -26,12 +26,13 @@ macro_rules! bail {
 pub(crate) use bail;
 
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-pub const FIXTURES: [&str; 5] = [
+pub const FIXTURES: [&str; 6] = [
     "rust-errors",
     "go-page",
     "go-relationships",
     "go-indep-2",
     "go-indep-4",
+    "go-invoice",
 ];
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
 pub const SCORED_FIXTURES: [&str; 3] = ["rust-errors", "go-page", "go-relationships"];

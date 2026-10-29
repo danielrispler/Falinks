@@ -89,7 +89,8 @@ pub fn slots(pilot: bool) -> Vec<Value> {
 /// and outside the scored schedule.
 pub fn track_t_slots() -> Vec<Value> {
     let mut slots = vec![];
-    for (index, name) in FIXTURES.iter().enumerate() {
+    // Track T's five fixtures, whatever `FIXTURES` gains (#205's go-invoice is sealed).
+    for (index, name) in FIXTURES[..5].iter().enumerate() {
         for repetition in 1..=5 {
             let sizes = if (index + repetition) % 2 == 1 {
                 [1, 2]
@@ -704,6 +705,14 @@ mod tests {
         assert_eq!(scored[0]["slot"], "rust-errors-1-git");
         assert_eq!(scored[2]["slot"], "rust-errors-2-falinks");
         assert_eq!(scored[1]["order"], 1);
+    }
+
+    /// #205's scored fixture is sealed until its pilots, so no track-T slot may reach it.
+    #[test]
+    fn track_t_keeps_its_fifty_slots_without_go_invoice() {
+        let slots = track_t_slots();
+        assert_eq!(slots.len(), 50);
+        assert!(slots.iter().all(|s| s["fixture"] != "go-invoice"));
     }
 
     #[test]

@@ -72,9 +72,10 @@ fn main() {
             fake_judge(&args)
         }
         Some("-p") => fake_claude(&args),
-        Some("rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4") => {
-            fake_arm(&args)
-        }
+        Some(
+            "rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4"
+            | "go-invoice",
+        ) => fake_arm(&args),
         other => panic!("unknown mode {other:?}"),
     }
 }
