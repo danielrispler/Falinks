@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init"}
+{"type":"user","isReplay":true,"timestamp":"2026-10-21T10:00:01.000Z","message":{"role":"user","content":"You are agent B"}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:02.000Z","message":{"id":"n1","model":"scripted","content":[{"type":"tool_use","id":"u1","name":"Write","input":{"file_path":"/w/agents/B/consumer.go","content":"package fixture\n\nfunc Consume(records []string) []string {\n    return append(records[:0:0], records...)\n}\n"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:02.250Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u1","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:02.750Z","message":{"id":"n2","model":"scripted","content":[{"type":"tool_use","id":"u2","name":"Bash","input":{"command":"\"$FALINKS_HOST\" share"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u2","content":"{\"commit\":\"b1\",\"type\":\"shared\"}"}]}}
+{"type":"assistant","timestamp":"2026-10-21T10:00:03.500Z","message":{"id":"n3","model":"scripted","content":[{"type":"tool_use","id":"u3","name":"Bash","input":{"command":"\"$FALINKS_HOST\" ready"}}]}}
+{"type":"user","timestamp":"2026-10-21T10:00:03.750Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"u3","content":"{\"action\":\"ready\",\"type\":\"ok\"}"}]}}
+{"type":"result","subtype":"success","usage":{"output_tokens":1}}

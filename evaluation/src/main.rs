@@ -990,8 +990,11 @@ fn run() -> Result<i32> {
             Ok(0)
         }
         Some("timing") => {
-            let run = args.positional.get(1).ok_or(USAGE)?;
-            let figures = timing::timing(Path::new(run))?;
+            let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
+            let result = read(run.join("controller/result.json"))?;
+            // Handling cost reads only the collisions' detections, which no classification changes.
+            let found = collisions::collisions(run, &result, &Value::Null);
+            let figures = timing::timing(run, &found)?;
             println!("{}", serde_json::to_string_pretty(&figures)?);
             Ok(0)
         }

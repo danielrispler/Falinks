@@ -568,8 +568,6 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
         let mut result = read(run_dir.join("controller/result.json"))
             .unwrap_or_else(|_| json!({"outcome": "infrastructure_failure"}));
         result["tokens"] = tokens::tokens(run_dir, &result, &prices)?;
-        // A run without readable transcripts has no model time: missing, never zero.
-        result["transcript"] = timing::timing(run_dir).unwrap_or(Value::Null);
         for key in ["run_id", "pair", "fixture", "arm", "scored", "concurrency"] {
             result[key] = entry[key].clone();
         }
@@ -582,6 +580,9 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
         result["developments"] = developments(run_dir);
         result["collisions"] = collisions::collisions(run_dir, &result, &duplicates);
         result["discarded_or_rewritten_work"] = collisions::waste(&result["collisions"]);
+        // A run without readable transcripts has no model time: missing, never zero.
+        result["transcript"] =
+            timing::timing(run_dir, &result["collisions"]).unwrap_or(Value::Null);
         result["worker_requests"] = worker_requests(run_dir);
         // Written by `quality` (#230); a run it has not measured has none.
         result["quality"] = quality["runs"][entry["run_id"].as_str().unwrap_or_default()].clone();
