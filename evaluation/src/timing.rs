@@ -14,8 +14,15 @@
 //!   `Write`, `Edit` or a `Bash` here-document redirected outside scratch; a `Bash` command
 //!   naming `FALINKS_HOST` is coordination.
 //! - **Output bytes** are the file content the model wrote, scratch included. **Changed bytes**
-//!   are the lines of each source file's last write that a line diff against its initial
-//!   content does not match.
+//!   are the lines of the agent's last version of each source file that a line diff against
+//!   its initial content does not match, read from the arm's records, not the transcript
+//!   (#325). A changed line counts only for the agent whose operation or commit introduced
+//!   it, traced through each version's base by the same diff. A peer's lines carried in a
+//!   whole-file write, a merge or a byte-identical copy of the peer's earlier version stay
+//!   the peer's, and a merge or conflict resolution introduces no one's. A line one agent wrote and the other rewrote counts twice: the
+//!   original for its writer, in the writer's last version, and the rewrite for the rewriter.
+//!   A changed line traced to the initial file (a moved line) is the holder's. Unreadable
+//!   records leave changed bytes missing.
 //! - **Refusal recovery** (#193 decision 9), per output form of a refused Falinks `edit`,
 //!   `retry` or `incorporate`: the round-trips after it, and their model seconds, up to and
 //!   including the agent's next accepted one. Refusals inside an open recovery belong to it, so
@@ -28,7 +35,7 @@
 //!   The **edit gate** is the tool time of accepted source writes, with its mean per accepted
 //!   write. Both are transcript-side, so parallel calls make them approximate too; host and
 //!   edit-gate instrumentation (#178's I-2) is not read.
-use crate::{Result, bail, fixture, read};
+use crate::{Result, bail, blobs, fixture, git, read};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
@@ -162,8 +169,8 @@ enum Write {
         new: String,
         all: bool,
     },
-    /// A Falinks `from` output: the whole file, read from this scratch path.
-    From(String),
+    /// A Falinks `from` output: the whole file, read from a scratch path.
+    From,
 }
 
 /// The file writes in one tool call, with the bytes the model emitted for each.
@@ -210,7 +217,7 @@ fn writes(call: &Call, bash_writes_source: bool) -> Vec<(String, Write, bool)> {
                             })
                             .collect()
                     } else if file["from"].is_string() {
-                        vec![Write::From(text(&file["from"]))]
+                        vec![Write::From]
                     } else {
                         vec![Write::Replace(text(&file["content"]))]
                     };
@@ -263,11 +270,13 @@ fn scratch(path: &str) -> bool {
     path.split('/').any(|part| part == "scratch")
 }
 
-/// Bytes of the lines in `new` that a longest-common-subsequence line diff leaves unmatched
-/// in `old`.
-pub fn changed_bytes(old: &str, new: &str) -> usize {
-    let a: Vec<&str> = old.split_inclusive('\n').collect();
-    let b: Vec<&str> = new.split_inclusive('\n').collect();
+fn lines(text: &str) -> Vec<&str> {
+    text.split_inclusive('\n').collect()
+}
+
+/// For each line of `b`, the line of `a` that a longest-common-subsequence line diff matches
+/// it to.
+fn matches(a: &[&str], b: &[&str]) -> Vec<Option<usize>> {
     let mut lcs = vec![vec![0usize; b.len() + 1]; a.len() + 1];
     for i in (0..a.len()).rev() {
         for j in (0..b.len()).rev() {
@@ -278,27 +287,70 @@ pub fn changed_bytes(old: &str, new: &str) -> usize {
             };
         }
     }
-    let (mut i, mut j, mut changed) = (0, 0, 0);
+    let (mut i, mut j, mut matched) = (0, 0, vec![None; b.len()]);
     while j < b.len() {
         if i < a.len() && a[i] == b[j] {
+            matched[j] = Some(i);
             (i, j) = (i + 1, j + 1);
         } else if i < a.len() && lcs[i + 1][j] >= lcs[i][j + 1] {
             i += 1;
         } else {
-            changed += b[j].len();
             j += 1;
         }
     }
-    changed
+    matched
+}
+
+/// The changed lines of `new`, by index: those a longest-common-subsequence line diff leaves
+/// unmatched in `old`. Changed bytes are their bytes.
+fn changed_lines<'a>(old: &str, new: &'a str) -> Vec<(usize, &'a str)> {
+    let new = lines(new);
+    let matched = matches(&lines(old), &new);
+    new.into_iter()
+        .enumerate()
+        .zip(matched)
+        .filter_map(|(line, m)| m.is_none().then_some(line))
+        .collect()
+}
+
+/// Who introduced a line.
+#[derive(Clone, Debug, PartialEq)]
+enum Origin {
+    Initial,
+    Agent(String),
+    /// A merge or conflict resolution, or a base no record shows.
+    Nobody,
+}
+
+/// The origin of each line of every file version seen, keyed by path and text.
+#[derive(Default)]
+struct Blame(BTreeMap<(String, String), Vec<Origin>>);
+
+impl Blame {
+    /// `text` at `path`, written by `author` over `bases`: a line the diff matches in a base
+    /// keeps that line's origin, the first base first; every other line is the author's. A
+    /// text seen before keeps its first origins, so a whole copy of a peer's file is the peer's.
+    fn version(&mut self, path: &str, author: Origin, bases: &[String], text: String) {
+        let key = |text: &String| (path.to_string(), text.clone());
+        if self.0.contains_key(&key(&text)) {
+            return;
+        }
+        let new = lines(&text);
+        let mut origins = vec![author; new.len()];
+        for base in bases.iter().rev() {
+            let known = self.0.get(&key(base));
+            for (j, i) in matches(&lines(base), &new).into_iter().enumerate() {
+                if let Some(i) = i {
+                    origins[j] = known.map_or(Origin::Nobody, |k| k[i].clone());
+                }
+            }
+        }
+        self.0.insert(key(&text), origins);
+    }
 }
 
 /// One agent's figures from its stream-json events, sessions concatenated.
-fn agent(
-    events: &[Value],
-    files: &Map<String, Value>,
-    bash_writes_source: bool,
-    clock: (Option<f64>, Option<f64>),
-) -> Value {
+fn agent(events: &[Value], bash_writes_source: bool, clock: (Option<f64>, Option<f64>)) -> Value {
     let (mut turns, mut messages, mut calls) = (Vec::<(Option<f64>, f64)>::new(), vec![], vec![]);
     let (mut ids, mut tool_ids) = (BTreeMap::new(), BTreeMap::new());
     let mut key_refusals = BTreeMap::<String, u64>::new();
@@ -428,74 +480,15 @@ fn agent(
         })
         .collect();
 
-    // Initial content of the source files, keyed by fixture path; other source writes start empty.
-    let mut contents: BTreeMap<String, (String, String)> = BTreeMap::new();
-    // The last applied text of each path written outside Falinks, for `from` outputs.
-    let mut scratches: BTreeMap<String, String> = BTreeMap::new();
-    let mut output = 0;
-    for call in &calls {
-        let applied = !call.result.is_some_and(|(_, refused)| refused);
-        for (path, write, source) in writes(call, bash_writes_source) {
-            output += match &write {
-                Write::Replace(text) | Write::Append(text) => text.len(),
-                Write::Patch { new, .. } => new.len(),
-                // Its bytes were counted when the model wrote the scratch file.
-                Write::From(_) => 0,
-            };
-            if applied && !call.name.starts_with(FALINKS) {
-                let current = scratches.entry(path.clone()).or_default();
-                match &write {
-                    Write::Replace(text) => *current = text.clone(),
-                    Write::Append(text) => *current += text,
-                    Write::Patch {
-                        old,
-                        new,
-                        all: true,
-                    } => *current = current.replace(old, new),
-                    Write::Patch { old, new, .. } => *current = current.replacen(old, new, 1),
-                    Write::From(_) => {}
-                }
-            }
-            if !applied || !source || scratch(&path) {
-                continue;
-            }
-            let key = files
-                .keys()
-                .find(|f| path == **f || path.ends_with(&format!("/{f}")))
-                .cloned()
-                .unwrap_or(path);
-            let initial = files
-                .get(&key)
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let (_, current) = contents
-                .entry(key)
-                .or_insert_with(|| (initial.clone(), initial));
-            match write {
-                Write::Replace(text) => *current = text,
-                Write::Append(text) => *current += &text,
-                Write::Patch { old, new, all } if all => *current = current.replace(&old, &new),
-                Write::Patch { old, new, .. } => *current = current.replacen(&old, &new, 1),
-                // shortcut: a scratch file the transcript never wrote leaves the file unchanged,
-                // so its bytes count as unchanged; read the run's scratch directory if that matters.
-                Write::From(from) => {
-                    // Agents run in their scratch directory, so relative writes resolve there.
-                    let named = |p: &&String| {
-                        **p == from
-                            || **p == format!("scratch/{from}")
-                            || p.ends_with(&format!("/scratch/{from}"))
-                    };
-                    if let Some(text) = scratches.keys().find(named).map(|p| &scratches[p]) {
-                        *current = text.clone();
-                    }
-                }
-            }
-        }
-    }
-    let changed: usize = contents
-        .values()
-        .map(|(initial, last)| changed_bytes(initial, last))
+    let output: usize = calls
+        .iter()
+        .flat_map(|call| writes(call, bash_writes_source))
+        .map(|(_, write, _)| match write {
+            Write::Replace(text) | Write::Append(text) => text.len(),
+            Write::Patch { new, .. } => new.len(),
+            // Its bytes were counted when the model wrote the scratch file.
+            Write::From => 0,
+        })
         .sum();
 
     let (start, stop) = clock;
@@ -544,7 +537,6 @@ fn agent(
         "refusal_recovery": recovery,
         "request_key_refusals": key_refusals,
         "output_bytes": output,
-        "changed_bytes": changed,
         "results": events.iter().filter(|e| e["type"] == "result").count(),
     });
     // A Git agent makes no Falinks call, so its figures stay as they were before #316.
@@ -554,6 +546,123 @@ fn agent(
             "per_accepted_seconds": (accepted > 0).then(|| rounded(gate_seconds / accepted as f64))});
     }
     figures
+}
+
+/// Per agent, the changed bytes of its last version of every file it changed that it
+/// introduced itself, read from the arm's records (#325), not the transcript.
+///
+/// - A Falinks agent's versions are its applied operations in `controller/history.json`: each
+///   output path's resolved file in the operation's exact `before` and `proposed` revisions.
+/// - A Git agent's last version is its last shared commit (`controller/events.jsonl`) in
+///   `agents/repo`; work it never shared counts nothing. Its own commits are those on the
+///   first-parent line of its shares, first sharer first. A merge introduces no one's lines,
+///   so a conflict resolution counts for no one; an integration commit reached only through
+///   a merge has no author.
+fn changed(run: &Path, arm: &str, files: &Map<String, Value>) -> Result<BTreeMap<String, usize>> {
+    let mut blame = Blame::default();
+    for (path, text) in files {
+        blame.version(
+            path,
+            Origin::Initial,
+            &[],
+            text.as_str().unwrap_or("").into(),
+        );
+    }
+    let mut last = BTreeMap::<(String, String), String>::new();
+    if arm == "git" {
+        let repo = run.join("agents/repo");
+        let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
+        let shares: Vec<(String, String)> = jsonl(&run.join("controller/events.jsonl"))?
+            .iter()
+            .filter(|event| event["kind"] == "draft_shared")
+            .map(|event| (text(&event["agent"]), text(&event["commit"])))
+            .collect();
+        let mut owners = BTreeMap::new();
+        for (agent, share) in &shares {
+            for commit in git(&repo, &["rev-list", "--first-parent", share], None)?.lines() {
+                owners.entry(commit.to_string()).or_insert(agent.clone());
+            }
+        }
+        let mut trees = BTreeMap::<String, BTreeMap<String, String>>::new();
+        // Share by share, in order, so a text shared earlier keeps its authorship.
+        let mut commits = vec![];
+        for (_, share) in &shares {
+            let args = ["rev-list", "--topo-order", "--reverse", "--parents", share];
+            commits.extend(git(&repo, &args, None)?.lines().map(String::from));
+        }
+        for line in &commits {
+            let (commit, parents) = line.split_once(' ').unwrap_or((line, ""));
+            let parents: Vec<&str> = parents.split_whitespace().collect();
+            if trees.contains_key(commit) {
+                continue;
+            }
+            // The initial commit has no parent; a merge introduces no one's lines.
+            let author = match (parents.len(), owners.get(commit)) {
+                (0, _) => Origin::Initial,
+                (1, Some(agent)) => Origin::Agent(agent.clone()),
+                _ => Origin::Nobody,
+            };
+            let tree: BTreeMap<String, String> = blobs(&repo, commit)?
+                .into_iter()
+                .map(|(path, bytes)| (path, String::from_utf8_lossy(&bytes).into_owned()))
+                .collect();
+            for (path, text) in &tree {
+                let bases: Vec<String> = parents
+                    .iter()
+                    .map(|p| trees[*p].get(path).cloned().unwrap_or_default())
+                    .collect();
+                blame.version(path, author.clone(), &bases, text.clone());
+            }
+            trees.insert(commit.to_string(), tree);
+        }
+        let last_shares: BTreeMap<String, String> = shares.into_iter().collect();
+        for (agent, share) in last_shares {
+            for (path, text) in &trees[&share] {
+                last.insert((agent.clone(), path.clone()), text.clone());
+            }
+        }
+    } else {
+        // A path absent from a revision, or deleted, is empty.
+        let file = |v: &Value| {
+            let bytes = v["file"]["bytes"].as_array().into_iter().flatten();
+            let bytes: Vec<u8> = bytes.filter_map(Value::as_u64).map(|b| b as u8).collect();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        let history = read(run.join("controller/history.json"))?;
+        for record in history.as_array().into_iter().flatten() {
+            if record["outcome"].get("Applied").is_none() {
+                continue;
+            }
+            let agent = format!("agent-{}", record["agent"]);
+            for (path, _) in record["request"]["output"]
+                .as_object()
+                .into_iter()
+                .flatten()
+            {
+                let base = file(&record["before"]["files"][path]);
+                let text = file(&record["proposed"]["files"][path]);
+                blame.version(path, Origin::Agent(agent.clone()), &[base], text.clone());
+                last.insert((agent.clone(), path.clone()), text);
+            }
+        }
+    }
+    let mut changed = BTreeMap::new();
+    for ((agent, path), text) in last {
+        let initial = files.get(&path).and_then(Value::as_str).unwrap_or("");
+        let origins = &blame.0[&(path, text.clone())];
+        // A changed line traced to the initial file is the holder's: no peer wrote it.
+        let own: usize = changed_lines(initial, &text)
+            .into_iter()
+            .filter(|(j, _)| match &origins[*j] {
+                Origin::Initial => true,
+                Origin::Agent(author) => *author == agent,
+                Origin::Nobody => false,
+            })
+            .map(|(_, line)| line.len())
+            .sum();
+        *changed.entry(agent).or_insert(0) += own;
+    }
+    Ok(changed)
 }
 
 fn jsonl(path: &Path) -> Result<Vec<Value>> {
@@ -612,9 +721,12 @@ pub fn timing(run: &Path) -> Result<Value> {
         .as_object()
         .cloned()
         .unwrap_or_default();
+    // Unreadable records leave changed bytes missing, never zero.
+    let changed = changed(run, arm, &files).ok();
     let mut figures = Map::new();
     for (name, events) in &agents {
-        let mut figure = agent(events, &files, arm == "git", (start, stop));
+        let mut figure = agent(events, arm == "git", (start, stop));
+        figure["changed_bytes"] = json!(changed.as_ref().map(|c| c.get(name).map_or(0, |n| *n)));
         let reports = &result["usage"]["agents"][name.as_str()];
         figure["usage_reports"] = reports.as_array().map_or(0, Vec::len).into();
         figures.insert(name.clone(), figure);
@@ -683,10 +795,32 @@ mod tests {
 
     #[test]
     fn changed_bytes_count_unmatched_new_lines() {
+        let changed_bytes = |old: &str, new: &str| -> usize {
+            changed_lines(old, new).iter().map(|(_, l)| l.len()).sum()
+        };
         assert_eq!(changed_bytes("a\nb\nc\n", "a\nb\nc\n"), 0);
         assert_eq!(changed_bytes("a\nb\nc\n", "a\nx\nc\nd\n"), 4);
         assert_eq!(changed_bytes("", "abc"), 3);
         assert_eq!(changed_bytes("a\nb\n", ""), 0);
+    }
+
+    #[test]
+    fn a_copied_version_keeps_its_first_authorship() {
+        let mut blame = Blame::default();
+        let b = Origin::Agent("B".into());
+        blame.version("a.go", Origin::Initial, &[], "a\n".into());
+        blame.version("a.go", b.clone(), &["a\n".into()], "a\nb\n".into());
+        // A copies B's file whole, with no merge: "b\n" stays B's.
+        blame.version(
+            "a.go",
+            Origin::Agent("A".into()),
+            &["a\n".into()],
+            "a\nb\n".into(),
+        );
+        assert_eq!(
+            blame.0[&("a.go".into(), "a\nb\n".into())],
+            [Origin::Initial, b]
+        );
     }
 
     #[test]
@@ -714,7 +848,7 @@ mod tests {
             call("m4", 11, &edit, "replace"),
             result("m4", 12, false),
         ];
-        let figures = agent(&events, &Map::new(), false, (None, None));
+        let figures = agent(&events, false, (None, None));
         let recovery = &figures["refusal_recovery"];
         // m2 (3 to 5) and m3 (6 to 9) follow m1's refusal; m4's refusal is never recovered.
         assert_eq!(
@@ -740,7 +874,6 @@ mod tests {
                 "tool_use_id": id, "content": json!({"accepted": accepted}).to_string()}]}})
         };
         let edit = format!("{FALINKS}edit");
-        let files = json!({"a.go": "a\nb\n", "b.go": "x\n"});
         let figures = |wrap: fn(Value) -> Value| {
             let events = [
                 json!({"type": "system", "subtype": "init"}),
@@ -771,7 +904,7 @@ mod tests {
                 ),
                 result("m3", 6, true),
             ];
-            agent(&events, files.as_object().unwrap(), false, (None, None))
+            agent(&events, false, (None, None))
         };
         let flat = figures(|request| request);
         assert_eq!(flat, figures(|request| json!({"request": request})));
@@ -781,8 +914,6 @@ mod tests {
         );
         // Heredoc "c\n" 2, refused "bb" 2, "bc" 2, "y\n" 2; `from` emits no file bytes.
         assert_eq!(flat["output_bytes"], 8);
-        // a.go "a\nbc\n" 3, b.go "y\n" 2, c.go "c\n" from scratch 2.
-        assert_eq!(flat["changed_bytes"], 7);
         assert_eq!(
             flat["refusal_recovery"]["replace"],
             json!({"refusals": 1, "unresolved": 0, "round_trips": 1, "model_seconds": 1.0})
@@ -812,7 +943,7 @@ mod tests {
             call("m4", "edit"),
             result("m4", "a.go: hunk 1: old text matches 0 places"),
         ];
-        let figures = agent(&events, &Map::new(), false, (None, None));
+        let figures = agent(&events, false, (None, None));
         assert_eq!(
             figures["request_key_refusals"],
             json!({"ack": 1, "handle": 2})

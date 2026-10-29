@@ -4,7 +4,7 @@
 //! Safety controls come from a fresh `check-integration` gate that the batch runs first.
 use falinks::{Action, Engine};
 use falinks_claude::{
-    Launch, MODEL, Runtime, VERSION,
+    EFFORT, Launch, MODEL, Runtime, VERSION,
     arm::{self, Answer, Arm, Tools, agent_name, prompt},
     engine_host, go_tools, verify_binary,
 };
@@ -556,8 +556,10 @@ fn setup(
     evidence: &mut Value,
 ) -> Result<Run> {
     require(
-        config["model"] == MODEL && config["runtime_version"] == VERSION,
-        "run configuration must name the adapter's pinned model and runtime version",
+        config["model"] == MODEL
+            && config["reasoning"] == EFFORT
+            && config["runtime_version"] == VERSION,
+        "run configuration must name the adapter's pinned model, effort and runtime version",
     )?;
     let drain = config["usage_drain_seconds"]
         .as_f64()

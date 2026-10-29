@@ -194,12 +194,16 @@ Claude Code `2.1.308` with `claude-opus-5-5` is the evaluated runtime in both ar
 ([#32](https://github.com/danielrispler/Falinks/issues/32#issuecomment-6096677771)).
 Both arms launch one long-lived `claude -p` stream-json session per agent with the same
 isolation flags (`--setting-sources ""`, `--strict-mcp-config`, `--disable-slash-commands`,
-`dontAsk`), default reasoning and `--max-turns 12`. When a message hits that tool-call cap,
+`dontAsk`), `--effort medium` (`reasoning` in `config.json`) and `--max-turns 12`. Effort
+is passed explicitly, never left to the runtime's default, which every earlier session ran
+at ([#205](https://github.com/danielrispler/Falinks/issues/205#issuecomment-6493518720),
+finding 9 and E1). When a message hits that tool-call cap,
 the host sends a continuation. Host events are written at once and presented at the next
 tool-result boundary or as a new turn. An idle, unfinished agent with no new events gets a
 reminder after two minutes. Any `system/init` mismatch, model refusal fallback or other
-model in `modelUsage` invalidates the run. A `rate_limit_event` with status `rejected` ends
-it as `usage_limit`.
+model in `modelUsage` invalidates the run. So does another effort on an assistant entry of
+the agent's session file, checked at every `result`, since only that file records it. A
+`rate_limit_event` with status `rejected` ends it as `usage_limit`.
 
 - **Git arm** (`baseline` with `worker_script` = `claude-worker`): the worker runs in
   the host sandbox profile with Claude Code's sandbox off and tools
@@ -408,6 +412,18 @@ it as `usage_limit`.
     For a Falinks agent, its `operations` give, per op, the calls (`acts`), the refused
     results and the tool seconds; its `edit_gate` gives the tool seconds of accepted `edit`, `retry`,
     `incorporate` and `apply_job` calls, their count and the mean per accepted call (#316).
+    Changed bytes come from each arm's records, not the transcript (#325): per agent, the
+    lines of its last version of each file that a line diff against the initial content
+    does not match. A Falinks agent's last version is its last applied operation's
+    (`controller/history.json`); a Git agent's is its last shared commit
+    (`controller/events.jsonl`, `agents/repo`). A changed line counts only for the agent
+    whose operation (each applied operation's exact `before` and `proposed` revisions) or
+    commit (its own, on its shares' first-parent line) introduced it. A peer's lines carried
+    in a whole-file write, a merge or a byte-identical copy of the peer's earlier version
+    count only for the peer; a merge or conflict resolution introduces no one's lines. A line one agent wrote and the other rewrote counts for both:
+    the original for its writer, in the writer's last version, and the rewrite for the
+    rewriter. A changed line traced to the initial file (a moved line) counts for the agent
+    whose version holds it.
     Tool seconds of calls made in parallel in one message overlap, so these are approximate.
     The definitions and heuristics are in
     `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
@@ -481,7 +497,8 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/step-6 --sc
   overhead apart: C_fixed (coordination round-trips, their model seconds and `operations`
   acts), per-edit tool overhead (`operations` tool seconds and `edit_gate`) and per-edit
   model overhead (output against changed bytes), with the run's `identity`. These come from
-  the transcripts, not the host's edit-gate timing (#178's I-2, track P).
+  the transcripts, not the host's edit-gate timing (#178's I-2, track P); changed bytes come
+  from the arm's records.
 
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and

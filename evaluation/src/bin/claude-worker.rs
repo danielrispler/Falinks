@@ -171,8 +171,22 @@ fn project_folder(path: &Path) -> String {
         .collect()
 }
 
+/// Copy of `falinks_claude::other_effort` (#205 E1); this crate is standalone from the adapter.
+/// shortcut: entries written after the last turn's `result` stay unchecked; check again after
+/// shutdown if a run ever ends on one.
+fn other_effort(file: &Path, effort: &str) -> Option<Value> {
+    fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["type"] == "assistant")
+        .map(|entry| entry["effort"].clone())
+        .find(|recorded| recorded != effort)
+}
+
 struct Bridge {
     model: String,
+    effort: String,
     runtime: String,
     session: String,
     /// The runtime home's session folder for scratch; a session there not ours is a nested agent.
@@ -257,6 +271,16 @@ impl Bridge {
                 if models.iter().any(|m| *m != model) {
                     return Err("model identity changed; run invalid".into());
                 }
+                let file = self
+                    .project
+                    .as_ref()
+                    .map(|p| p.join(format!("{}.jsonl", self.session)));
+                if let Some(effort) = file.and_then(|f| other_effort(&f, &self.effort)) {
+                    let pinned = &self.effort;
+                    return Err(
+                        format!("session effort {effort} is not {pinned:?}; run invalid").into(),
+                    );
+                }
                 let foreign = self
                     .project
                     .iter()
@@ -336,6 +360,10 @@ fn run() -> Result<()> {
         .as_str()
         .unwrap_or_default()
         .to_string();
+    let effort = start["model"]["reasoning"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let worker = cwd.join("scratch/worker");
     let session = uuid()?;
     let runtime_binary = start["runtime_binary"]
@@ -365,6 +393,8 @@ fn run() -> Result<()> {
             "--replay-user-messages",
             "--model",
             &model,
+            "--effort",
+            &effort,
             "--setting-sources",
             "",
             "--strict-mcp-config",
@@ -413,6 +443,7 @@ fn run() -> Result<()> {
     });
     let mut bridge = Bridge {
         model,
+        effort,
         runtime: runtime_binary,
         session,
         project,
