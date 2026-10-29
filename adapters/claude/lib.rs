@@ -42,6 +42,8 @@ pub const PINS: PinMap<&str> = &[
 ];
 pub const VERSION: &str = "2.1.308";
 pub const MODEL: &str = "claude-opus-5-5";
+/// Passed explicitly in both arms (#205 E1): the runtime default every earlier session ran at.
+pub const EFFORT: &str = "medium";
 /// Built-in tools every worker gets; the launch adds its `falinks` tools.
 pub const NATIVE: &[&str] = &["Bash", "Glob", "Grep", "Read"];
 pub const PLUGINS: &[&str] = &[
@@ -228,6 +230,21 @@ pub fn verify_init(init: &Value, scratch: &Path, session: &str, tools: &[String]
             && strings("plugins", Some("source")) == set(PLUGINS),
         &format!("unsupported runtime init; publication/scoring disabled: {init}"),
     )
+}
+
+/// The first effort other than `effort` on an assistant entry of a runtime session file, where
+/// the runtime records it (the stream does not); a missing field counts (#205 E1). The Git arm's
+/// `claude-worker` keeps a copy.
+/// shortcut: entries written after the last turn's `result` stay unchecked; check again after
+/// shutdown if a run ever ends on one.
+pub fn other_effort(file: &Path, effort: &str) -> Option<Value> {
+    fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["type"] == "assistant")
+        .map(|entry| entry["effort"].clone())
+        .find(|recorded| recorded != effort)
 }
 
 /// Whether a Bash command starts a nested agent (#178 C7): a command's first word, after shell
@@ -499,6 +516,15 @@ impl Session {
                     models == Some(vec![MODEL.to_owned()]),
                     "model identity changed; run invalid",
                 )?;
+                let file = self
+                    .project
+                    .as_ref()
+                    .map(|p| p.join(format!("{}.jsonl", self.session)));
+                if let Some(effort) = file.and_then(|f| other_effort(&f, EFFORT)) {
+                    return Err(
+                        format!("session effort {effort} is not {EFFORT:?}; run invalid").into(),
+                    );
+                }
                 self.gate.record("model_identity", true)
             }
             ("rate_limit_event" | "control_response", _) => Ok(()),
@@ -700,6 +726,8 @@ pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String
         "--include-hook-events",
         "--model",
         MODEL,
+        "--effort",
+        EFFORT,
         "--setting-sources",
         "",
         "--strict-mcp-config",
