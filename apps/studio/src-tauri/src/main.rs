@@ -1,6 +1,7 @@
 //! The studio app's shell (#328, module 9). At start it replays the whole event log through the
 //! core, then feeds it each new line live and hands the core's card requests to the card writer. The
-//! pane shows the session Daniel prompted last and its cards.
+//! pane shows the session Daniel prompted last and its cards, which the card store keeps on disk; a
+//! session that newly needs Daniel gets a macOS notification while the window is not focused.
 
 use std::{
     fs::File,
@@ -8,15 +9,15 @@ use std::{
     path::Path,
     sync::Mutex,
     thread,
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
-use studio_core::{CardRequest, Output, Session, Studio};
-use studio_understanding::{Card, CardWriter, FakeWriter, Fingerprints};
+use studio_core::{Output, Session, Studio};
+use studio_understanding::{CardStore, CardWriter, FakeWriter, Fingerprints, StoredCard};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 
-/// The written cards, oldest first, each with the step it explains.
-// shortcut: kept in memory, so a restart loses them; the card store (#345) keeps them on disk.
-type Cards = Mutex<Vec<(CardRequest, Card)>>;
+/// The card store, which the log thread adds to and the pane reveals in.
+type Cards = Mutex<CardStore>;
 
 #[tauri::command]
 fn now(studio: State<Mutex<Studio>>) -> Option<Session> {
@@ -25,25 +26,38 @@ fn now(studio: State<Mutex<Studio>>) -> Option<Session> {
 
 /// The cards of the session the pane follows.
 #[tauri::command]
-fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<(CardRequest, Card)> {
+fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<StoredCard> {
     let Some(followed) = studio.lock().unwrap().prompted_last().map(|s| s.id.clone()) else {
         return Vec::new();
     };
     cards
         .lock()
         .unwrap()
+        .cards()
         .iter()
-        .filter(|(request, _)| request.session_id == followed)
+        .filter(|kept| kept.request.session_id == followed)
         .cloned()
         .collect()
 }
 
+/// Daniel revealed the answer of the card on step `tool_use_id`.
+#[tauri::command]
+fn reveal(tool_use_id: String, cards: State<Cards>) {
+    let at = UNIX_EPOCH.elapsed().unwrap_or_default().as_millis() as u64;
+    if let Err(e) = cards.lock().unwrap().reveal(&tool_use_id, at) {
+        eprintln!("studio: save the card store: {e}");
+    }
+}
+
 fn main() {
     let log = studio_hook::event_log(&std::env::home_dir().expect("a home directory"));
+    // The store sits beside the log, in the studio's data directory.
+    let store = CardStore::open(log.with_file_name("cards.json")).expect("read the card store");
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(Studio::default()))
-        .manage(Cards::default())
-        .invoke_handler(tauri::generate_handler![now, cards])
+        .manage(Cards::new(store))
+        .invoke_handler(tauri::generate_handler![now, cards, reveal])
         .setup(move |app| {
             let app = app.handle().clone();
             thread::spawn(move || follow(&app, &log));
@@ -55,8 +69,8 @@ fn main() {
 
 /// Reads the log from its start, then from where it stopped. A line counts once it ends in a newline,
 /// so a line the hook is still writing waits for the next read. The lines there at start are
-/// replayed, so steps that ran while the app was down get no cards. Live lines get the worktree
-/// fingerprint the core asks for; replayed ones get none.
+/// replayed, so steps that ran while the app was down get no cards and no notifications. Live lines
+/// get the worktree fingerprint the core asks for; replayed ones get none.
 // shortcut: polls every 200 ms; switch to file-system events if the delay or the wake-ups matter.
 fn follow(app: &AppHandle, log: &Path) {
     let mut read_to = 0;
@@ -92,10 +106,13 @@ fn follow(app: &AppHandle, log: &Path) {
                     // shortcut: writes on this thread, which suits the instant fake; the real writer
                     // (#342) takes seconds and needs its own thread.
                     Output::Card(request) => {
-                        if let Some(card) = FakeWriter.write(&request) {
-                            app.state::<Cards>().lock().unwrap().push((request, card));
+                        if let Some(card) = FakeWriter.write(&request)
+                            && let Err(e) = app.state::<Cards>().lock().unwrap().add(request, card)
+                        {
+                            eprintln!("studio: save the card store: {e}");
                         }
                     }
+                    Output::NeedsYou { session_id } => notify(app, &session_id),
                 }
             }
             if read_to > read_from {
@@ -106,4 +123,28 @@ fn follow(app: &AppHandle, log: &Path) {
         live = true;
         thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// One notification per notice, only while the window is not focused (#328, module 9). Called
+/// without the core's lock held, because asking for focus waits on the main thread, which runs `now`.
+fn notify(app: &AppHandle, session_id: &str) {
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_focused().ok());
+    if focused == Some(true) {
+        return;
+    }
+    let studio = app.state::<Mutex<Studio>>();
+    let cwd = studio
+        .lock()
+        .unwrap()
+        .session(session_id)
+        .map(|s| s.cwd.clone());
+    let folder = cwd.as_deref().and_then(|cwd| cwd.rsplit('/').next());
+    let _ = app
+        .notification()
+        .builder()
+        .title("Needs you")
+        .body(folder.unwrap_or_default())
+        .show();
 }

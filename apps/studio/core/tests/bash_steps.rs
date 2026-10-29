@@ -36,7 +36,10 @@ fn restart_after(replayed: usize, changed: &[(&str, &str)]) -> Vec<CardRequest> 
                 .map(|(_, diff)| diff.to_string());
             studio.apply_with_change(line, change)
         })
-        .map(|Output::Card(request)| request)
+        .filter_map(|output| match output {
+            Output::Card(request) => Some(request),
+            _ => None,
+        })
         .collect()
 }
 
