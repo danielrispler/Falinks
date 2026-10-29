@@ -163,7 +163,10 @@ fn restart_after(log: &str, replayed: usize) -> Vec<CardRequest> {
     lines[replayed..]
         .iter()
         .flat_map(|line| studio.apply(line))
-        .map(|Output::Card(request)| request)
+        .filter_map(|output| match output {
+            Output::Card(request) => Some(request),
+            _ => None,
+        })
         .collect()
 }
 

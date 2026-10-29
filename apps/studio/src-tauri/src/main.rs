@@ -1,6 +1,7 @@
 //! The studio app's shell (#328, module 9). At start it replays the whole event log through the
 //! core, then feeds it each new line live and hands the core's card requests to the card writer. The
-//! pane shows the session Daniel prompted last and its cards, which the card store keeps on disk.
+//! pane shows the session Daniel prompted last and its cards, which the card store keeps on disk; a
+//! session that newly needs Daniel gets a macOS notification while the window is not focused.
 
 use std::{
     fs::File,
@@ -13,6 +14,7 @@ use std::{
 use studio_core::{Output, Session, Studio};
 use studio_understanding::{CardStore, CardWriter, FakeWriter, StoredCard};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 
 /// The card store, which the log thread adds to and the pane reveals in.
 type Cards = Mutex<CardStore>;
@@ -52,6 +54,7 @@ fn main() {
     // The store sits beside the log, in the studio's data directory.
     let store = CardStore::open(log.with_file_name("cards.json")).expect("read the card store");
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(Studio::default()))
         .manage(Cards::new(store))
         .invoke_handler(tauri::generate_handler![now, cards, reveal])
@@ -66,7 +69,7 @@ fn main() {
 
 /// Reads the log from its start, then from where it stopped. A line counts once it ends in a newline,
 /// so a line the hook is still writing waits for the next read. The lines there at start are
-/// replayed, so steps that ran while the app was down get no cards.
+/// replayed, so steps that ran while the app was down get no cards and no notifications.
 // shortcut: polls every 200 ms; switch to file-system events if the delay or the wake-ups matter.
 fn follow(app: &AppHandle, log: &Path) {
     let mut read_to = 0;
@@ -103,6 +106,7 @@ fn follow(app: &AppHandle, log: &Path) {
                             eprintln!("studio: save the card store: {e}");
                         }
                     }
+                    Output::NeedsYou { session_id } => notify(app, &session_id),
                 }
             }
             if read_to > read_from {
@@ -113,4 +117,28 @@ fn follow(app: &AppHandle, log: &Path) {
         live = true;
         thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// One notification per notice, only while the window is not focused (#328, module 9). Called
+/// without the core's lock held, because asking for focus waits on the main thread, which runs `now`.
+fn notify(app: &AppHandle, session_id: &str) {
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_focused().ok());
+    if focused == Some(true) {
+        return;
+    }
+    let studio = app.state::<Mutex<Studio>>();
+    let cwd = studio
+        .lock()
+        .unwrap()
+        .session(session_id)
+        .map(|s| s.cwd.clone());
+    let folder = cwd.as_deref().and_then(|cwd| cwd.rsplit('/').next());
+    let _ = app
+        .notification()
+        .builder()
+        .title("Needs you")
+        .body(folder.unwrap_or_default())
+        .show();
 }

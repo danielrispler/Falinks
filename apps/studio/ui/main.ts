@@ -1,11 +1,19 @@
-// The side pane: the "now" line of the session Daniel prompted last, and its cards. The core decides
-// what it shows; this file only draws what the shell sends, on load and on each "now" or "cards" event.
+// The side pane: the state and "now" line of the session Daniel prompted last, and its cards. The core
+// decides what it shows; this file only draws what the shell sends, on load and on each "now" or
+// "cards" event.
 
 type Step = { tool: string; detail: string | null };
-type Session = { id: string; cwd: string; last_step: Step | null };
+type SessionState = "working" | "needs_you" | "your_turn";
+type Session = { id: string; cwd: string; last_step: Step | null; state: SessionState };
 type CardRequest = { session_id: string; tool_use_id: string; step: Step; change: string };
 type Card = { question: string; answer: string };
 type StoredCard = { request: CardRequest; card: Card; revealed_at: number | null };
+
+const stateLabels: Record<SessionState, string> = {
+  working: "Working",
+  needs_you: "Needs you",
+  your_turn: "Your turn",
+};
 
 declare global {
   interface Window {
@@ -21,10 +29,13 @@ const element = (id: string) => document.getElementById(id)!;
 function show(session: Session | null) {
   element("empty").hidden = session !== null;
   element("session").hidden = session === null;
+  element("state").hidden = session === null;
   element("step").hidden = session === null;
   if (session === null) return;
   const folder = session.cwd.split("/").pop() || session.cwd;
   element("session").textContent = `${folder} · ${session.id.slice(0, 8)}`;
+  element("state").textContent = stateLabels[session.state];
+  element("state").dataset.state = session.state;
   element("tool").textContent = session.last_step?.tool ?? "No step yet";
   element("detail").textContent = session.last_step?.detail ?? "";
 }
