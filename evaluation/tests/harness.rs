@@ -445,6 +445,41 @@ fn codex_bridge_waits_for_peer_events_and_retains_all_usage() {
     }
 }
 
+/// Gives a scripted configuration a runtime home, where the runtime keeps its sessions.
+fn with_runtime_home(config: &Path, base: &Path) -> PathBuf {
+    let home = base.join("home");
+    let mut value = read(config);
+    value["runtime_home"] = json!(home);
+    fs::write(config, value.to_string()).unwrap();
+    home
+}
+
+/// A session that records another effort than the configured one invalidates the run, like
+/// another model (#205 E1). The scripted runtime copied as `effort-high` records `high`.
+#[test]
+fn claude_bridge_fails_a_session_at_another_effort() {
+    let tmp = tmp("falinks-claude-effort-test-");
+    let base = tmp.path();
+    let runtime = base.join("effort-high");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        runtime.to_str().unwrap(),
+    );
+    with_runtime_home(&config, base);
+    let run = base.join("run");
+    assert!(!baseline("go-relationships", &config, &run).status.success());
+    let stderr: String = ["A", "B"]
+        .map(|a| fs::read_to_string(run.join(format!("controller/{a}.stderr"))).unwrap())
+        .concat();
+    assert!(
+        stderr.contains("session effort \"high\" is not \"none\"; run invalid"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage() {
     let tmp = tmp("falinks-claude-bridge-test-");
@@ -458,9 +493,20 @@ fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage
         json!(["{worker}"]),
         runtime.to_str().unwrap(),
     );
+    let home = with_runtime_home(&config, base);
     let run = base.join("run");
     let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
     assert_eq!(evidence["usage"]["status"], "complete");
+    // The scripted runtime records the `--effort` it was given, as the real one does (#205 E1).
+    let sessions: Vec<String> = fs::read_dir(home.join(".claude/projects"))
+        .unwrap()
+        .flat_map(|folder| fs::read_dir(folder.unwrap().path()).unwrap())
+        .map(|file| fs::read_to_string(file.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(sessions.len(), 2);
+    for session in sessions {
+        assert!(session.contains("\"effort\":\"none\""), "{session}");
+    }
     for agent in ["A", "B"] {
         let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
         assert_eq!(reports[0]["subtype"], "error_max_turns");
@@ -914,13 +960,64 @@ fn usage_is_complete_only_with_final_results_inside_the_drain_window() {
 /// `timing` on synthetic stream-json transcripts (`tests/timing/`), checked against values
 /// computed by hand. Times are seconds after 2026-10-21T10:00:00Z. Step 6's overhead figures
 /// (#316): tool seconds and acts by Falinks operation, and edit-gate seconds per accepted edit.
+/// Changed bytes come from each arm's records (#325), for writes the transcript misreads.
 #[test]
 fn timing_reports_hand_computed_figures() {
+    // Git's records are A's two shares, committed over the fixture's initial files.
+    let tmp = tmp("falinks-timing-");
+    let git_run = tmp.path().join("git");
+    let copied = Command::new("cp")
+        .arg("-R")
+        .arg(root().join("tests/timing/git"))
+        .arg(&git_run)
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    let repo = git_run.join("agents/repo");
+    let initial = read(root().join("fixtures/go-relationships.json"))["files"].clone();
+    for (name, content) in initial.as_object().unwrap() {
+        fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
+        fs::write(repo.join(name), content.as_str().unwrap()).unwrap();
+    }
+    let init = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&repo)
+        .status();
+    assert!(init.unwrap().success());
+    commit(&repo, "Frozen initial task");
+    let shares: [&[(&str, &str)]; 2] = [
+        &[
+            ("producer.go", "package fixture\n"),
+            ("store/store.go", "package store\n\nfunc Get() {}\n"),
+        ],
+        &[(
+            "store/store.go",
+            "package store\n\nfunc Get() int { return 1 }\n",
+        )],
+    ];
+    let mut events = String::new();
+    for (n, files) in shares.iter().enumerate() {
+        for (name, content) in *files {
+            fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
+            fs::write(repo.join(name), content).unwrap();
+        }
+        commit(&repo, &format!("A draft {}", n + 1));
+        let head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        let commit = String::from_utf8(head.stdout).unwrap();
+        let event = json!({"kind": "draft_shared", "agent": "A", "commit": commit.trim()});
+        events += &format!("{event}\n");
+    }
+    fs::write(git_run.join("controller/events.jsonl"), events).unwrap();
     let figures = |run: &str| {
-        let output = cli([
-            OsStr::new("timing"),
-            root().join("tests/timing").join(run).as_os_str(),
-        ]);
+        let dir = match run {
+            "git" => git_run.clone(),
+            _ => root().join("tests/timing").join(run),
+        };
+        let output = cli([OsStr::new("timing"), dir.as_os_str()]);
         assert!(output.status.success(), "{}", text(&output));
         serde_json::from_slice::<Value>(&output.stdout).unwrap()
     };
@@ -959,18 +1056,21 @@ fn timing_reports_hand_computed_figures() {
             // m1 (two events, last at 4.0) 4.0-2.5; m2 6.0-4.5; m3 7.0-6.5; m4 13.5-12.0;
             // m5 15.0-14.0; m6 16.0-15.25; m7 24.0-16.5.
             "model_seconds": 14.25,
-            // m1 here-document into producer.go; m4 a refused Write; m5 an Edit; m2 Bash share
-            // plus Read is native; m6 only Bash ready.
+            // m1 here-documents into producer.go and, after a `cd`, store.go; m4 a refused
+            // Write; m5 an Edit; m2 Bash share plus Read is native; m6 only Bash share and ready.
             "round_trips": trips((2, 2.5), (1, 1.5), (1, 1.5), (1, 0.75)),
             // Recovery counts Falinks edits only.
             "refusal_recovery": recovery(&none),
             "request_key_refusals": {},
             // t1 0.5, t2 0.25, t3 0.5, t4 0.5, t5 0.25, t6 0.5.
             "tool_seconds": 2.5,
-            // 16 (here-document) + 35 (refused Write) + 22 (Edit's new string).
-            "output_bytes": 73,
-            // producer.go ends "package fixture\n\n// A\n": only "// A\n" is new.
-            "changed_bytes": 5,
+            // 16 + 29 (here-documents) + 35 (refused Write) + 27 (Edit's new string).
+            "output_bytes": 107,
+            // From A's last share, not the transcript, which keys the here-document after the
+            // `cd` as store.go and the Edit as /w/A/store/store.go: producer.go
+            // "package fixture\n" matches its initial first line, 0; the new store/store.go
+            // "package store\n" 14, "\n" 1, "func Get() int { return 1 }\n" 28.
+            "changed_bytes": 43,
             "results": 2,
             "usage_reports": 1,
         })
@@ -1012,9 +1112,12 @@ fn timing_reports_hand_computed_figures() {
             "refusal_recovery": recovery(&unresolved),
             "request_key_refusals": {},
             "tool_seconds": 1.75,
-            // 23 + 2; the refused edit is output but changes nothing.
+            // 23 + 2; the refused edit is output but changes nothing. e1's `from` emits none.
             "output_bytes": 25,
-            "changed_bytes": 7,
+            // From `history.json`, not the transcript, which never wrote e1's `from` scratch
+            // file: producer.go's "// new\n" 7, consumer.go's "    return records\n" 19. The
+            // Stale e2 changes nothing.
+            "changed_bytes": 26,
             "results": 2,
             "usage_reports": 2,
             // e1 2.5-3.0 accepted, e2 4.0-4.5 refused, y1 9.0-9.25.
