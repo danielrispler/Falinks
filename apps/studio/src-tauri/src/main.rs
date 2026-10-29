@@ -1,6 +1,7 @@
 //! The studio app's shell (#328, module 9). At start it replays the whole event log through the
-//! core, then feeds it each new line live. The pane shows the session Daniel prompted last; a session
-//! that newly needs Daniel gets a macOS notification while the window is not focused.
+//! core, then feeds it each new line live and hands the core's card requests to the card writer. The
+//! pane shows the session Daniel prompted last and its cards; a session that newly needs Daniel gets a
+//! macOS notification while the window is not focused.
 
 use std::{
     fs::File,
@@ -10,13 +11,33 @@ use std::{
     thread,
     time::Duration,
 };
-use studio_core::{Output, Session, Studio};
+use studio_core::{CardRequest, Output, Session, Studio};
+use studio_understanding::{Card, CardWriter, FakeWriter};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
+
+/// The written cards, oldest first, each with the step it explains.
+// shortcut: kept in memory, so a restart loses them; the card store (#345) keeps them on disk.
+type Cards = Mutex<Vec<(CardRequest, Card)>>;
 
 #[tauri::command]
 fn now(studio: State<Mutex<Studio>>) -> Option<Session> {
     studio.lock().unwrap().prompted_last().cloned()
+}
+
+/// The cards of the session the pane follows.
+#[tauri::command]
+fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<(CardRequest, Card)> {
+    let Some(followed) = studio.lock().unwrap().prompted_last().map(|s| s.id.clone()) else {
+        return Vec::new();
+    };
+    cards
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(request, _)| request.session_id == followed)
+        .cloned()
+        .collect()
 }
 
 fn main() {
@@ -24,7 +45,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(Studio::default()))
-        .invoke_handler(tauri::generate_handler![now])
+        .manage(Cards::default())
+        .invoke_handler(tauri::generate_handler![now, cards])
         .setup(move |app| {
             let app = app.handle().clone();
             thread::spawn(move || follow(&app, &log));
@@ -35,8 +57,8 @@ fn main() {
 }
 
 /// Reads the log from its start, then from where it stopped. A line counts once it ends in a newline,
-/// so a line the hook is still writing waits for the next read. The lines present at start are
-/// replayed; later ones are live.
+/// so a line the hook is still writing waits for the next read. The lines there at start are
+/// replayed, so steps that ran while the app was down get no cards and no notifications.
 // shortcut: polls every 200 ms; switch to file-system events if the delay or the wake-ups matter.
 fn follow(app: &AppHandle, log: &Path) {
     let mut read_to = 0;
@@ -47,32 +69,36 @@ fn follow(app: &AppHandle, log: &Path) {
         {
             let mut reader = BufReader::new(file);
             let mut line = Vec::new();
+            let mut outputs = Vec::new();
             let read_from = read_to;
-            let mut needs_you = Vec::new();
             let state = app.state::<Mutex<Studio>>();
             let mut studio = state.lock().unwrap();
             while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 && line.ends_with(b"\n") {
                 read_to += line.len() as u64;
-                let event = String::from_utf8_lossy(&line);
-                if !live {
-                    studio.replay(&event);
+                let text = String::from_utf8_lossy(&line);
+                if live {
+                    outputs.extend(studio.apply(&text));
                 } else {
-                    for output in studio.apply(&event) {
-                        match output {
-                            Output::NeedsYou { session_id } => {
-                                needs_you.push(studio.session(&session_id).cloned())
-                            }
-                        }
-                    }
+                    studio.replay(&text);
                 }
                 line.clear();
             }
             drop(studio);
+            for output in outputs {
+                match output {
+                    // shortcut: writes on this thread, which suits the instant fake; the real writer
+                    // (#342) takes seconds and needs its own thread.
+                    Output::Card(request) => {
+                        if let Some(card) = FakeWriter.write(&request) {
+                            app.state::<Cards>().lock().unwrap().push((request, card));
+                        }
+                    }
+                    Output::NeedsYou { session_id } => notify(app, &session_id),
+                }
+            }
             if read_to > read_from {
                 let _ = app.emit("now", now(state));
-            }
-            for session in needs_you {
-                notify(app, session);
+                let _ = app.emit("cards", cards(app.state(), app.state()));
             }
         }
         live = true;
@@ -81,15 +107,21 @@ fn follow(app: &AppHandle, log: &Path) {
 }
 
 /// One notification per notice, only while the window is not focused (#328, module 9). Called
-/// without the core's lock, because asking for focus waits on the main thread, which runs `now`.
-fn notify(app: &AppHandle, session: Option<Session>) {
+/// without the core's lock held, because asking for focus waits on the main thread, which runs `now`.
+fn notify(app: &AppHandle, session_id: &str) {
     let focused = app
         .get_webview_window("main")
         .and_then(|w| w.is_focused().ok());
     if focused == Some(true) {
         return;
     }
-    let folder = session.map(|s| s.cwd.rsplit('/').next().unwrap_or_default().to_string());
+    let studio = app.state::<Mutex<Studio>>();
+    let cwd = studio
+        .lock()
+        .unwrap()
+        .session(session_id)
+        .map(|s| s.cwd.clone());
+    let folder = cwd.as_deref().and_then(|cwd| cwd.rsplit('/').next());
     let _ = app
         .notification()
         .builder()

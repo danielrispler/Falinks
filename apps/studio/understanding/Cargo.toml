@@ -1,0 +1,9 @@
+[package]
+name = "studio-understanding"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+studio-core = { path = "../core" }

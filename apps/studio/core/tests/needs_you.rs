@@ -18,10 +18,13 @@ fn states(log: &str, session: &str) -> Vec<Option<State>> {
         .collect()
 }
 
-/// What the shell must act on when the log's lines arrive live.
+/// The "needs you" notices when the log's lines arrive live.
 fn live(log: &str) -> Vec<Output> {
     let mut studio = Studio::default();
-    log.lines().flat_map(|line| studio.apply(line)).collect()
+    let outputs = log.lines().flat_map(|line| studio.apply(line));
+    outputs
+        .filter(|output| matches!(output, Output::NeedsYou { .. }))
+        .collect()
 }
 
 fn notice(session: &str) -> Output {
