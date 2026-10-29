@@ -4,7 +4,7 @@
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
-    FIXTURES, Result, bail, git, read,
+    FIXTURES, Result, bail, collisions, git, read,
     report::{report, step_6_report, track_t_report},
     root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
@@ -544,6 +544,8 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
     let ledger = read(runs.join("batch.json"))?;
     let prices = tokens::prices()?;
     let quality = read(runs.join("quality.json")).unwrap_or(Value::Null);
+    // Written by `duplicates` (#334): the classified duplicate-work candidates.
+    let duplicates = read(runs.join("duplicates.json")).unwrap_or(Value::Null);
     let mut out = vec![];
     for entry in ledger["runs"].as_array().into_iter().flatten() {
         let run_dir = Path::new(entry["run_dir"].as_str().unwrap_or_default());
@@ -562,6 +564,8 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
             }
         }
         result["developments"] = developments(run_dir);
+        result["collisions"] = collisions::collisions(run_dir, &result, &duplicates);
+        result["discarded_or_rewritten_work"] = collisions::waste(&result["collisions"]);
         // Written by `quality` (#230); a run it has not measured has none.
         result["quality"] = quality["runs"][entry["run_id"].as_str().unwrap_or_default()].clone();
         out.push(result);
