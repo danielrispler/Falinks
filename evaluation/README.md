@@ -412,6 +412,12 @@ the agent's session file, checked at every `result`, since only that file record
     For a Falinks agent, its `operations` give, per op, the calls (`acts`), the refused
     results and the tool seconds; its `edit_gate` gives the tool seconds of accepted `edit`, `retry`,
     `incorporate` and `apply_job` calls, their count and the mean per accepted call (#316).
+    Changed bytes come from each arm's records, not the transcript (#325): per agent, the
+    lines of its last version of each file that a line diff against the initial content
+    does not match. A Falinks agent's last version is its last applied operation's
+    (`controller/history.json`); a Git agent's is its last shared commit
+    (`controller/events.jsonl`, `agents/repo`). A line in both agents' last versions counts
+    for each, and a line one agent wrote and the other overwrote counts for its writer.
     Tool seconds of calls made in parallel in one message overlap, so these are approximate.
     The definitions and heuristics are in
     `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
@@ -485,7 +491,8 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/step-6 --sc
   overhead apart: C_fixed (coordination round-trips, their model seconds and `operations`
   acts), per-edit tool overhead (`operations` tool seconds and `edit_gate`) and per-edit
   model overhead (output against changed bytes), with the run's `identity`. These come from
-  the transcripts, not the host's edit-gate timing (#178's I-2, track P).
+  the transcripts, not the host's edit-gate timing (#178's I-2, track P); changed bytes come
+  from the arm's records.
 
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and
