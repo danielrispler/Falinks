@@ -24,7 +24,7 @@ pub struct Session {
 }
 
 /// A tool call the agent made, as the "now" line names it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Step {
     pub tool: String,
     pub detail: Option<String>,
@@ -38,7 +38,8 @@ pub enum Output {
 }
 
 /// A finished card step, with what the card writer needs: the step's change, not the whole payload.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// The card store keeps it with its card.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CardRequest {
     pub session_id: String,
     /// The step's tool call, which names the card.
