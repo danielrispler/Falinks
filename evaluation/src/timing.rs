@@ -42,7 +42,7 @@ use std::fs;
 use std::path::Path;
 
 const FALINKS: &str = "mcp__falinks__falinks_";
-const SOURCE_WRITES: [&str; 4] = ["edit", "retry", "incorporate", "apply_job"];
+pub(crate) const SOURCE_WRITES: [&str; 4] = ["edit", "retry", "incorporate", "apply_job"];
 const CATEGORIES: [&str; 4] = ["edit", "refused_edit", "native", "coordination"];
 /// Falinks mutations that take output forms, and the forms (#193 decision 1), as
 /// `adapters/claude/arm.rs` counts them; its `tests/arm.rs` checks they agree.
