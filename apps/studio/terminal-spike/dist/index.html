@@ -105,7 +105,7 @@ async function create(kind) {
   const { cols, rows } = tab.term;
   if (remote(tab)) {
     const argv = kind === 'claude'
-      ? [cfg.shell, '-lc', `claude --settings '${cfg.hooks}'; exec ${cfg.shell} -l`]
+      ? [cfg.shell, '-lc', `claude --plugin-dir '${cfg.plugin}'; exec ${cfg.shell} -l`]
       : [cfg.shell, '-l'];
     await invoke('daemon_send', { msg: { op: 'spawn', id, argv, cwd: cfg.cwd, cols, rows } });
     await invoke('daemon_send', { msg: { op: 'attach', id } });
@@ -148,7 +148,7 @@ function onEvent(m) {
   } else if (m.ev === 'list') {
     log(`daemon ${m.daemon_pid}: ${m.terms.map(t => `${t.id}[fg ${t.foreground ?? '-'}${t.exited ? ', exited ' + t.exited : ''}]`).join(' ') || 'no terminals'}`);
     for (const t of m.terms) if (!tabs.has(t.id)) {
-      makeTab(t.id, t.argv.join(' ').includes('claude --settings') ? 'claude' : 'daemon');
+      makeTab(t.id, t.argv.join(' ').includes('claude --plugin-dir') ? 'claude' : 'daemon');
       invoke('daemon_send', { msg: { op: 'attach', id: t.id } });
     }
   } else if (m.ev === 'lost') log('daemon connection lost');
@@ -171,7 +171,7 @@ async function restore() {
 
 (async () => {
   cfg = await invoke('config');
-  log(`app ${cfg.app_pid}, cwd ${cfg.cwd}. Right-click a tab to close it. Claude with the spike's hooks: claude --settings '${cfg.hooks}'`);
+  log(`app ${cfg.app_pid}, cwd ${cfg.cwd}. Right-click a tab to close it. Claude with the spike's hooks: claude --plugin-dir '${cfg.plugin}'`);
   await listen('daemon', e => onEvent(e.payload));
   await listen('local', e => onEvent(e.payload));
   for (const b of document.querySelectorAll('#bar > button')) b.onclick = () => create(b.dataset.kind);

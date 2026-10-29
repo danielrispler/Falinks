@@ -51,7 +51,7 @@ fn config() -> Value {
     json!({
         "shell": std::env::var("SHELL").unwrap_or("/bin/zsh".into()),
         "cwd": std::env::var("SPIKE_CWD").unwrap_or(std::env::current_dir().unwrap().display().to_string()),
-        "hooks": format!("{spike}/hook/settings.json"),
+        "plugin": format!("{spike}/hook"),
         "tmux_conf": format!("{spike}/tmux.conf"),
         "app_pid": std::process::id(),
         "autospawn": std::env::var("SPIKE_AUTOSPAWN").unwrap_or_default(),
