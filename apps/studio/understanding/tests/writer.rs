@@ -38,7 +38,10 @@ fn the_real_writer_runs_claude_on_the_subscription_in_its_neutral_folder() {
             (OsStr::new("ANTHROPIC_AUTH_TOKEN"), None),
         ]
     );
-    let args: Vec<_> = command.get_args().map(|arg| arg.to_str().unwrap()).collect();
+    let args: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_str().unwrap())
+        .collect();
     assert_eq!(args[0], "-p");
     assert!(!args.contains(&"--bare"));
     let prompt = args[1];

@@ -22,10 +22,52 @@ pub struct Session {
     /// The folder the session works in, from its latest event.
     pub cwd: String,
     pub last_step: Option<Step>,
+    pub state: State,
+    /// The tool calls whose `PreToolUse` landed and whose `PostToolUse` has not.
+    #[serde(skip)]
+    running: Vec<Call>,
+    /// The tool calls blocked on Daniel.
+    #[serde(skip)]
+    blocks: Vec<Call>,
+    /// A block no tool call clears: a question in the turn's final message.
+    #[serde(skip)]
+    asked: bool,
+    #[serde(skip)]
+    turn_ended: bool,
+}
+
+impl Session {
+    fn needs_you(&self) -> bool {
+        self.asked || !self.blocks.is_empty()
+    }
+
+    /// The id of the latest running call that `matches`: the tool a block waits on, so that its
+    /// `PostToolUse` clears the block. With none, the block lasts until the turn ends.
+    fn running_id(&self, matches: impl Fn(&Call) -> bool) -> Option<String> {
+        self.running.iter().rfind(|c| matches(c))?.id.clone()
+    }
+
+    /// Clears every block (#328, module 3, "Needs you": `UserPromptSubmit`, `Stop`, `SessionEnd`).
+    fn unblock(&mut self) {
+        self.blocks.clear();
+        self.asked = false;
+    }
+}
+
+/// Tools that wait on Daniel in any permission mode, before any `PermissionRequest`.
+const ASKING_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
+
+/// Whether a session waits on Daniel (#328, module 3, "Needs you").
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum State {
+    Working,
+    NeedsYou,
+    YourTurn,
 }
 
 /// A tool call the agent made, as the "now" line names it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Step {
     pub tool: String,
     pub detail: Option<String>,
@@ -36,10 +78,13 @@ pub struct Step {
 pub enum Output {
     /// A card step finished; ask the card writer.
     Card(CardRequest),
+    /// A session newly needs Daniel.
+    NeedsYou { session_id: String },
 }
 
 /// A finished card step, with what the card writer needs: the step's change, not the whole payload.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// The card store keeps it with its card.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CardRequest {
     pub session_id: String,
     /// The step's tool call, which names the card.
@@ -47,6 +92,15 @@ pub struct CardRequest {
     pub step: Step,
     /// The diff lines of an edit, or a new file's content as added lines.
     pub change: String,
+}
+
+/// One tool call: its `tool_use_id`, and its tool and input, which are all `PermissionRequest`
+/// names it by.
+#[derive(Clone, Debug, PartialEq)]
+struct Call {
+    id: Option<String>,
+    tool: String,
+    input: Value,
 }
 
 /// The fields of a hook payload the core reads; the rest of the line is ignored.
@@ -63,6 +117,37 @@ struct Event {
     tool_use_id: String,
     #[serde(default)]
     tool_response: Value,
+    #[serde(default)]
+    last_assistant_message: String,
+    #[serde(default)]
+    notification_type: String,
+}
+
+/// Whether the turn's final message asks Daniel something: a sentence ending in `?`, after removing
+/// fenced code, inline code, blockquotes, headings and table rows (#321's evidence, "Transcripts").
+fn asks(message: &str) -> bool {
+    let mut in_fence = false;
+    message.lines().any(|line| {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            return false;
+        }
+        // Inline code sits between pairs of backticks; an unpaired last one starts no code.
+        let parts: Vec<&str> = line.split('`').collect();
+        let prose: String = parts
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0 || i + 1 == parts.len())
+            .map(|(_, part)| *part)
+            .collect();
+        let prose = prose
+            .trim()
+            .trim_end_matches([' ', '\t', '*', '_', ')', '"', '\'', '”', '’']);
+        !in_fence
+            && !prose.starts_with(['>', '#', '|'])
+            && prose.split_whitespace().any(|word| word.ends_with('?'))
+    })
 }
 
 /// The tool input that says what a step works on: a command's first line, a path relative to the
@@ -130,44 +215,132 @@ impl Studio {
                 id: event.session_id.clone(),
                 cwd: String::new(),
                 last_step: None,
+                state: State::Working,
+                running: Vec::new(),
+                blocks: Vec::new(),
+                asked: false,
+                turn_ended: false,
             });
         if !event.cwd.is_empty() {
             session.cwd.clone_from(&event.cwd);
         }
+        let mut outputs = Vec::new();
+        let mut blocked_before = session.needs_you();
         let tool = event.tool_name.unwrap_or_default();
+        let id = Some(event.tool_use_id.clone()).filter(|id| !id.is_empty());
         match event.hook_event_name.as_str() {
             // A prompt opens a wait, also after an interrupt, which fires no `Stop`.
             "UserPromptSubmit" => {
                 self.awaiting_card.insert(event.session_id.clone());
-                self.prompted_last = Some(event.session_id);
+                self.prompted_last = Some(event.session_id.clone());
+                session.unblock();
+                session.turn_ended = false;
             }
             "Stop" => {
                 self.awaiting_card.remove(&event.session_id);
+                // The order on `Stop`: clear every block first, then ask if the message asks.
+                session.unblock();
+                session.turn_ended = true;
+                blocked_before = false;
+                session.asked = asks(&event.last_assistant_message);
+            }
+            // shortcut: a closed session shows "your turn"; drop closed sessions once the board
+            // lists sessions.
+            "SessionEnd" => {
+                session.unblock();
+                session.turn_ended = true;
             }
             "PreToolUse" => {
                 let detail = step_detail(&event.tool_input, &event.cwd);
-                session.last_step = Some(Step { tool, detail });
+                session.last_step = Some(Step {
+                    tool: tool.clone(),
+                    detail,
+                });
+                let call = Call {
+                    id,
+                    tool,
+                    input: event.tool_input,
+                };
+                if ASKING_TOOLS.contains(&call.tool.as_str()) {
+                    session.blocks.push(call.clone());
+                }
+                // The hooks are async, so this call's `PermissionRequest` may have landed first.
+                // shortcut: a block whose call ended before the block landed stays until the turn
+                // ends; remember ended calls if auto-denied calls (#322) show it.
+                if let Some(block) = session
+                    .blocks
+                    .iter_mut()
+                    .find(|b| b.id.is_none() && b.tool == call.tool && b.input == call.input)
+                {
+                    block.id.clone_from(&call.id);
+                }
+                session.running.push(call);
             }
-            // Only a step that succeeded counts: a failed Edit or Write changed nothing.
-            "PostToolUse"
-                if is_card_step(&tool, &event.tool_input)
-                    && self.awaiting_card.remove(&event.session_id) =>
+            "PermissionRequest" if !ASKING_TOOLS.contains(&tool.as_str()) => {
+                // It has no `tool_use_id`, so it names its call by tool and input.
+                let id = session.running_id(|c| c.tool == tool && c.input == event.tool_input);
+                session.blocks.push(Call {
+                    id,
+                    tool,
+                    input: event.tool_input,
+                });
+            }
+            // A sandboxed command's network request fires no `PermissionRequest`; any other
+            // prompt already has its block.
+            "Notification"
+                if event.notification_type == "permission_prompt" && !session.needs_you() =>
             {
-                let detail = step_detail(&event.tool_input, &event.cwd);
-                return vec![Output::Card(CardRequest {
-                    session_id: event.session_id,
-                    tool_use_id: event.tool_use_id,
-                    step: Step { tool, detail },
-                    change: change(&event.tool_response),
-                })];
+                let id = session.running_id(|c| c.tool == "Bash");
+                session.blocks.push(Call {
+                    id,
+                    tool,
+                    input: Value::Null,
+                });
+            }
+            "Elicitation" => {
+                let id = session.running_id(|c| c.tool.starts_with("mcp__"));
+                session.blocks.push(Call {
+                    id,
+                    tool,
+                    input: Value::Null,
+                });
+            }
+            "PostToolUse" | "PostToolUseFailure" => {
+                session.running.retain(|c| c.id != id);
+                session.blocks.retain(|c| c.id != id);
+                // Only a step that succeeded counts: a failed Edit or Write changed nothing.
+                if event.hook_event_name == "PostToolUse"
+                    && is_card_step(&tool, &event.tool_input)
+                    && self.awaiting_card.remove(&event.session_id)
+                {
+                    let detail = step_detail(&event.tool_input, &event.cwd);
+                    outputs.push(Output::Card(CardRequest {
+                        session_id: event.session_id.clone(),
+                        tool_use_id: event.tool_use_id,
+                        step: Step { tool, detail },
+                        change: change(&event.tool_response),
+                    }));
+                }
             }
             _ => {}
         }
-        Vec::new()
+        session.state = if session.needs_you() {
+            State::NeedsYou
+        } else if session.turn_ended {
+            State::YourTurn
+        } else {
+            State::Working
+        };
+        if !blocked_before && session.needs_you() {
+            outputs.push(Output::NeedsYou {
+                session_id: event.session_id,
+            });
+        }
+        outputs
     }
 
     /// Takes one event log line replayed at app start. It updates state exactly like `apply` and
-    /// requests nothing, so steps that ran while the app was down get no cards.
+    /// requests nothing, so steps that ran while the app was down get no cards and no notices.
     pub fn replay(&mut self, line: &str) {
         self.apply(line);
     }

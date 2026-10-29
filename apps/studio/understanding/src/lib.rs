@@ -1,9 +1,12 @@
 //! The understanding layer's I/O, which the core leaves to the shell: the card writer (#328,
-//! module 4).
+//! module 4) and the card store (module 6).
 
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, process::Command};
 use studio_core::CardRequest;
+
+mod store;
+pub use store::{CardStore, StoredCard};
 
 /// A card on one step, in Hebrew; code stays in English, and code inside the Hebrew text is in
 /// backticks. It opens with the question; the rest shows when Daniel taps.
@@ -76,7 +79,10 @@ impl ClaudeWriter {
     pub fn command(&self, request: &CardRequest) -> Command {
         let step = &request.step;
         let detail = step.detail.as_deref().unwrap_or_default();
-        let prompt = format!("{PROMPT}\nStep: {} {detail}\nChange:\n{}", step.tool, request.change);
+        let prompt = format!(
+            "{PROMPT}\nStep: {} {detail}\nChange:\n{}",
+            step.tool, request.change
+        );
         let mut command = Command::new("claude");
         command
             .args(["-p", &prompt])

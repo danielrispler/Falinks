@@ -1,8 +1,10 @@
-// The side pane: the "now" line of the session Daniel prompted last, and its cards. The core decides
-// what it shows; this file only draws what the shell sends, on load and on each "now" or "cards" event.
+// The side pane: the state and "now" line of the session Daniel prompted last, and its cards. The core
+// decides what it shows; this file only draws what the shell sends, on load and on each "now" or
+// "cards" event.
 
 type Step = { tool: string; detail: string | null };
-type Session = { id: string; cwd: string; last_step: Step | null };
+type SessionState = "working" | "needs_you" | "your_turn";
+type Session = { id: string; cwd: string; last_step: Step | null; state: SessionState };
 type CardRequest = { session_id: string; tool_use_id: string; step: Step; change: string };
 type Card = {
   question: string;
@@ -12,11 +14,18 @@ type Card = {
   why_it_matters: string;
   not_checked: string;
 };
+type StoredCard = { request: CardRequest; card: Card; revealed_at: number | null };
+
+const stateLabels: Record<SessionState, string> = {
+  working: "Working",
+  needs_you: "Needs you",
+  your_turn: "Your turn",
+};
 
 declare global {
   interface Window {
     __TAURI__: {
-      core: { invoke<T>(command: string): Promise<T> };
+      core: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> };
       event: { listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<unknown> };
     };
   }
@@ -27,10 +36,13 @@ const element = (id: string) => document.getElementById(id)!;
 function show(session: Session | null) {
   element("empty").hidden = session !== null;
   element("session").hidden = session === null;
+  element("state").hidden = session === null;
   element("step").hidden = session === null;
   if (session === null) return;
   const folder = session.cwd.split("/").pop() || session.cwd;
   element("session").textContent = `${folder} · ${session.id.slice(0, 8)}`;
+  element("state").textContent = stateLabels[session.state];
+  element("state").dataset.state = session.state;
   element("tool").textContent = session.last_step?.tool ?? "No step yet";
   element("detail").textContent = session.last_step?.detail ?? "";
 }
@@ -52,13 +64,18 @@ function hebrew(tag: string, text: string): HTMLElement {
 }
 
 // A card in Hebrew, right to left: the question, then, on a tap, the answer, the file paths, the code
-// left to right, why the step matters and what was not checked.
-function cardElement(request: CardRequest, card: Card): HTMLElement {
+// left to right, why the step matters and what was not checked. The shell keeps each reveal in the
+// card store, so after a restart a revealed card is drawn open.
+function cardElement({ request, card, revealed_at }: StoredCard): HTMLElement {
   const details = document.createElement("details");
   details.className = "card";
   details.dir = "rtl";
   details.lang = "he";
   details.dataset.id = request.tool_use_id;
+  details.open = revealed_at !== null;
+  details.addEventListener("toggle", () => {
+    if (details.open) window.__TAURI__.core.invoke("reveal", { toolUseId: request.tool_use_id });
+  });
   const answer = hebrew("p", card.answer);
   answer.className = "answer";
   const paths = document.createElement("p");
@@ -82,24 +99,24 @@ function cardElement(request: CardRequest, card: Card): HTMLElement {
 
 // Each card is a <details>: its question shows, and a tap reveals the rest. Cards already drawn are
 // kept, keyed by their step's tool_use_id, so one Daniel opened stays open on the next event.
-function showCards(cards: [CardRequest, Card][]) {
+function showCards(cards: StoredCard[]) {
   const list = element("cards");
-  const ids = new Set(cards.map(([request]) => request.tool_use_id));
+  const ids = new Set(cards.map(({ request }) => request.tool_use_id));
   const drawn = new Set<string>();
   for (const node of [...list.children] as HTMLElement[]) {
     if (ids.has(node.dataset.id!)) drawn.add(node.dataset.id!);
     else node.remove();
   }
-  for (const [request, card] of cards) {
-    if (drawn.has(request.tool_use_id)) continue;
-    list.prepend(cardElement(request, card));
+  for (const stored of cards) {
+    if (drawn.has(stored.request.tool_use_id)) continue;
+    list.prepend(cardElement(stored));
   }
   element("cards-title").hidden = cards.length === 0;
 }
 
 window.__TAURI__.event.listen<Session | null>("now", (event) => show(event.payload));
 window.__TAURI__.core.invoke<Session | null>("now").then(show);
-window.__TAURI__.event.listen<[CardRequest, Card][]>("cards", (event) => showCards(event.payload));
-window.__TAURI__.core.invoke<[CardRequest, Card][]>("cards").then(showCards);
+window.__TAURI__.event.listen<StoredCard[]>("cards", (event) => showCards(event.payload));
+window.__TAURI__.core.invoke<StoredCard[]>("cards").then(showCards);
 
 export {};

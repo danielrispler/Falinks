@@ -163,7 +163,10 @@ fn restart_after(log: &str, replayed: usize) -> Vec<CardRequest> {
     lines[replayed..]
         .iter()
         .flat_map(|line| studio.apply(line))
-        .map(|Output::Card(request)| request)
+        .filter_map(|output| match output {
+            Output::Card(request) => Some(request),
+            _ => None,
+        })
         .collect()
 }
 
@@ -188,14 +191,17 @@ fn the_card_writers_own_sessions_are_dropped() {
         "/Users/danielrispler/Library/Application Support/dev.falinks.studio/card-writer",
     );
     let log = include_str!("fixtures/card-writer.jsonl");
-    let cards: Vec<Step> = log
-        .lines()
-        .flat_map(|line| studio.apply(line))
-        .map(|Output::Card(request)| request.step)
-        .collect();
+    let outputs: Vec<Output> = log.lines().flat_map(|line| studio.apply(line)).collect();
 
     let now = studio.prompted_last().expect("a session was prompted");
     assert_eq!(now.id, "2c7a9f14-6e3b-4d58-a1c9-0f8e2b7d4a63");
     assert_eq!(studio.session("e81b4c06-3f7d-4a92-b5e1-9c0d2a6f8b37"), None);
-    assert_eq!(cards, [step("Edit", Some("apps/studio/ui/style.css")).unwrap()]);
+    // The writer's reply ends its turn with a `?`, which gives no "needs you" notice either.
+    let [Output::Card(card)] = &outputs[..] else {
+        panic!("one card and no notice: {outputs:?}");
+    };
+    assert_eq!(
+        Some(card.step.clone()),
+        step("Edit", Some("apps/studio/ui/style.css"))
+    );
 }
