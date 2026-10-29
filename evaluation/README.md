@@ -194,12 +194,16 @@ Claude Code `2.1.308` with `claude-opus-5-5` is the evaluated runtime in both ar
 ([#32](https://github.com/danielrispler/Falinks/issues/32#issuecomment-6096677771)).
 Both arms launch one long-lived `claude -p` stream-json session per agent with the same
 isolation flags (`--setting-sources ""`, `--strict-mcp-config`, `--disable-slash-commands`,
-`dontAsk`), default reasoning and `--max-turns 12`. When a message hits that tool-call cap,
+`dontAsk`), `--effort medium` (`reasoning` in `config.json`) and `--max-turns 12`. Effort
+is passed explicitly, never left to the runtime's default, which every earlier session ran
+at ([#205](https://github.com/danielrispler/Falinks/issues/205#issuecomment-6493518720),
+finding 9 and E1). When a message hits that tool-call cap,
 the host sends a continuation. Host events are written at once and presented at the next
 tool-result boundary or as a new turn. An idle, unfinished agent with no new events gets a
 reminder after two minutes. Any `system/init` mismatch, model refusal fallback or other
-model in `modelUsage` invalidates the run. A `rate_limit_event` with status `rejected` ends
-it as `usage_limit`.
+model in `modelUsage` invalidates the run. So does another effort on an assistant entry of
+the agent's session file, checked at every `result`, since only that file records it. A
+`rate_limit_event` with status `rejected` ends it as `usage_limit`.
 
 - **Git arm** (`baseline` with `worker_script` = `claude-worker`): the worker runs in
   the host sandbox profile with Claude Code's sandbox off and tools

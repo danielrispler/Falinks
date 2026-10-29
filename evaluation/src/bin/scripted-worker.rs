@@ -9,7 +9,8 @@
 //! appends the prompt (after `-p`) to `$FALINKS_FAKE_JUDGE/prompts.json` and replies with the next canned
 //! text in `$FALINKS_FAKE_JUDGE/replies.json`, where `null` is a failed call;
 //! `scripted-worker -p ...` impersonates `claude -p` stream-json for the Claude bridge; copied
-//! as `launches-PROGRAM`, its first turn runs `PROGRAM` through Bash (a nested agent);
+//! as `launches-PROGRAM`, its first turn runs `PROGRAM` through Bash (a nested agent); copied
+//! as `effort-LEVEL`, its session file records `LEVEL` whatever `--effort` says;
 //! `scripted-worker <fixture> --output DIR ...` impersonates the Falinks-arm runner for batches;
 //! `FALINKS_FAKE_NESTED=COMMAND` records that command as a nested agent.
 use serde_json::{Value, json};
@@ -374,6 +375,22 @@ fn fake_claude(argv: &[String]) {
             "consumer.go"
         }
     );
+    let program = env::args().next().unwrap();
+    let name = program.rsplit('/').next().unwrap();
+    // Like the real runtime, its session file under `$HOME` records each reply's effort.
+    let effort = name
+        .strip_prefix("effort-")
+        .map_or(flag("--effort"), String::from);
+    let session = env::var_os("HOME").map(|home| {
+        let folder: String = env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let path = Path::new(&home).join(".claude/projects").join(folder);
+        path.join(format!("{}.jsonl", flag("--session-id")))
+    });
     let mut first = true;
     for line in io::stdin().lines() {
         let message: Value = serde_json::from_str(&line.unwrap()).unwrap();
@@ -384,13 +401,7 @@ fn fake_claude(argv: &[String]) {
             "session_id": flag("--session-id")}),
         );
         let mut subtype = "success";
-        let program = env::args().next().unwrap();
-        if let Some(launched) = program
-            .rsplit('/')
-            .next()
-            .unwrap()
-            .strip_prefix("launches-")
-        {
+        if let Some(launched) = name.strip_prefix("launches-") {
             send(
                 json!({"type": "assistant", "message": {"model": "scripted", "content": [
                 {"type": "tool_use", "id": "t1", "name": "Bash",
@@ -440,6 +451,14 @@ fn fake_claude(argv: &[String]) {
         );
         send(json!({"type": "assistant", "message": {"model": "scripted",
             "content": [{"type": "thinking", "thinking": "hidden"}, {"type": "text", "text": "done"}]}}));
+        if let Some(session) = &session {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(session)
+                .unwrap();
+            writeln!(file, "{}", json!({"type": "assistant", "effort": effort})).unwrap();
+        }
         send(json!({"type": "result", "subtype": subtype, "num_turns": 1,
             "usage": {"input_tokens": 2, "output_tokens": 3}, "modelUsage": {"scripted": {}}}));
     }
