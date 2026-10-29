@@ -45,10 +45,18 @@ impl Session {
         self.asked || !self.blocks.is_empty()
     }
 
-    /// The id of the latest running call that `matches`: the tool a block waits on, so that its
-    /// `PostToolUse` clears the block. With none, the block lasts until the turn ends.
-    fn running_id(&self, matches: impl Fn(&Call) -> bool) -> Option<String> {
-        self.running.iter().rfind(|c| matches(c))?.id.clone()
+    /// Adds a block on the latest running call it waits on, so that the call's `PostToolUse` clears
+    /// it. With none, the call's `PreToolUse` may still land (the hooks are async); otherwise the
+    /// block lasts until the turn ends.
+    fn block(&mut self, tool: String, input: Value) {
+        let mut block = Call {
+            id: None,
+            tool,
+            input,
+        };
+        let call = self.running.iter().rfind(|c| waits_on(&block, c));
+        block.id = call.and_then(|c| c.id.clone());
+        self.blocks.push(block);
     }
 
     /// Clears every block (#328, module 3, "Needs you": `UserPromptSubmit`, `Stop`, `SessionEnd`).
@@ -60,6 +68,16 @@ impl Session {
 
 /// Tools that wait on Daniel in any permission mode, before any `PermissionRequest`.
 const ASKING_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
+
+/// Whether `block` waits on tool call `call`: a permission prompt on the call it names, an MCP
+/// server's request for input on an MCP tool, and a sandboxed command's network request on a command.
+fn waits_on(block: &Call, call: &Call) -> bool {
+    match block.tool.as_str() {
+        "Elicitation" => call.tool.starts_with("mcp__"),
+        "Notification" => call.tool == "Bash",
+        tool => tool == call.tool && block.input == call.input,
+    }
+}
 
 /// Whether a session waits on Daniel (#328, module 3, "Needs you").
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -410,47 +428,30 @@ impl Studio {
                 if ASKING_TOOLS.contains(&call.tool.as_str()) {
                     session.blocks.push(call.clone());
                 }
-                // The hooks are async, so this call's `PermissionRequest` may have landed first.
+                // The hooks are async, so the block this call waits on may have landed first.
                 // shortcut: a block whose call ended before the block landed stays until the turn
                 // ends; remember ended calls if auto-denied calls (#322) show it.
                 if let Some(block) = session
                     .blocks
                     .iter_mut()
-                    .find(|b| b.id.is_none() && b.tool == call.tool && b.input == call.input)
+                    .find(|b| b.id.is_none() && waits_on(b, &call))
                 {
                     block.id.clone_from(&call.id);
                 }
                 session.running.push(call);
             }
+            // It has no `tool_use_id`, so it names its call by tool and input.
             "PermissionRequest" if !ASKING_TOOLS.contains(&tool.as_str()) => {
-                // It has no `tool_use_id`, so it names its call by tool and input.
-                let id = session.running_id(|c| c.tool == tool && c.input == event.tool_input);
-                session.blocks.push(Call {
-                    id,
-                    tool,
-                    input: event.tool_input,
-                });
+                session.block(tool, event.tool_input);
             }
             // A sandboxed command's network request fires no `PermissionRequest`; any other
             // prompt already has its block.
             "Notification"
                 if event.notification_type == "permission_prompt" && !session.needs_you() =>
             {
-                let id = session.running_id(|c| c.tool == "Bash");
-                session.blocks.push(Call {
-                    id,
-                    tool,
-                    input: Value::Null,
-                });
+                session.block("Notification".into(), Value::Null);
             }
-            "Elicitation" => {
-                let id = session.running_id(|c| c.tool.starts_with("mcp__"));
-                session.blocks.push(Call {
-                    id,
-                    tool,
-                    input: Value::Null,
-                });
-            }
+            "Elicitation" => session.block("Elicitation".into(), Value::Null),
             "PostToolUse" | "PostToolUseFailure" => {
                 session.running.retain(|c| c.id != id);
                 session.blocks.retain(|c| c.id != id);

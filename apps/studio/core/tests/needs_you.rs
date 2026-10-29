@@ -150,6 +150,26 @@ fn an_mcp_servers_request_for_input_needs_you_until_its_tool_ends() {
 }
 
 #[test]
+fn a_request_that_lands_before_its_tool_call_still_ends_when_the_tool_ends() {
+    // The hooks are async, so an Elicitation or a network request can land before its PreToolUse.
+    let logs = [
+        ("elicitation", include_str!("fixtures/elicitation.jsonl")),
+        (
+            "sandbox-network",
+            include_str!("fixtures/sandbox-network.jsonl"),
+        ),
+    ];
+    for (name, log) in logs {
+        let lines: Vec<&str> = log.lines().collect();
+        let log = [lines[0], lines[2], lines[1], lines[3], lines[4]].join("\n");
+
+        // UserPromptSubmit, the request, PreToolUse, PostToolUse, Stop.
+        let expected = [Working, NeedsYou, NeedsYou, Working, YourTurn].map(Some);
+        assert_eq!(states(&log, PROBE), expected, "{name}");
+    }
+}
+
+#[test]
 fn a_session_closed_at_a_plan_approval_stops_needing_you() {
     let log = include_str!("fixtures/closed-at-plan.jsonl");
 
