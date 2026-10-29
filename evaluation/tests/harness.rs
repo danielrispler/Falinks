@@ -174,6 +174,7 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
             "go-indep-4",
             "go-page",
             "go-relationships",
+            "go-tasks",
             "rust-errors"
         ]
     );

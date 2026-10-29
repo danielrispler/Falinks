@@ -7,7 +7,7 @@
     "schema_version": {"const": 1},
     "run_id": {"type": "string"},
     "arm": {"enum": ["git", "falinks"]},
-    "fixture": {"enum": ["rust-errors", "go-page", "go-relationships", "go-indep-2", "go-indep-4"]},
+    "fixture": {"enum": ["rust-errors", "go-page", "go-relationships", "go-indep-2", "go-indep-4", "go-tasks"]},
     "fixture_version": {"type": "integer", "minimum": 1},
     "freeze": {"type": "object"},
     "configuration": {"type": "object"},
