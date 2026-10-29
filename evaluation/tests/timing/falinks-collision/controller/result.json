@@ -1,0 +1,26 @@
+{
+ "run_id": "synthetic-falinks-collision",
+ "arm": "falinks",
+ "fixture": "go-relationships",
+ "team_size": 2,
+ "timing": {
+  "start_utc": "2026-10-21T10:00:00Z",
+  "start_unix": 1792576800.0,
+  "elapsed_seconds": 10.0
+ },
+ "usage": {
+  "status": "partial",
+  "agents": {
+   "agent-0": [
+    {
+     "turn": 1
+    }
+   ],
+   "agent-1": [
+    {
+     "turn": 1
+    }
+   ]
+  }
+ }
+}

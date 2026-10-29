@@ -714,6 +714,15 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
 /// Printed with the collision cells (#334).
 const COLLISION_NOTE: &str = "Collision waste (#334): lines an agent wrote and later discarded or rewrote because of a collision, plus final-tree lines that duplicate the peer's lines for the same requirement; lines a gate stopped count 0. It fills discarded_or_rewritten_work and is missing for a run until its duplicate-work candidates are classified (`falinks-eval duplicates`). Premature checks failed before the peer's half existed and are not collisions.";
 
+/// Printed with the handling cells (#337).
+const HANDLING_NOTE: &str = "Handling cost (#337), per collision class: round-trips and model seconds from detection to resolution, summed over agents; a round-trip counts for the first collision whose window holds it. Falinks: a Stale refusal's recovery, timing's refusal_recovery, to the next accepted edit, retry or incorporate; an incorporate is its own round-trip; a failed combined check runs to the agent's next accepted write or passing check. Git: from the first round-trip after a CONFLICT ( line, a failed check or, for rework, the peer's share, to the agent's next share or passing check. Rereads, each the first read of a file a Stale or a CONFLICT named before the agent's next accepted write of it (Read, or cat, head, tail, sed -n, git diff or git show naming it), count in it and in coordination overhead. Duplicate work is never signalled, so it has no handling cost; a signal to no agent (the final check) is not charged. Missing when a run's collision records are unreadable.";
+/// #205's resolution, "Measures": printed with the collision cells.
+const SENTENCES: [&str; 3] = [
+    "Collision waste counts lines only. A collision a gate stopped scores 0; its cost (rereads, reviews, retries) is in the handling cost, P2 and P3.",
+    "A Falinks `Stale` refusal carries the file's current content, so its rereads may be fewer; that content's cost is in the refusal's round-trip.",
+    "Other rereads, after notices or peer shares, are not attributed; their cost is in P2 and P3 only.",
+];
+
 /// Per arm (any arms, each a list of repetition slots): collision waste per run, collisions per
 /// class and premature checks, with the waste's evidence label when both `git` and `falinks`
 /// are given. An arm of teams of one has no peer, so it prints `n/a`.
@@ -744,10 +753,22 @@ pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
             })
             .collect();
         let premature = |r: &Value| r["collisions"]["premature_checks"].as_f64();
+        let total = |pointer: String| stats(&per_run(runs, &|r| sum(r, &pointer)));
+        let handling: serde_json::Map<String, Value> = crate::timing::HANDLED
+            .iter()
+            .map(|c| {
+                let cost = json!({"round_trips": total(format!("/collision_handling/{c}/round_trips")),
+                    "model_seconds": total(format!("/collision_handling/{c}/model_seconds"))});
+                (c.to_string(), cost)
+            })
+            .collect();
+        let rereads = json!({"round_trips": total("/rereads/round_trips".into()),
+            "model_seconds": total("/rereads/model_seconds".into())});
         out.insert(
             arm.to_string(),
             json!({"waste_lines": stats(&per_run(runs, &waste)),
-            "collisions": classes, "premature_checks": stats(&per_run(runs, &premature))}),
+            "collisions": classes, "premature_checks": stats(&per_run(runs, &premature)),
+            "handling": handling, "rereads": rereads}),
         );
     }
     if let (Some(git), Some(falinks)) = (slots.get("git"), slots.get("falinks")) {
@@ -757,6 +778,8 @@ pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
         );
     }
     out.insert("note".into(), COLLISION_NOTE.into());
+    out.insert("handling_note".into(), HANDLING_NOTE.into());
+    out.insert("sentences".into(), json!(SENTENCES));
     Value::Object(out)
 }
 
@@ -1403,21 +1426,78 @@ fn collision_waste(run: &Value) -> Option<f64> {
 const TICKETS: f64 = 9.0;
 /// The Git host's requests that the harness, not the agent, sends.
 const HARNESS_REQUESTS: [&str; 2] = ["usage", "limit"];
-const PER_ARM_NOTE: &str = "Per arm, over every ranked run, failures included. Per-ticket overhead (#205, descriptive): the run's coordination overhead (the round-trips and model seconds of timing's coordination category, summed over agents) and its protocol acts (a Falinks agent's Falinks calls other than source writes; a Git team's requests to its host other than the harness's usage reports), each divided by the fixture's 9 tickets. Waiting on peer: seconds after an agent's first turn that it spent idle, summed over agents. Load balance: the busiest agent's busy seconds over the mean.";
+const PER_ARM_NOTE: &str = "Per arm, over every ranked run, failures included. Per-ticket overhead (#205, descriptive): the run's coordination overhead (coordination_note) and its protocol acts (a Falinks agent's Falinks calls other than source writes; a Git team's requests to its host other than the harness's usage reports), each divided by the fixture's 9 tickets. Waiting on peer: seconds after an agent's first turn that it spent idle, summed over agents. Load balance: the busiest agent's busy seconds over the mean.";
 
 /// One run's cold-start cost (#223), P2's measure.
 fn cold_start(run: &Value) -> Option<f64> {
     run["tokens"]["cold_start_cost_usd"].as_f64()
 }
 
-/// One run's coordination overhead: round-trips and model seconds of `timing`'s
-/// `coordination` category, summed over agents. Every per-ticket figure reads it here, so #337
-/// widens it in one place (`refused_edit`, Git's `integration`, the Falinks review estimate).
+/// One run's coordination overhead (#337): `timing`'s round-trips and model seconds of the
+/// `coordination`, `refused_edit` and `integration` categories and collision-driven rereads,
+/// plus the Falinks inline review estimate, summed over agents. Every per-ticket figure reads
+/// it here.
 fn coordination_overhead(run: &Value) -> Option<[f64; 2]> {
     Some([
-        sum(run, "/round_trips/coordination/count")?,
-        sum(run, "/round_trips/coordination/model_seconds")?,
+        sum(run, "/coordination_overhead/round_trips")?,
+        sum(run, "/coordination_overhead/model_seconds")?,
     ])
+}
+
+const COORDINATION_NOTE: &str = "Coordination overhead (#205, Q7b; #337), per run summed over agents: the round-trips and model seconds of timing's coordination, refused_edit and integration categories and of collision-driven rereads (a reread in one of those categories counts once), plus, in Falinks, inline review text at 3.56 ms per output character (#193's fit), which rides inside accepted edits. Integration is a heuristic: Git merge, rebase, cherry-pick and checkout --theirs/--ours commands, and writes under agents/integration; a command that also calls the host stays coordination. The review time is an estimate; the operations table beside it gives each Falinks operation's acts, refused results and tool seconds per run.";
+
+/// One arm's coordination overhead per run with its parts, and for Falinks the operations
+/// table beside it.
+fn coordination_cells(runs: &[&Value], falinks: bool) -> (Value, Option<Value>) {
+    let figure =
+        |f: &dyn Fn(&Value) -> Option<f64>| stats(&runs.iter().map(|r| f(r)).collect::<Vec<_>>());
+    let part = |count: &str, seconds: &str| json!({"round_trips": figure(&|r| sum(r, count)), "model_seconds": figure(&|r| sum(r, seconds))});
+    let mut cells = json!({
+        "round_trips": figure(&|r| Some(coordination_overhead(r)?[0])),
+        "model_seconds": figure(&|r| Some(coordination_overhead(r)?[1])),
+        "rereads": part("/rereads/round_trips", "/rereads/model_seconds"),
+    });
+    for category in ["coordination", "refused_edit", "integration"] {
+        let pointer = |key: &str| format!("/round_trips/{category}/{key}");
+        cells[category] = part(&pointer("count"), &pointer("model_seconds"));
+    }
+    cells["integration"]["label"] = "heuristic".into();
+    if !falinks {
+        return (cells, None);
+    }
+    cells["review_estimate"] = json!({"model_seconds": figure(&|r| sum(r, "/review_estimate/model_seconds")),
+        "label": "estimate"});
+    let ops: BTreeSet<String> = runs
+        .iter()
+        .filter_map(|r| r["transcript"]["agents"].as_object())
+        .flat_map(|agents| agents.values())
+        .filter_map(|a| a["operations"].as_object())
+        .flat_map(|ops| ops.keys().cloned())
+        .collect();
+    // An agent that never called an operation made 0 of it; one without the table, unknown.
+    let operations: serde_json::Map<String, Value> = ops
+        .into_iter()
+        .map(|op| {
+            let cell = |key: &str| {
+                figure(&|r: &Value| {
+                    let agents = r["transcript"]["agents"].as_object()?.values();
+                    let of = |a: &Value| {
+                        Some(
+                            a["operations"]
+                                .as_object()?
+                                .get(&op)
+                                .map_or(0.0, |o| o[key].as_f64().unwrap_or(0.0)),
+                        )
+                    };
+                    agents.map(of).sum()
+                })
+            };
+            let entry = json!({"acts": cell("acts"), "refused": cell("refused"),
+                "tool_seconds": cell("tool_seconds")});
+            (op, entry)
+        })
+        .collect();
+    (cells, Some(operations.into()))
 }
 
 /// One run's protocol acts: its Falinks agents' Falinks calls other than source writes, or
@@ -1552,15 +1632,20 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
             let figure = |f: &dyn Fn(&Value) -> Option<f64>| {
                 stats(&runs.iter().map(|r| f(r)).collect::<Vec<_>>())
             };
-            let entry = json!({
+            let (overhead, operations) = coordination_cells(runs, arm == "falinks-2");
+            let mut entry = json!({
                 "per_ticket": {
                     "coordination_round_trips": figure(&per_ticket(|r| Some(coordination_overhead(r)?[0]))),
                     "coordination_model_seconds": figure(&per_ticket(|r| Some(coordination_overhead(r)?[1]))),
                     "protocol_acts": figure(&per_ticket(protocol_acts)),
                 },
+                "coordination_overhead": overhead,
                 "waiting_on_peer_seconds": figure(&|r| sum(r, "/waiting_on_peer_seconds")),
                 "load_balance": figure(&|r| value(r, "load_balance")),
             });
+            if let Some(operations) = operations {
+                entry["operations"] = operations;
+            }
             (arm.to_string(), entry)
         })
         .collect();
@@ -1628,7 +1713,7 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         "collisions": collision_cells(&arms.iter().map(|(a, runs)| (*a, runs.iter().map(|r| Some(*r)).collect())).collect()),
         "reading": reading,
         "git_1": git_1,
-        "per_arm": per_arm, "per_arm_note": PER_ARM_NOTE,
+        "per_arm": per_arm, "per_arm_note": PER_ARM_NOTE, "coordination_note": COORDINATION_NOTE,
         "cost": costs,
         "gaps": gaps,
         "nested_agent_hits": STEP_6_ARMS.iter().map(|a| (a.to_string(), json!(nested(a)))).collect::<serde_json::Map<_, _>>(),
@@ -2030,13 +2115,15 @@ mod large_spec_tests {
         }
     }
 
-    /// Per arm: coordination overhead and protocol acts per ticket (÷ 9), waiting-on-peer
-    /// seconds and load balance, with each run listed and a missing rotation named.
+    /// Per arm: coordination overhead (#337: `timing`'s total of coordination, refused edits,
+    /// Git's integration, rereads and the Falinks review estimate) and protocol acts per
+    /// ticket (÷ 9), waiting-on-peer seconds and load balance, with each run listed and a
+    /// missing rotation named.
     #[test]
     fn per_arm_figures_divide_overhead_by_nine_tickets() {
         let mut runs = even();
         let agent = |count: u64, seconds: f64, waiting: f64, busy: f64| {
-            json!({"round_trips": {"coordination": {"count": count, "model_seconds": seconds}},
+            json!({"coordination_overhead": {"round_trips": count, "model_seconds": seconds},
                 "waiting_on_peer_seconds": waiting, "busy_seconds": busy})
         };
         let (mut a, mut b) = (agent(9, 18.0, 4.0, 30.0), agent(9, 9.0, 6.0, 10.0));
@@ -2080,6 +2167,67 @@ mod large_spec_tests {
         assert_eq!(
             out["gaps"],
             json!(["go-invoice: 7 of 8 complete rotations"])
+        );
+    }
+
+    /// Coordination overhead per arm (#205, Q7b) beside its parts, summed over each run's
+    /// agents: Git's integration labelled a heuristic, the Falinks review time an estimate,
+    /// with the Falinks operations table beside it.
+    #[test]
+    fn coordination_overhead_per_arm_shows_its_parts_labels_and_operations() {
+        let mut runs = even();
+        let trips = |count: u64, seconds: f64| json!({"count": count, "model_seconds": seconds});
+        let falinks = json!({
+            "round_trips": {"coordination": trips(2, 3.0), "refused_edit": trips(1, 1.0),
+                "integration": trips(0, 0.0)},
+            "rereads": {"round_trips": 1, "model_seconds": 0.5},
+            "review_estimate": {"characters": 100, "model_seconds": 0.356},
+            "coordination_overhead": {"round_trips": 4, "model_seconds": 4.856},
+            "operations": {"edit": {"acts": 3, "refused": 1, "tool_seconds": 2.0},
+                "ready": {"acts": 1, "refused": 0, "tool_seconds": 0.5}}});
+        let git = json!({
+            "round_trips": {"coordination": trips(3, 1.0), "refused_edit": trips(0, 0.0),
+                "integration": trips(2, 1.75)},
+            "rereads": {"round_trips": 1, "model_seconds": 1.0},
+            "coordination_overhead": {"round_trips": 6, "model_seconds": 3.75}});
+        for run in runs.iter_mut() {
+            let agent = if run["arm"] == "falinks" {
+                &falinks
+            } else {
+                &git
+            };
+            run["transcript"] = json!({"agents": {"one": agent, "two": agent}});
+        }
+        let out = large_spec_report(&runs);
+        let first = |arm: &str, pointer: &str| {
+            let cell = out["per_arm"][arm]["coordination_overhead"]
+                .pointer(pointer)
+                .cloned();
+            cell.unwrap_or(Value::Null)
+        };
+        assert_eq!(first("falinks-2", "/round_trips/values/0"), 8.0);
+        assert_eq!(first("falinks-2", "/model_seconds/median"), 9.712);
+        assert_eq!(first("falinks-2", "/refused_edit/round_trips/median"), 2.0);
+        assert_eq!(first("falinks-2", "/rereads/model_seconds/median"), 1.0);
+        assert_eq!(
+            first("falinks-2", "/review_estimate/model_seconds/median"),
+            0.712
+        );
+        assert_eq!(first("falinks-2", "/review_estimate/label"), "estimate");
+        assert_eq!(first("git-2", "/integration/round_trips/median"), 4.0);
+        assert_eq!(first("git-2", "/integration/model_seconds/median"), 3.5);
+        assert_eq!(first("git-2", "/integration/label"), "heuristic");
+        assert_eq!(first("git-2", "/coordination/round_trips/median"), 6.0);
+        assert_eq!(first("git-2", "/review_estimate"), Value::Null);
+        let operations = &out["per_arm"]["falinks-2"]["operations"];
+        assert_eq!(operations["edit"]["acts"]["median"], 6.0);
+        assert_eq!(operations["edit"]["refused"]["median"], 2.0);
+        assert_eq!(operations["ready"]["tool_seconds"]["median"], 1.0);
+        assert!(out["per_arm"]["git-2"].get("operations").is_none());
+        let note = out["coordination_note"].as_str().unwrap();
+        assert!(
+            note.contains("heuristic") && note.contains("3.56 ms"),
+            "{note}"
         );
     }
 
@@ -2554,6 +2702,57 @@ mod tests {
         let cells = &report(&runs, false)["fixtures"]["rust-errors"]["collisions"];
         assert_eq!(cells["label"], "incomplete");
         assert_eq!(cells["falinks"]["waste_lines"]["missing"], 1);
+    }
+
+    /// Beside collision waste (#337): handling cost per class and rereads, summed over each
+    /// run's agents, and #205's three sentences on waste, `Stale` content and other rereads.
+    #[test]
+    fn collision_cells_print_handling_cost_rereads_and_the_three_sentences() {
+        let mut runs = uniform();
+        for (arm, trips) in [("g", [2, 4, 6]), ("f", [1, 1, 3])] {
+            for (rep, n) in trips.into_iter().enumerate() {
+                let run = find(&mut runs, &format!("rust-errors-{rep}-{arm}"));
+                run["collisions"] = json!({"status": "complete", "by_class": {}});
+                let cost = |n: u64| json!({"round_trips": n, "model_seconds": n as f64 * 1.5});
+                let agent = json!({"collision_handling": {"line_conflict": cost(n), "rework": cost(0),
+                    "no_fault": cost(1)}, "rereads": {"round_trips": 1, "model_seconds": 0.5}});
+                run["transcript"] = json!({"agents": {"one": agent, "two": agent}});
+            }
+        }
+        // Unreadable collision records: the run's handling is missing, never zero.
+        find(&mut runs, "rust-errors-2-f")["transcript"]["agents"]["two"]["collision_handling"] =
+            Value::Null;
+        let cells = &report(&runs, false)["fixtures"]["rust-errors"]["collisions"];
+        let git = &cells["git"]["handling"];
+        assert_eq!(
+            git["line_conflict"]["round_trips"]["values"],
+            json!([4.0, 8.0, 12.0])
+        );
+        assert_eq!(git["line_conflict"]["model_seconds"]["median"], 12.0);
+        assert_eq!(git["no_fault"]["round_trips"]["median"], 2.0);
+        assert!(git.get("duplicate_work").is_none());
+        let falinks = &cells["falinks"]["handling"]["line_conflict"]["round_trips"];
+        assert_eq!(falinks["values"], json!([2.0, 2.0, null]));
+        assert_eq!(falinks["missing"], 1);
+        assert_eq!(
+            cells["falinks"]["rereads"]["round_trips"]["values"],
+            json!([2.0, 2.0, 2.0])
+        );
+        assert_eq!(cells["falinks"]["rereads"]["model_seconds"]["median"], 1.0);
+        assert_eq!(
+            cells["sentences"],
+            json!([
+                "Collision waste counts lines only. A collision a gate stopped scores 0; its cost (rereads, reviews, retries) is in the handling cost, P2 and P3.",
+                "A Falinks `Stale` refusal carries the file's current content, so its rereads may be fewer; that content's cost is in the refusal's round-trip.",
+                "Other rereads, after notices or peer shares, are not attributed; their cost is in P2 and P3 only."
+            ])
+        );
+        assert!(
+            cells["handling_note"]
+                .as_str()
+                .unwrap()
+                .contains("refusal_recovery")
+        );
     }
 
     #[test]
