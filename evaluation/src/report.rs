@@ -715,7 +715,7 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
 const COLLISION_NOTE: &str = "Collision waste (#334): lines an agent wrote and later discarded or rewrote because of a collision, plus final-tree lines that duplicate the peer's lines for the same requirement; lines a gate stopped count 0. It fills discarded_or_rewritten_work and is missing for a run until its duplicate-work candidates are classified (`falinks-eval duplicates`). Premature checks failed before the peer's half existed and are not collisions.";
 
 /// Printed with the handling cells (#337).
-const HANDLING_NOTE: &str = "Handling cost (#337), per collision class: round-trips and model seconds from detection to resolution, summed over agents; a round-trip counts for the first collision whose window holds it. Falinks: a Stale refusal's recovery, timing's refusal_recovery, to the next accepted edit, retry or incorporate; an incorporate is its own round-trip; a failed combined check runs to the agent's next accepted write or passing check. Git: from the first round-trip after a CONFLICT ( line, a failed check or, for rework, the peer's share, to the agent's next share or passing check. Rereads, each the first read of a file a Stale or a CONFLICT named before the agent's next accepted write of it (Read, or cat, head, tail, sed -n, git diff or git show naming it), count in it and in coordination overhead. Duplicate work is never signalled, so it has no handling cost; a signal to no agent (the final check) is not charged. Missing when a run's collision records are unreadable.";
+const HANDLING_NOTE: &str = "Handling cost (#337), per collision class: round-trips and model seconds from detection to resolution, summed over agents; a round-trip counts for the first collision whose window holds it. Falinks: a Stale refusal's recovery, timing's refusal_recovery, to the next accepted edit, retry or incorporate; an incorporate is its own round-trip; a failed combined check runs to the agent's next accepted write or passing check. Git: from the first round-trip after a CONFLICT ( line or a failed check (a host check's conflict included) to the agent's next share or passing check; a rework detected by the peer's share has no window, as its time is the share's, not the agent's notice. Rereads are each agent's first read of a file a Falinks Stale (a collision or not) or a Git CONFLICT named, before its next accepted write of it (Read, or cat, head, tail, sed -n, git diff or git show naming it); a collision's count in its handling cost, and every reread in coordination overhead. Duplicate work is never signalled, so it has no handling cost; a signal to no agent (the final check) is not charged. Missing when a run's collision records are unreadable.";
 /// #205's resolution, "Measures": printed with the collision cells.
 const SENTENCES: [&str; 3] = [
     "Collision waste counts lines only. A collision a gate stopped scores 0; its cost (rereads, reviews, retries) is in the handling cost, P2 and P3.",
@@ -754,7 +754,7 @@ pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
             .collect();
         let premature = |r: &Value| r["collisions"]["premature_checks"].as_f64();
         let total = |pointer: String| stats(&per_run(runs, &|r| sum(r, &pointer)));
-        let handling: serde_json::Map<String, Value> = crate::timing::HANDLED
+        let handling: serde_json::Map<String, Value> = crate::collisions::HANDLED
             .iter()
             .map(|c| {
                 let cost = json!({"round_trips": total(format!("/collision_handling/{c}/round_trips")),
@@ -1434,9 +1434,9 @@ fn cold_start(run: &Value) -> Option<f64> {
 }
 
 /// One run's coordination overhead (#337): `timing`'s round-trips and model seconds of the
-/// `coordination`, `refused_edit` and `integration` categories and collision-driven rereads,
-/// plus the Falinks inline review estimate, summed over agents. Every per-ticket figure reads
-/// it here.
+/// `coordination` and `refused_edit` categories, integration and rereads, less runtime
+/// refusals, plus the Falinks inline review estimate, summed over agents. Every per-ticket
+/// figure reads it here.
 fn coordination_overhead(run: &Value) -> Option<[f64; 2]> {
     Some([
         sum(run, "/coordination_overhead/round_trips")?,
@@ -1444,22 +1444,28 @@ fn coordination_overhead(run: &Value) -> Option<[f64; 2]> {
     ])
 }
 
-const COORDINATION_NOTE: &str = "Coordination overhead (#205, Q7b; #337), per run summed over agents: the round-trips and model seconds of timing's coordination, refused_edit and integration categories and of collision-driven rereads (a reread in one of those categories counts once), plus, in Falinks, inline review text at 3.56 ms per output character (#193's fit), which rides inside accepted edits. Integration is a heuristic: Git merge, rebase, cherry-pick and checkout --theirs/--ours commands, and writes under agents/integration; a command that also calls the host stays coordination. The review time is an estimate; the operations table beside it gives each Falinks operation's acts, refused results and tool seconds per run.";
+const COORDINATION_NOTE: &str = "Coordination overhead (#205, Q7b; #337), per run summed over agents: the round-trips and model seconds of timing's coordination and refused_edit categories, of integration and of rereads, each round-trip once, plus, in Falinks, inline review text at 3.56 ms per output character (#193's fit), which rides inside accepted edits. A round-trip holding a Write or Edit that Claude Code refused by its own read-before-write rule (\"File has not been read yet\") is left out and printed apart as runtime_refusals; engine and host refusals (a Falinks Stale or Unreviewed, a refused host request) stay in. Integration is a heuristic: Git merge, rebase, cherry-pick and checkout --theirs/--ours commands, and writes under agents/integration; a command that also calls the host does not integrate. The review time is an estimate; the operations table beside it gives each Falinks operation's acts, refused results and tool seconds per run.";
+
+/// Per run, summed over agents, the round-trips and model seconds at two `timing` pointers.
+fn part(runs: &[&Value], count: &str, seconds: &str) -> Value {
+    let figure = |pointer: &str| stats(&runs.iter().map(|r| sum(r, pointer)).collect::<Vec<_>>());
+    json!({"round_trips": figure(count), "model_seconds": figure(seconds)})
+}
 
 /// One arm's coordination overhead per run with its parts, and for Falinks the operations
 /// table beside it.
 fn coordination_cells(runs: &[&Value], falinks: bool) -> (Value, Option<Value>) {
     let figure =
         |f: &dyn Fn(&Value) -> Option<f64>| stats(&runs.iter().map(|r| f(r)).collect::<Vec<_>>());
-    let part = |count: &str, seconds: &str| json!({"round_trips": figure(&|r| sum(r, count)), "model_seconds": figure(&|r| sum(r, seconds))});
     let mut cells = json!({
         "round_trips": figure(&|r| Some(coordination_overhead(r)?[0])),
         "model_seconds": figure(&|r| Some(coordination_overhead(r)?[1])),
-        "rereads": part("/rereads/round_trips", "/rereads/model_seconds"),
+        "rereads": part(runs, "/rereads/round_trips", "/rereads/model_seconds"),
+        "integration": part(runs, "/integration/round_trips", "/integration/model_seconds"),
     });
-    for category in ["coordination", "refused_edit", "integration"] {
+    for category in ["coordination", "refused_edit"] {
         let pointer = |key: &str| format!("/round_trips/{category}/{key}");
-        cells[category] = part(&pointer("count"), &pointer("model_seconds"));
+        cells[category] = part(runs, &pointer("count"), &pointer("model_seconds"));
     }
     cells["integration"]["label"] = "heuristic".into();
     if !falinks {
@@ -1640,6 +1646,7 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
                     "protocol_acts": figure(&per_ticket(protocol_acts)),
                 },
                 "coordination_overhead": overhead,
+                "runtime_refusals": part(runs, "/runtime_refusals/round_trips", "/runtime_refusals/model_seconds"),
                 "waiting_on_peer_seconds": figure(&|r| sum(r, "/waiting_on_peer_seconds")),
                 "load_balance": figure(&|r| value(r, "load_balance")),
             });
@@ -2172,23 +2179,26 @@ mod large_spec_tests {
 
     /// Coordination overhead per arm (#205, Q7b) beside its parts, summed over each run's
     /// agents: Git's integration labelled a heuristic, the Falinks review time an estimate,
-    /// with the Falinks operations table beside it.
+    /// with the Falinks operations table beside it, and runtime refusals apart (#205 D1).
     #[test]
     fn coordination_overhead_per_arm_shows_its_parts_labels_and_operations() {
         let mut runs = even();
         let trips = |count: u64, seconds: f64| json!({"count": count, "model_seconds": seconds});
+        let figure =
+            |count: u64, seconds: f64| json!({"round_trips": count, "model_seconds": seconds});
         let falinks = json!({
-            "round_trips": {"coordination": trips(2, 3.0), "refused_edit": trips(1, 1.0),
-                "integration": trips(0, 0.0)},
-            "rereads": {"round_trips": 1, "model_seconds": 0.5},
+            "round_trips": {"coordination": trips(2, 3.0), "refused_edit": trips(1, 1.0)},
+            "integration": figure(0, 0.0), "runtime_refusals": figure(0, 0.0),
+            "rereads": figure(1, 0.5),
             "review_estimate": {"characters": 100, "model_seconds": 0.356},
             "coordination_overhead": {"round_trips": 4, "model_seconds": 4.856},
             "operations": {"edit": {"acts": 3, "refused": 1, "tool_seconds": 2.0},
                 "ready": {"acts": 1, "refused": 0, "tool_seconds": 0.5}}});
+        // One refused edit, the runtime's own: in refused_edit, not in the overhead.
         let git = json!({
-            "round_trips": {"coordination": trips(3, 1.0), "refused_edit": trips(0, 0.0),
-                "integration": trips(2, 1.75)},
-            "rereads": {"round_trips": 1, "model_seconds": 1.0},
+            "round_trips": {"coordination": trips(3, 1.0), "refused_edit": trips(1, 2.0)},
+            "integration": figure(2, 1.75), "runtime_refusals": figure(1, 2.0),
+            "rereads": figure(1, 1.0),
             "coordination_overhead": {"round_trips": 6, "model_seconds": 3.75}});
         for run in runs.iter_mut() {
             let agent = if run["arm"] == "falinks" {
@@ -2218,6 +2228,11 @@ mod large_spec_tests {
         assert_eq!(first("git-2", "/integration/model_seconds/median"), 3.5);
         assert_eq!(first("git-2", "/integration/label"), "heuristic");
         assert_eq!(first("git-2", "/coordination/round_trips/median"), 6.0);
+        assert_eq!(first("git-2", "/round_trips/median"), 12.0);
+        assert_eq!(first("git-2", "/refused_edit/round_trips/median"), 2.0);
+        let runtime = &out["per_arm"]["git-2"]["runtime_refusals"];
+        assert_eq!(runtime["round_trips"]["median"], 2.0);
+        assert_eq!(runtime["model_seconds"]["median"], 4.0);
         assert_eq!(first("git-2", "/review_estimate"), Value::Null);
         let operations = &out["per_arm"]["falinks-2"]["operations"];
         assert_eq!(operations["edit"]["acts"]["median"], 6.0);

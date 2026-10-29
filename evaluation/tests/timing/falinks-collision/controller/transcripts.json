@@ -5,7 +5,7 @@
     {"type":"system","subtype":"init"},
     {"type":"user","isReplay":true,"timestamp":"2026-10-21T10:00:01.000Z","message":{"role":"user","content":"[Falinks host] You are agent-0"}},
     {"type":"assistant","timestamp":"2026-10-21T10:00:02.000Z","message":{"id":"f1","model":"scripted","content":[{"type":"tool_use","id":"a1","name":"mcp__falinks__falinks_edit","input":{"id":"a1","expected":{"consumer.go":0},"note":"Copy","output":{"consumer.go":{"content":"package fixture\n\nfunc Consume(records []string) []string {\n    return append(records[:0:0], records...)\n}\n"}}}}]}},
-    {"type":"user","timestamp":"2026-10-21T10:00:02.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"{\"accepted\":false,\"reason\":\"Stale\"}"}]}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:02.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"{\"accepted\":false,\"outcome\":{\"Stale\":{\"conflicts\":{\"consumer.go\":{\"expected\":0}}}}}"}]}]}},
     {"type":"assistant","timestamp":"2026-10-21T10:00:04.000Z","message":{"id":"f2","model":"scripted","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/w/space0/consumer.go"}}]}},
     {"type":"user","timestamp":"2026-10-21T10:00:04.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"1\tpackage fixture"}]}},
     {"type":"assistant","timestamp":"2026-10-21T10:00:05.000Z","message":{"id":"f3","model":"scripted","content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"cat /w/space0/producer.go"}}]}},

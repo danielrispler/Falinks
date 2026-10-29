@@ -48,6 +48,8 @@ use std::time::Duration;
 /// one development (0.74 to 0.86).
 pub const SIMILARITY: f64 = 0.75;
 pub const CLASSES: [&str; 4] = ["line_conflict", "duplicate_work", "rework", "no_fault"];
+/// The classes a signal reaches, with a handling cost (#337): duplicate work is never signalled.
+pub const HANDLED: [&str; 3] = [CLASSES[0], CLASSES[2], CLASSES[3]];
 /// Written into `discarded_or_rewritten_work`.
 const SOURCE: &str = "collisions (#334): falinks-eval collisions RUN_DIR";
 
@@ -1009,11 +1011,12 @@ impl Repo {
             .into();
         let list = authorship::shares(run)?;
         let mut shares: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
-        for (agent, commit, at) in &list {
+        // A share without a recorded time traces authorship but is never placed in time.
+        for (agent, commit, at) in list.iter().filter_map(|(a, c, t)| Some((a, c, (*t)?))) {
             shares
                 .entry(agent.clone())
                 .or_default()
-                .push((commit.clone(), *at));
+                .push((commit.clone(), at));
         }
         Ok(Repo {
             dir: run.join("agents/repo"),

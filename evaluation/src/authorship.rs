@@ -192,12 +192,12 @@ pub fn falinks(
 }
 
 /// A Git run's shares from `controller/events.jsonl`, in the order they were made: agent,
-/// commit and seconds after the run's start.
-pub fn shares(run: &Path) -> Result<Vec<(String, String, f64)>> {
+/// commit and, when recorded, seconds after the run's start.
+pub fn shares(run: &Path) -> Result<Vec<(String, String, Option<f64>)>> {
     let rows = jsonl(&run.join("controller/events.jsonl"))?;
     let share = |row: &Value| {
         let field = |key: &str| row[key].as_str().map(String::from);
-        Some((field("agent")?, field("commit")?, row["elapsed"].as_f64()?))
+        Some((field("agent")?, field("commit")?, row["elapsed"].as_f64()))
     };
     Ok(rows
         .iter()
@@ -219,7 +219,7 @@ impl Repo {
     /// Traces every one of the run's `shares`.
     pub fn new(
         run: &Path,
-        shares: &[(String, String, f64)],
+        shares: &[(String, String, Option<f64>)],
         files: &Map<String, Value>,
     ) -> Result<Self> {
         let dir = &run.join("agents/repo");

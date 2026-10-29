@@ -1107,22 +1107,20 @@ fn timing_reports_hand_computed_figures() {
         assert!(output.status.success(), "{}", text(&output));
         serde_json::from_slice::<Value>(&output.stdout).unwrap()
     };
-    let trips = |edit: (u64, f64),
-                 refused: (u64, f64),
-                 native: (u64, f64),
-                 coordination: (u64, f64)| {
-        let total = (
-            edit.0 + refused.0 + native.0 + coordination.0,
-            edit.1 + refused.1 + native.1 + coordination.1,
-        );
-        let entry =
-            |(count, seconds): (u64, f64)| json!({"count": count, "model_seconds": seconds});
-        // No synthetic run here integrates.
-        json!({"edit": entry(edit), "refused_edit": entry(refused), "native": entry(native),
-            "integration": entry((0, 0.0)), "coordination": entry(coordination), "total": entry(total)})
-    };
+    let trips =
+        |edit: (u64, f64), refused: (u64, f64), native: (u64, f64), coordination: (u64, f64)| {
+            let total = (
+                edit.0 + refused.0 + native.0 + coordination.0,
+                edit.1 + refused.1 + native.1 + coordination.1,
+            );
+            let entry =
+                |(count, seconds): (u64, f64)| json!({"count": count, "model_seconds": seconds});
+            json!({"edit": entry(edit), "refused_edit": entry(refused), "native": entry(native),
+            "coordination": entry(coordination), "total": entry(total)})
+        };
     let idle = json!({"round_trips": 0, "model_seconds": 0.0, "unresolved": 0, "unlocated": 0});
     let unhandled = json!({"line_conflict": idle, "rework": idle, "no_fault": idle});
+    // No synthetic run here integrates or meets the runtime's read-before-write refusal.
     let nothing = json!({"round_trips": 0, "model_seconds": 0.0});
     let none = json!({"refusals": 0, "unresolved": 0, "round_trips": 0, "model_seconds": 0.0});
     let recovery = |content: &Value| json!({"content": content, "replace": none, "from": none});
@@ -1168,6 +1166,8 @@ fn timing_reports_hand_computed_figures() {
             // These Git records lack an initial snapshot and share times, so the run's
             // collisions are unavailable: every collision figure is missing, never zero.
             "collision_handling": null, "rereads": null, "coordination_overhead": null,
+            // m4's Write was denied, not refused by the read-before-write rule.
+            "integration": nothing, "runtime_refusals": nothing,
         })
     );
     assert_eq!(
@@ -1179,7 +1179,7 @@ fn timing_reports_hand_computed_figures() {
             // "func Put() {}\n" 14. The merge carries A's store/store.go lines, which stay A's.
             "changed_bytes": 33, "results": 1,
             "usage_reports": 1, "collision_handling": null, "rereads": null,
-            "coordination_overhead": null})
+            "coordination_overhead": null, "integration": nothing, "runtime_refusals": nothing})
     );
 
     // Falinks: the clock starts at 0 (to the second) and stops at 10; agent-0 resumes once.
@@ -1221,6 +1221,7 @@ fn timing_reports_hand_computed_figures() {
             "usage_reports": 2,
             // e2's Stale names no conflict: no collision, nothing to handle or reread.
             "collision_handling": unhandled, "rereads": nothing,
+            "integration": nothing, "runtime_refusals": nothing,
             // The refused e2 and falinks_ready; no inline review.
             "coordination_overhead": {"round_trips": 2, "model_seconds": 2.0},
             "review_estimate": {"characters": 0, "model_seconds": 0.0},
@@ -1244,7 +1245,7 @@ fn timing_reports_hand_computed_figures() {
             // and only "// one\n" 7 is agent-1's.
             "changed_bytes": 7, "results": 1,
             "usage_reports": 1, "collision_handling": unhandled, "rereads": nothing,
-            "coordination_overhead": nothing,
+            "coordination_overhead": nothing, "integration": nothing, "runtime_refusals": nothing,
             "review_estimate": {"characters": 0, "model_seconds": 0.0},
             "operations": {"apply_job": op(1, 0, 0.25), "post": op(1, 0, 0.5)},
             "edit_gate": gate(1, 0.25, json!(0.25))})
@@ -1324,7 +1325,7 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
         agent_0["refusal_recovery"]["content"],
         json!({"refusals": 1, "unresolved": 0, "round_trips": 3, "model_seconds": 2.75})
     );
-    // f2's Read of consumer.go; f3 reads producer.go.
+    // f2's Read of consumer.go, which a1's Stale names; f3 reads producer.go.
     assert_eq!(
         agent_0["rereads"],
         json!({"round_trips": 1, "model_seconds": 1.5})
@@ -1413,10 +1414,16 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
     fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
     let git = figures(&run);
     let a = &git["agents"]["A"];
-    // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75).
+    // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75), beside their
+    // categories, native and edit.
     assert_eq!(
-        a["round_trips"]["integration"],
-        json!({"count": 2, "model_seconds": 1.75})
+        a["integration"],
+        json!({"round_trips": 2, "model_seconds": 1.75})
+    );
+    assert!(a["round_trips"].get("integration").is_none());
+    assert_eq!(
+        a["runtime_refusals"],
+        json!({"round_trips": 0, "model_seconds": 0.0})
     );
     // From m4, the first input at the CONFLICT's 5.5, to m6's passing check: 1.0, 0.75, 0.25.
     assert_eq!(

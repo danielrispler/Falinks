@@ -9,23 +9,30 @@
 //!   **Launch** runs from the run's start to the agent's first turn. **Waiting on peer** is the
 //!   rest of the run after launch: the agent was idle until a host event woke it.
 //! - Round-trip categories, first match wins: `edit` (an accepted source write), `refused_edit`,
-//!   `integration` (Git only, #337), `native` (any other non-protocol tool), `coordination`
-//!   (protocol calls only). Falinks source writes are `edit`, `retry`, `incorporate` and
-//!   `apply_job`. A Git agent writes with `Write`, `Edit` or a `Bash` here-document redirected
-//!   outside scratch; a `Bash` command naming `FALINKS_HOST` is coordination. Integration is a
-//!   heuristic: a write under `agents/integration`, or a `git merge`, `rebase`, `cherry-pick`
-//!   or `checkout --theirs/--ours` in a command that does not name the host.
+//!   `native` (any other non-protocol tool), `coordination` (protocol calls only). Falinks
+//!   source writes are `edit`, `retry`, `incorporate` and `apply_job`. A Git agent writes with
+//!   `Write`, `Edit` or a `Bash` here-document redirected outside scratch; a `Bash` command
+//!   naming `FALINKS_HOST` is coordination.
+//! - **Integration** (#337, Git only), a figure beside the categories: the round-trips with a
+//!   write under `agents/integration`, or a `git merge`, `rebase`, `cherry-pick` or
+//!   `checkout --theirs/--ours` in a command that does not name the host. A heuristic.
+//! - **Runtime refusals** (#205 D1), a figure beside the categories: the round-trips holding a
+//!   `Write` or `Edit` that Claude Code refused by its own read-before-write rule ("File has not
+//!   been read yet", "File has been modified since read"). They stay in `refused_edit`.
 //! - **Collision handling** (#205, "Measures"), per class of the run's `collisions`: the
 //!   round-trips, and their model seconds, from each signal that reached the agent to its
-//!   resolution, each charged to the first window that holds it (see `window`). A signal whose
-//!   call the transcript lacks is `unlocated`; one the transcript ends in is `unresolved`.
-//!   **Rereads** (Q7c): after a `Stale` or a `CONFLICT (` naming a file, the agent's first read
-//!   of it before its next accepted write of it; they count in the handling cost.
+//!   resolution, each charged to the first window that holds it (see `window`). A rework the
+//!   peer's share detected (`peer_diff`) has no window: its time is the share's, not the
+//!   agent's notice. A signal whose call the transcript lacks is `unlocated`; one the
+//!   transcript ends in is `unresolved`.
+//!   **Rereads** (Q7c): after a Falinks `Stale` whose conflicts name a file, a collision or not,
+//!   or a Git `CONFLICT (` collision signal naming it, the agent's first read of it before its
+//!   next accepted write of it. A collision's rereads count in its handling cost.
 //! - **Coordination overhead** (Q7b): the round-trips and model seconds of `refused_edit`,
-//!   `integration`, `coordination` and rereads, each round-trip once, plus a Falinks agent's
-//!   **review estimate**: the inline `reviews` of its accepted edits, as compact JSON, at
-//!   #193's 3.56 ms per character. Unreadable collision records leave handling, rereads and
-//!   overhead missing.
+//!   `coordination`, integration and rereads, each round-trip once, less runtime refusals, plus
+//!   a Falinks agent's **review estimate**: the inline `reviews` of its accepted edits, as
+//!   compact JSON, at #193's 3.56 ms per character. Engine and host refusals stay in it.
+//!   Unreadable collision records leave handling, rereads and overhead missing.
 //! - **Output bytes** are the file content the model wrote, scratch included. **Changed bytes**
 //!   are the lines of the agent's last version of each source file that a line diff against
 //!   its initial content does not match, read from the arm's records, not the transcript
@@ -50,6 +57,7 @@
 //!   write. Both are transcript-side, so parallel calls make them approximate too; host and
 //!   edit-gate instrumentation (#178's I-2) is not read.
 use crate::authorship::{self, Origin, agent_name, lines, matches};
+use crate::collisions::HANDLED;
 use crate::{Result, bail, fixture, jsonl, read};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -57,12 +65,20 @@ use std::path::Path;
 
 const FALINKS: &str = "mcp__falinks__falinks_";
 pub(crate) const SOURCE_WRITES: [&str; 4] = ["edit", "retry", "incorporate", "apply_job"];
-const CATEGORIES: [&str; 5] = [
-    "edit",
-    "refused_edit",
-    "integration",
-    "native",
-    "coordination",
+
+/// A round-trip's category: the first of its calls' categories, in this order.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Category {
+    Edit,
+    RefusedEdit,
+    Native,
+    Coordination,
+}
+const CATEGORIES: [(Category, &str); 4] = [
+    (Category::Edit, "edit"),
+    (Category::RefusedEdit, "refused_edit"),
+    (Category::Native, "native"),
+    (Category::Coordination, "coordination"),
 ];
 /// Falinks mutations that take output forms, and the forms (#193 decision 1), as
 /// `adapters/claude/arm.rs` counts them; its `tests/arm.rs` checks they agree.
@@ -70,8 +86,6 @@ const EDITS: [&str; 3] = ["edit", "retry", "incorporate"];
 const FORMS: [&str; 3] = ["content", "replace", "from"];
 /// #193's fit: a round-trip's model time grows 3.56 ms per emitted character.
 const SECONDS_PER_CHARACTER: f64 = 0.00356;
-/// The collision classes a signal reaches: duplicate work is never signalled (#334).
-pub(crate) const HANDLED: [&str; 3] = ["line_conflict", "rework", "no_fault"];
 
 /// Seconds since the Unix epoch of a UTC timestamp such as `2026-10-15T17:37:34.552Z`.
 pub fn unix(timestamp: &str) -> Option<f64> {
@@ -300,28 +314,58 @@ fn integrates(command: &str) -> bool {
     })
 }
 
-fn category(call: &Call, bash_writes_source: bool) -> usize {
-    let source: Vec<String> = writes(call, bash_writes_source)
-        .into_iter()
+/// The source files a call writes, scratch excluded.
+fn source_writes(call: &Call, bash_writes_source: bool) -> Vec<String> {
+    let writes = writes(call, bash_writes_source).into_iter();
+    writes
         .filter(|(path, _, source)| *source && !scratch(path))
         .map(|(path, _, _)| path)
-        .collect();
+        .collect()
+}
+
+fn host(call: &Call) -> bool {
+    call.name == "Bash" && call.input.to_string().contains("FALINKS_HOST")
+}
+
+fn category(call: &Call, bash_writes_source: bool) -> Category {
     let refused = call.result.is_some_and(|(_, refused)| refused);
+    let write = if refused {
+        Category::RefusedEdit
+    } else {
+        Category::Edit
+    };
+    match call.name.strip_prefix(FALINKS) {
+        Some(op) if SOURCE_WRITES.contains(&op) => write,
+        Some(_) => Category::Coordination,
+        None if !source_writes(call, bash_writes_source).is_empty() => write,
+        None if host(call) => Category::Coordination,
+        None => Category::Native,
+    }
+}
+
+/// A Git integration act (#337): a write under `agents/integration`, or an integrating command
+/// that does not name the host. Never in Falinks, whose shell writes no source.
+fn integration(call: &Call, bash_writes_source: bool) -> bool {
+    let source = source_writes(call, bash_writes_source);
     let command = call.input["command"].as_str().unwrap_or_default();
     // A here-document after `cd` into the integration worktree names a relative path.
-    let integration_write = bash_writes_source
-        && !source.is_empty()
+    let write = !source.is_empty()
         && (command.contains("agents/integration")
             || source.iter().all(|p| p.contains("agents/integration/")));
-    match call.name.strip_prefix(FALINKS) {
-        Some(op) if SOURCE_WRITES.contains(&op) => usize::from(refused),
-        Some(_) => 4,
-        None if integration_write => 2,
-        None if !source.is_empty() => usize::from(refused),
-        None if call.name == "Bash" && call.input.to_string().contains("FALINKS_HOST") => 4,
-        None if bash_writes_source && call.name == "Bash" && integrates(command) => 2,
-        None => 3,
-    }
+    let merge = call.name == "Bash" && !host(call) && integrates(command);
+    bash_writes_source && !call.name.starts_with(FALINKS) && (write || merge)
+}
+
+/// A write Claude Code itself refused by its read-before-write rule (#205 D1), not the engine
+/// or the host: its cost is the runtime's, not coordination's.
+fn runtime_refused(call: &Call) -> bool {
+    let rule = [
+        "File has not been read yet",
+        "File has been modified since read",
+    ];
+    matches!(call.name.as_str(), "Write" | "Edit")
+        && call.result.is_some_and(|(_, refused)| refused)
+        && rule.iter().any(|text| call.output.contains(text))
 }
 
 fn scratch(path: &str) -> bool {
@@ -388,27 +432,81 @@ fn falinks_check(call: &Call) -> Option<(bool, Option<u64>)> {
 /// Whether a call resolves a collision's handling.
 type Resolves<'a> = Box<dyn Fn(&Call) -> bool + 'a>;
 
-/// Where a collision signal reached this agent and the round-trips that handled it (#337):
-/// the first round-trip after the signal, the window's round-trips up to and including the
-/// resolving one, whether one resolved it, and the round-trips that reread a named file.
-/// None when the transcript lacks the signalling call.
+/// One collision class's handling cost in one agent (#337).
+#[derive(Default)]
+struct Cost {
+    round_trips: u64,
+    seconds: f64,
+    unresolved: u64,
+    unlocated: u64,
+}
+
+/// Where a collision signal reached one agent and the round-trips that handled it (#337).
+struct Window {
+    /// The first round-trip after the signal.
+    start: usize,
+    /// The round-trips up to and including the resolving one.
+    held: Vec<usize>,
+    resolved: bool,
+    /// The round-trips that reread a file the collision names.
+    rereads: Vec<usize>,
+}
+
+/// Per file in `files`, the round-trip of the agent's first read of it from round-trip `start`,
+/// unless an accepted write of it comes first (#205, Q7c).
+fn rereads<'a>(
+    trips: &[&Message],
+    calls: &[Call],
+    git: bool,
+    start: usize,
+    files: impl IntoIterator<Item = &'a str>,
+) -> Vec<usize> {
+    let mut out = vec![];
+    for file in files {
+        let touch = (start..trips.len()).find_map(|k| {
+            trips[k].calls.iter().find_map(|&c| {
+                // A refused write changes nothing: the window stays open.
+                let write = calls[c].result.is_some_and(|(_, refused)| !refused)
+                    && writes(&calls[c], git)
+                        .iter()
+                        .any(|(path, _, _)| !scratch(path) && names(path, file));
+                let read = reads(&calls[c], file);
+                (read || write).then_some((k, read))
+            })
+        });
+        if let Some((k, true)) = touch {
+            out.push(k);
+        }
+    }
+    out
+}
+
+/// The files a refused Falinks write's `Stale` names: its result's `conflicts`.
+fn stale_files(call: &Call) -> Option<Vec<String>> {
+    let edit = call
+        .name
+        .strip_prefix(FALINKS)
+        .is_some_and(|op| EDITS.contains(&op));
+    let result = results(call).into_iter().next()?;
+    let conflicts = result["outcome"]["Stale"]["conflicts"].as_object()?;
+    edit.then(|| conflicts.keys().cloned().collect())
+}
+
+/// A collision signal's handling window in this agent's round-trips; None when the transcript
+/// lacks the signalling call. A rework detected by the peer's share (`peer_diff`) gets none
+/// (see `agent`).
 ///
 /// - Falinks `stale` and `incorporate` (`request_id`): `refusal_recovery`'s window, from the
 ///   refused call to the next accepted edit, retry or incorporate. An accepted `incorporate`
 ///   resolves its own collision, so its round-trip is the handling.
 /// - Falinks `broken_check` (`revision`): from the failed check to the next accepted source
 ///   write or passing check.
-/// - Git (`at`, seconds since the epoch): from the first round-trip whose input arrived at or
-///   after the signal to the next share or passing check.
+/// - Git `merge_conflict`, `check_conflict` and `broken_check` (`at`, seconds since the epoch):
+///   from the first round-trip whose input arrived at or after the signal to the next share or
+///   passing check.
 ///
-/// Rereads follow a `stale` or a `merge_conflict` only (#205, Q7c): per named file, the
-/// first read of it before the next accepted write of it.
-fn window(
-    trips: &[&Message],
-    calls: &[Call],
-    git: bool,
-    signal: &Value,
-) -> Option<(usize, Vec<usize>, bool, Vec<usize>)> {
+/// Its rereads follow a `stale` or a `merge_conflict` only, of the collision's files.
+fn window(trips: &[&Message], calls: &[Call], git: bool, signal: &Value) -> Option<Window> {
     let position = |c: usize| trips.iter().position(|m| m.calls.contains(&c));
     let accepted = |c: &Call, ops: &[&str]| {
         c.result.is_some_and(|(_, refused)| !refused)
@@ -416,7 +514,6 @@ fn window(
                 .strip_prefix(FALINKS)
                 .is_some_and(|op| ops.contains(&op))
     };
-    let host = |c: &Call| c.name == "Bash" && c.input.to_string().contains("FALINKS_HOST");
     let kind = signal["signal"].as_str().unwrap_or_default();
     let (start, end): (usize, Resolves) = match kind {
         "stale" | "incorporate" => {
@@ -457,27 +554,18 @@ fn window(
     };
     let resolving = (start..trips.len()).find(|&k| trips[k].calls.iter().any(|&c| end(&calls[c])));
     let held: Vec<usize> = (start..resolving.map_or(trips.len(), |k| k + 1)).collect();
-    let mut rereads = vec![];
-    if matches!(kind, "stale" | "merge_conflict") {
-        for file in signal["files"].as_array().into_iter().flatten() {
-            let file = file.as_str().unwrap_or_default();
-            let touch = (start..trips.len()).find_map(|k| {
-                trips[k].calls.iter().find_map(|&c| {
-                    // A refused write changes nothing: the window stays open.
-                    let write = calls[c].result.is_some_and(|(_, refused)| !refused)
-                        && writes(&calls[c], git)
-                            .iter()
-                            .any(|(path, _, _)| !scratch(path) && names(path, file));
-                    let read = reads(&calls[c], file);
-                    (read || write).then_some((k, read))
-                })
-            });
-            if let Some((k, true)) = touch {
-                rereads.push(k);
-            }
-        }
-    }
-    Some((start, held, resolving.is_some(), rereads))
+    let files = signal["files"].as_array().into_iter().flatten();
+    let files = files.filter_map(Value::as_str);
+    let rereads = match kind {
+        "stale" | "merge_conflict" => rereads(trips, calls, git, start, files),
+        _ => vec![],
+    };
+    Some(Window {
+        start,
+        held,
+        resolved: resolving.is_some(),
+        rereads,
+    })
 }
 
 /// One agent's figures from its stream-json events, sessions concatenated, with the collision
@@ -553,7 +641,7 @@ fn agent(
     }
     let model = |m: &Message| m.input.map_or(0.0, |input| m.last - input);
     let trips: Vec<&Message> = messages.iter().filter(|m| !m.calls.is_empty()).collect();
-    let kinds: Vec<usize> = trips
+    let kinds: Vec<Category> = trips
         .iter()
         .map(|m| {
             let kinds = m
@@ -563,15 +651,15 @@ fn agent(
             kinds.min().unwrap()
         })
         .collect();
-    let mut categories = [(0, 0.0); 5];
+    let mut categories = [(0, 0.0); CATEGORIES.len()];
     for (message, &kind) in trips.iter().zip(&kinds) {
-        categories[kind].0 += 1;
-        categories[kind].1 += model(message);
+        categories[kind as usize].0 += 1;
+        categories[kind as usize].1 += model(message);
     }
     let mut round_trips: Map<String, Value> = CATEGORIES
         .iter()
         .zip(categories)
-        .map(|(name, (count, seconds))| {
+        .map(|((_, name), (count, seconds))| {
             (
                 name.to_string(),
                 json!({"count": count, "model_seconds": rounded(seconds)}),
@@ -674,43 +762,88 @@ fn agent(
         })
         .collect();
 
+    let trips_calls = |k: usize| trips[k].calls.iter().copied();
+    // Integration (#337, a heuristic) and runtime refusals (#205 D1): figures of their own,
+    // beside the categories, which stay as they were.
+    let holding = |f: &dyn Fn(&Call) -> bool| -> BTreeSet<usize> {
+        let all = 0..trips.len();
+        all.filter(|&k| trips_calls(k).any(|c| f(&calls[c])))
+            .collect()
+    };
+    let integrating = holding(&|c| integration(c, bash_writes_source));
+    let runtime = holding(&runtime_refused);
+
     // Collision handling (#337): each round-trip charged to the first window that holds it.
     let handling = signals.map(|signals| {
         let mut located = vec![];
-        let mut classes: BTreeMap<&str, (u64, f64, u64, u64)> =
-            HANDLED.map(|c| (c, (0, 0.0, 0, 0))).into();
+        let mut classes: BTreeMap<&str, Cost> = HANDLED.map(|c| (c, Cost::default())).into();
+        // A rework detected by the peer's share has no window: its time is the share's, not
+        // the agent's notice (#205, "Measures"); its waste stays.
+        let signals = signals.iter().filter(|s| s["signal"] != "peer_diff");
         for signal in signals {
-            let Some(class) = classes.get_mut(signal["class"].as_str().unwrap_or_default()) else {
+            let class = signal["class"].as_str().unwrap_or_default();
+            let Some(cost) = classes.get_mut(class) else {
                 continue;
             };
             match window(&trips, &calls, bash_writes_source, signal) {
-                Some(found) => located.push((signal["class"].as_str().unwrap(), found)),
-                None => class.3 += 1,
+                Some(found) => located.push((class, found)),
+                None => cost.unlocated += 1,
             }
         }
-        located.sort_by_key(|(_, found)| found.0);
-        let (mut charged, mut rereads) = (BTreeSet::new(), BTreeSet::new());
-        for (class, (_, held, resolved, again)) in located {
-            rereads.extend(again.iter().copied());
-            let class = classes.get_mut(class).unwrap();
-            class.2 += u64::from(!resolved);
-            for k in held.into_iter().chain(again) {
+        located.sort_by_key(|(_, found)| found.start);
+        let mut charged = BTreeSet::new();
+        for (class, found) in located {
+            let cost = classes.get_mut(class).unwrap();
+            cost.unresolved += u64::from(!found.resolved);
+            for k in found.held.into_iter().chain(found.rereads) {
                 if charged.insert(k) {
-                    (class.0, class.1) = (class.0 + 1, class.1 + model(trips[k]));
+                    cost.round_trips += 1;
+                    cost.seconds += model(trips[k]);
                 }
             }
         }
-        (classes, rereads)
+        classes
     });
-    // Coordination overhead (#205, Q7b): refused edits, integration, coordination and rereads.
-    let overhead: Option<BTreeSet<usize>> = handling.as_ref().map(|(_, rereads)| {
-        let counted = (0..trips.len()).filter(|&k| [1, 2, 4].contains(&kinds[k]));
-        counted.chain(rereads.iter().copied()).collect()
+    // Rereads (Q7c): after any Falinks `Stale` naming the file, a collision or not, or a Git
+    // `CONFLICT (` collision signal.
+    let rereads: Option<BTreeSet<usize>> = signals.map(|signals| {
+        let mut out = BTreeSet::new();
+        if bash_writes_source {
+            let conflicts = signals.iter().filter(|s| s["signal"] == "merge_conflict");
+            for signal in conflicts {
+                let found = window(&trips, &calls, true, signal);
+                out.extend(found.into_iter().flat_map(|w| w.rereads));
+            }
+        } else {
+            for k in 0..trips.len() {
+                for files in trips_calls(k).filter_map(|c| stale_files(&calls[c])) {
+                    let files = files.iter().map(String::as_str);
+                    out.extend(rereads(&trips, &calls, false, k + 1, files));
+                }
+            }
+        }
+        out
+    });
+    // Coordination overhead (#205, Q7b): refused edits, coordination, integration and rereads,
+    // each round-trip once, less the runtime's own refusals (#205 D1).
+    let overhead: Option<BTreeSet<usize>> = rereads.as_ref().map(|rereads| {
+        let protocol =
+            |k: &usize| matches!(kinds[*k], Category::RefusedEdit | Category::Coordination);
+        let counted = (0..trips.len())
+            .filter(protocol)
+            .chain(integrating.iter().copied());
+        counted
+            .chain(rereads.iter().copied())
+            .filter(|k| !runtime.contains(k))
+            .collect()
     });
     // Inline reviews ride inside accepted edits; an overhead round-trip already holds its own.
     let characters: usize = (0..trips.len())
-        .filter(|&k| kinds[k] == 0 && !overhead.as_ref().is_some_and(|o| o.contains(&k)))
-        .flat_map(|k| trips[k].calls.iter().map(|&c| &calls[c]))
+        .filter(|&k| {
+            kinds[k] == Category::Edit && !overhead.as_ref().is_some_and(|o| o.contains(&k))
+        })
+        .flat_map(trips_calls)
+        .map(|c| &calls[c])
         .filter(|c| c.name.starts_with(FALINKS))
         .map(|c| request(c)["reviews"].clone())
         .filter(|reviews| reviews.as_array().is_some_and(|r| !r.is_empty()))
@@ -719,21 +852,15 @@ fn agent(
     let review_seconds = characters as f64 * SECONDS_PER_CHARACTER;
     // From 0.0: an empty f64 sum is -0.0.
     let trips_seconds = |set: &BTreeSet<usize>| set.iter().fold(0.0, |s, &k| s + model(trips[k]));
-    let (handling, rereads) = match &handling {
-        Some((classes, rereads)) => {
-            let classes: Map<String, Value> = classes
-                .iter()
-                .map(|(class, (trips, seconds, unresolved, unlocated))| {
-                    let cost = json!({"round_trips": trips, "model_seconds": rounded(*seconds),
-                        "unresolved": unresolved, "unlocated": unlocated});
-                    (class.to_string(), cost)
-                })
-                .collect();
-            let rereads = json!({"round_trips": rereads.len(), "model_seconds": rounded(trips_seconds(rereads))});
-            (classes.into(), rereads)
-        }
-        None => (Value::Null, Value::Null),
-    };
+    let figure = |set: &BTreeSet<usize>| json!({"round_trips": set.len(), "model_seconds": rounded(trips_seconds(set))});
+    let handling = handling.map(|classes| {
+        let classes = classes.iter().map(|(class, cost)| {
+            let cost = json!({"round_trips": cost.round_trips, "model_seconds": rounded(cost.seconds),
+                "unresolved": cost.unresolved, "unlocated": cost.unlocated});
+            (class.to_string(), cost)
+        });
+        Value::Object(classes.collect())
+    });
     let overhead = overhead.map(|set| {
         let seconds = trips_seconds(&set)
             + if bash_writes_source {
@@ -754,8 +881,10 @@ fn agent(
         "request_key_refusals": key_refusals,
         "output_bytes": output,
         "results": events.iter().filter(|e| e["type"] == "result").count(),
+        "integration": figure(&integrating),
+        "runtime_refusals": figure(&runtime),
         "collision_handling": handling,
-        "rereads": rereads,
+        "rereads": rereads.as_ref().map(figure),
         "coordination_overhead": overhead,
     });
     // A Git agent makes no Falinks call, so its figures stay as they were before #316.
@@ -1130,22 +1259,24 @@ mod tests {
     /// round-trip charged to the first collision whose window holds it. Falinks: a `Stale`
     /// refusal's recovery to the next accepted edit, an `incorporate` its own round-trip, a
     /// failed check to the next accepted write or passing check. Git: from the signal's time to
-    /// the next share or passing check. A reread is the first read of a named file after a
-    /// `Stale` or `CONFLICT (`, before the next accepted write of it; it counts in the handling cost and
-    /// in coordination overhead, with `refused_edit`, `integration`, `coordination` and,
-    /// for Falinks, inline reviews at 3.56 ms per character.
+    /// the next share or passing check; a rework the peer's share detected has none. A reread is
+    /// the first read of a file a Falinks `Stale` (a collision or not) or a Git `CONFLICT (`
+    /// named, before the next accepted write of it; a collision's counts in its handling cost.
+    /// Coordination overhead: `refused_edit`, `coordination`, integration and rereads, less the
+    /// runtime's own refusals, and for Falinks inline reviews at 3.56 ms per character.
     #[test]
     fn collision_handling_runs_from_detection_to_resolution() {
         let op = |op: &str, input: Value, output: Value| {
             json!({"name": format!("{FALINKS}{op}"), "input": input, "output": output.to_string(),
                 "is_error": output["accepted"] == false})
         };
+        let stale = |file: &str| json!({"accepted": false, "outcome": {"Stale": {"conflicts": {file: {"expected": 0}}}}});
         let reviews = json!([{"scope": "s", "revision": 1, "decision": "Keep", "note": "ok"}]);
         let calls = [
             op(
                 "edit",
                 json!({"id": "e1", "output": {"h.go": {"replace": [{"old": "a", "new": "b"}]}}}),
-                json!({"accepted": false, "reason": "Stale"}),
+                stale("h.go"),
             ),
             json!({"name": "Read", "input": {"file_path": "/w/space0/h.go"}}),
             bash("cat /w/space0/h.go"),
@@ -1170,6 +1301,18 @@ mod tests {
                 json!({"id": "i1", "output": {"h.go": {"content": "c\n"}}}),
                 json!({"accepted": true}),
             ),
+            // A `Stale` that is no collision still leaves its file's next read a reread.
+            op(
+                "edit",
+                json!({"id": "e3", "output": {"g.go": {"content": "g\n"}}}),
+                stale("g.go"),
+            ),
+            json!({"name": "Read", "input": {"file_path": "/w/space0/g.go"}}),
+            op(
+                "edit",
+                json!({"id": "e4", "output": {"g.go": {"content": "g\n"}}}),
+                json!({"accepted": true}),
+            ),
         ];
         let signals = [
             json!({"class": "line_conflict", "files": ["h.go"], "signal": "stale", "request_id": "e1"}),
@@ -1189,20 +1332,25 @@ mod tests {
                 "no_fault": cost(0, 0.0, 0, 1),
             })
         );
-        // m1's Read; m2's cat is not the first read.
+        // m1's Read of h.go (m2's cat is not the first read) and m9's of g.go.
         assert_eq!(
             falinks["rereads"],
-            json!({"round_trips": 1, "model_seconds": 0.5})
+            json!({"round_trips": 2, "model_seconds": 1.0})
         );
         // m3's reviews: 58 characters as compact JSON, 0.206 s.
         assert_eq!(
             falinks["review_estimate"],
             json!({"characters": 58, "model_seconds": 0.206})
         );
-        // m0 refused, m4-m6 coordination, m1 a reread: 5 round-trips, 2.5 s plus the estimate.
+        // Engine refusals stay: m0 and m8 refused, m4-m6 coordination, m1 and m9 rereads: 7
+        // round-trips, 3.5 s plus the estimate.
         assert_eq!(
             falinks["coordination_overhead"],
-            json!({"round_trips": 5, "model_seconds": 2.706})
+            json!({"round_trips": 7, "model_seconds": 3.706})
+        );
+        assert_eq!(
+            falinks["runtime_refusals"],
+            json!({"round_trips": 0, "model_seconds": 0.0})
         );
 
         let shared = r#"{"commit":"c","type":"shared"}
@@ -1220,6 +1368,9 @@ mod tests {
             json!({"name": "Write", "input": {"file_path": "/r/agents/A/h.go", "content": "x\n"}}),
             json!({"name": "Bash", "input": {"command": "\"$FALINKS_HOST\" share; \"$FALINKS_HOST\" message hi"},
                 "output": shared}),
+            // Claude Code's own read-before-write refusal (#205 D1).
+            json!({"name": "Write", "input": {"file_path": "/r/agents/A/g.go", "content": "g\n"},
+                "is_error": true, "output": "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>"}),
         ];
         let at = |s: f64| unix(&utc(s)).unwrap();
         let signals = [
@@ -1235,8 +1386,8 @@ mod tests {
                 // m1 to the passing check m4.
                 "line_conflict": cost(4, 2.0, 0, 0),
                 // The failed check's window, m4, is the line conflict's; the peer's share at
-                // 5.25 runs from m6, input at 6, to m6's share.
-                "rework": cost(1, 0.5, 0, 0),
+                // 5.25 opens none.
+                "rework": cost(0, 0.0, 0, 0),
                 // Nothing follows: unresolved.
                 "no_fault": cost(0, 0.0, 1, 0),
             })
@@ -1244,6 +1395,20 @@ mod tests {
         // m1's `sed -n` names h.go.
         assert_eq!(
             git["rereads"],
+            json!({"round_trips": 1, "model_seconds": 0.5})
+        );
+        // m0 and m2 integrate, beside their categories (native, edit).
+        assert_eq!(
+            git["integration"],
+            json!({"round_trips": 2, "model_seconds": 1.0})
+        );
+        // m7's runtime refusal stays in refused_edit but leaves coordination overhead.
+        assert_eq!(
+            git["round_trips"]["refused_edit"],
+            json!({"count": 1, "model_seconds": 0.5})
+        );
+        assert_eq!(
+            git["runtime_refusals"],
             json!({"round_trips": 1, "model_seconds": 0.5})
         );
         // m0, m2 integration; m3, m4, m6 coordination; m1 a reread.
@@ -1286,11 +1451,12 @@ mod tests {
         );
     }
 
-    /// #205 finding 6: Git merges and conflict fixes were `native`. `integration` takes them:
-    /// merge, rebase, cherry-pick, `checkout --theirs/--ours`, and writes under
-    /// `agents/integration`. A command naming the host stays coordination.
+    /// #205 finding 6: Git merges and conflict fixes were `native` (or `edit`). Integration is
+    /// a figure beside the categories, which stay as they were: merge, rebase, cherry-pick,
+    /// `checkout --theirs/--ours`, and writes under `agents/integration`. A command naming the
+    /// host does not integrate.
     #[test]
-    fn git_integration_is_its_own_category() {
+    fn git_integration_is_a_figure_beside_the_categories() {
         let calls = [
             bash("cd /r/agents/integration && git merge --no-edit abc 2>&1 | tail -5"),
             bash("git -C /r/agents/integration rebase main"),
@@ -1299,19 +1465,21 @@ mod tests {
             json!({"name": "Edit", "input": {"file_path": "/r/agents/integration/h.go",
                 "old_string": "a", "new_string": "b"}}),
             bash("cd /r/agents/integration && cat > h.go <<'EOF'\nx\nEOF"),
-            // Native: not an integration verb, or a write in the agent's own worktree.
+            // Not an integration verb, or a write in the agent's own worktree.
             bash("git merge-base a b; git checkout h.go"),
             json!({"name": "Write", "input": {"file_path": "/r/agents/A/h.go", "content": "x\n"}}),
             bash("\"$FALINKS_HOST\" ack peer-drafts; git checkout --ours h.go"),
         ];
         let figures = agent(&session(&calls), true, (None, None), None);
-        let trips = &figures["round_trips"];
         assert_eq!(
-            trips["integration"],
-            json!({"count": 6, "model_seconds": 3.0})
+            figures["integration"],
+            json!({"round_trips": 6, "model_seconds": 3.0})
         );
-        assert_eq!(trips["native"], json!({"count": 1, "model_seconds": 0.5}));
-        assert_eq!(trips["edit"], json!({"count": 1, "model_seconds": 0.5}));
+        let trips = &figures["round_trips"];
+        assert!(trips.get("integration").is_none());
+        // m0-m3 and m6 native; m4, m5 and m7 edits; m8 coordination.
+        assert_eq!(trips["native"], json!({"count": 5, "model_seconds": 2.5}));
+        assert_eq!(trips["edit"], json!({"count": 3, "model_seconds": 1.5}));
         assert_eq!(
             trips["coordination"],
             json!({"count": 1, "model_seconds": 0.5})
@@ -1319,7 +1487,7 @@ mod tests {
         assert_eq!(trips["total"]["count"], 9);
         // A Falinks agent's shell never integrates.
         let falinks = agent(&session(&calls[..1]), false, (None, None), None);
-        assert_eq!(falinks["round_trips"]["integration"]["count"], 0);
+        assert_eq!(falinks["integration"]["round_trips"], 0);
     }
 
     #[test]
