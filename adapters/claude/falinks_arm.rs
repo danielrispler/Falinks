@@ -385,7 +385,7 @@ fn run(options: Options) -> Result<i32> {
         "scored": options.scored, "team_size": 2 /* the engine supports two clients (#13) */, "outcome": "infrastructure_failure",
         "usage": {"status": "unavailable"}, "usage_limit_interruptions": [], "rejected_operations": 0,
         "retries": 0, "discarded_or_rewritten_work": {"status": "unavailable",
-            "reason": "overwritten operations are retained in controller/history.json, not quantified"},
+            "reason": "report fills it from collisions in controller/history.json (#334)"},
         "validation_attempts": [], "recommendations": 0, "transitions": 0, "launches": [],
         "timing": {"start_utc": utc(), "start_unix": start_unix.as_secs_f64(), "endpoint": "clean preparation through exact published candidate passing the independent oracle"},
         "tool_differences": config["tool_differences"],

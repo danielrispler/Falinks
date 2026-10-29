@@ -134,6 +134,14 @@ The hash pinning of evaluation materials in `evaluation/manifest.json`. Changing
 The exact candidate a run's final oracle checked. Code-quality metrics measure the change from the frozen initial commit to it.
 _Avoid_: Publication, published state (the Git arm never publishes through the engine)
 
+**Collision**:
+Both agents change the same file region, or both implement the same requirement, before their work is combined. Each collision is classed by its outcome: a line conflict, duplicate work, rework, or no fault (the work met, but nothing was discarded, rewritten or duplicated).
+_Avoid_: Overlap event, overlap (that is the engine's owning-symbol signal)
+
+**Collision waste**:
+Lines an agent wrote and later discarded or rewrote because of a collision, plus final-tree lines that duplicate the peer's lines for the same requirement. Lines a gate stopped count zero.
+_Avoid_: Overlap waste
+
 **Supported platform**:
 An operating system on which a Falinks component upholds its guarantees and CI or recorded evidence proves it. Support is claimed per component: the engine and each worker-runtime adapter separately.
 _Avoid_: Development platform (the OS Falinks is built on, currently macOS)

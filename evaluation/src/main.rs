@@ -1,6 +1,7 @@
 //! Frozen fixture checks and a one- or two-process communicating Git-worktree baseline.
 mod baseline;
 mod batch;
+mod collisions;
 mod judge;
 mod known_answer;
 mod quality;
@@ -813,7 +814,9 @@ const USAGE: &str = "usage: falinks-eval <command>
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
   report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec] [--show-code]
-  timing RUN_DIR";
+  timing RUN_DIR
+  collisions RUN_DIR
+  duplicates --runs DIR";
 
 struct Args {
     positional: Vec<String>,
@@ -967,6 +970,23 @@ fn run() -> Result<i32> {
         }
         Some("known-answer") => {
             known_answer::known_answer(args.get("judge").map(Path::new), args.get("fixtures"))
+        }
+        Some("duplicates") => collisions::classify(
+            Path::new(args.required("runs")?),
+            std::io::stdin().lock(),
+            std::io::stdout(),
+        ),
+        Some("collisions") => {
+            let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
+            let result = read(run.join("controller/result.json"))?;
+            // A batch keeps its classifications beside its runs.
+            let classified = run
+                .parent()
+                .and_then(|batch| read(batch.join("duplicates.json")).ok())
+                .unwrap_or(Value::Null);
+            let found = collisions::collisions(run, &result, &classified);
+            println!("{}", serde_json::to_string_pretty(&found)?);
+            Ok(0)
         }
         Some("timing") => {
             let run = args.positional.get(1).ok_or(USAGE)?;

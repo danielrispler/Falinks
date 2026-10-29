@@ -662,6 +662,7 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
                 "falinks_edits": edits,
                 "falinks_request_key_refusals": refusals,
                 "reverted_peer_text": reverted,
+                "collisions": collision_cells(&slots),
             }),
         );
     }
@@ -708,6 +709,55 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         "regrouping_benefit": if transitions == 0 { "unestablished: no transitions" } else { "observed transitions; benefit needs review" },
         "replaced_runs": replaced,
     })
+}
+
+/// Printed with the collision cells (#334).
+const COLLISION_NOTE: &str = "Collision waste (#334): lines an agent wrote and later discarded or rewrote because of a collision, plus final-tree lines that duplicate the peer's lines for the same requirement; lines a gate stopped count 0. It fills discarded_or_rewritten_work and is missing for a run until its duplicate-work candidates are classified (`falinks-eval duplicates`). Premature checks failed before the peer's half existed and are not collisions.";
+
+/// Per arm (any arms, each a list of repetition slots): collision waste per run, collisions per
+/// class and premature checks, with the waste's evidence label when both `git` and `falinks`
+/// are given. An arm of teams of one has no peer, so it prints `n/a`.
+pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
+    let waste = |r: &Value| collision_waste(r);
+    let per_run = |runs: &[Option<&Value>],
+                   f: &dyn Fn(&Value) -> Option<f64>|
+     -> Vec<Option<f64>> { runs.iter().map(|r| r.and_then(f)).collect() };
+    let mut out = serde_json::Map::new();
+    for (arm, runs) in slots {
+        let alone = |r: &Option<&Value>| r.is_some_and(|r| r["collisions"]["status"] == "n/a");
+        if !runs.is_empty() && runs.iter().all(alone) {
+            out.insert(arm.to_string(), "n/a".into());
+            continue;
+        }
+        let classes: serde_json::Map<String, Value> = crate::collisions::CLASSES
+            .iter()
+            .map(|c| {
+                let count = |r: &Value| match r["collisions"]["status"].as_str() {
+                    Some("complete" | "partial") => Some(
+                        r["collisions"]["by_class"][c]["count"]
+                            .as_f64()
+                            .unwrap_or(0.0),
+                    ),
+                    _ => None,
+                };
+                (c.to_string(), stats(&per_run(runs, &count)))
+            })
+            .collect();
+        let premature = |r: &Value| r["collisions"]["premature_checks"].as_f64();
+        out.insert(
+            arm.to_string(),
+            json!({"waste_lines": stats(&per_run(runs, &waste)),
+            "collisions": classes, "premature_checks": stats(&per_run(runs, &premature))}),
+        );
+    }
+    if let (Some(git), Some(falinks)) = (slots.get("git"), slots.get("falinks")) {
+        out.insert(
+            "label".into(),
+            label(&per_run(git, &waste), &per_run(falinks, &waste)).into(),
+        );
+    }
+    out.insert("note".into(), COLLISION_NOTE.into());
+    Value::Object(out)
 }
 
 /// The runs a later run replaced, and every other run, for the track-T reports.
@@ -1339,10 +1389,14 @@ fn completion(run: &Value) -> Option<f64> {
     }
 }
 
-/// One run's collision waste (#334's `discarded_or_rewritten_work`), None until it is measured.
+/// One run's collision waste: `discarded_or_rewritten_work.lines` once `collisions::waste` marks
+/// it `complete` (#334). None while a duplicate-work candidate is unclassified, when the records
+/// are unreadable, and for a team of one (`n/a`).
 fn collision_waste(run: &Value) -> Option<f64> {
     let work = &run["discarded_or_rewritten_work"];
-    work.as_f64().or_else(|| work["lines"].as_f64())
+    work["lines"]
+        .as_f64()
+        .filter(|_| work["status"] == "complete")
 }
 
 /// #205's scored fixture has nine tickets; per-ticket overhead divides by them.
@@ -1571,6 +1625,7 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         "primaries": primaries.into_iter().map(|(n, t)| (n.to_string(), t)).collect::<serde_json::Map<_, _>>(),
         "primaries_note": "Exact one-sided tests at 2.5%. P1: Fisher's exact test on success counts. P2 (per-run cold-start cost, failed runs at their actual cost) and P3 (per-run completion seconds): permutation rank tests over every split of the pooled runs, U counting ties as half; an oracle failure or a timeout ranks slower than every success and ties with the others, and a replaced interruption is never ranked. p is each arm's chance of ranking below (P1: of more successes than) the other; null when a run lacks the value.",
         "mechanism": mechanism,
+        "collisions": collision_cells(&arms.iter().map(|(a, runs)| (*a, runs.iter().map(|r| Some(*r)).collect())).collect()),
         "reading": reading,
         "git_1": git_1,
         "per_arm": per_arm, "per_arm_note": PER_ARM_NOTE,
@@ -1714,12 +1769,54 @@ mod large_spec_tests {
             } else {
                 i as f64
             };
-            run["discarded_or_rewritten_work"] = json!({"lines": waste});
+            run["discarded_or_rewritten_work"] = json!({"status": "complete", "lines": waste});
         }
         let mechanism = &large_spec_report(&runs)["mechanism"];
         assert_eq!(mechanism["status"], "measured");
         assert_eq!(mechanism["p"]["falinks-2"], 1.0 / 12870.0);
         assert_eq!(mechanism["evidence"], true);
+    }
+
+    /// The mechanism and the per-arm collision cells read `collisions::waste`'s shape: lines
+    /// only once complete, and `n/a` for one agent, which has no peer.
+    #[test]
+    fn collision_waste_is_read_once_complete_and_is_na_for_one_agent() {
+        let mut runs = even();
+        for (i, run) in runs.iter_mut().enumerate() {
+            let (collisions, work) = match (run["arm"].as_str(), run["team_size"].as_u64()) {
+                (_, Some(1)) => (json!({"status": "n/a"}), json!({"status": "n/a"})),
+                (Some("falinks"), _) => (
+                    json!({"status": "complete", "premature_checks": 0, "by_class": {}}),
+                    json!({"status": "complete", "lines": 0}),
+                ),
+                _ => (
+                    json!({"status": "complete", "premature_checks": 0,
+                        "by_class": {"line_conflict": {"count": 1, "lines": i}}}),
+                    json!({"status": "complete", "lines": i}),
+                ),
+            };
+            run["collisions"] = collisions;
+            run["discarded_or_rewritten_work"] = work;
+        }
+        let out = large_spec_report(&runs);
+        assert_eq!(out["mechanism"]["status"], "measured");
+        assert_eq!(out["collisions"]["git-1"], "n/a");
+        assert_eq!(out["collisions"]["git-2"]["waste_lines"]["median"], 11.5);
+        assert_eq!(out["collisions"]["falinks-2"]["waste_lines"]["n"], 8);
+        assert_eq!(
+            out["collisions"]["git-2"]["collisions"]["line_conflict"]["median"],
+            1.0
+        );
+        // An unclassified duplicate-work pair leaves the run's waste, and the mechanism, missing.
+        let run = runs
+            .iter_mut()
+            .find(|r| r["run_id"] == "go-invoice-1-falinks-2")
+            .unwrap();
+        run["discarded_or_rewritten_work"] =
+            json!({"status": "partial", "lines": null, "counted_lines": 3});
+        let out = large_spec_report(&runs);
+        assert_eq!(out["mechanism"]["status"], "missing");
+        assert_eq!(out["collisions"]["falinks-2"]["waste_lines"]["missing"], 1);
     }
 
     /// The #5 decision's power table at n = 8 (simulated, log-normal, equal σ, a real 20%
@@ -1740,7 +1837,7 @@ mod large_spec_tests {
             } else {
                 i as f64
             };
-            run["discarded_or_rewritten_work"] = json!({"lines": lines});
+            run["discarded_or_rewritten_work"] = json!({"status": "complete", "lines": lines});
         }
     }
 
@@ -1772,7 +1869,7 @@ mod large_spec_tests {
         );
         // Payback without it (all waste equal): a grilling ticket asks why.
         for run in runs.iter_mut() {
-            run["discarded_or_rewritten_work"] = json!({"lines": 0});
+            run["discarded_or_rewritten_work"] = json!({"status": "complete", "lines": 0});
         }
         let out = reading(&runs);
         assert_eq!(
@@ -2424,6 +2521,39 @@ mod tests {
         // Equal values overlap.
         assert_eq!(rust["metrics"]["success"]["label"], "mixed");
         assert_eq!(rust["metrics"]["refused_operations"]["label"], "incomplete");
+    }
+
+    #[test]
+    fn collision_waste_is_compared_per_run_and_missing_until_classified() {
+        let mut runs = uniform();
+        for (arm, lines) in [("g", [3, 4, 5]), ("f", [0, 1, 2])] {
+            for (rep, n) in lines.into_iter().enumerate() {
+                let run = find(&mut runs, &format!("rust-errors-{rep}-{arm}"));
+                run["discarded_or_rewritten_work"] = json!({"status": "complete", "lines": n});
+                run["collisions"] = json!({"status": "complete", "premature_checks": 1,
+                    "by_class": {"line_conflict": {"count": n, "lines": n}}});
+            }
+        }
+        let cells = &report(&runs, false)["fixtures"]["rust-errors"]["collisions"];
+        assert_eq!(cells["label"], "consistent", "{cells}");
+        assert_eq!(
+            cells["git"]["waste_lines"]["values"],
+            json!([3.0, 4.0, 5.0])
+        );
+        assert_eq!(
+            cells["falinks"]["collisions"]["line_conflict"]["median"],
+            1.0
+        );
+        assert_eq!(
+            cells["falinks"]["collisions"]["rework"]["values"],
+            json!([0.0, 0.0, 0.0])
+        );
+        assert_eq!(cells["falinks"]["premature_checks"]["median"], 1.0);
+        find(&mut runs, "rust-errors-1-f")["discarded_or_rewritten_work"] =
+            json!({"status": "partial", "lines": null});
+        let cells = &report(&runs, false)["fixtures"]["rust-errors"]["collisions"];
+        assert_eq!(cells["label"], "incomplete");
+        assert_eq!(cells["falinks"]["waste_lines"]["missing"], 1);
     }
 
     #[test]
