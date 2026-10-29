@@ -92,6 +92,29 @@ fn a_replayed_bash_step_requests_no_card() {
 }
 
 #[test]
+fn a_failed_bash_step_that_changed_the_worktree_gets_its_card() {
+    let log = include_str!("fixtures/failing-bash.jsonl").replace("ls does-not-exist", "sh gen.sh");
+    // The script wrote half its output before it failed.
+    let half = "--- a/apps/studio/NOTES.md\n+++ b/apps/studio/NOTES.md\n@@ -0,0 +1 @@\n+half\n";
+    let mut studio = Studio::default();
+
+    let outputs: Vec<Output> = log
+        .lines()
+        .flat_map(|line| {
+            let failed = line.contains(r#""PostToolUseFailure""#);
+            studio.apply_with_change(line, failed.then(|| half.into()))
+        })
+        .collect();
+
+    let [Output::Card(card)] = &outputs[..] else {
+        panic!("one card: {outputs:?}");
+    };
+    assert_eq!(card.tool_use_id, "toolu_01FpQ7wXk2Lr9sV3bN6mT4cY");
+    assert_eq!(card.step.detail.as_deref(), Some("sh gen.sh"));
+    assert_eq!(card.change, half);
+}
+
+#[test]
 fn the_shell_fingerprints_at_each_prompt_and_each_steps_end() {
     let fingerprinted = |log: &str| -> Vec<usize> {
         let lines = log.lines().enumerate();

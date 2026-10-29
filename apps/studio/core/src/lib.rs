@@ -467,8 +467,8 @@ impl Studio {
                         exit_passed: (ran && exit_code_counts(command)).then_some(!failed),
                     };
                     Some((output(&event.tool_response, &event.error), Some(check)))
-                // Only another step that succeeded counts: a failed Edit or Write changed nothing.
-                } else if !failed
+                // A failed Edit or Write changed nothing; a failed command may have.
+                } else if (!failed || tool == "Bash")
                     && let Some(change) =
                         card_change(&tool, input, &event.tool_response, worktree_change)
                     && self.awaiting_card.remove(&event.session_id)
