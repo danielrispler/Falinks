@@ -87,7 +87,11 @@ fn main() {
     let folder = fs::canonicalize(folder).expect("resolve the card writer's folder");
     let mut studio = Studio::default();
     studio.set_card_writer_folder(&folder.to_string_lossy());
-    studio.set_carded_steps(store.cards().iter().map(|kept| kept.request.tool_use_id.clone()));
+    let carded = store
+        .cards()
+        .iter()
+        .map(|kept| kept.request.tool_use_id.clone());
+    studio.set_carded_steps(carded);
     let writer: Writer = match std::env::var("STUDIO_CARD_WRITER").as_deref() {
         Ok("fake") => Arc::new(FakeWriter),
         _ => Arc::new(ClaudeWriter::new(folder)),
