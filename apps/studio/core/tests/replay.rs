@@ -62,7 +62,13 @@ fn questions_and_plan_approvals_inside_a_wait_leave_the_steps_in_order() {
     let at_end = replay(log);
 
     let asked = at_question.prompted_last().expect("a session was prompted");
-    assert_eq!(asked.last_step, step("AskUserQuestion", None));
+    assert_eq!(
+        asked.last_step,
+        step(
+            "AskUserQuestion",
+            Some("Which README section should I fix?")
+        )
+    );
     let done = at_end.prompted_last().expect("a session was prompted");
     assert_eq!(done.last_step, step("Edit", Some("README.md")));
 }

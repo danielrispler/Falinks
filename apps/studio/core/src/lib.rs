@@ -40,10 +40,13 @@ struct Event {
 }
 
 /// The tool input that says what a step works on: a command's first line, a path relative to the
-/// session's folder, or a search pattern, URL, query or task description.
+/// session's folder, the first question asked, or a search pattern, URL, query or task description.
 fn step_detail(input: &Value, cwd: &str) -> Option<String> {
     if let Some(command) = input["command"].as_str() {
         return command.lines().next().map(Into::into);
+    }
+    if let Some(question) = input["questions"][0]["question"].as_str() {
+        return Some(question.into());
     }
     if let Some(path) = input["file_path"].as_str() {
         let relative = path.strip_prefix(cwd).and_then(|p| p.strip_prefix('/'));
