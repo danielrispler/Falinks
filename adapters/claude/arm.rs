@@ -515,9 +515,7 @@ impl Arm {
         if envelope["identity"]["workspace"].as_str() != root.to_str() {
             // An applied split/join moved this agent; the runner resumes it in its new root.
             self.relocated.insert(agent);
-            return Ok(Answer::now(refuse(
-                "your workspace moved after an agreed regrouping; the host is restarting you there",
-            )));
+            return Ok(Answer::now(refuse(engine_host::MOVED)));
         }
         if self.ready[agent] && MUTATIONS.contains(&operation) {
             return Ok(Answer::now(refuse("you declared ready; no further edits")));
@@ -544,6 +542,9 @@ impl Arm {
             }
             _ => {
                 let (result, report) = self.hosts[agent].call_timed(envelope)?;
+                if result["reason"] == engine_host::MOVED {
+                    self.relocated.insert(agent);
+                }
                 stages = report;
                 result
             }

@@ -177,6 +177,10 @@ impl Hidden {
     }
 }
 /// The file of a path or a `path#symbol` node.
+/// The refusal for a call from a workspace an applied regrouping moved the agent out of.
+pub const MOVED: &str =
+    "your workspace moved after an agreed regrouping; the host is restarting you there";
+
 fn file_of(path: &str) -> &str {
     path.split_once('#').map_or(path, |(p, _)| p)
 }
@@ -205,12 +209,14 @@ impl EngineHost {
     /// `call`, plus an edit's engine stage report (host-only) when the call reached the engine.
     pub fn call_timed(&self, envelope: &Value) -> Result<(Value, Option<Value>)> {
         let identity = &envelope["identity"];
-        let root = self.engine.root(&self.client)?;
         require(
-            identity["agent"] == self.agent.as_str()
-                && identity["workspace"].as_str() == root.to_str(),
-            "envelope identity is not this agent's current workspace",
+            identity["agent"] == self.agent.as_str(),
+            "envelope identity is not this agent",
         )?;
+        // A regrouping applied since the caller's own check is a refusal, not a failure (#355 A5).
+        if identity["workspace"].as_str() != self.engine.root(&self.client)?.to_str() {
+            return Ok((json!({"accepted": false, "reason": MOVED}), None));
+        }
         let (operation, request) = (
             envelope["operation"].as_str().unwrap_or(""),
             &envelope["request"],
