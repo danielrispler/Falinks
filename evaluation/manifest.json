@@ -5,7 +5,7 @@
     "calibration/v2.json": "c0597650c95e4ebd4f0f0a083152c4705b41a70c2b4f7eef393cd2828251dccf",
     "calibration/v4.json": "5330fca431e224ed4716c112528902dbbbb8aeb92b849d2389f05656ebc83642",
     "code-quality.json": "7f048f480ed039ba650c196189998a4a4def4af83546d3f375286a80d84219cc",
-    "config.json": "3ee79cc4f7f50f6cb8ff9a908732db2e65bc6f67e0ab4b2d9e7c02974a45776f",
+    "config.json": "11182f6e5ef12e813aacde78db6940b4756e415d5344817ebca3366193e47741",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
     "fixtures/go-invoice.json": "b647a36412839cd67d8cc904dfdd10df36e276fc606a7e28bb20a8e0eaae4210",
@@ -31,7 +31,7 @@
     "result-schema.json": "be02f77833ff82b59ae30d6de3b01700742e8d9229e5a86ed23bf8cbd0c4d89a",
     "src/authorship.rs": "bd17ec739a9d62f12365ba15ffd4e2ffd0e1f886bd261aac8de0667800a28192",
     "src/baseline.rs": "86c1590a570d2f37f82a2b5b4704b9562a165df9d1b2d6d272751aa5d6e4e855",
-    "src/batch.rs": "e539fa166b88bce6c138984c633a7eec44bb11f78d27154de41fb8b62812d263",
+    "src/batch.rs": "71fb3dea094551b534a9edfc0c04e08eceeabdf6797105dbf1a517dc4e0d35a8",
     "src/bin/claude-worker.rs": "cce241dd25b33dcc35734a7a3574292b7684bc85174b448d7060ca1d7b933602",
     "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
     "src/bin/falinks-eval-contain.rs": "c5c53fad8087a3b8d6cf3f31f04b96ae2946dfa530093d9b902c307871513a10",
@@ -41,7 +41,7 @@
     "src/known_answer.rs": "572dd86fc5e3c36e66ba48238abec5335234d138d296bd9b1c32eea43bcd4e08",
     "src/main.rs": "d69d2a3abc63302f2ae95684874ba946ae788b969a2965d0bdfc2a6253ca0f9e",
     "src/quality.rs": "231d5aa450782eff53e559bfbd0950e3eef51656526c0c7185a5c4ae5bc7ad14",
-    "src/report.rs": "af0eb5d5bf4dfbea8ce55be0d2dd7c50f3e6b7b254e14083aab611c6c0796f8a",
+    "src/report.rs": "cb7623eca49801bc8c9d00d749b2a6aafe6a13714e53a92a6aad8a54c4fdc38d",
     "src/significance.rs": "6fe97d8ba59392d48ebaaedee5c6c29e49f47d778530cfe738f1eb74652399ff",
     "src/timing.rs": "866a5c98ccd1e40a911fa10cc3d1270dc9a0c9312f123cc2c8bda55ed5829c25",
     "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
@@ -55,5 +55,5 @@
     "go-tasks": "12f2511ee050e318f13aa99ae0838b96ffd095a5",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 44
+  "version": 45
 }

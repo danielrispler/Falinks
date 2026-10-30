@@ -1683,6 +1683,7 @@ fn nested_agents_invalidate_the_run_are_counted_and_stop_the_batch() {
         let report: Value = serde_json::from_slice(&report.stdout).unwrap();
         let hits = json!({"git": (arm == "git") as u8, "falinks": (arm == "falinks") as u8});
         assert_eq!(report["nested_agent_hits"], hits);
+        assert_eq!(report["control_failure_runs"], 0);
     }
 }
 

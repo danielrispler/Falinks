@@ -698,7 +698,7 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         "runs": runs.iter().map(|r| json!({"run_id": r["run_id"], "pair": r["pair"], "arm": r["arm"],
             "scored": r["scored"], "outcome": r["outcome"], "replaces": r.get("replaces"),
             "failure_reason": r.get("failure_reason"), "concurrency": r.get("concurrency"),
-            "nested_agent": r.get("nested_agent"), "tokens": r.get("tokens")})).collect::<Vec<_>>(),
+            "nested_agent": r.get("nested_agent"), "control_failure": r.get("control_failure"), "tokens": r.get("tokens")})).collect::<Vec<_>>(),
         "concurrent_runs": runs.iter().filter(|r| concurrent(r)).map(|r| &r["run_id"]).collect::<Vec<_>>(),
         "concurrency_note": "Times of concurrent_runs were measured while another shard's run was active.",
         "fixtures": fixtures,
@@ -706,6 +706,8 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         "gaps": gaps,
         "safety_failures": unsafe_runs,
         "nested_agent_hits": {"git": nested("git"), "falinks": nested("falinks")},
+        // Runs a control failure in a stopping runtime made invalid (#355 A4).
+        "control_failure_runs": runs.iter().filter(|r| !r["control_failure"].is_null()).count(),
         "falinks_transitions": transitions,
         "regrouping_benefit": if transitions == 0 { "unestablished: no transitions" } else { "observed transitions; benefit needs review" },
         "replaced_runs": replaced,
