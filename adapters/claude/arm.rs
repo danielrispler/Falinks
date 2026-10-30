@@ -794,6 +794,11 @@ impl Arm {
         }
         let published = self.engine.published()?;
         let mine = self.engine.host_capture(&self.clients[agent])?;
+        if !mine.included.is_superset(&published.included) {
+            return Ok(refuse(
+                "your workspace lacks the latest publication: wait for it to be incorporated, or incorporate it if a Behind event names overlaps",
+            ));
+        }
         if Self::files(&published) != Self::files(&mine) {
             return Ok(refuse(
                 "your workspace has unpublished work: offer it and wait for publication",

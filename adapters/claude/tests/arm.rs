@@ -500,6 +500,70 @@ fn milestones_checks_publication_and_readiness_decide_the_outcome() {
     assert_eq!(run.arm.rejected, rejected);
 }
 
+/// A split space that drafted a file the peer then published is `Behind` (#356): `capture`
+/// shows it the published side of the overlap, and `ready` names incorporation, not offering.
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn a_behind_space_reads_the_published_overlap_and_ready_names_incorporation() {
+    let mut run = setup("go-indep-2");
+    let space1 = run.dir.path().join("space1");
+    fs::create_dir(&space1).unwrap();
+    run.arm.engine.add_workspace(&space1).unwrap();
+    let split = run.call(
+        1,
+        "propose",
+        json!({"action": "Split", "text": "separate", "failing": false}),
+    )["proposal"]
+        .clone();
+    for agent in [0, 1] {
+        let agreed = run.call(
+            agent,
+            "respond",
+            json!({"id": split["id"], "context": split["context"], "response": "Agree"}),
+        );
+        assert_eq!(agreed["accepted"], true, "{agreed}");
+    }
+    assert_eq!(run.arm.engine.placement().unwrap(), [0, 1]);
+    let path = "semver/semver.go";
+    let original = run.call(1, "capture", json!({"paths": [path]}))["files"][path]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let theirs = original.clone() + "\n// agent 0\n";
+    let mine = original + "\n// agent 1\n";
+    assert_eq!(run.edit(0, "a1", path, &theirs)["accepted"], true);
+    assert_eq!(run.edit(1, "b1", path, &mine)["accepted"], true);
+    let revision = run.call(0, "capture", json!({}))["revision"].clone();
+    let offer = run.call(
+        0,
+        "offer",
+        json!({"id": "a", "task": "semver", "revision": revision, "scope": [], "text": "a"}),
+    );
+    assert_eq!(offer["accepted"], true, "{offer}");
+    while run.arm.engine.validate().unwrap().is_some() {}
+    let events = run.arm.engine.events(run.arm.client(1), 0).unwrap();
+    assert!(
+        events.iter().any(|e| matches!(&e.body,
+            falinks::Body::Behind { overlaps, .. } if overlaps == &[path.to_string()])),
+        "{events:?}"
+    );
+
+    let published = run.call(1, "capture", json!({"paths": [path], "published": true}));
+    assert_eq!(published["accepted"], true, "{published}");
+    assert_eq!(published["files"][path]["content"], theirs.as_str());
+    let own = run.call(1, "capture", json!({"paths": [path]}));
+    assert_eq!(own["files"][path]["content"], mine.as_str());
+
+    let ready = run.call(1, "ready", json!({}));
+    assert_eq!(ready["accepted"], false);
+    let reason = ready["reason"].as_str().unwrap();
+    assert!(reason.contains("incorporat"), "{reason}");
+    assert!(!reason.contains("offer it"), "{reason}");
+}
+
 /// An assistant stream-json event: one content block of model message `id`.
 fn block(id: &str, tool: &str) -> Value {
     json!({"type": "assistant", "message": {"id": id,

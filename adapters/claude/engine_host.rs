@@ -253,8 +253,13 @@ impl EngineHost {
         };
         Ok(match operation {
             "capture" => {
-                takes(&[], &["paths"])?;
-                let capture = engine.capture_for(client)?;
+                takes(&[], &["paths", "published"])?;
+                // The published state, to resolve a Behind overlap: never a review source (#116 d2).
+                let capture = if request["published"] == true {
+                    engine.published()?
+                } else {
+                    engine.capture_for(client)?
+                };
                 let wanted: Vec<&str> = request["paths"]
                     .as_array()
                     .into_iter()
@@ -424,8 +429,8 @@ const EDIT_TYPES: &str =
 pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "capture",
-        r#"{"paths":"array"}"#,
-        "{paths?: [path]} -> your workspace's last completed revision, every file's version, and the text of the named paths. Native Read can show a partial installation; capture never does.",
+        r#"{"paths":"array","published":"boolean"}"#,
+        "{paths?: [path], published?: bool} -> your workspace's last completed revision, every file's version, and the text of the named paths. Native Read can show a partial installation; capture never does. published: true shows the latest publication instead, to resolve a Behind event's overlaps; its versions are not your workspace's, so edit with your own.",
     ),
     (
         "edit",
@@ -440,7 +445,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "incorporate",
         EDIT_TYPES,
-        "Same shape as edit, note included: install the published state with your resolution of every file a Behind event names.",
+        "Same shape as edit, note included. A Behind event means a publication changed files your split workspace also drafted (its overlaps); until you incorporate, your offers cannot publish. Read the published side with capture {paths: overlaps, published: true}, then incorporate: it installs the published state plus your output, which must resolve every overlapping path, combining both sides' changes. expected uses your own workspace's versions.",
     ),
     (
         "request",
