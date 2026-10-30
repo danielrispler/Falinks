@@ -1183,7 +1183,7 @@ fn a_pending_offer_keeps_the_pair_until_the_revision_advances() {
     let split = engine.reconsider().unwrap();
     assert_eq!(split.action, Action::Split, "{}", split.reasoning);
 
-    // A failure report with a pending offer still splits.
+    // An unanswered failure report with a pending offer still splits.
     decline(&engine, &alice, &split);
     offer(&engine, &bob, "again");
     let failing = engine
@@ -1196,7 +1196,7 @@ fn a_pending_offer_keeps_the_pair_until_the_revision_advances() {
             },
         )
         .unwrap();
-    decline(&engine, &alice, &failing);
+    assert!(failing.state.pending());
     let split = engine.reconsider().unwrap();
     assert_eq!(split.action, Action::Split, "{}", split.reasoning);
     assert!(split.signals.failing && !split.signals.pending.is_empty());
@@ -1319,4 +1319,152 @@ fn an_insertion_only_obligation_does_not_hold_a_split() {
     let split = engine.reconsider().unwrap();
     assert_eq!(split.action, Action::Split, "{}", split.reasoning);
     assert!(split.signals.overlap.is_empty() && split.signals.compiler.is_empty());
+}
+
+fn offer_at(engine: &Engine, client: &Client, id: &str, revision: u64) -> Offered {
+    engine
+        .offer(
+            client,
+            Offer {
+                id: id.into(),
+                task: "task".into(),
+                revision,
+                scope: Vec::new(),
+                text: id.into(),
+                supersedes: None,
+                reviews: Vec::new(),
+            },
+        )
+        .unwrap()
+}
+
+/// #331's E4: a candidate held from before a split holds Bob's own earlier draft. Its
+/// publication after the split is no overlap with Bob's later draft of the same file.
+#[test]
+fn pre_split_candidate_publication_is_not_an_overlap_with_own_later_draft() {
+    let (dir, engine, alice, bob) = fixture();
+    applied(&engine, &alice, "left", "siblings.go", LEFT);
+    let held = applied(&engine, &bob, "callee", "callee.go", CALLEE);
+    offer_at(&engine, &alice, "held", held.revision);
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = engine
+        .propose(
+            &bob,
+            Propose {
+                action: Action::Split,
+                text: "separate".into(),
+                failing: false,
+            },
+        )
+        .unwrap();
+    agree(&engine, &alice, &split);
+    agree(&engine, &bob, &split);
+    assert_eq!(engine.placement().unwrap(), [0, 1]);
+    let later = CALLEE.replace('8', "9");
+    applied(&engine, &bob, "callee2", "callee.go", &later);
+    let offered = offer_at(&engine, &bob, "held", held.revision);
+    assert!(offered.coverage.queued, "{:?}", offered.coverage);
+    let run = engine.validate().unwrap().unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Published { .. })),
+        "{run:?}"
+    );
+    let events = engine.events(&bob, 0).unwrap();
+    assert!(
+        !events.iter().any(|e| matches!(e.body, Body::Behind { .. })),
+        "{events:?}"
+    );
+    let second = engine.root(&bob).unwrap();
+    assert_eq!(read(&second, "callee.go"), later);
+    assert_eq!(read(&second, "siblings.go"), LEFT);
+}
+
+/// #358, from #331's probe `probe_declined_failure_report_twice`: a declined failure report
+/// is answered and stops driving engine proposals; a new report counts again.
+#[test]
+fn a_declined_failure_report_stops_driving_engine_proposals() {
+    let (dir, engine, alice, bob) = support::fixture(&[
+        ("go.mod", "module example.com/probe\n\ngo 1.22\n"),
+        (
+            "disc.go",
+            "package probe\n\nfunc Disc() int {\n\treturn 0\n}\n",
+        ),
+    ]);
+    fs::create_dir_all(dir.path().join("second")).unwrap();
+    configure(&engine);
+    register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
+    register(&engine, &bob, "b", "b", &["disc.go#Disc"]);
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    engine.reconsider().unwrap();
+    let report = |text: &str| {
+        engine
+            .propose(
+                &bob,
+                Propose {
+                    action: Action::Split,
+                    text: text.into(),
+                    failing: true,
+                },
+            )
+            .unwrap()
+    };
+    let failing = report("this is not working");
+    decline(&engine, &alice, &failing);
+    for n in 1..=3 {
+        let body = format!("package probe\n\nfunc Disc() int {{\n\treturn {n}\n}}\n");
+        applied(&engine, &alice, &format!("d{n}"), "disc.go", &body);
+        if let Some(o) = engine
+            .obligations(&bob)
+            .unwrap()
+            .iter()
+            .find(|o| o.pending())
+        {
+            let revision = engine.capture_for(&bob).unwrap().revision;
+            let decision = if n % 2 == 0 {
+                Decision::Keep
+            } else {
+                Decision::Revise
+            };
+            let scope = o.scope.id.clone();
+            let note = "r".into();
+            engine
+                .review(
+                    &bob,
+                    Review {
+                        scope,
+                        revision,
+                        decision,
+                        note,
+                    },
+                )
+                .unwrap();
+        }
+        let recommended = engine.reconsider().unwrap();
+        assert!(!recommended.signals.failing, "{}", recommended.reasoning);
+        assert_ne!(
+            recommended.action,
+            Action::Split,
+            "{}",
+            recommended.reasoning
+        );
+    }
+    let engine_splits = engine
+        .proposals()
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.proposer.is_none() && p.action == Action::Split)
+        .count();
+    assert_eq!(engine_splits, 0);
+
+    // A new report after the decline counts again.
+    let again = report("still not working");
+    assert!(again.state.pending() && again.signals.failing);
+    let recommended = engine.reconsider().unwrap();
+    assert!(recommended.signals.failing, "{}", recommended.reasoning);
+    assert_eq!(
+        recommended.action,
+        Action::Split,
+        "{}",
+        recommended.reasoning
+    );
 }

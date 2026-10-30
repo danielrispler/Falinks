@@ -176,6 +176,18 @@ impl Hidden {
         text.replace(self.prefix.as_str(), "")
     }
 }
+/// The refusal for a call from a workspace an applied regrouping moved the agent out of.
+pub const MOVED: &str =
+    "your workspace moved after an agreed regrouping; the host is restarting you there";
+
+/// What `EngineHost::call_timed` did with a call.
+pub enum Timed {
+    /// An applied regrouping moved the caller out of the envelope's workspace (#355 A5).
+    Moved,
+    /// The result, plus an edit's engine stage report when the call reached the engine.
+    Answered(Value, Option<Value>),
+}
+
 /// The file of a path or a `path#symbol` node.
 fn file_of(path: &str) -> &str {
     path.split_once('#').map_or(path, |(p, _)| p)
@@ -200,17 +212,22 @@ impl EngineHost {
         }
     }
     pub fn call(&self, envelope: &Value) -> Result<Value> {
-        Ok(self.call_timed(envelope)?.0)
+        Ok(match self.call_timed(envelope)? {
+            Timed::Moved => json!({"accepted": false, "reason": MOVED}),
+            Timed::Answered(result, _) => result,
+        })
     }
     /// `call`, plus an edit's engine stage report (host-only) when the call reached the engine.
-    pub fn call_timed(&self, envelope: &Value) -> Result<(Value, Option<Value>)> {
+    pub fn call_timed(&self, envelope: &Value) -> Result<Timed> {
         let identity = &envelope["identity"];
-        let root = self.engine.root(&self.client)?;
         require(
-            identity["agent"] == self.agent.as_str()
-                && identity["workspace"].as_str() == root.to_str(),
-            "envelope identity is not this agent's current workspace",
+            identity["agent"] == self.agent.as_str(),
+            "envelope identity is not this agent",
         )?;
+        // A regrouping applied since the caller's own check is a refusal, not a failure (#355 A5).
+        if identity["workspace"].as_str() != self.engine.root(&self.client)?.to_str() {
+            return Ok(Timed::Moved);
+        }
         let (operation, request) = (
             envelope["operation"].as_str().unwrap_or(""),
             &envelope["request"],
@@ -232,7 +249,10 @@ impl EngineHost {
         };
         // Concealed first, so a substitute the agent caused survives as the path it wrote; then
         // restored on every call once any request was substituted, since the engine keeps them.
-        Ok((self.hidden.restore(self.hidden.conceal(result)), stages))
+        Ok(Timed::Answered(
+            self.hidden.restore(self.hidden.conceal(result)),
+            stages,
+        ))
     }
     /// Each operation's parser checks its request keys before the engine sees the request.
     fn dispatch(
@@ -247,8 +267,13 @@ impl EngineHost {
         };
         Ok(match operation {
             "capture" => {
-                takes(&[], &["paths"])?;
-                let capture = engine.capture_for(client)?;
+                takes(&[], &["paths", "published"])?;
+                // The published state, to resolve a Behind overlap: never a review source (#116 d2).
+                let capture = if request["published"] == true {
+                    engine.published()?
+                } else {
+                    engine.capture_for(client)?
+                };
                 let wanted: Vec<&str> = request["paths"]
                     .as_array()
                     .into_iter()
@@ -418,8 +443,8 @@ const EDIT_TYPES: &str =
 pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "capture",
-        r#"{"paths":"array"}"#,
-        "{paths?: [path]} -> your workspace's last completed revision, every file's version, and the text of the named paths. Native Read can show a partial installation; capture never does.",
+        r#"{"paths":"array","published":"boolean"}"#,
+        "{paths?: [path], published?: bool} -> your workspace's last completed revision, every file's version, and the text of the named paths. Native Read can show a partial installation; capture never does. published: true shows the latest publication instead, to resolve a Behind event's overlaps; its versions are not your workspace's, so edit with your own.",
     ),
     (
         "edit",
@@ -434,7 +459,7 @@ pub const OPERATIONS: &[(&str, &str, &str)] = &[
     (
         "incorporate",
         EDIT_TYPES,
-        "Same shape as edit, note included: install the published state with your resolution of every file a Behind event names.",
+        "Same shape as edit, note included. A Behind event means a publication changed files your split workspace also drafted (its overlaps); until you incorporate, your offers cannot publish. Read the published side with capture {paths: overlaps, published: true}, then incorporate: it installs the published state plus your output, which must resolve every overlapping path, combining both sides' changes. expected uses your own workspace's versions.",
     ),
     (
         "request",

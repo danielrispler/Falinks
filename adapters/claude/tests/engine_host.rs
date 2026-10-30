@@ -376,9 +376,15 @@ fn agreed_split_moves_the_agent_and_its_old_launch_loses_engine_access() {
     }
     assert_eq!(f.engine.placement().unwrap(), [0, 1]);
 
-    // The old launch's workspace no longer matches: a host error that latches the worker.
-    let stale = f.hosts[1].call(&envelope(1, &f.live, "capture", json!({})));
-    assert!(stale.is_err());
+    // The old launch's workspace no longer matches: a refusal the arm turns into a relocation,
+    // never a host error that latches the worker (#355 A5).
+    let stale = f.hosts[1]
+        .call(&envelope(1, &f.live, "capture", json!({})))
+        .unwrap();
+    assert_eq!(
+        stale,
+        json!({"accepted": false, "reason": falinks_claude::engine_host::MOVED})
+    );
     let moved = f.hosts[1]
         .call(&envelope(1, &second, "capture", json!({})))
         .unwrap();
@@ -756,7 +762,11 @@ fn wrapped_unknown_or_missing_request_keys_are_refused_by_name() {
             json!({"request":{"through":5}}),
             "handle takes {through?, deferred?, processed?}",
         ),
-        ("capture", json!({"request":{}}), "capture takes {paths?}"),
+        (
+            "capture",
+            json!({"request":{}}),
+            "capture takes {paths?, published?}",
+        ),
         ("obligations", json!({"all":true}), "obligations takes {}"),
         (
             "edit",

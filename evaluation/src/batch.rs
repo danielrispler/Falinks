@@ -497,8 +497,15 @@ pub fn batch(
                 &mut ledger,
                 &ledger_path,
                 format!(
-                    "{run_id}: nested agent launched ({}); run invalid. Stop and ask before resuming",
-                    result["nested_agent"]
+                    "{run_id}: {}; run invalid. Stop and ask before resuming",
+                    if result["control_failure"].is_null() {
+                        format!("nested agent launched ({})", result["nested_agent"])
+                    } else {
+                        format!(
+                            "control failure while a runtime stopped ({})",
+                            result["control_failure"]
+                        )
+                    }
                 ),
             );
         }

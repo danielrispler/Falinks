@@ -800,3 +800,91 @@ fn a_check_that_errors_still_answers_its_caller_and_latches_the_gate() {
         assert!(timed(f.session.events.last().unwrap()));
     }
 }
+
+/// #355 A9: a check still running when its worker stops (the gate latched) is finished and
+/// recorded once its oracle returns; the stopping runtime waits for it (`Runtime::stopped`).
+#[test]
+fn a_check_running_when_its_worker_stops_is_still_recorded() {
+    use falinks_claude::Served;
+    let mut f = deferring(|| Ok(json!({"passed":true})));
+    let Served::Later(key, work) = serve(&mut f, "toolu_1", "falinks_check") else {
+        panic!("check answered on the driver");
+    };
+    f.session.gate.failed = true; // what `Runtime::stop` does
+    let answer = f.session.finish(key, work());
+    assert_eq!(answer, json!({"accepted":true,"passed":true}));
+    let record = f.session.events.last().unwrap();
+    assert_eq!(record["result"], answer, "{record}");
+}
+
+/// A `Runtime` over a fixture's session with no process, fed by `Replay`.
+fn replayed(
+    f: Fixture,
+) -> (
+    falinks_claude::Runtime,
+    falinks_claude::Replay,
+    tempfile::TempDir,
+) {
+    let controller = f.workspace.with_file_name("controller");
+    let (runtime, replay) = falinks_claude::Runtime::replay(f.session, &controller).unwrap();
+    (runtime, replay, f._dir)
+}
+
+/// #355 A9: a check running when its worker stops keeps the stopping runtime alive until the
+/// oracle returns; its answer is recorded, and the oracle's child has exited by then.
+#[test]
+fn a_stopping_runtime_waits_for_and_records_a_running_check() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{Duration, Instant};
+    static ORACLE: AtomicU32 = AtomicU32::new(0);
+    let oracle = || {
+        let mut child = std::process::Command::new("sleep").arg("0.5").spawn()?;
+        ORACLE.store(child.id(), Ordering::SeqCst);
+        child.wait()?;
+        Ok(json!({"passed":true}))
+    };
+    let (mut runtime, replay, _dir) = replayed(deferring(oracle));
+    let input = json!({});
+    let hooked = replay.host(hook("P1", "toolu_1", "falinks_check", &input));
+    let answer = replay.host(call("toolu_1", "falinks_check", &input));
+    for _ in 0..2 {
+        assert!(runtime.step(Duration::from_secs(5)).unwrap());
+    }
+    hooked.recv().unwrap();
+    runtime.stop();
+    replay.end();
+    let started = Instant::now();
+    while !runtime.stopped() {
+        assert!(started.elapsed() < Duration::from_secs(10), "never stopped");
+        let _ = runtime.step(Duration::from_millis(100));
+    }
+    let answer = answer.try_recv().unwrap();
+    assert_eq!(answer, json!({"accepted":true,"passed":true}));
+    assert_eq!(runtime.session.events.last().unwrap()["result"], answer);
+    let pid = ORACLE.load(Ordering::SeqCst).to_string();
+    let alive = std::process::Command::new("kill")
+        .args(["-0", &pid])
+        .status()
+        .unwrap();
+    assert!(!alive.success(), "oracle {pid} outlived the stop");
+}
+
+/// #355 A4: a control failure among the lines a stopping runtime still writes is an error
+/// before the stream's end; only the end itself comes once `ended` holds.
+#[test]
+fn a_stopping_runtimes_control_failure_comes_before_its_end() {
+    use std::time::Duration;
+    let f = fixture();
+    let mut line = init(&f.workspace);
+    line["model"] = json!("claude-opus-4-8");
+    let (mut runtime, replay, _dir) = replayed(f);
+    runtime.stop();
+    replay.line(line);
+    replay.end();
+    let first = runtime.step(Duration::from_secs(5));
+    assert!(first.is_err() && !runtime.ended(), "{first:?}");
+    let last = runtime.step(Duration::from_secs(5));
+    assert!(last.is_err() && runtime.ended(), "{last:?}");
+    assert!(!runtime.step(Duration::from_millis(100)).unwrap());
+    assert!(runtime.stopped());
+}

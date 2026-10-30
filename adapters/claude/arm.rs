@@ -515,9 +515,7 @@ impl Arm {
         if envelope["identity"]["workspace"].as_str() != root.to_str() {
             // An applied split/join moved this agent; the runner resumes it in its new root.
             self.relocated.insert(agent);
-            return Ok(Answer::now(refuse(
-                "your workspace moved after an agreed regrouping; the host is restarting you there",
-            )));
+            return Ok(Answer::now(refuse(engine_host::MOVED)));
         }
         if self.ready[agent] && MUTATIONS.contains(&operation) {
             return Ok(Answer::now(refuse("you declared ready; no further edits")));
@@ -542,11 +540,16 @@ impl Arm {
                     _ => return Ok(Answer::Check(self.check(agent)?)),
                 }
             }
-            _ => {
-                let (result, report) = self.hosts[agent].call_timed(envelope)?;
-                stages = report;
-                result
-            }
+            _ => match self.hosts[agent].call_timed(envelope)? {
+                engine_host::Timed::Moved => {
+                    self.relocated.insert(agent);
+                    refuse(engine_host::MOVED)
+                }
+                engine_host::Timed::Answered(result, report) => {
+                    stages = report;
+                    result
+                }
+            },
         };
         if result["accepted"] == false {
             self.rejected += 1;
@@ -793,6 +796,11 @@ impl Arm {
         }
         let published = self.engine.published()?;
         let mine = self.engine.host_capture(&self.clients[agent])?;
+        if !mine.included.is_superset(&published.included) {
+            return Ok(refuse(
+                "your workspace lacks the latest publication: wait for it to be incorporated, or incorporate it if a Behind event names overlaps",
+            ));
+        }
         if Self::files(&published) != Self::files(&mine) {
             return Ok(refuse(
                 "your workspace has unpublished work: offer it and wait for publication",

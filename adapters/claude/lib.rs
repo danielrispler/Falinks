@@ -813,7 +813,11 @@ pub struct Runtime {
     pub settings: Value,
     binary: PathBuf,
     control_host: bool,
-    child: Child,
+    /// Taken by `stop`, which shuts it down on another thread.
+    child: Option<Child>,
+    shutdown: Option<JoinHandle<()>>,
+    /// The runtime's output stream ended.
+    ended: bool,
     input: Option<ChildStdin>,
     inputs: Receiver<Input>,
     /// Deferred work reports here; replies wait by key.
@@ -821,6 +825,24 @@ pub struct Runtime {
     replies: BTreeMap<u64, Sender<Value>>,
     listener: Listener,
     closed: bool,
+}
+/// Plays what a runtime process would write into a `Runtime::replay` (tests).
+pub struct Replay(Sender<Input>);
+impl Replay {
+    /// One stream-json line.
+    pub fn line(&self, line: Value) {
+        let _ = self.0.send(Input::Line(Ok(line)));
+    }
+    /// The output stream ends, as the reader thread reports it.
+    pub fn end(&self) {
+        let _ = self.0.send(Input::Line(Err("claude stream closed".into())));
+    }
+    /// A host request through the socket; the reply arrives on the returned receiver.
+    pub fn host(&self, request: Value) -> Receiver<Value> {
+        let (reply, answer) = mpsc::channel();
+        let _ = self.0.send(Input::Host(request, reply, Instant::now()));
+        answer
+    }
 }
 impl Runtime {
     /// `resume` names a saved runtime session; otherwise the host chooses a fresh one.
@@ -927,7 +949,9 @@ impl Runtime {
             settings,
             binary,
             control_host,
-            child,
+            child: Some(child),
+            shutdown: None,
+            ended: false,
             input,
             inputs,
             done,
@@ -935,6 +959,30 @@ impl Runtime {
             listener,
             closed: false,
         })
+    }
+    /// A runtime over `session` with no process: `Replay` feeds what one would write, and the
+    /// host socket is bound in `controller` (tests).
+    #[doc(hidden)]
+    pub fn replay(session: Session, controller: &Path) -> Result<(Self, Replay)> {
+        let (sender, inputs) = mpsc::channel();
+        let listener = Listener::bind(controller.join("host.sock"), sender.clone())?;
+        let runtime = Self {
+            session,
+            args: vec![],
+            settings: Value::Null,
+            binary: PathBuf::new(),
+            control_host: true,
+            child: None,
+            shutdown: None,
+            ended: false,
+            input: None,
+            inputs,
+            done: sender.clone(),
+            replies: BTreeMap::new(),
+            listener,
+            closed: false,
+        };
+        Ok((runtime, Replay(sender)))
     }
     /// Write a user message. Sending never implies presentation or handling.
     pub fn send(&mut self, text: String, event: Option<&str>) -> Result<()> {
@@ -968,6 +1016,8 @@ impl Runtime {
                 Err(format!("claude disconnected: {error}").into())
             }
             Ok(Input::Line(Err(error))) => {
+                // The reader thread sends this last, then exits.
+                self.ended = true;
                 self.session.gate.failed = true;
                 Err(error)
             }
@@ -975,7 +1025,7 @@ impl Runtime {
                 let observed = self.session.line(&line);
                 // Fail closed: a runtime mismatch also stops native tools, not only engine calls.
                 if observed.is_err() {
-                    self.close();
+                    self.stop();
                 }
                 observed.map(|()| true)
             }
@@ -1048,24 +1098,54 @@ impl Runtime {
     }
     pub fn require_supported(&mut self) -> Result<()> {
         self.session.gate.require_supported()?;
-        require(self.child.try_wait()?.is_none(), "claude disconnected")?;
+        let child = self.child.as_mut().ok_or("claude disconnected")?;
+        require(child.try_wait()?.is_none(), "claude disconnected")?;
         verify_binary(&self.binary)?;
         Ok(())
     }
-    pub fn close(&mut self) {
+    /// Starts closing without waiting: the process shuts down on another thread while `step`
+    /// still serves the lines it writes (under the session's controls) and deferred calls.
+    /// Every call and hook stamp is refused from here on.
+    pub fn stop(&mut self) {
         if self.closed {
             return;
         }
         self.closed = true;
         self.session.gate.failed = true;
         self.input.take();
-        shut_down(
-            &mut self.child,
-            Duration::from_secs(20),
-            Duration::from_secs(5),
-        );
+        // A later runtime binds the same socket path, so the listener goes now.
         self.listener.stop();
+        if let Some(child) = self.child.take() {
+            self.shutdown = Some(shut_down_later(
+                child,
+                Duration::from_secs(20),
+                Duration::from_secs(5),
+            ));
+        }
     }
+    /// After `stop`: the process exited, its stream ended and no deferred call is outstanding.
+    pub fn stopped(&self) -> bool {
+        self.closed
+            && self.ended
+            && self.replies.is_empty()
+            && self.shutdown.as_ref().is_none_or(|s| s.is_finished())
+    }
+    /// The runtime's output stream ended.
+    pub fn ended(&self) -> bool {
+        self.ended
+    }
+    /// `stop`, then wait for the process to exit.
+    pub fn close(&mut self) {
+        self.stop();
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.join();
+        }
+    }
+}
+
+/// `shut_down` on its own thread; the handle finishes when the group is gone.
+fn shut_down_later(mut child: Child, eof_grace: Duration, term_grace: Duration) -> JoinHandle<()> {
+    thread::spawn(move || shut_down(&mut child, eof_grace, term_grace))
 }
 
 /// After input is closed, wait `eof_grace` for exit, then `SIGTERM` the process group so the
@@ -1156,6 +1236,19 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         child
+    }
+
+    /// #355 A3: a relocation's stop does not hold the driver for the EOF grace.
+    #[test]
+    fn a_later_shutdown_returns_at_once_and_ends_the_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let child = looping_group(dir.path(), "trap 'touch flushed; exit 0' TERM;");
+        let started = Instant::now();
+        let stopping = shut_down_later(child, Duration::from_secs(2), Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(!stopping.is_finished());
+        stopping.join().unwrap();
+        assert!(dir.path().join("flushed").exists());
     }
 
     #[test]
