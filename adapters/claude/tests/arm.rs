@@ -973,6 +973,42 @@ fn every_tool_answers_a_hidden_path_as_a_never_enrolled_one() {
     assert_eq!(never.arm.hidden.requests.load(Ordering::Relaxed), 0);
 }
 
+/// `capture {published: true}`, the read that resolves a Behind overlap, answers a hidden path
+/// as a never-enrolled one too (#356 A7).
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the evaluation sandbox is macOS-only"
+)]
+fn a_published_capture_answers_a_hidden_path_as_a_never_enrolled_one() {
+    let [mut hidden, mut never] = [setup("go-relationships"), setup("go-relationships")];
+    let dir = |run: &Run| run.dir.path().canonicalize().unwrap();
+    for agent in [0, 1] {
+        let a = hidden.call(
+            agent,
+            "capture",
+            json!({"paths": ["parse.go"], "published": true}),
+        );
+        let b = never.call(
+            agent,
+            "capture",
+            json!({"paths": ["nope.go"], "published": true}),
+        );
+        let a = a
+            .to_string()
+            .replace(dir(&hidden).to_str().unwrap(), "<run>");
+        let b = b
+            .to_string()
+            .replace(dir(&never).to_str().unwrap(), "<run>");
+        assert_eq!(a, b.replace("nope.go", "parse.go"));
+        assert!(
+            !a.contains("unenrolled-") && !a.contains("parse_test.go"),
+            "{a}"
+        );
+    }
+    assert!(hidden.arm.hidden.requests.load(Ordering::Relaxed) > 0);
+}
+
 /// A later call that reads stored state answers a hidden path as a never-enrolled one too:
 /// the engine keeps what the request named, and no reply shows the substitute (#250).
 #[test]

@@ -248,18 +248,18 @@ pub(crate) fn merge(
     published: &Capture,
 ) -> Result<(Capture, Vec<String>)> {
     let base = base_of(db, workspace)?;
-    let [a, b] = authored(
+    let [own_a, own_b] = authored(
         db,
         workspace.included.difference(&published.included).copied(),
     )?;
-    let own: BTreeSet<_> = a.union(&b).collect();
+    let own: BTreeSet<_> = own_a.union(&own_b).collect();
     // Only paths a published operation missing from the workspace wrote can change it:
     // a pre-split candidate holds the workspace's own earlier drafts (#331, E4).
-    let [c, d] = authored(
+    let [missing_a, missing_b] = authored(
         db,
         published.included.difference(&workspace.included).copied(),
     )?;
-    let missing: BTreeSet<_> = c.union(&d).collect();
+    let missing: BTreeSet<_> = missing_a.union(&missing_b).collect();
     let mut merged = workspace.clone();
     let mut overlaps = Vec::new();
     for (path, file) in &published.files {

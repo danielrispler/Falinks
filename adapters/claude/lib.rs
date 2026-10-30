@@ -826,6 +826,24 @@ pub struct Runtime {
     listener: Listener,
     closed: bool,
 }
+/// Plays what a runtime process would write into a `Runtime::replay` (tests).
+pub struct Replay(Sender<Input>);
+impl Replay {
+    /// One stream-json line.
+    pub fn line(&self, line: Value) {
+        let _ = self.0.send(Input::Line(Ok(line)));
+    }
+    /// The output stream ends, as the reader thread reports it.
+    pub fn end(&self) {
+        let _ = self.0.send(Input::Line(Err("claude stream closed".into())));
+    }
+    /// A host request through the socket; the reply arrives on the returned receiver.
+    pub fn host(&self, request: Value) -> Receiver<Value> {
+        let (reply, answer) = mpsc::channel();
+        let _ = self.0.send(Input::Host(request, reply, Instant::now()));
+        answer
+    }
+}
 impl Runtime {
     /// `resume` names a saved runtime session; otherwise the host chooses a fresh one.
     pub fn new(
@@ -941,6 +959,30 @@ impl Runtime {
             listener,
             closed: false,
         })
+    }
+    /// A runtime over `session` with no process: `Replay` feeds what one would write, and the
+    /// host socket is bound in `controller` (tests).
+    #[doc(hidden)]
+    pub fn replay(session: Session, controller: &Path) -> Result<(Self, Replay)> {
+        let (sender, inputs) = mpsc::channel();
+        let listener = Listener::bind(controller.join("host.sock"), sender.clone())?;
+        let runtime = Self {
+            session,
+            args: vec![],
+            settings: Value::Null,
+            binary: PathBuf::new(),
+            control_host: true,
+            child: None,
+            shutdown: None,
+            ended: false,
+            input: None,
+            inputs,
+            done: sender.clone(),
+            replies: BTreeMap::new(),
+            listener,
+            closed: false,
+        };
+        Ok((runtime, Replay(sender)))
     }
     /// Write a user message. Sending never implies presentation or handling.
     pub fn send(&mut self, text: String, event: Option<&str>) -> Result<()> {

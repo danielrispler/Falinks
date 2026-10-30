@@ -540,14 +540,16 @@ impl Arm {
                     _ => return Ok(Answer::Check(self.check(agent)?)),
                 }
             }
-            _ => {
-                let (result, report) = self.hosts[agent].call_timed(envelope)?;
-                if result["reason"] == engine_host::MOVED {
+            _ => match self.hosts[agent].call_timed(envelope)? {
+                engine_host::Timed::Moved => {
                     self.relocated.insert(agent);
+                    refuse(engine_host::MOVED)
                 }
-                stages = report;
-                result
-            }
+                engine_host::Timed::Answered(result, report) => {
+                    stages = report;
+                    result
+                }
+            },
         };
         if result["accepted"] == false {
             self.rejected += 1;

@@ -55,13 +55,16 @@ struct Worker {
     notices: Vec<Sent>,
     /// Turns a stop ended before their `result`.
     killed: usize,
-    /// Nested agents and control failures seen in stopped runtimes (#355 A4).
-    invalid: Vec<Value>,
+    /// Nested agents seen in stopped runtimes (#178 C7).
+    nested: Vec<Value>,
+    /// Control failures among a stopping runtime's last lines (#355 A4).
+    controls: Vec<String>,
 }
 
 /// One notice and the worker state from before it was sent, so a stop can resend it.
 struct Sent {
-    text: String,
+    /// The delivery event the notice was sent under.
+    event: String,
     delivered: u64,
     given: BTreeMap<String, u64>,
     developments: Vec<Value>,
@@ -86,7 +89,8 @@ impl Worker {
             stopping: None,
             notices: vec![],
             killed: 0,
-            invalid: vec![],
+            nested: vec![],
+            controls: vec![],
         }
     }
 
@@ -111,7 +115,7 @@ impl Worker {
                 Ok(false) => break,
                 // The stream's end is its last input.
                 Err(_) if runtime.ended() => {}
-                Err(error) => self.invalid.push(json!({"control": error.to_string()})),
+                Err(error) => self.controls.push(error.to_string()),
             }
         }
         if !runtime.stopped() {
@@ -122,7 +126,7 @@ impl Worker {
         if runtime.session.in_turn() {
             self.killed += 1;
         }
-        self.invalid
+        self.nested
             .extend(runtime.session.nested_agents.iter().cloned());
         self.transcripts.push(runtime.session.transcript());
         self.restarted(&runtime.session.deliveries);
@@ -135,13 +139,13 @@ impl Worker {
     fn restarted(&mut self, deliveries: &[Value]) {
         self.last_result = Value::Null;
         self.scanned = 0;
-        let presented = |text: &str| {
+        let presented = |event: &str| {
             deliveries
                 .iter()
-                .any(|d| d["text"] == text && !d["presented_span"].is_null())
+                .any(|d| d["event"] == event && !d["presented_span"].is_null())
         };
         let notices = std::mem::take(&mut self.notices);
-        if let Some(lost) = notices.iter().position(|n| !presented(&n.text)) {
+        if let Some(lost) = notices.iter().position(|n| !presented(&n.event)) {
             self.delivered = notices[lost].delivered;
             self.given = notices[lost].given.clone();
             let mut developments: Vec<Value> = notices
@@ -376,13 +380,10 @@ impl Run {
         );
         let hidden = self.arm.borrow().hidden.clone();
         text = hidden.restore_text(&text);
-        let worker = &self.workers[agent];
-        let mut sent = Sent {
-            text: String::new(),
-            delivered: worker.delivered,
-            given: worker.given.clone(),
-            developments,
-        };
+        let (delivered, given_before) = (
+            self.workers[agent].delivered,
+            self.workers[agent].given.clone(),
+        );
         let given = &mut self.workers[agent].given;
         if let Some(capture) =
             engine_host::notice_capture(&self.engine, &client, &events, given, &hidden)?
@@ -394,9 +395,13 @@ impl Run {
         if let Some(last) = events.last() {
             self.workers[agent].delivered = last.seq;
         }
-        sent.text = text.clone();
         self.send(agent, text, Some(&id))?;
-        self.workers[agent].notices.push(sent);
+        self.workers[agent].notices.push(Sent {
+            event: id,
+            delivered,
+            given: given_before,
+            developments,
+        });
         Ok(())
     }
 
@@ -551,7 +556,7 @@ fn run(options: Options) -> Result<i32> {
     }
     // A control failure while a relocation stopped a runtime (#355 A4); after the clock
     // stopped, one is evidence only (see `drain`).
-    let relocating = invalid(&run.workers, true);
+    let control = run.workers.iter().find_map(|w| w.controls.first().cloned());
     let drained = if run.arm.borrow().outcome.is_some() {
         Some(drain(&mut run)?)
     } else {
@@ -560,10 +565,8 @@ fn run(options: Options) -> Result<i32> {
     for agent in 0..2 {
         run.stop(agent, false);
     }
-    // A nested agent (#178 C7) in any runtime, stopped ones included, makes the run invalid
-    // and stops the batch.
-    if let Some(invalid) = relocating.or_else(|| invalid(&run.workers, false)) {
-        run.evidence["nested_agent"] = invalid;
+    if let Some((key, why)) = invalid(&run.workers, control) {
+        run.evidence[key] = why;
         run.evidence["outcome"] = "run_invalid".into();
     }
     let arm = run.arm.borrow();
@@ -872,14 +875,13 @@ fn drain(run: &mut Run) -> Result<Value> {
     )
 }
 
-/// The first nested agent the workers' stopped runtimes recorded, or with `controls` also the
-/// first control failure.
-fn invalid(workers: &[Worker], controls: bool) -> Option<Value> {
-    workers
-        .iter()
-        .flat_map(|w| &w.invalid)
-        .find(|v| controls || v.get("control").is_none())
-        .cloned()
+/// What makes the run invalid and stops the batch, as its evidence key and value: a nested
+/// agent (#178 C7) in any stopped runtime, else a relocation's `control` failure.
+fn invalid(workers: &[Worker], control: Option<String>) -> Option<(&'static str, Value)> {
+    let nested = workers.iter().find_map(|w| w.nested.first().cloned());
+    nested
+        .map(|n| ("nested_agent", n))
+        .or(control.map(|c| ("control_failure", c.into())))
 }
 
 /// Usage is complete only when both final turns ended in the window and no stop killed a turn
@@ -1009,19 +1011,19 @@ mod tests {
         let mut worker = Worker::new();
         worker.notices = vec![
             Sent {
-                text: "notice 2".into(),
+                event: "e2".into(),
                 delivered: 1,
                 given: given(1),
                 developments: vec![],
             },
             Sent {
-                text: "notice 4".into(),
+                event: "e4".into(),
                 delivered: 2,
                 given: given(2),
                 developments: vec![json!({"id": "m1"})],
             },
             Sent {
-                text: "notice 5".into(),
+                event: "e5".into(),
                 delivered: 4,
                 given: given(3),
                 developments: vec![json!({"id": "m2"})],
@@ -1030,9 +1032,9 @@ mod tests {
         (worker.delivered, worker.given) = (5, given(4));
         worker.developments = vec![json!({"id": "m3"})];
         let deliveries = [
-            json!({"text": "notice 2", "presented_span": 1}),
-            json!({"text": "notice 4", "presented_span": null}),
-            json!({"text": "notice 5", "presented_span": null}),
+            json!({"event": "e2", "presented_span": 1}),
+            json!({"event": "e4", "presented_span": null}),
+            json!({"event": "e5", "presented_span": null}),
         ];
         worker.restarted(&deliveries);
         assert_eq!(worker.delivered, 2);
@@ -1050,7 +1052,7 @@ mod tests {
         // Everything presented: nothing is resent.
         let mut worker = Worker::new();
         worker.notices = vec![Sent {
-            text: "notice 2".into(),
+            event: "e2".into(),
             delivered: 1,
             given: given(1),
             developments: vec![json!({"id": "m1"})],
@@ -1061,6 +1063,94 @@ mod tests {
         assert!(worker.developments.is_empty());
     }
 
+    /// #355 A2: two notices with equal text are told apart by their delivery event, so the
+    /// unpresented second one is still resent.
+    #[test]
+    fn an_unpresented_notice_is_resent_even_when_an_earlier_one_had_equal_text() {
+        let given = |v: u64| BTreeMap::from([("a.go".to_string(), v)]);
+        let sent = |event: &str, delivered, g| Sent {
+            event: event.into(),
+            delivered,
+            given: given(g),
+            developments: vec![],
+        };
+        let mut worker = Worker::new();
+        worker.notices = vec![sent("e1", 1, 1), sent("e2", 2, 2)];
+        (worker.delivered, worker.given) = (3, given(3));
+        worker.restarted(&[
+            json!({"event": "e1", "text": "same", "presented_span": 1}),
+            json!({"event": "e2", "text": "same", "presented_span": null}),
+        ]);
+        assert_eq!((worker.delivered, worker.given), (2, given(2)));
+    }
+
+    /// A worker whose runtime has no process: the `Replay` writes its lines.
+    fn replayed(root: &Path) -> (Worker, falinks_claude::Replay) {
+        let launch = falinks_claude::Launch::fixture(root);
+        for dir in [&launch.source, &launch.scratch, &launch.controller] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let engine: falinks_host::Engine = Box::new(|_: &Value| Ok(EngineOutcome::default()));
+        let session =
+            falinks_claude::Session::new(&launch, "agent-a", "s", "t", engine, false).unwrap();
+        let (runtime, replay) = Runtime::replay(session, &launch.controller).unwrap();
+        let mut worker = Worker::new();
+        worker.runtime = Some(runtime);
+        (worker, replay)
+    }
+
+    /// #355 A1-A4: a relocation stops one worker without holding the driver: while its runtime
+    /// still writes, `poll_stop` returns at once and the peer is served; a control failure among
+    /// its last lines is kept, its end is not, and once stopped the unpresented notice is
+    /// rewound for the next runtime.
+    #[test]
+    fn a_relocation_stops_one_worker_while_the_peer_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (mut moving, replay) = replayed(&root.join("a"));
+        let (mut peer, peer_replay) = replayed(&root.join("b"));
+        let given = BTreeMap::from([("a.go".to_string(), 1)]);
+        moving.notices.push(Sent {
+            event: "e1".into(),
+            delivered: 1,
+            given: given.clone(),
+            developments: vec![json!({"id": "m1"})],
+        });
+        let runtime = moving.runtime.as_mut().unwrap();
+        runtime.session.sent("notice", Some("e1"));
+        (moving.delivered, moving.last_result) = (5, json!({"subtype": "success"}));
+
+        moving.begin_stop();
+        replay.line(json!({"type": "assistant", "message": {"model": "claude-opus-4-8"}}));
+        assert_eq!(moving.poll_stop(false, Duration::ZERO), None);
+        assert_eq!(moving.controls.len(), 1, "{:?}", moving.controls);
+        // The peer is not stalled: its lines are served while the other runtime is stopping.
+        peer_replay.line(json!({"type": "system", "subtype": "hook_response"}));
+        let peer_runtime = peer.runtime.as_mut().unwrap();
+        assert!(peer_runtime.step(Duration::from_secs(5)).unwrap());
+        assert_eq!(moving.poll_stop(false, Duration::ZERO), None);
+
+        replay.end();
+        let started = Instant::now();
+        let results = loop {
+            assert!(started.elapsed() < Duration::from_secs(10), "never stopped");
+            if let Some(results) = moving.poll_stop(false, Duration::from_millis(50)) {
+                break results;
+            }
+        };
+        assert_eq!(results, 0);
+        assert_eq!(
+            moving.controls.len(),
+            1,
+            "the stream's end is not a failure"
+        );
+        assert!(moving.runtime.is_none() && moving.stopping.is_none());
+        assert_eq!(moving.transcripts.len(), 1);
+        assert_eq!((moving.delivered, moving.given), (1, given));
+        assert_eq!(moving.developments, [json!({"id": "m1"})]);
+        assert_eq!(moving.last_result, Value::Null);
+    }
+
     /// #355 A3: a turn a stop killed before its `result` leaves usage partial.
     #[test]
     fn a_killed_turn_makes_usage_partial() {
@@ -1069,22 +1159,22 @@ mod tests {
         assert_eq!(usage_status(0, false, 1), "unavailable");
     }
 
-    /// #355 A4: a nested agent or a control failure seen while a relocation stopped a runtime
-    /// invalidates the run; after the clock, only a nested agent does.
+    /// #355 A4: a nested agent in a stopped runtime, or a relocation's control failure,
+    /// invalidates the run, each under its own evidence key.
     #[test]
     fn a_stopped_runtimes_nested_agent_or_control_failure_invalidates_the_run() {
-        let (mut first, mut second) = (Worker::new(), Worker::new());
-        assert_eq!(invalid(&[Worker::new(), Worker::new()], true), None);
-        first
-            .invalid
-            .push(json!({"control": "model identity changed; run invalid"}));
-        let workers = [first, Worker::new()];
-        assert!(invalid(&workers, true).is_some());
-        assert_eq!(invalid(&workers, false), None);
-        second.invalid.push(json!({"command": "claude -p hi"}));
+        let none = [Worker::new(), Worker::new()];
+        assert_eq!(invalid(&none, None), None);
+        let control = "model identity changed; run invalid".to_string();
         assert_eq!(
-            invalid(&[Worker::new(), second], false),
-            Some(json!({"command": "claude -p hi"}))
+            invalid(&none, Some(control.clone())),
+            Some(("control_failure", json!(control)))
+        );
+        let mut second = Worker::new();
+        second.nested.push(json!({"command": "claude -p hi"}));
+        assert_eq!(
+            invalid(&[Worker::new(), second], None),
+            Some(("nested_agent", json!({"command": "claude -p hi"})))
         );
     }
 
