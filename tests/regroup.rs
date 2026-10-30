@@ -13,7 +13,7 @@ use support::{GO, edit, fail_commits, fails_with, go_toolchain, halt, incidents,
 use tempfile::TempDir;
 
 const LEFT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n";
-/// `LEFT` with Alice's draft of Right too.
+/// `LEFT` with a draft of Right too.
 const RIGHT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
 const CALLEE: &str = "package probe\n\nfunc Callee() int {\n\treturn 8\n}\n";
 
@@ -1602,8 +1602,10 @@ fn strands(rounds: usize) {
     let (dir, engine, alice, bob) = layered(LAYERED);
     register(&engine, &alice, "a", "a", &["core.go", "disc.go"]);
     register(&engine, &bob, "b", "b", &["model.go", "fx.go"]);
-    let rate = format!("{}\n{}", LAYERED[1].1, &go("Rate", "2")[15..]);
-    let price = format!("{}\n{}", LAYERED[2].1, &go("Price", "5")[15..]);
+    // Each agent adds an L1 function after the foundation's own.
+    let added = |file: &str, name: &str| format!("{file}\nfunc {name}() int {{\n\treturn 2\n}}\n");
+    let rate = added(LAYERED[1].1, "Rate");
+    let price = added(LAYERED[2].1, "Price");
     applied(&engine, &alice, "core", "core.go", &rate);
     applied(&engine, &bob, "model", "model.go", &price);
     for n in 1..=rounds {
@@ -1637,16 +1639,25 @@ fn drafts_using_the_peers_unpublished_foundation_keep_the_pair_after_one_round()
     strands(1);
 }
 
+/// L1, the foundation L2 uses, before the L2 drafts.
+#[derive(PartialEq)]
+enum L1 {
+    Untouched,
+    Drafted,
+    Published,
+}
 /// #331's E2 (`window_never_turns_over`): with narrowed scopes no review turns the window
 /// over, and before L1 publishes L2 still uses it: the pair is kept. Once L1 publishes, the
 /// L2 drafts are independent: the split applies and both spaces build (#357).
-fn foundation(publish_first: bool) -> (TempDir, Engine, Client, Client, RegroupingProposal) {
+fn foundation(l1: L1) -> (TempDir, Engine, Client, Client, RegroupingProposal) {
     let (dir, engine, alice, bob) = layered(LAYERED);
     register(&engine, &alice, "a", "a", &["core.go#Money"]);
     register(&engine, &bob, "b", "b", &["model.go#Item"]);
-    applied(&engine, &alice, "money", "core.go", &go("Money", "100"));
-    applied(&engine, &bob, "item", "model.go", &go("Item", "3"));
-    if publish_first {
+    if l1 != L1::Untouched {
+        applied(&engine, &alice, "money", "core.go", &go("Money", "100"));
+        applied(&engine, &bob, "item", "model.go", &go("Item", "3"));
+    }
+    if l1 == L1::Published {
         publish(&engine, &alice, &bob, "l1");
     }
     register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
@@ -1663,13 +1674,13 @@ fn foundation(publish_first: bool) -> (TempDir, Engine, Client, Client, Regroupi
 }
 #[test]
 fn an_unpublished_foundation_keeps_the_pair_without_reviews() {
-    let (_dir, _engine, _alice, _bob, keep) = foundation(false);
+    let (_dir, _engine, _alice, _bob, keep) = foundation(L1::Drafted);
     assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
     assert_eq!(keep.signals.compiler, vec!["0:drafts 1:drafts".to_string()]);
 }
 #[test]
 fn a_published_foundation_lets_independent_drafts_split_and_both_spaces_build() {
-    let (_dir, engine, alice, bob, split) = foundation(true);
+    let (_dir, engine, alice, bob, split) = foundation(L1::Published);
     assert_eq!(split.action, Action::Split, "{}", split.reasoning);
     agree(&engine, &alice, &split);
     let applied = agree(&engine, &bob, &split);
@@ -1679,6 +1690,13 @@ fn a_published_foundation_lets_independent_drafts_split_and_both_spaces_build() 
     );
     assert!(vets(&engine.root(&alice).unwrap()));
     assert!(vets(&engine.root(&bob).unwrap()));
+}
+
+/// #331's control for E2: the same L2 drafts with no L1 drafts split.
+#[test]
+fn the_same_drafts_without_foundation_drafts_split() {
+    let (_dir, _engine, _alice, _bob, split) = foundation(L1::Untouched);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
 }
 
 /// Splits Alice's `disc.go` draft from Bob's `fx.go` draft by the engine's recommendation.
@@ -1863,5 +1881,23 @@ fn a_draft_deleting_a_symbol_the_peers_draft_uses_is_related() {
         keep.reasoning.contains("compiler relationship alone"),
         "{}",
         keep.reasoning
+    );
+}
+
+/// #357 decision 1: reverted drafts drop out, for `plan` too. A file two authors wrote back
+/// to its published bytes does not interleave, so the split applies.
+#[test]
+fn a_file_both_authors_reverted_does_not_void_a_split() {
+    let (dir, engine, alice, bob) = fixture();
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    applied(&engine, &alice, "left", "siblings.go", LEFT);
+    applied(&engine, &bob, "revert", "siblings.go", GO[1].1);
+    let split = split_by(&engine, &alice);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    agree(&engine, &alice, &split);
+    let applied = agree(&engine, &bob, &split);
+    assert!(
+        matches!(applied.state, ProposalState::Applied { .. }),
+        "{applied:?}"
     );
 }

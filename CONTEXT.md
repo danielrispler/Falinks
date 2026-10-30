@@ -62,7 +62,7 @@ The source symbols relevant to an edit through compiler-derived semantic depende
 The nearest enclosing function or method containing an edit, or the top-level declaration for an edit outside functions and methods. Separate methods have separate owners even when they belong to the same class.
 
 **Overlap**:
-Two agents' current work includes the same owning symbol. Current work is the owning symbols of an agent's unpublished drafts or, before it has edited, its registered scope.
+Two agents' current work includes the same owning symbol. Current work is the owning symbols of an agent's unpublished drafts or, before it has edited and before any regrouping transition, its registered scope.
 
 **Recency window**:
 The latest settled review in each direction between two agents. It bounds collaboration evidence; it does not decide current work.

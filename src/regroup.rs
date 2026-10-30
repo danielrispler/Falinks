@@ -334,19 +334,20 @@ fn stranding(drafts: &[Footprint; 2], sides: &[&[Evidence]]) -> Option<String> {
     if a.all || b.all {
         return Some("unbounded relevance of unpublished drafts".into());
     }
-    let one = |node: &String| Footprint {
+    let one = |node: &String| BTreeSet::from([node.clone()]);
+    let node = |n: &String| Footprint {
         all: false,
-        nodes: BTreeSet::from([node.clone()]),
+        nodes: one(n),
     };
     let closures: Vec<_> = b
         .nodes
         .iter()
-        .map(|y| (y, analysis::closure(&one(y).nodes, sides)))
+        .map(|y| (y, analysis::closure(&one(y), sides)))
         .collect();
     for x in &a.nodes {
-        let left = analysis::closure(&one(x).nodes, sides);
+        let left = analysis::closure(&one(x), sides);
         for (y, right) in &closures {
-            if analysis::related(&left, &one(y)) || analysis::related(right, &one(x)) {
+            if analysis::related(&left, &node(y)) || analysis::related(right, &node(x)) {
                 return Some(format!(
                     "unpublished drafts {x} (agent 0) and {y} (agent 1) relate by the compiler"
                 ));
@@ -563,8 +564,8 @@ impl Engine {
                     .push(format!("agent {agent} registered no scope"));
             }
             for o in obligations(db, agent)?.iter().filter(|o| o.pending()) {
-                // Read a cause edit as the window does: an insertion names its file only
-                // for relevance. Other causes stay uncertain (#311).
+                // Read a cause edit by its owners: an insertion names its file only for
+                // relevance. Other causes stay uncertain (#311).
                 let causes: Vec<Body> = all(
                     db,
                     "SELECT c.body FROM events o JOIN events c ON c.seq = json_extract(o.body, '$.Obligation.cause')
@@ -803,6 +804,8 @@ impl Engine {
             }
             let since = mark.proposal;
             // A split voided as unsafe is proposed again once it is safe (#357).
+            // shortcut: the Stale cause is told apart by its reason prefix; type the cause if
+            // another rule must read it.
             let unsafe_split = |p: &RegroupingProposal| matches!(&p.state, ProposalState::Stale { reason } if reason.starts_with(UNSAFE));
             if let Some((_, previous)) = history.iter().rev().find(|(seq, p)| {
                 *seq > since
@@ -975,15 +978,20 @@ impl Engine {
                     Ok(own) => own,
                     Err(blocker) => return blocked(blocker),
                 };
-                // ponytail: drafts move per file; two authors in one file void the split until
-                // publication.
-                let interleaved: Vec<_> = kept.intersection(&moved).collect();
+                // shortcut: drafts move per file, so two authors in one file void the split until
+                // publication; move them per hunk if that keeps pairs joined too long.
+                // Reverted drafts drop out, as in `signals` (#357).
+                let differ = differing(&published, workspace);
+                let interleaved: Vec<_> = kept
+                    .intersection(&moved)
+                    .filter(|p| differ.contains(*p))
+                    .collect();
                 if !interleaved.is_empty() {
                     return unsafe_until_published(format!(
                         "interleaved unpublished drafts in {interleaved:?}"
                     ));
                 }
-                // Required, not a backstop: an agent's split never passes `decide` (#357).
+                // Required, not a backstop: drafts can change between proposal and application.
                 let evidence = [
                     self.evidence_in(db, &published)?,
                     self.evidence_in(db, workspace)?,

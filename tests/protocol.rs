@@ -1444,10 +1444,11 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
         ]
     );
     assert_eq!([snapshot(&live), snapshot(&second)], roots);
-    // An edit's boundary retries the agreed split.
-    let current = engine.capture_for(&alice).unwrap();
+    // An edit's boundary retries the agreed split. Bob's, so no staying draft relates to the
+    // moving ones: without analysis an edit by Alice would void the split (#357).
+    let current = engine.capture_for(&bob).unwrap();
     engine
-        .apply(&alice, edit("a", &current, "a.rs", "fn a() { 1; }\n"))
+        .apply(&bob, edit("b2", &current, "b.rs", "fn b() { 3; }\n"))
         .unwrap();
     assert_eq!(take(), [transition, vec![Fault::Committed]].concat());
     assert!(matches!(
@@ -1457,6 +1458,10 @@ fn fault_hook_reaches_every_durable_step_of_transitions_restart_and_synchronizat
     assert_eq!(halt(dir.path()), None);
 
     // Publishing Alice's edit brings it into Bob's workspace.
+    let current = engine.capture_for(&alice).unwrap();
+    engine
+        .apply(&alice, edit("a", &current, "a.rs", "fn a() { 1; }\n"))
+        .unwrap();
     engine
         .configure_checks(vec![Check {
             name: "true".into(),
