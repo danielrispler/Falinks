@@ -1,10 +1,13 @@
 //! Frozen fixture checks and a one- or two-process communicating Git-worktree baseline.
+mod authorship;
 mod baseline;
 mod batch;
+mod collisions;
 mod judge;
 mod known_answer;
 mod quality;
 mod report;
+mod significance;
 mod timing;
 mod tokens;
 
@@ -26,14 +29,17 @@ macro_rules! bail {
 pub(crate) use bail;
 
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-pub const FIXTURES: [&str; 6] = [
+pub const FIXTURES: [&str; 7] = [
     "rust-errors",
     "go-page",
     "go-relationships",
     "go-indep-2",
     "go-indep-4",
+    "go-tasks",
     "go-invoice",
 ];
+/// #205's sealed scored fixture (#332), the `large-spec` schedule's only one.
+pub const LARGE_SPEC_FIXTURE: &str = "go-invoice";
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
 pub const SCORED_FIXTURES: [&str; 3] = ["rust-errors", "go-page", "go-relationships"];
 pub const FIXED_ENV: [(&str, &str); 10] = [
@@ -58,6 +64,16 @@ pub fn read(path: impl AsRef<Path>) -> Result<Value> {
     let path = path.as_ref();
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(serde_json::from_str(&text)?)
+}
+
+/// A JSON-lines file, blank lines skipped; a malformed line is an error.
+pub fn jsonl(path: &Path) -> Result<Vec<Value>> {
+    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?)
 }
 
 pub fn write(path: impl AsRef<Path>, data: &Value) -> Result<()> {
@@ -809,11 +825,13 @@ const USAGE: &str = "usage: falinks-eval <command>
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
-  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6] [--fixtures NAME[,NAME]]
+  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6|large-spec] [--fixtures NAME[,NAME]]
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
-  report --runs DIR [--runs DIR]... [--schedule track-t|step-6] [--show-code]
-  timing RUN_DIR";
+  report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec] [--show-code]
+  timing RUN_DIR
+  collisions RUN_DIR
+  duplicates --runs DIR";
 
 struct Args {
     positional: Vec<String>,
@@ -930,11 +948,15 @@ fn run() -> Result<i32> {
             args.get("after-pilot").map(Path::new),
             match args.get("schedule") {
                 None => None,
-                Some(name @ ("track-t" | "step-6")) if args.get("after-pilot").is_none() => {
+                Some(name @ ("track-t" | "step-6" | "large-spec"))
+                    if args.get("after-pilot").is_none() =>
+                {
                     Some(name)
                 }
                 Some(_) => {
-                    bail!("--schedule takes track-t or step-6, without --after-pilot\n{USAGE}")
+                    bail!(
+                        "--schedule takes track-t, step-6 or large-spec, without --after-pilot\n{USAGE}"
+                    )
                 }
             },
             &match args.get("fixtures") {
@@ -950,7 +972,8 @@ fn run() -> Result<i32> {
                 None => report::report(&runs, args.get("show-code").is_some()),
                 Some("track-t") => report::track_t_report(&runs),
                 Some("step-6") => report::step_6_report(&runs),
-                Some(_) => bail!("--schedule takes track-t or step-6\n{USAGE}"),
+                Some("large-spec") => report::large_spec_report(&runs),
+                Some(_) => bail!("--schedule takes track-t, step-6 or large-spec\n{USAGE}"),
             };
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(0)
@@ -963,9 +986,29 @@ fn run() -> Result<i32> {
         Some("known-answer") => {
             known_answer::known_answer(args.get("judge").map(Path::new), args.get("fixtures"))
         }
+        Some("duplicates") => collisions::classify(
+            Path::new(args.required("runs")?),
+            std::io::stdin().lock(),
+            std::io::stdout(),
+        ),
+        Some("collisions") => {
+            let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
+            let result = read(run.join("controller/result.json"))?;
+            // A batch keeps its classifications beside its runs.
+            let classified = run
+                .parent()
+                .and_then(|batch| read(batch.join("duplicates.json")).ok())
+                .unwrap_or(Value::Null);
+            let found = collisions::collisions(run, &result, &classified);
+            println!("{}", serde_json::to_string_pretty(&found)?);
+            Ok(0)
+        }
         Some("timing") => {
-            let run = args.positional.get(1).ok_or(USAGE)?;
-            let figures = timing::timing(Path::new(run))?;
+            let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
+            let result = read(run.join("controller/result.json"))?;
+            // Handling cost reads only the collisions' detections, which no classification changes.
+            let found = collisions::collisions(run, &result, &Value::Null);
+            let figures = timing::timing(run, &found)?;
             println!("{}", serde_json::to_string_pretty(&figures)?);
             Ok(0)
         }

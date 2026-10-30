@@ -42,6 +42,8 @@ pub const PINS: PinMap<&str> = &[
 ];
 pub const VERSION: &str = "2.1.308";
 pub const MODEL: &str = "claude-opus-5-5";
+/// Passed explicitly in both arms (#205 E1): the runtime default every earlier session ran at.
+pub const EFFORT: &str = "medium";
 /// Built-in tools every worker gets; the launch adds its `falinks` tools.
 pub const NATIVE: &[&str] = &["Bash", "Glob", "Grep", "Read"];
 pub const PLUGINS: &[&str] = &[
@@ -228,6 +230,24 @@ pub fn verify_init(init: &Value, scratch: &Path, session: &str, tools: &[String]
             && strings("plugins", Some("source")) == set(PLUGINS),
         &format!("unsupported runtime init; publication/scoring disabled: {init}"),
     )
+}
+
+/// Why a runtime session file does not show `effort` on every model reply (#205 E1): the runtime
+/// records effort there, not in the stream, and a reply without the field counts. Its own
+/// `<synthetic>` replies ("No response requested.") carry none and are skipped. A missing file
+/// leaves the effort unverifiable. The Git arm's `claude-worker` keeps a copy.
+/// shortcut: entries written after the last turn's `result` stay unchecked; check again after
+/// shutdown if a run ever ends on one.
+pub fn effort_failure(file: Option<&Path>, effort: &str) -> Option<String> {
+    let Some(text) = file.and_then(|f| fs::read_to_string(f).ok()) else {
+        return Some("session effort unrecorded; run invalid".into());
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["type"] == "assistant" && entry["message"]["model"] != "<synthetic>")
+        .map(|entry| entry["effort"].clone())
+        .find(|recorded| recorded != effort)
+        .map(|recorded| format!("session effort {recorded} is not {effort:?}; run invalid"))
 }
 
 /// Whether a Bash command starts a nested agent (#178 C7): a command's first word, after shell
@@ -499,6 +519,13 @@ impl Session {
                     models == Some(vec![MODEL.to_owned()]),
                     "model identity changed; run invalid",
                 )?;
+                let file = self
+                    .project
+                    .as_ref()
+                    .map(|p| p.join(format!("{}.jsonl", self.session)));
+                if let Some(failure) = effort_failure(file.as_deref(), EFFORT) {
+                    return Err(failure.into());
+                }
                 self.gate.record("model_identity", true)
             }
             ("rate_limit_event" | "control_response", _) => Ok(()),
@@ -700,6 +727,8 @@ pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String
         "--include-hook-events",
         "--model",
         MODEL,
+        "--effort",
+        EFFORT,
         "--setting-sources",
         "",
         "--strict-mcp-config",

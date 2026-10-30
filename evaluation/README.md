@@ -194,12 +194,17 @@ Claude Code `2.1.308` with `claude-opus-5-5` is the evaluated runtime in both ar
 ([#32](https://github.com/danielrispler/Falinks/issues/32#issuecomment-6096677771)).
 Both arms launch one long-lived `claude -p` stream-json session per agent with the same
 isolation flags (`--setting-sources ""`, `--strict-mcp-config`, `--disable-slash-commands`,
-`dontAsk`), default reasoning and `--max-turns 12`. When a message hits that tool-call cap,
+`dontAsk`), `--effort medium` (`reasoning` in `config.json`) and `--max-turns 12`. Effort
+is passed explicitly, never left to the runtime's default, which every earlier session ran
+at ([#205](https://github.com/danielrispler/Falinks/issues/205#issuecomment-6493518720),
+finding 9 and E1). When a message hits that tool-call cap,
 the host sends a continuation. Host events are written at once and presented at the next
 tool-result boundary or as a new turn. An idle, unfinished agent with no new events gets a
 reminder after two minutes. Any `system/init` mismatch, model refusal fallback or other
-model in `modelUsage` invalidates the run. A `rate_limit_event` with status `rejected` ends
-it as `usage_limit`.
+model in `modelUsage` invalidates the run. So does another effort on a model reply in the
+agent's session file, or no such file, checked at every `result`, since only that file records
+it; the runtime's own `<synthetic>` replies carry no effort and are skipped. A
+`rate_limit_event` with status `rejected` ends it as `usage_limit`.
 
 - **Git arm** (`baseline` with `worker_script` = `claude-worker`): the worker runs in
   the host sandbox profile with Claude Code's sandbox off and tools
@@ -408,12 +413,73 @@ it as `usage_limit`.
     For a Falinks agent, its `operations` give, per op, the calls (`acts`), the refused
     results and the tool seconds; its `edit_gate` gives the tool seconds of accepted `edit`, `retry`,
     `incorporate` and `apply_job` calls, their count and the mean per accepted call (#316).
+    Changed bytes come from each arm's records, not the transcript (#325): per agent, the
+    lines of its last version of each file that a line diff against the initial content
+    does not match. A Falinks agent's last version is its last applied operation's
+    (`controller/history.json`); a Git agent's is its last shared commit
+    (`controller/events.jsonl`, `agents/repo`). A changed line counts only for the agent
+    whose operation (each applied operation's exact `before` and `proposed` revisions) or
+    commit (its own, on its shares' first-parent line) introduced it. A peer's lines carried
+    in a whole-file write, a merge or a byte-identical copy of the peer's earlier version
+    count only for the peer; a merge or conflict resolution introduces no one's lines. A line one agent wrote and the other rewrote counts for both:
+    the original for its writer, in the writer's last version, and the rewrite for the
+    rewriter. A changed line traced to the initial file (a moved line) counts for the agent
+    whose version holds it.
+    Its `integration` (#337, Git only) counts, beside the categories, the round-trips with a
+    write under `agents/integration` or a `git merge`, `rebase`, `cherry-pick` or
+    `checkout --theirs/--ours` in a command that does not name the host; it is a labelled
+    heuristic. Its `runtime_refusals` (#205 D1) count the round-trips holding a `Write` or
+    `Edit` that Claude Code refused by its own read-before-write rule ("File has not been read
+    yet", "File has been modified since read"); they stay in `refused_edit`.
+    Its `collision_handling` (#337) gives, per collision class (`line_conflict`, `rework`,
+    `no_fault`), the round-trips and model seconds from each signal of the run's collisions
+    that reached the agent to its resolution, each round-trip charged to the first collision
+    whose window holds it. `unlocated` counts signals whose call the transcript lacks, and
+    `unresolved` those it ends in. Falinks: a `Stale` refusal's `refusal_recovery` window; an
+    `incorporate` is its own round-trip; a failed combined check runs to the agent's next
+    accepted write or passing check. Git: from the first round-trip after a `CONFLICT (` line
+    or a failed check to the agent's next share or passing check. Interpretation: #205's
+    resolution names `refusal_recovery` for Falinks and `CONFLICT (` or a failed combined
+    check for Git; a host check that reports a merge conflict (Git) and a failed combined
+    check (Falinks) get windows by the same rule. A rework detected by the peer's share gets
+    none, since its time is the share's, before the agent noticed it; its waste stays.
+    Its `rereads` (Q7c) count each agent's first read of a file (`Read`, or a `Bash` command
+    naming it with `cat`, `head`, `tail`, `sed -n`, `git diff` or `git show`) after a Falinks
+    `Stale` whose `conflicts` name it, a collision or not, or a Git
+    `CONFLICT (…): Merge conflict in` it, before the agent's next accepted write of it. A
+    collision's rereads count in its handling cost.
+    Its `coordination_overhead` (#205, Q7b) is the round-trips and model seconds of
+    `refused_edit`, `coordination`, `integration` and `rereads`, each round-trip once, less
+    `runtime_refusals`. Engine and host refusals (a Falinks `Stale` or `Unreviewed`, a refused
+    host request) stay in. A Falinks agent adds its `review_estimate`: the inline `reviews` of
+    its accepted edits, as compact JSON, at #193's 3.56 ms per character, an estimate.
+    Unreadable collision records leave `collision_handling`, `rereads` and
+    `coordination_overhead` missing, never zero.
     Tool seconds of calls made in parallel in one message overlap, so these are approximate.
     The definitions and heuristics are in
     `src/timing.rs`; `tests/timing/` holds synthetic transcripts with hand-computed values.
     Runs before #179 record their start to the second only (`start_precision`), so their
     launch and waiting times are good to about a second. Its `results` and `usage_reports`
     per agent compare the transcript's turn results with those recorded in `result.json`.
+  - **Collisions** (#334): `collisions RUN_DIR` prints one run's collisions and collision
+    waste (#205's resolution, "Measures"): Falinks from `controller/history.json`, Git from
+    the `draft_shared` events, the merge commits in `agents/repo` and the agents' `CONFLICT (`
+    output. Lines are credited by `src/authorship.rs`, the model changed bytes use. A failed
+    combined check is premature, not a collision, when the peer of the agent that asked for
+    it added work before the next passing check. `batch` and `report` fill each run's
+    `collisions` and `discarded_or_rewritten_work` from it: its `lines` once every
+    duplicate-work candidate of the run is classified (`status: complete`), else `partial`
+    with `counted_lines` and `lines: null`, and `unavailable` when the records cannot be
+    read; a team of one is `n/a`.
+    - Duplicate work needs a classifier: after a batch, run `duplicates --runs DIR`. It
+      proposes candidate pairs (one function per agent with one name, in files one
+      requirement names, or with token similarity at or above the frozen `SIMILARITY` in
+      `src/collisions.rs`), shows each unclassified pair without its run, arm or agent, in
+      hash order across runs, and saves each answer to `DIR/duplicates.json`
+      (`pairs[].duplicate`, null until classified). `collisions` and `report` read it.
+    - `report` prints, per fixture and arm, `collisions`: waste lines, collisions per class
+      and premature checks, the `handling` cost per class and `rereads` (round-trips and model
+      seconds summed over agents), with `note`, `handling_note` and #205's three `sentences`.
 
 Run the pilot and batch in a session **outside auto mode**, because they launch nested
 agents:
@@ -482,7 +548,53 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/step-6 --sc
   overhead apart: C_fixed (coordination round-trips, their model seconds and `operations`
   acts), per-edit tool overhead (`operations` tool seconds and `edit_gate`) and per-edit
   model overhead (output against changed bytes), with the run's `identity`. These come from
-  the transcripts, not the host's edit-gate timing (#178's I-2, track P).
+  the transcripts, not the host's edit-gate timing (#178's I-2, track P); changed bytes come
+  from the arm's records.
+
+#205's scored batch runs the `large-spec` schedule on `go-invoice` (#332) and reads it by the
+[#5 decision](https://github.com/danielrispler/Falinks/issues/5#issuecomment-6387801654)'s
+fixed payback criteria (#333):
+
+```sh
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/large-spec --schedule large-spec
+evaluation/target/release/falinks-eval report --runs /private/tmp/ev/large-spec --schedule large-spec
+```
+
+- **Schedule**: `go-invoice` eight times in each of step 6's three arms, 24 scored slots
+  and no pilot pair. The order rotates as in step 6, so each arm runs first two or three
+  times. Batch isolation, the gate, the ledger and the pause rules apply to every slot.
+- **Report** (`report --schedule large-spec`, also the batch's `report.json`):
+  - **P1–P3** compare `falinks-2` with `git-2` only, each exact and one-sided at 2.5%. P1 is
+    Fisher's exact test on success counts (at n = 8: 8–3, 7–2, 6–1 and 5–0 pass). P2
+    (per-run cold-start cost, failed runs at their actual cost) and P3 (per-run completion
+    seconds) are permutation rank tests over every split of the pooled runs, with ties
+    counted as half. An oracle failure or a timeout ranks slower than every success and ties
+    with the others; a replaced interruption is never ranked. Each test gives U, each arm's
+    p and the arm that passes; p is null when a run lacks the value.
+  - **Mechanism**: the same rank test on per-run collision waste
+    (`discarded_or_rewritten_work.lines`, #334); `missing` while a run's duplicate-work
+    candidates are unclassified or its records are unreadable.
+  - **Reading**: payback (a primary passes for Falinks, with or without mechanism evidence),
+    no payback (none does, and P3 passes for Git) or not shown, with the next step the #5
+    decision fixes. A safety failure gives no reading. A primary that lacks a run's value
+    gives `incomplete` unless another primary passed. The reading prints each primary's
+    observed σ (the sample standard deviation of log values per arm, and pooled; P3 over
+    successes only), the power that σ implies (simulated as for the #5 decision's table) and
+    the chance of a false payback.
+  - **`git-1`**: compared with each two-agent arm by P1's test in both directions, P3's and
+    P2's, and read in #205's fixed sentences for speed and cost, each beginning with the
+    success counts. Cost per successful task is given per arm.
+  - **Per arm**: per-ticket overhead (coordination overhead round-trips and model seconds,
+    and protocol acts, each divided by the fixture's tickets: its 9 `requirements`),
+    waiting-on-peer seconds and load balance. Protocol acts are a Falinks agent's Falinks
+    calls other than source writes, and a Git team's host requests other than the harness's
+    usage reports (`controller/events.jsonl`). Coordination overhead is `timing`'s
+    `coordination_overhead` (see **Timing**), summed over agents and printed beside its
+    parts: `coordination`, `refused_edit`, `integration` (labelled a heuristic), `rereads`
+    and, for `falinks-2`, `review_estimate` (labelled an estimate) with the `operations`
+    table (acts, refused results and tool seconds per op). `runtime_refusals` is printed
+    apart, outside the overhead. `collisions` gives each arm's collision cells, as `report`
+    does.
 
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and

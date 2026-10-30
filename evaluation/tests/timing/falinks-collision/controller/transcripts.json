@@ -1,0 +1,34 @@
+[
+ [
+  {
+   "events": [
+    {"type":"system","subtype":"init"},
+    {"type":"user","isReplay":true,"timestamp":"2026-10-21T10:00:01.000Z","message":{"role":"user","content":"[Falinks host] You are agent-0"}},
+    {"type":"assistant","timestamp":"2026-10-21T10:00:02.000Z","message":{"id":"f1","model":"scripted","content":[{"type":"tool_use","id":"a1","name":"mcp__falinks__falinks_edit","input":{"id":"a1","expected":{"consumer.go":0},"note":"Copy","output":{"consumer.go":{"content":"package fixture\n\nfunc Consume(records []string) []string {\n    return append(records[:0:0], records...)\n}\n"}}}}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:02.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a1","is_error":true,"content":[{"type":"text","text":"{\"accepted\":false,\"outcome\":{\"Stale\":{\"conflicts\":{\"consumer.go\":{\"expected\":0}}}}}"}]}]}},
+    {"type":"assistant","timestamp":"2026-10-21T10:00:04.000Z","message":{"id":"f2","model":"scripted","content":[{"type":"tool_use","id":"r1","name":"Read","input":{"file_path":"/w/space0/consumer.go"}}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:04.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"r1","content":"1\tpackage fixture"}]}},
+    {"type":"assistant","timestamp":"2026-10-21T10:00:05.000Z","message":{"id":"f3","model":"scripted","content":[{"type":"tool_use","id":"c1","name":"Bash","input":{"command":"cat /w/space0/producer.go"}}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:05.250Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"package fixture"}]}},
+    {"type":"assistant","timestamp":"2026-10-21T10:00:06.000Z","message":{"id":"f4","model":"scripted","content":[{"type":"tool_use","id":"a2","name":"mcp__falinks__falinks_edit","input":{"id":"a2","expected":{"consumer.go":1},"note":"Keep theirs","output":{"consumer.go":{"replace":[{"old":"    return records\n","new":"    // Consume returns its input.\n    return records\n"}]}},"reviews":[{"scope":"s","revision":1,"decision":"Keep","note":"ok"}]}}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:06.500Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a2","content":[{"type":"text","text":"{\"accepted\":true}"}]}]}},
+    {"type":"assistant","timestamp":"2026-10-21T10:00:07.500Z","message":{"id":"f5","model":"scripted","content":[{"type":"tool_use","id":"y1","name":"mcp__falinks__falinks_ready","input":{}}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:08.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"y1","content":[{"type":"text","text":"{\"accepted\":true}"}]}]}},
+    {"type":"result","subtype":"success","usage":{"output_tokens":1}}
+   ]
+  }
+ ],
+ [
+  {
+   "events": [
+    {"type":"system","subtype":"init"},
+    {"type":"user","isReplay":true,"timestamp":"2026-10-21T10:00:00.500Z","message":{"role":"user","content":"[Falinks host] You are agent-1"}},
+    {"type":"assistant","timestamp":"2026-10-21T10:00:01.500Z","message":{"id":"g1","model":"scripted","content":[{"type":"tool_use","id":"b1","name":"mcp__falinks__falinks_edit","input":{"id":"b1","expected":{"consumer.go":0},"note":"Return as is","output":{"consumer.go":{"replace":[{"old":"    return append([]string{}, records...)\n","new":"    return records\n"}]}}}}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:01.750Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"b1","content":[{"type":"text","text":"{\"accepted\":true}"}]}]}},
+    {"type":"assistant","timestamp":"2026-10-21T10:00:03.000Z","message":{"id":"g2","model":"scripted","content":[{"type":"tool_use","id":"y2","name":"mcp__falinks__falinks_ready","input":{}}]}},
+    {"type":"user","timestamp":"2026-10-21T10:00:03.250Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"y2","content":[{"type":"text","text":"{\"accepted\":true}"}]}]}},
+    {"type":"result","subtype":"success","usage":{"output_tokens":1}}
+   ]
+  }
+ ]
+]

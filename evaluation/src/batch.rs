@@ -4,8 +4,8 @@
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
-    FIXTURES, Result, bail, git, read,
-    report::{report, step_6_report, track_t_report},
+    FIXTURES, LARGE_SPEC_FIXTURE, Result, bail, collisions, git, read,
+    report::{large_spec_report, report, step_6_report, track_t_report},
     root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
 use serde_json::{Value, json};
@@ -111,14 +111,26 @@ pub fn track_t_slots() -> Vec<Value> {
 /// Git agents and two Falinks agents. Each repetition runs every arm once, and the order rotates
 /// across repetitions, so each arm runs first, second and third at least once. Unscored.
 pub fn step_6_slots() -> Vec<Value> {
+    rotations("go-indep-4", 5, false)
+}
+
+/// #205's `large-spec` slots (M1): `go-invoice` eight times in each of step 6's three arms,
+/// rotating the same way, so each arm runs first two or three times. Scored, with no pilot pair.
+pub fn large_spec_slots() -> Vec<Value> {
+    rotations(LARGE_SPEC_FIXTURE, 8, true)
+}
+
+/// `count` rotations of one agent, two Git agents and two Falinks agents on `fixture`, the
+/// order shifting by one each rotation.
+fn rotations(fixture: &str, count: usize, scored: bool) -> Vec<Value> {
     let mut arms = [("git", 1), ("git", 2), ("falinks", 2)];
     let mut slots = vec![];
-    for repetition in 1..=5 {
+    for repetition in 1..=count {
         for (order, (arm, size)) in arms.into_iter().enumerate() {
             slots.push(
-                json!({"slot": format!("go-indep-4-{repetition}-{arm}-{size}"),
-                "pair": format!("go-indep-4-{repetition}"), "fixture": "go-indep-4", "arm": arm,
-                "order": order, "scored": false, "team_size": size}),
+                json!({"slot": format!("{fixture}-{repetition}-{arm}-{size}"),
+                "pair": format!("{fixture}-{repetition}"), "fixture": fixture, "arm": arm,
+                "order": order, "scored": scored, "team_size": size}),
             );
         }
         arms.rotate_left(1);
@@ -219,7 +231,8 @@ fn one_worktree(list: &str) -> Result<()> {
 
 /// `after_pilot` names the completed pilot batch directory; without it this is the pilot,
 /// unless `schedule` names a track-T schedule instead: `track-t` (team sizes) or `step-6`
-/// (three arms). `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
+/// (three arms), or #205's scored `large-spec`. `fixtures` limits the batch to those fixtures'
+/// slots, so shards can run in parallel.
 pub fn batch(
     config_path: &Path,
     runs: &Path,
@@ -299,6 +312,7 @@ pub fn batch(
         None => slots(pilot),
         Some("track-t") => track_t_slots(),
         Some("step-6") => step_6_slots(),
+        Some("large-spec") => large_spec_slots(),
         Some(other) => bail!("Unknown schedule {other}"),
     }
     .into_iter()
@@ -321,7 +335,7 @@ pub fn batch(
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": schedule.is_some(), "schedule": schedule,
+    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": schedule.is_some_and(|s| s != "large-spec"), "schedule": schedule,
         "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config,
         "commit": commit, "go": go, "worktrees": worktrees}));
     let mut gated = false;
@@ -532,7 +546,9 @@ pub fn batch(
     let results = results(&runs)?;
     let summary = match schedule {
         Some("track-t") => track_t_report(&results),
-        Some(_) => step_6_report(&results),
+        Some("large-spec") => large_spec_report(&results),
+        Some("step-6") => step_6_report(&results),
+        Some(other) => bail!("Unknown schedule {other}"),
         None => report(&results, false),
     };
     write(runs.join("report.json"), &summary)?;
@@ -545,14 +561,14 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
     let ledger = read(runs.join("batch.json"))?;
     let prices = tokens::prices()?;
     let quality = read(runs.join("quality.json")).unwrap_or(Value::Null);
+    // Written by `duplicates` (#334): the classified duplicate-work candidates.
+    let duplicates = read(runs.join("duplicates.json")).unwrap_or(Value::Null);
     let mut out = vec![];
     for entry in ledger["runs"].as_array().into_iter().flatten() {
         let run_dir = Path::new(entry["run_dir"].as_str().unwrap_or_default());
         let mut result = read(run_dir.join("controller/result.json"))
             .unwrap_or_else(|_| json!({"outcome": "infrastructure_failure"}));
         result["tokens"] = tokens::tokens(run_dir, &result, &prices)?;
-        // A run without readable transcripts has no model time: missing, never zero.
-        result["transcript"] = timing::timing(run_dir).unwrap_or(Value::Null);
         for key in ["run_id", "pair", "fixture", "arm", "scored", "concurrency"] {
             result[key] = entry[key].clone();
         }
@@ -563,6 +579,12 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
             }
         }
         result["developments"] = developments(run_dir);
+        result["collisions"] = collisions::collisions(run_dir, &result, &duplicates);
+        result["discarded_or_rewritten_work"] = collisions::waste(&result["collisions"]);
+        // A run without readable transcripts has no model time: missing, never zero.
+        result["transcript"] =
+            timing::timing(run_dir, &result["collisions"]).unwrap_or(Value::Null);
+        result["worker_requests"] = worker_requests(run_dir);
         // Written by `quality` (#230); a run it has not measured has none.
         result["quality"] = quality["runs"][entry["run_id"].as_str().unwrap_or_default()].clone();
         out.push(result);
@@ -574,13 +596,9 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
 /// many drafts were shared after the first (#178: development arrival and rework), from the
 /// run's events; null without them.
 fn developments(run_dir: &Path) -> Value {
-    let Ok(text) = fs::read_to_string(run_dir.join("controller/events.jsonl")) else {
+    let Some(rows) = events(run_dir) else {
         return Value::Null;
     };
-    let rows: Vec<Value> = text
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
     let at = |kind: &str| -> Vec<f64> {
         rows.iter()
             .filter(|r| r["kind"] == kind)
@@ -592,6 +610,31 @@ fn developments(run_dir: &Path) -> Value {
         .first()
         .map(|first| at("draft_shared").iter().filter(|s| *s > first).count());
     json!({"arrival_seconds": arrivals, "drafts_shared_after_first": after})
+}
+
+/// The rows of a run's `controller/events.jsonl`, or None without it.
+fn events(run_dir: &Path) -> Option<Vec<Value>> {
+    let text = fs::read_to_string(run_dir.join("controller/events.jsonl")).ok()?;
+    Some(
+        text.lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect(),
+    )
+}
+
+/// The requests the Git arm's host received, by action (#205: protocol acts), from the run's
+/// events; null without them. A Falinks run's events have none.
+fn worker_requests(run_dir: &Path) -> Value {
+    let Some(rows) = events(run_dir) else {
+        return Value::Null;
+    };
+    let mut actions = serde_json::Map::new();
+    for row in rows.iter().filter(|r| r["kind"] == "worker_request") {
+        let action = row["request"]["action"].as_str().unwrap_or_default();
+        let count = actions.entry(action).or_insert(json!(0));
+        *count = json!(count.as_u64().unwrap_or(0) + 1);
+    }
+    actions.into()
 }
 
 /// Every run of one batch split across shard directories. The shards must share one
@@ -749,6 +792,65 @@ mod tests {
             orders.dedup();
             assert_eq!(orders, [0, 1, 2], "{name}");
         }
+    }
+
+    /// #205: eight scored rotations on go-invoice, each arm first two or three times.
+    #[test]
+    fn large_spec_runs_eight_scored_rotations_on_go_invoice() {
+        let slots = large_spec_slots();
+        assert_eq!(slots.len(), 24);
+        let arm = |s: &Value| format!("{}-{}", s["arm"].as_str().unwrap(), s["team_size"]);
+        for (index, rotation) in slots.chunks(3).enumerate() {
+            let pair = format!("go-invoice-{}", index + 1);
+            let mut arms: Vec<String> = rotation.iter().map(arm).collect();
+            for (order, slot) in rotation.iter().enumerate() {
+                assert_eq!(slot["slot"], format!("{pair}-{}", arms[order]));
+                assert_eq!(
+                    (&slot["pair"], &slot["order"], &slot["scored"]),
+                    (&json!(pair), &json!(order), &json!(true))
+                );
+                assert_eq!(slot["fixture"], "go-invoice");
+            }
+            arms.sort();
+            assert_eq!(arms, ["falinks-2", "git-1", "git-2"]);
+        }
+        let first: Vec<String> = slots.iter().step_by(3).map(arm).collect();
+        assert_eq!(
+            first,
+            [
+                "git-1",
+                "git-2",
+                "falinks-2",
+                "git-1",
+                "git-2",
+                "falinks-2",
+                "git-1",
+                "git-2"
+            ]
+        );
+        // go-invoice is registered (#332), so the default fixture filter keeps every slot.
+        assert!(
+            slots
+                .iter()
+                .all(|s| FIXTURES.contains(&s["fixture"].as_str().unwrap()))
+        );
+    }
+
+    /// A Git run's protocol acts are its host's requests, counted by action from its events.
+    #[test]
+    fn worker_requests_count_host_requests_by_action() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(worker_requests(tmp.path()), Value::Null);
+        fs::create_dir_all(tmp.path().join("controller")).unwrap();
+        let rows = [
+            json!({"kind": "worker_request", "request": {"action": "share"}}),
+            json!({"kind": "worker_request", "request": {"action": "share"}}),
+            json!({"kind": "worker_request", "request": {"action": "usage"}}),
+            json!({"kind": "development", "elapsed": 3.0}),
+        ];
+        let text: String = rows.iter().map(|r| format!("{r}\n")).collect();
+        fs::write(tmp.path().join("controller/events.jsonl"), text).unwrap();
+        assert_eq!(worker_requests(tmp.path()), json!({"share": 2, "usage": 1}));
     }
 
     /// Writes a batch directory of successful `slots`: Git 1000 s; Falinks 900 s on go-page, else 700 s.

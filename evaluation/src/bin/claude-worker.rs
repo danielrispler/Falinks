@@ -171,8 +171,24 @@ fn project_folder(path: &Path) -> String {
         .collect()
 }
 
+/// Copy of `falinks_claude::effort_failure` (#205 E1); this crate is standalone from the adapter.
+/// shortcut: entries written after the last turn's `result` stay unchecked; check again after
+/// shutdown if a run ever ends on one.
+fn effort_failure(file: Option<&Path>, effort: &str) -> Option<String> {
+    let Some(text) = file.and_then(|f| fs::read_to_string(f).ok()) else {
+        return Some("session effort unrecorded; run invalid".into());
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["type"] == "assistant" && entry["message"]["model"] != "<synthetic>")
+        .map(|entry| entry["effort"].clone())
+        .find(|recorded| recorded != effort)
+        .map(|recorded| format!("session effort {recorded} is not {effort:?}; run invalid"))
+}
+
 struct Bridge {
     model: String,
+    effort: String,
     runtime: String,
     session: String,
     /// The runtime home's session folder for scratch; a session there not ours is a nested agent.
@@ -257,6 +273,13 @@ impl Bridge {
                 if models.iter().any(|m| *m != model) {
                     return Err("model identity changed; run invalid".into());
                 }
+                let file = self
+                    .project
+                    .as_ref()
+                    .map(|p| p.join(format!("{}.jsonl", self.session)));
+                if let Some(failure) = effort_failure(file.as_deref(), &self.effort) {
+                    return Err(failure.into());
+                }
                 let foreign = self
                     .project
                     .iter()
@@ -292,6 +315,11 @@ fn run() -> Result<()> {
     let mut first = String::new();
     io::stdin().lock().read_line(&mut first)?;
     let start: Value = serde_json::from_str(&first)?;
+    let effort = start["model"]["reasoning"]
+        .as_str()
+        .filter(|effort| !effort.is_empty())
+        .ok_or("the start names no reasoning effort")?
+        .to_string();
     let developments = start["development_count"].as_u64().unwrap_or(0);
     let cwd = env::current_dir()?;
     let scratch = cwd.join("scratch");
@@ -365,6 +393,8 @@ fn run() -> Result<()> {
             "--replay-user-messages",
             "--model",
             &model,
+            "--effort",
+            &effort,
             "--setting-sources",
             "",
             "--strict-mcp-config",
@@ -406,13 +436,15 @@ fn run() -> Result<()> {
         let _ = runtime.send(Input::Claude(None));
     });
 
-    let project = start["runtime_home"].as_str().map(|home| {
-        Path::new(home)
-            .join(".claude/projects")
-            .join(project_folder(&scratch))
-    });
+    // Without a runtime home the runtime inherits this process's `HOME`.
+    let project = start["runtime_home"]
+        .as_str()
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(PathBuf::from))
+        .map(|home| home.join(".claude/projects").join(project_folder(&scratch)));
     let mut bridge = Bridge {
         model,
+        effort,
         runtime: runtime_binary,
         session,
         project,

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -175,6 +176,7 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
             "go-invoice",
             "go-page",
             "go-relationships",
+            "go-tasks",
             "rust-errors"
         ]
     );
@@ -448,6 +450,91 @@ fn codex_bridge_waits_for_peer_events_and_retains_all_usage() {
     }
 }
 
+/// Gives a scripted configuration a runtime home, where the runtime keeps its sessions.
+fn with_runtime_home(config: &Path, base: &Path) -> PathBuf {
+    let home = base.join("home");
+    let mut value = read(config);
+    value["runtime_home"] = json!(home);
+    fs::write(config, value.to_string()).unwrap();
+    home
+}
+
+/// A session that records another effort than the configured one invalidates the run, like
+/// another model (#205 E1). The scripted runtime copied as `effort-high` records `high`.
+#[test]
+fn claude_bridge_fails_a_session_at_another_effort() {
+    let tmp = tmp("falinks-claude-effort-test-");
+    let base = tmp.path();
+    let runtime = base.join("effort-high");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        runtime.to_str().unwrap(),
+    );
+    with_runtime_home(&config, base);
+    let run = base.join("run");
+    assert!(!baseline("go-relationships", &config, &run).status.success());
+    let stderr: String = ["A", "B"]
+        .map(|a| fs::read_to_string(run.join(format!("controller/{a}.stderr"))).unwrap())
+        .concat();
+    assert!(
+        stderr.contains("session effort \"high\" is not \"none\"; run invalid"),
+        "{stderr}"
+    );
+}
+
+/// Without its session file a run's effort cannot be verified (#205 E1). The scripted runtime
+/// copied as `unrecorded` writes none; with no `runtime_home`, the runtime's home is scratch.
+#[test]
+fn claude_bridge_fails_a_session_without_its_file() {
+    let tmp = tmp("falinks-claude-unrecorded-test-");
+    let base = tmp.path();
+    let runtime = base.join("unrecorded");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let config = config(
+        base,
+        CLAUDE_WORKER,
+        json!(["{worker}"]),
+        runtime.to_str().unwrap(),
+    );
+    let run = base.join("run");
+    assert!(!baseline("go-relationships", &config, &run).status.success());
+    let stderr: String = ["A", "B"]
+        .map(|a| fs::read_to_string(run.join(format!("controller/{a}.stderr"))).unwrap())
+        .concat();
+    assert!(
+        stderr.contains("session effort unrecorded; run invalid"),
+        "{stderr}"
+    );
+}
+
+/// The bridge never passes `--effort ""`: a start without the effort is refused at once.
+#[test]
+fn claude_bridge_refuses_a_start_without_effort() {
+    let tmp = tmp("falinks-claude-no-effort-test-");
+    for model in [
+        json!({"model": "scripted"}),
+        json!({"model": "scripted", "reasoning": ""}),
+    ] {
+        let mut child = Command::new(CLAUDE_WORKER)
+            .current_dir(tmp.path())
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = json!({"model": model});
+        writeln!(child.stdin.take().unwrap(), "{start}").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "the start names no reasoning effort\n"
+        );
+    }
+}
+
 #[test]
 fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage() {
     let tmp = tmp("falinks-claude-bridge-test-");
@@ -461,9 +548,20 @@ fn claude_bridge_forwards_host_commands_continues_capped_turns_and_retains_usage
         json!(["{worker}"]),
         runtime.to_str().unwrap(),
     );
+    let home = with_runtime_home(&config, base);
     let run = base.join("run");
     let evidence = successful_evidence(&baseline("go-relationships", &config, &run), &run);
     assert_eq!(evidence["usage"]["status"], "complete");
+    // The scripted runtime records the `--effort` it was given, as the real one does (#205 E1).
+    let sessions: Vec<String> = fs::read_dir(home.join(".claude/projects"))
+        .unwrap()
+        .flat_map(|folder| fs::read_dir(folder.unwrap().path()).unwrap())
+        .map(|file| fs::read_to_string(file.unwrap().path()).unwrap())
+        .collect();
+    assert_eq!(sessions.len(), 2);
+    for session in sessions {
+        assert!(session.contains("\"effort\":\"none\""), "{session}");
+    }
     for agent in ["A", "B"] {
         let reports = evidence["usage"]["agents"][agent].as_array().unwrap();
         assert_eq!(reports[0]["subtype"], "error_max_turns");
@@ -917,13 +1015,95 @@ fn usage_is_complete_only_with_final_results_inside_the_drain_window() {
 /// `timing` on synthetic stream-json transcripts (`tests/timing/`), checked against values
 /// computed by hand. Times are seconds after 2026-10-21T10:00:00Z. Step 6's overhead figures
 /// (#316): tool seconds and acts by Falinks operation, and edit-gate seconds per accepted edit.
+/// Changed bytes come from each arm's records (#325), for writes the transcript misreads, and
+/// count only the lines each agent introduced: in each arm, one agent's write carries a file
+/// its peer wrote.
 #[test]
 fn timing_reports_hand_computed_figures() {
+    // Git's records: A's two shares, then B's two, committed over the fixture's initial files.
+    // B's second share merges A's and extends A's store/store.go.
+    let tmp = tmp("falinks-timing-");
+    let git_run = tmp.path().join("git");
+    let copied = Command::new("cp")
+        .arg("-R")
+        .arg(root().join("tests/timing/git"))
+        .arg(&git_run)
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    let repo = git_run.join("agents/repo");
+    fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let identity = [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+        ];
+        let out = Command::new("git")
+            .args(identity)
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let initial = read(root().join("fixtures/go-relationships.json"))["files"].clone();
+    let mut events = String::new();
+    let mut share = |agent: &str, message: &str, files: &[(&str, &str)]| {
+        for (name, content) in files {
+            fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
+            fs::write(repo.join(name), content).unwrap();
+        }
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", message]);
+        let commit = git(&["rev-parse", "HEAD"]);
+        if !agent.is_empty() {
+            let event = json!({"kind": "draft_shared", "agent": agent, "commit": commit});
+            events += &format!("{event}\n");
+        }
+        commit
+    };
+    git(&["init", "-q"]);
+    let files: Vec<(&str, &str)> = initial
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str().unwrap()))
+        .collect();
+    let root_commit = share("", "Frozen initial task", &files);
+    let consumer =
+        "package fixture\n\nfunc Consume(records []string) []string {\n    return records\n}\n";
+    let store = "package store\n\nfunc Get() int { return 1 }\n";
+    share(
+        "A",
+        "A draft 1",
+        &[
+            ("producer.go", "package fixture\n"),
+            ("store/store.go", "package store\n\nfunc Get() {}\n"),
+        ],
+    );
+    let a2 = share("A", "A draft 2", &[("store/store.go", store)]);
+    git(&["checkout", "-q", "-b", "B", &root_commit]);
+    share("B", "B draft 1", &[("consumer.go", consumer)]);
+    git(&["merge", "-q", "--no-edit", &a2]);
+    share(
+        "B",
+        "B draft 2",
+        &[("store/store.go", &format!("{store}func Put() {{}}\n"))],
+    );
+    fs::write(git_run.join("controller/events.jsonl"), events).unwrap();
     let figures = |run: &str| {
-        let output = cli([
-            OsStr::new("timing"),
-            root().join("tests/timing").join(run).as_os_str(),
-        ]);
+        let dir = match run {
+            "git" => git_run.clone(),
+            _ => root().join("tests/timing").join(run),
+        };
+        let output = cli([OsStr::new("timing"), dir.as_os_str()]);
         assert!(output.status.success(), "{}", text(&output));
         serde_json::from_slice::<Value>(&output.stdout).unwrap()
     };
@@ -938,6 +1118,10 @@ fn timing_reports_hand_computed_figures() {
             json!({"edit": entry(edit), "refused_edit": entry(refused), "native": entry(native),
             "coordination": entry(coordination), "total": entry(total)})
         };
+    let idle = json!({"round_trips": 0, "model_seconds": 0.0, "unresolved": 0, "unlocated": 0});
+    let unhandled = json!({"line_conflict": idle, "rework": idle, "no_fault": idle});
+    // No synthetic run here integrates or meets the runtime's read-before-write refusal.
+    let nothing = json!({"round_trips": 0, "model_seconds": 0.0});
     let none = json!({"refusals": 0, "unresolved": 0, "round_trips": 0, "model_seconds": 0.0});
     let recovery = |content: &Value| json!({"content": content, "replace": none, "from": none});
     let op = |acts: u64, refused: u64, seconds: f64| json!({"acts": acts, "refused": refused, "tool_seconds": seconds});
@@ -962,28 +1146,40 @@ fn timing_reports_hand_computed_figures() {
             // m1 (two events, last at 4.0) 4.0-2.5; m2 6.0-4.5; m3 7.0-6.5; m4 13.5-12.0;
             // m5 15.0-14.0; m6 16.0-15.25; m7 24.0-16.5.
             "model_seconds": 14.25,
-            // m1 here-document into producer.go; m4 a refused Write; m5 an Edit; m2 Bash share
-            // plus Read is native; m6 only Bash ready.
+            // m1 here-documents into producer.go and, after a `cd`, store.go; m4 a refused
+            // Write; m5 an Edit; m2 Bash share plus Read is native; m6 only Bash share and ready.
             "round_trips": trips((2, 2.5), (1, 1.5), (1, 1.5), (1, 0.75)),
             // Recovery counts Falinks edits only.
             "refusal_recovery": recovery(&none),
             "request_key_refusals": {},
             // t1 0.5, t2 0.25, t3 0.5, t4 0.5, t5 0.25, t6 0.5.
             "tool_seconds": 2.5,
-            // 16 (here-document) + 35 (refused Write) + 22 (Edit's new string).
-            "output_bytes": 73,
-            // producer.go ends "package fixture\n\n// A\n": only "// A\n" is new.
-            "changed_bytes": 5,
+            // 16 + 29 (here-documents) + 35 (refused Write) + 27 (Edit's new string).
+            "output_bytes": 107,
+            // From A's last share, not the transcript, which keys the here-document after the
+            // `cd` as store.go and the Edit as /w/A/store/store.go: producer.go
+            // "package fixture\n" matches its initial first line, 0; the new store/store.go
+            // "package store\n" 14, "\n" 1, "func Get() int { return 1 }\n" 28.
+            "changed_bytes": 43,
             "results": 2,
             "usage_reports": 1,
+            // These Git records lack an initial snapshot and share times, so the run's
+            // collisions are unavailable: every collision figure is missing, never zero.
+            "collision_handling": null, "rereads": null, "coordination_overhead": null,
+            // m4's Write was denied, not refused by the read-before-write rule.
+            "integration": nothing, "runtime_refusals": nothing,
         })
     );
     assert_eq!(
         git["agents"]["B"],
         json!({"busy_seconds": 2.5, "launch_seconds": 2.5, "waiting_on_peer_seconds": 15.0,
             "model_seconds": 2.0, "round_trips": trips((0, 0.0), (0, 0.0), (0, 0.0), (1, 2.0)),
-            "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 0.5, "output_bytes": 0, "changed_bytes": 0, "results": 1,
-            "usage_reports": 1})
+            "refusal_recovery": recovery(&none), "request_key_refusals": {}, "tool_seconds": 0.5, "output_bytes": 0,
+            // B's own commits only: consumer.go "    return records\n" 19 and store/store.go
+            // "func Put() {}\n" 14. The merge carries A's store/store.go lines, which stay A's.
+            "changed_bytes": 33, "results": 1,
+            "usage_reports": 1, "collision_handling": null, "rereads": null,
+            "coordination_overhead": null, "integration": nothing, "runtime_refusals": nothing})
     );
 
     // Falinks: the clock starts at 0 (to the second) and stops at 10; agent-0 resumes once.
@@ -1015,11 +1211,20 @@ fn timing_reports_hand_computed_figures() {
             "refusal_recovery": recovery(&unresolved),
             "request_key_refusals": {},
             "tool_seconds": 1.75,
-            // 23 + 2; the refused edit is output but changes nothing.
+            // 23 + 2; the refused edit is output but changes nothing. e1's `from` emits none.
             "output_bytes": 25,
-            "changed_bytes": 7,
+            // From `history.json`, not the transcript, which never wrote e1's `from` scratch
+            // file: producer.go's "// new\n" 7, consumer.go's "    return records\n" 19. The
+            // Stale e2 changes nothing.
+            "changed_bytes": 26,
             "results": 2,
             "usage_reports": 2,
+            // e2's Stale names no conflict: no collision, nothing to handle or reread.
+            "collision_handling": unhandled, "rereads": nothing,
+            "integration": nothing, "runtime_refusals": nothing,
+            // The refused e2 and falinks_ready; no inline review.
+            "coordination_overhead": {"round_trips": 2, "model_seconds": 2.0},
+            "review_estimate": {"characters": 0, "model_seconds": 0.0},
             // e1 2.5-3.0 accepted, e2 4.0-4.5 refused, y1 9.0-9.25.
             "operations": {"edit": op(2, 1, 1.0), "ready": op(1, 0, 0.25)},
             // Only e1 passed the gate.
@@ -1035,10 +1240,213 @@ fn timing_reports_hand_computed_figures() {
             "round_trips": trips((1, 0.25), (0, 0.0), (1, 1.0), (0, 0.0)),
             "refusal_recovery": recovery(&none), "request_key_refusals": {},
             // b1 1.0, j1 0.25 and p1 0.5, in parallel with j1.
-            "tool_seconds": 1.75, "output_bytes": 0, "changed_bytes": 0, "results": 1,
-            "usage_reports": 1,
+            "tool_seconds": 1.75, "output_bytes": 0,
+            // j1's job rewrote agent-0's producer.go whole: "// new\n" is carried, agent-0's,
+            // and only "// one\n" 7 is agent-1's.
+            "changed_bytes": 7, "results": 1,
+            "usage_reports": 1, "collision_handling": unhandled, "rereads": nothing,
+            "coordination_overhead": nothing, "integration": nothing, "runtime_refusals": nothing,
+            "review_estimate": {"characters": 0, "model_seconds": 0.0},
             "operations": {"apply_job": op(1, 0, 0.25), "post": op(1, 0, 0.5)},
             "edit_gate": gate(1, 0.25, json!(0.25))})
+    );
+}
+
+/// Collision handling cost, rereads and coordination overhead (#337) on synthetic runs
+/// (`tests/timing/*-collision`) whose records hold one line conflict each, checked against
+/// values computed by hand. Times are seconds after 2026-10-21T10:00:00Z, the runs' start.
+/// In both, the peer changes `consumer.go`'s return line first and the agent's change of the
+/// same line collides with it.
+#[test]
+fn timing_reports_collision_handling_rereads_and_overhead() {
+    let tmp = tmp("falinks-timing-collisions-");
+    let copy = |name: &str| {
+        let to = tmp.path().join(name);
+        let copied = Command::new("cp")
+            .arg("-R")
+            .arg(root().join("tests/timing").join(name))
+            .arg(&to)
+            .status()
+            .unwrap();
+        assert!(copied.success());
+        to
+    };
+    let figures = |run: &Path| {
+        let output = cli([OsStr::new("timing"), run.as_os_str()]);
+        assert!(output.status.success(), "{}", text(&output));
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let initial = read(root().join("fixtures/go-relationships.json"))["files"]["consumer.go"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let consume = |body: &str| {
+        format!("package fixture\n\nfunc Consume(records []string) []string {{\n{body}}}\n")
+    };
+    let theirs = consume("    return records\n");
+    let ours = consume("    return append(records[:0:0], records...)\n");
+    let cost = |trips: u64, seconds: f64| json!({"round_trips": trips, "model_seconds": seconds, "unresolved": 0, "unlocated": 0});
+    let idle = cost(0, 0.0);
+    let unhandled = json!({"line_conflict": idle, "rework": idle, "no_fault": idle});
+
+    // Falinks: agent-1's b1 (op 1) writes consumer.go version 1; agent-0's a1 (op 2) still
+    // expects version 0 and is refused Stale; its a2 (op 3) edits version 1.
+    let run = copy("falinks-collision");
+    let file = |text: &str| json!({"bytes": text.as_bytes(), "executable": false});
+    let version = |v: u64, text: &str| json!({"consumer.go": {"version": v, "file": file(text)}});
+    let noted = consume("    // Consume returns its input.\n    return records\n");
+    let history = json!([
+        {"operation": 1, "agent": 1, "request": {"id": "b1", "expected": {"consumer.go": 0},
+            "output": {"consumer.go": file(&theirs)}, "reviews": []},
+         "before": {"revision": 0, "files": version(0, &initial)},
+         "proposed": {"revision": 1, "files": version(1, &theirs)},
+         "outcome": {"Applied": {"revision": 1}}, "incorporates": null},
+        {"operation": 2, "agent": 0, "request": {"id": "a1", "expected": {"consumer.go": 0},
+            "output": {"consumer.go": file(&ours)}, "reviews": []},
+         "before": {"revision": 1, "files": {}}, "proposed": null,
+         "outcome": {"Stale": {"conflicts": {"consumer.go": {"expected": 0,
+            "current": {"version": 1, "file": file(&theirs)}}}}}, "incorporates": null},
+        {"operation": 3, "agent": 0, "request": {"id": "a2", "expected": {"consumer.go": 1},
+            "output": {"consumer.go": file(&noted)}, "reviews": []},
+         "before": {"revision": 1, "files": version(1, &theirs)},
+         "proposed": {"revision": 2, "files": version(2, &noted)},
+         "outcome": {"Applied": {"revision": 2}}, "incorporates": null},
+    ]);
+    fs::write(run.join("controller/history.json"), history.to_string()).unwrap();
+    let falinks = figures(&run);
+    let agent_0 = &falinks["agents"]["agent-0"];
+    // f2 1.5 (4.0-2.5), f3 0.5 and f4 0.75 after a1's refusal, to a2: the round-trips of
+    // refusal recovery for `content`, the form a1 used.
+    assert_eq!(
+        agent_0["collision_handling"],
+        json!({"line_conflict": cost(3, 2.75), "rework": idle, "no_fault": idle})
+    );
+    assert_eq!(
+        agent_0["refusal_recovery"]["content"],
+        json!({"refusals": 1, "unresolved": 0, "round_trips": 3, "model_seconds": 2.75})
+    );
+    // f2's Read of consumer.go, which a1's Stale names; f3 reads producer.go.
+    assert_eq!(
+        agent_0["rereads"],
+        json!({"round_trips": 1, "model_seconds": 1.5})
+    );
+    // a2's reviews, `[{"decision":"Keep","note":"ok","revision":1,"scope":"s"}]`: 58
+    // characters at 3.56 ms, 0.206 s.
+    assert_eq!(
+        agent_0["review_estimate"],
+        json!({"characters": 58, "model_seconds": 0.206})
+    );
+    // Refused a1 1.0, ready 1.0 and the reread 1.5, plus the reviews' 0.20648.
+    assert_eq!(
+        agent_0["coordination_overhead"],
+        json!({"round_trips": 3, "model_seconds": 3.706})
+    );
+    let agent_1 = &falinks["agents"]["agent-1"];
+    assert_eq!(agent_1["collision_handling"], unhandled);
+    assert_eq!(
+        agent_1["rereads"],
+        json!({"round_trips": 0, "model_seconds": 0.0})
+    );
+    // ready, 3.0-1.75.
+    assert_eq!(
+        agent_1["coordination_overhead"],
+        json!({"round_trips": 1, "model_seconds": 1.25})
+    );
+
+    // Git: A shares a1 at 2.25 and B shares b1 at 3.0, each from the initial commit; A's
+    // merge of b1 in agents/integration conflicts at 5.5.
+    let run = copy("git-collision");
+    let repo = run.join("agents/repo");
+    fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let identity = [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+        ];
+        let out = Command::new("git")
+            .args(identity)
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let commit = |files: &[(&str, &str)], message: &str| {
+        for (name, content) in files {
+            fs::write(repo.join(name), content).unwrap();
+        }
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", message]);
+        git(&["rev-parse", "HEAD"])
+    };
+    git(&["init", "-q"]);
+    let files = read(root().join("fixtures/go-relationships.json"))["files"].clone();
+    let files: Vec<(&str, &str)> = files
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str().unwrap()))
+        .collect();
+    let base = commit(&files, "Frozen initial task");
+    let a1 = commit(&[("consumer.go", &theirs)], "A draft 1");
+    git(&["checkout", "-q", "-b", "B", &base]);
+    let b1 = commit(&[("consumer.go", &ours)], "B draft 1");
+    git(&["checkout", "-q", "-b", "integration", &a1]);
+    git(&["merge", "-q", "--no-edit", "-s", "ours", &b1]);
+    let merged = git(&["rev-parse", "HEAD"]);
+    let events = [("A", &a1, 2.25), ("B", &b1, 3.0)]
+        .map(|(agent, commit, elapsed)| {
+            json!({"kind": "draft_shared", "agent": agent, "commit": commit, "elapsed": elapsed})
+                .to_string()
+        })
+        .join("\n");
+    fs::write(run.join("controller/events.jsonl"), events).unwrap();
+    let mut result = read(run.join("controller/result.json"));
+    result["initial_snapshot"] = json!(base);
+    result["final_snapshot"] = json!(merged);
+    fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+    let git = figures(&run);
+    let a = &git["agents"]["A"];
+    // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75), beside their
+    // categories, native and edit.
+    assert_eq!(
+        a["integration"],
+        json!({"round_trips": 2, "model_seconds": 1.75})
+    );
+    assert!(a["round_trips"].get("integration").is_none());
+    assert_eq!(
+        a["runtime_refusals"],
+        json!({"round_trips": 0, "model_seconds": 0.0})
+    );
+    // From m4, the first input at the CONFLICT's 5.5, to m6's passing check: 1.0, 0.75, 0.25.
+    assert_eq!(
+        a["collision_handling"],
+        json!({"line_conflict": cost(3, 2.0), "rework": idle, "no_fault": idle})
+    );
+    // m4's `cat consumer.go`.
+    assert_eq!(
+        a["rereads"],
+        json!({"round_trips": 1, "model_seconds": 1.0})
+    );
+    // Coordination m2 0.25, m6 0.25, m7 0.5; integration 1.75; the reread 1.0.
+    assert_eq!(
+        a["coordination_overhead"],
+        json!({"round_trips": 6, "model_seconds": 3.75})
+    );
+    assert!(a.get("review_estimate").is_none());
+    let b = &git["agents"]["B"];
+    assert_eq!(b["collision_handling"], unhandled);
+    // Share 0.5 and ready 0.5.
+    assert_eq!(
+        b["coordination_overhead"],
+        json!({"round_trips": 2, "model_seconds": 1.0})
     );
 }
 
