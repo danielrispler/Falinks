@@ -800,3 +800,19 @@ fn a_check_that_errors_still_answers_its_caller_and_latches_the_gate() {
         assert!(timed(f.session.events.last().unwrap()));
     }
 }
+
+/// #355 A9: a check still running when its worker stops (the gate latched) is finished and
+/// recorded once its oracle returns; the stopping runtime waits for it (`Runtime::stopped`).
+#[test]
+fn a_check_running_when_its_worker_stops_is_still_recorded() {
+    use falinks_claude::Served;
+    let mut f = deferring(|| Ok(json!({"passed":true})));
+    let Served::Later(key, work) = serve(&mut f, "toolu_1", "falinks_check") else {
+        panic!("check answered on the driver");
+    };
+    f.session.gate.failed = true; // what `Runtime::stop` does
+    let answer = f.session.finish(key, work());
+    assert_eq!(answer, json!({"accepted":true,"passed":true}));
+    let record = f.session.events.last().unwrap();
+    assert_eq!(record["result"], answer, "{record}");
+}
