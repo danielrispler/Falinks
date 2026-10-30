@@ -756,7 +756,11 @@ fn wrapped_unknown_or_missing_request_keys_are_refused_by_name() {
             json!({"request":{"through":5}}),
             "handle takes {through?, deferred?, processed?}",
         ),
-        ("capture", json!({"request":{}}), "capture takes {paths?}"),
+        (
+            "capture",
+            json!({"request":{}}),
+            "capture takes {paths?, published?}",
+        ),
         ("obligations", json!({"all":true}), "obligations takes {}"),
         (
             "edit",
