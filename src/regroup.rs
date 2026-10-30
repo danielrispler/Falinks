@@ -617,7 +617,9 @@ impl Engine {
                 signals
                     .reports
                     .push(format!("agent {agent}: {}", earlier.reasoning));
-                signals.failing |= earlier.signals.failing;
+                // A declined report is answered: disagreement keeps the arrangement (#14, #358).
+                signals.failing |= earlier.signals.failing
+                    && !matches!(earlier.state, ProposalState::Declined { .. });
             }
         }
         Ok(signals)
