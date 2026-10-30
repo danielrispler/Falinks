@@ -49,7 +49,7 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
 - It prints the worktree path.
 - After the PR merges, `--done <n>` run from the main checkout removes that worktree and branch; `--help` lists what it refuses.
 
-Parallel tickets run in separate sessions that Daniel starts. Give one `--claim <n>` command and one prompt per terminal (do not attempt to spawn background general-purpose agents).
+Daniel picks how parallel tickets run: separate sessions he starts (one `--claim <n>` command and one prompt per terminal), or `/implement-spec` over tickets whose Touches say `Session: auto mode`. A ticket outside auto mode, or one that stops for Daniel's sign-off, runs in its own session. On an integration branch, implementers do not run `freeze`; it runs once after the last merge. Never spawn background implementers unasked.
 
 GitHub stays authoritative.
 
