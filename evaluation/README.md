@@ -129,6 +129,11 @@ paired timings. Both arms still receive the same task information, agent
 allocation, model/version/reasoning, peer feedback opportunities and trusted
 check set. Do not impose the engine ledger on Git or claim an engine is present.
 
+Falinks-only instruction text (#356): `instructions/falinks.md` and the `incorporate` and
+`capture` tool text explain `Behind` and incorporation, including `capture {published: true}`
+to read the published side of an overlap. The Git arm has no split workspaces or
+incorporation (its agents resolve merges in ordinary Git), so its instructions are unchanged.
+
 ## Protection, reset and evidence
 
 The host process, binaries and material checkout are trusted. Worker and compiler/

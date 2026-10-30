@@ -253,11 +253,21 @@ pub(crate) fn merge(
         workspace.included.difference(&published.included).copied(),
     )?;
     let own: BTreeSet<_> = a.union(&b).collect();
+    // Only paths a published operation missing from the workspace wrote can change it:
+    // a pre-split candidate holds the workspace's own earlier drafts (#331, E4).
+    let [c, d] = authored(
+        db,
+        published.included.difference(&workspace.included).copied(),
+    )?;
+    let missing: BTreeSet<_> = c.union(&d).collect();
     let mut merged = workspace.clone();
     let mut overlaps = Vec::new();
     for (path, file) in &published.files {
         // Bytes, not occurrences: a restored file is a new occurrence of unchanged content.
-        if base.files[path].file == file.file || merged.files[path].file == file.file {
+        if !missing.contains(path)
+            || base.files[path].file == file.file
+            || merged.files[path].file == file.file
+        {
             continue;
         }
         if !own.contains(path) {

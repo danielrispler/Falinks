@@ -1321,6 +1321,64 @@ fn an_insertion_only_obligation_does_not_hold_a_split() {
     assert!(split.signals.overlap.is_empty() && split.signals.compiler.is_empty());
 }
 
+fn offer_at(engine: &Engine, client: &Client, id: &str, revision: u64) -> Offered {
+    engine
+        .offer(
+            client,
+            Offer {
+                id: id.into(),
+                task: "task".into(),
+                revision,
+                scope: Vec::new(),
+                text: id.into(),
+                supersedes: None,
+                reviews: Vec::new(),
+            },
+        )
+        .unwrap()
+}
+
+/// #331's E4: a candidate held from before a split holds Bob's own earlier draft. Its
+/// publication after the split is no overlap with Bob's later draft of the same file.
+#[test]
+fn pre_split_candidate_publication_is_not_an_overlap_with_own_later_draft() {
+    let (dir, engine, alice, bob) = fixture();
+    applied(&engine, &alice, "left", "siblings.go", LEFT);
+    let held = applied(&engine, &bob, "callee", "callee.go", CALLEE);
+    offer_at(&engine, &alice, "held", held.revision);
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = engine
+        .propose(
+            &bob,
+            Propose {
+                action: Action::Split,
+                text: "separate".into(),
+                failing: false,
+            },
+        )
+        .unwrap();
+    agree(&engine, &alice, &split);
+    agree(&engine, &bob, &split);
+    assert_eq!(engine.placement().unwrap(), [0, 1]);
+    let later = CALLEE.replace('8', "9");
+    applied(&engine, &bob, "callee2", "callee.go", &later);
+    let offered = offer_at(&engine, &bob, "held", held.revision);
+    assert!(offered.coverage.queued, "{:?}", offered.coverage);
+    let run = engine.validate().unwrap().unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Published { .. })),
+        "{run:?}"
+    );
+    let events = engine.events(&bob, 0).unwrap();
+    assert!(
+        !events.iter().any(|e| matches!(e.body, Body::Behind { .. })),
+        "{events:?}"
+    );
+    let second = engine.root(&bob).unwrap();
+    assert_eq!(read(&second, "callee.go"), later);
+    assert_eq!(read(&second, "siblings.go"), LEFT);
+}
+
 /// #358, from #331's probe `probe_declined_failure_report_twice`: a declined failure report
 /// is answered and stops driving engine proposals; a new report counts again.
 #[test]
