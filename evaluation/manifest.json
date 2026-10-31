@@ -4,7 +4,8 @@
     "Cargo.toml": "1c6bc262c1b4b81b4c7bd5ae291db2fc06de3578cd672c060337c0ebe5ae9ec0",
     "calibration/v2.json": "c0597650c95e4ebd4f0f0a083152c4705b41a70c2b4f7eef393cd2828251dccf",
     "calibration/v4.json": "5330fca431e224ed4716c112528902dbbbb8aeb92b849d2389f05656ebc83642",
-    "code-quality.json": "365f7fcd7afe769e45cd13e12d1b8022f2a56d818e11190eaa4d4952671eb1a8",
+    "calibration/v6.json": "8d98f199a44d2bc737ef2680db671faef2f8470a0c2e474f927edea2713c027d",
+    "code-quality.json": "5d9c696b20bfb3c27a37dbe14d0b2f403215ecd301edcb2cda19e3cce1daf5e1",
     "config.json": "b95eb1f40cde0752db8eef611d6f1614cb1a50c7d5b1c44a74a90f1e5207dc01",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
@@ -56,5 +57,5 @@
     "go-tasks": "12f2511ee050e318f13aa99ae0838b96ffd095a5",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 47
+  "version": 48
 }

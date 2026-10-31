@@ -1,0 +1,990 @@
+{
+  "calls": [
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 29966,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.25624579999999997,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 819,
+          "provider": "firstParty",
+          "thinkingTokens": 433,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "reference",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 29966,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 29966,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 29966,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 29966,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 819,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 819,
+        "output_tokens_details": {
+          "thinking_tokens": 433
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 29972,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2555538,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 782,
+          "provider": "firstParty",
+          "thinkingTokens": 374,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "reference",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 29972,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 29972,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 29972,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 29972,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 782,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 782,
+        "output_tokens_details": {
+          "thinking_tokens": 374
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 29968,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2560418,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 808,
+          "provider": "firstParty",
+          "thinkingTokens": 427,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "reference",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 29968,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 29968,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 29968,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 29968,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 808,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 808,
+        "output_tokens_details": {
+          "thinking_tokens": 427
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30055,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2559978,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 771,
+          "provider": "firstParty",
+          "thinkingTokens": 352,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "maintainability",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30055,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30055,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30055,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30055,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 771,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 771,
+        "output_tokens_details": {
+          "thinking_tokens": 352
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30055,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2568978,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 816,
+          "provider": "firstParty",
+          "thinkingTokens": 402,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "maintainability",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30055,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30055,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30055,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30055,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 816,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 816,
+        "output_tokens_details": {
+          "thinking_tokens": 402
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30055,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2562578,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 784,
+          "provider": "firstParty",
+          "thinkingTokens": 401,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "maintainability",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30055,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30055,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30055,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30055,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 784,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 784,
+        "output_tokens_details": {
+          "thinking_tokens": 401
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30035,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.25557779999999997,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 758,
+          "provider": "firstParty",
+          "thinkingTokens": 366,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "duplication",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30035,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30035,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30035,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30035,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 758,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 758,
+        "output_tokens_details": {
+          "thinking_tokens": 366
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30033,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2574018,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 850,
+          "provider": "firstParty",
+          "thinkingTokens": 515,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "duplication",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30033,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30033,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30033,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30033,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 850,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 850,
+        "output_tokens_details": {
+          "thinking_tokens": 515
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30031,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.25918579999999997,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 940,
+          "provider": "firstParty",
+          "thinkingTokens": 519,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "duplication",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30031,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30031,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30031,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30031,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 940,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 940,
+        "output_tokens_details": {
+          "thinking_tokens": 519
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30350,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2607578,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 891,
+          "provider": "firstParty",
+          "thinkingTokens": 458,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "unnecessary_changes",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30350,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30350,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30350,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30350,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 891,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 891,
+        "output_tokens_details": {
+          "thinking_tokens": 458
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30350,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2591578,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 811,
+          "provider": "firstParty",
+          "thinkingTokens": 458,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "unnecessary_changes",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30350,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30350,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30350,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30350,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 811,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 811,
+        "output_tokens_details": {
+          "thinking_tokens": 458
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 30348,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2611418,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 911,
+          "provider": "firstParty",
+          "thinkingTokens": 479,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "unnecessary_changes",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 30348,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 30348,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 30348,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 30348,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 911,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 911,
+        "output_tokens_details": {
+          "thinking_tokens": 479
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 24255,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2076178,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 672,
+          "provider": "firstParty",
+          "thinkingTokens": 295,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "test_quality",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 24255,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 24255,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 24255,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 24255,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 672,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 672,
+        "output_tokens_details": {
+          "thinking_tokens": 295
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 24255,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2099378,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 788,
+          "provider": "firstParty",
+          "thinkingTokens": 375,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "test_quality",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 24255,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 24255,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 24255,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 24255,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 788,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 788,
+        "output_tokens_details": {
+          "thinking_tokens": 375
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    },
+    {
+      "fixture": "go-invoice",
+      "model_usage": {
+        "claude-opus-5-5": {
+          "cacheCreationInputTokens": 24255,
+          "cacheReadInputTokens": 649,
+          "canonicalModel": "claude-opus-5-5",
+          "contextWindow": 1000000,
+          "costBasis": "list",
+          "costUSD": 0.2091778,
+          "inputTokens": 2,
+          "maxOutputTokens": 128000,
+          "outputTokens": 750,
+          "provider": "firstParty",
+          "thinkingTokens": 403,
+          "webSearchRequests": 0
+        }
+      },
+      "purpose": "rating",
+      "tree": "test_quality",
+      "usage": {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 24255,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 24255,
+        "cache_read_input_tokens": 649,
+        "fallback_credit": null,
+        "inference_geo": "global",
+        "input_tokens": 2,
+        "iterations": [
+          {
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 24255,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "cache_creation_input_tokens": 24255,
+            "cache_read_input_tokens": 649,
+            "input_tokens": 2,
+            "output_tokens": 750,
+            "type": "message"
+          }
+        ],
+        "output_tokens": 750,
+        "output_tokens_details": {
+          "thinking_tokens": 403
+        },
+        "server_tool_use": {
+          "web_fetch_requests": 0,
+          "web_search_requests": 0
+        },
+        "service_tier": "standard",
+        "speed": "standard"
+      }
+    }
+  ],
+  "definitions_version": 6,
+  "dimensions": {
+    "duplication": true,
+    "maintainability": true,
+    "test_quality": true,
+    "unnecessary_changes": true
+  },
+  "fixtures": {
+    "go-invoice": {
+      "duplication": {
+        "copy": {
+          "ratings": [
+            2,
+            2,
+            2
+          ],
+          "reasons": [
+            "Statement re-derives each line's discount, tax and the total instead of reusing Totals or the price helper. The split/trim/skip line loop is copied in discount, tax and fx, and digit-only and currency-code checks are written several times.",
+            "Statement re-implements the per-line discount, tax and total arithmetic instead of reusing Totals or its price helper, and the line-splitting and trimming loop, the digit checks and the currency-code check are each copied across several packages.",
+            "Statement re-implements the per-line discount and tax accumulation and the Total formula instead of reusing Totals or price, and the split, trim and skip line loop plus the digit-only checks are copied across the discount, tax, fx and parse packages."
+          ],
+          "spread": [
+            2,
+            2
+          ],
+          "value": 2
+        },
+        "passed": true,
+        "reference": {
+          "ratings": [
+            3,
+            3,
+            3
+          ],
+          "reasons": [
+            "The split, trim and skip-comment loop is copied into discount, tax and fx; the capital-letter and digit-only checks are repeated across core, fx, discount and parse; and fx re-implements decimal rate formatting instead of sharing a helper.",
+            "The split-at-newline, trim, skip-comment line loop is copied into discount, tax and fx instead of being shared, and the digit-only and capital-letter checks are re-implemented in several packages, though price() is shared well between Totals and Statement.",
+            "The line-reading loop (split at newline, trim, skip blanks and comments, wrap errors with the line number) is copied in discount, tax and fx, and the digit and currency-code checks are written out again in several packages, though `price` is shared between Totals and Statement."
+          ],
+          "spread": [
+            3,
+            3
+          ],
+          "value": 3
+        }
+      },
+      "maintainability": {
+        "copy": {
+          "ratings": [
+            3,
+            3,
+            3
+          ],
+          "reasons": [
+            "Most functions are small, well named and direct, but Validate is needlessly convoluted: a loop starting at -1 with an ok flag, and a slice of booleans counted against a parallel slice of reason strings, force the reader to trace it by hand.",
+            "Most packages are clear, small helpers with honest names, but Validate is needlessly convoluted: a loop starting at -1 for the header checks, an ok flag, and a slice of booleans counted against a parallel reasons slice make the reader trace it by hand.",
+            "Most packages are clear and well factored, but Validate is needlessly convoluted: it uses a loop starting at index -1 for the header checks and counts a slice of booleans to index a parallel slice of reasons, so the reader has to trace it by hand."
+          ],
+          "spread": [
+            3,
+            3
+          ],
+          "value": 3
+        },
+        "passed": true,
+        "reference": {
+          "ratings": [
+            4,
+            4,
+            4
+          ],
+          "reasons": [
+            "Functions are small and well named with clear helpers such as scaled, divRound, distances and physical, though a few dense boolean conditions (the ParseMoney range check, the header switch in Parse) need a careful read.",
+            "Functions are small and well named (scaled, isToken, physical, distances, step, price), but the discount Rule's string-typed kind field and modelling percent as a one-element tier slice add some indirection a reader must reconstruct.",
+            "Most functions are small and well named, with clear helpers such as `scaled`, `distances`, `neighbours`, `physical` and `price`, but stringly-typed rule kinds and storing percent rules as a single tier add some indirection."
+          ],
+          "spread": [
+            4,
+            4
+          ],
+          "value": 4
+        }
+      },
+      "test_quality": {
+        "copy": {
+          "ratings": [
+            1,
+            1,
+            1
+          ],
+          "reasons": [
+            "A single happy-path test checks a few totals and round trips and leaves untested every edge case the requirements name, such as parse errors, int64 bounds, rounding halves, caps, tiers, fx route tie-breaking, whole currencies, and render truncation and multiline cells.",
+            "A single happy-path test checks one value per component and leaves untested every edge case the requirements name: parse errors, int64 bounds, rounding of halves, validation order, tier and cap logic, fx tie-breaking and whole currencies, and render truncation.",
+            "A single happy-path smoke test touches each package once and exercises none of the named edge cases: no invalid input, overflow, rounding halves, tiers or caps, fx routing ties, whole currencies, multi-line or truncated cells, or validation order."
+          ],
+          "spread": [
+            1,
+            1
+          ],
+          "value": 1
+        },
+        "passed": true,
+        "reference": {
+          "ratings": [
+            4,
+            4,
+            4
+          ],
+          "reasons": [
+            "Tests cover most named edge cases with clear assertions, including int64 bounds, half rounding, validation order, tier and cap rules, the fx tie-break, whole-unit rounding, rune truncation and per-line tax, but miss a few, such as title truncation, the tier-with-cap form and rates above 100% in tax.",
+            "The tests cover most named edge cases with clear assertions: int64 bounds, -0, validation order, caps and tiers, fx tie-break and whole rounding, render truncation and extra cells, comment rules, and per-line tax rounding; they miss some, such as String round-trips for bundle and off rules and the pair-direction duplicate in the ParseTable tests.",
+            "Tests cover most named edge cases with clear assertions (int64 bounds, rounding halves, Validate's rule order, route tie-breaking, truncation, comment rules, round trips), but miss some, such as MulRate exactness near overflow, title truncation and caps on tier rules."
+          ],
+          "spread": [
+            4,
+            4
+          ],
+          "value": 4
+        }
+      },
+      "unnecessary_changes": {
+        "copy": {
+          "ratings": [
+            2,
+            3,
+            2
+          ],
+          "reasons": [
+            "The change adds an unrequested `render.Markdown` function, an entirely new feature beyond the requirements, while the rest of the edits stay on task.",
+            "Nearly every edit serves a requirement, but the change adds an unrequested render.Markdown function.",
+            "Apart from small comment rewrites, the change adds an untested render.Markdown function that no requirement asked for."
+          ],
+          "spread": [
+            2,
+            3
+          ],
+          "value": 2
+        },
+        "passed": true,
+        "reference": {
+          "ratings": [
+            5,
+            4,
+            4
+          ],
+          "reasons": [
+            "Every edit implements a stub or adds a required Summary field, and the only other changes are doc comments on the functions being implemented.",
+            "The edits implement the requirements, apart from several expanded doc comments on existing functions that were not required, while untouched code is left alone.",
+            "Edits are on task, apart from rewording several existing doc comments that the requirements did not ask to change."
+          ],
+          "spread": [
+            4,
+            5
+          ],
+          "value": 4
+        }
+      }
+    }
+  },
+  "manifest_version": 46,
+  "utc": "2026-10-31T13:20:57Z"
+}
