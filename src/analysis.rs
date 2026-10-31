@@ -902,7 +902,10 @@ pub(crate) fn change(
             .zip(new[prefix..].iter().rev())
             .take_while(|(a, b)| a == b)
             .count();
-        // ponytail: one hunk per file; per-hunk diff only if over-notification hurts.
+        // shortcut: one hunk per file, so a draft names every owner between its first and last
+        // change. That over-notifies, and a false overlap between split drafts proposes a join
+        // both agents must agree to; a join is the safe direction (#357). Diff per hunk if
+        // over-notification or those joins hurt.
         for (side, bytes) in evidence.iter().zip([old, new]) {
             let region = &bytes[prefix..bytes.len() - suffix];
             touched(side, path, prefix, region, &mut footprint);

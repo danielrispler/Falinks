@@ -1,8 +1,8 @@
 //! Join/split/keep recommendations, exact regrouping proposals, explicit agreement
 //! and work-preserving workspace transitions. Signals inform usefulness only; every
 //! transition still passes the engine's own safety checks.
-use crate::analysis::{self, Footprint};
-use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, Work, emit, obligations};
+use crate::analysis::{self, Evidence, Footprint};
+use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, emit, obligations};
 use crate::publication::{self, published};
 use crate::{
     Capture, Client, Engine, Fault, Halt, Interrupted, Layout, Result, VersionedFile, WRITER_LEASE,
@@ -23,9 +23,9 @@ pub enum Action {
     Keep,
 }
 /// Evidence behind a recommendation, read from current collaboration, never a score.
-/// Each agent's current work is the owning symbols of its live edits in the recency
-/// window or, before it has edited since the last applied transition, its registered
-/// scopes. The window is the latest settled review in each direction.
+/// Each agent's current work is its unpublished drafts by owning symbol or, before it has
+/// edited and before any applied transition, its registered scopes. The recency window,
+/// the latest settled review in each direction, bounds `revised` and `retries` only.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signals {
     /// Compiler-derived relationships between the agents' current work.
@@ -76,6 +76,12 @@ impl Signals {
     fn joining(&self) -> bool {
         !self.overlap.is_empty() || !self.redeclared.is_empty() || !self.behind.is_empty()
     }
+    /// Join evidence a transition cannot have seen: overlap between drafts or an overlapping
+    /// publication since it, never registered scopes (#357).
+    fn rejoining(&self) -> bool {
+        let drafts = format!("0:{DRAFTS} 1:{DRAFTS}");
+        self.overlap.contains(&drafts) || !self.behind.is_empty()
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProposalState {
@@ -87,7 +93,8 @@ pub enum ProposalState {
     Applied { revisions: BTreeMap<usize, u64> },
     /// An affected agent disagreed; the arrangement is unchanged.
     Declined { agent: usize, reason: String },
-    /// Task or group context changed before application; agreement is void.
+    /// Agreement is void: the task or group context changed, a newer proposal replaced it,
+    /// or unpublished drafts made it unsafe until a publication. The reason says which.
     Stale { reason: String },
     /// A keep recommendation: recorded evidence, nothing to apply.
     Kept,
@@ -190,6 +197,10 @@ fn commit_state(db: &Connection, proposal: &RegroupingProposal) -> Result<()> {
     Ok(())
 }
 const CONTEXT_CHANGED: &str = "task or group context changed; propose again";
+/// A split refused because of unpublished drafts; it voids agreement (#357).
+const UNSAFE: &str = "unsafe until publication";
+/// The current-work label of an agent's unpublished drafts.
+const DRAFTS: &str = "drafts";
 pub(crate) fn scalar(db: &Connection, sql: &str) -> Result<u64> {
     Ok(db.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
 }
@@ -287,6 +298,63 @@ fn differing(before: &Capture, after: &Capture) -> BTreeSet<String> {
         .filter(|(p, f)| before.files.get(*p).map(|b| &b.file) != Some(&f.file))
         .map(|(p, _)| p.clone())
         .collect()
+}
+/// Each author's unpublished drafts in `workspace` by owning symbol: the files it wrote
+/// (`authored`) that still differ from the publication. `evidence` reads the publication
+/// and the workspace, so a draft that deletes a symbol names it.
+fn drafted(
+    authored: [&BTreeSet<String>; 2],
+    published: &Capture,
+    workspace: &Capture,
+    evidence: [&[Evidence]; 2],
+) -> [Footprint; 2] {
+    let differ = differing(published, workspace);
+    authored.map(|paths| {
+        let paths = paths.intersection(&differ).cloned().collect();
+        let change = analysis::change(published, workspace, &paths, &evidence);
+        let mut footprint = Footprint {
+            all: change.all,
+            nodes: BTreeSet::new(),
+        };
+        owners(
+            &change.nodes.into_iter().collect::<Vec<_>>(),
+            &mut footprint,
+        );
+        footprint
+    })
+}
+/// A compiler relationship between the two agents' drafts, named by its first pair of
+/// owning symbols: a split would strand one draft's use of the other.
+fn stranding(drafts: &[Footprint; 2], sides: &[&[Evidence]]) -> Option<String> {
+    let [a, b] = drafts;
+    let empty = |f: &Footprint| !f.all && f.nodes.is_empty();
+    if empty(a) || empty(b) {
+        return None;
+    }
+    if a.all || b.all {
+        return Some("unbounded relevance of unpublished drafts".into());
+    }
+    let one = |node: &String| BTreeSet::from([node.clone()]);
+    let node = |n: &String| Footprint {
+        all: false,
+        nodes: one(n),
+    };
+    let closures: Vec<_> = b
+        .nodes
+        .iter()
+        .map(|y| (y, analysis::closure(&one(y), sides)))
+        .collect();
+    for x in &a.nodes {
+        let left = analysis::closure(&one(x), sides);
+        for (y, right) in &closures {
+            if analysis::related(&left, &node(y)) || analysis::related(right, &node(x)) {
+                return Some(format!(
+                    "unpublished drafts {x} (agent 0) and {y} (agent 1) relate by the compiler"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Shifts still installing at restart, with their new revisions retained as evidence.
@@ -437,6 +505,8 @@ impl Engine {
 
     // ponytail: evidence is gathered under the writer lock, like the edit gate; gather
     // outside it if reconsideration delays edits.
+    /// The signals, and the compiler relationship between the agents' drafts that a split
+    /// would strand.
     fn signals(
         &self,
         db: &Connection,
@@ -444,7 +514,7 @@ impl Engine {
         scopes: &[Vec<Scope>; 2],
         history: &[(u64, RegroupingProposal)],
         mark: &Mark,
-    ) -> Result<Signals> {
+    ) -> Result<(Signals, Option<String>)> {
         let mut signals = Signals::default();
         if self
             .analysis
@@ -456,9 +526,24 @@ impl Engine {
                 .uncertain
                 .push("compiler analysis not configured".into());
         }
+        let published = revision(db, published(db)?)?;
+        let before = self.evidence_in(db, &published)?;
         let mut evidence = Vec::new();
+        let mut drafts: [Footprint; 2] = Default::default();
         for space in layout.placement.iter().collect::<BTreeSet<_>>() {
-            evidence.extend(self.evidence_in(db, layout.current(*space)?)?);
+            let workspace = layout.current(*space)?;
+            let after = self.evidence_in(db, workspace)?;
+            let own = authored(
+                db,
+                workspace.included.difference(&published.included).copied(),
+            )?;
+            let footprints = drafted(own.each_ref(), &published, workspace, [&before, &after]);
+            for (agent, footprint) in footprints.into_iter().enumerate() {
+                if layout.placement[agent] == *space {
+                    drafts[agent] = footprint;
+                }
+            }
+            evidence.extend(after);
         }
         for e in &evidence {
             if !e.errors.is_empty() || !e.unknown.is_empty() {
@@ -479,8 +564,8 @@ impl Engine {
                     .push(format!("agent {agent} registered no scope"));
             }
             for o in obligations(db, agent)?.iter().filter(|o| o.pending()) {
-                // Read a cause edit as the window does: an insertion names its file only
-                // for relevance. Other causes stay uncertain (#311).
+                // Read a cause edit by its owners: an insertion names its file only for
+                // relevance. Other causes stay uncertain (#311).
                 let causes: Vec<Body> = all(
                     db,
                     "SELECT c.body FROM events o JOIN events c ON c.seq = json_extract(o.body, '$.Obligation.cause')
@@ -522,12 +607,18 @@ impl Engine {
         }
         let window = window(db, mark)?;
         signals.revised = window.revised;
-        let work = [0, 1].map(|agent| match &window.edits[agent] {
-            Some(edits) => vec![("edits".to_string(), edits.clone())],
-            None => scopes[agent]
-                .iter()
-                .map(|s| (s.id.clone(), nodes(&s.nodes)))
-                .collect(),
+        // After an edit or a transition, an agent without drafts has no current work (#357).
+        let work = [0, 1].map(|agent| {
+            if drafts[agent].all || !drafts[agent].nodes.is_empty() {
+                vec![(DRAFTS.to_string(), drafts[agent].clone())]
+            } else if mark.event == 0 && !window.edited[agent] {
+                scopes[agent]
+                    .iter()
+                    .map(|s| (s.id.clone(), nodes(&s.nodes)))
+                    .collect()
+            } else {
+                Vec::new()
+            }
         });
         for (la, a) in &work[0] {
             for (lb, b) in &work[1] {
@@ -622,7 +713,7 @@ impl Engine {
                     && !matches!(earlier.state, ProposalState::Declined { .. });
             }
         }
-        Ok(signals)
+        Ok((signals, stranding(&drafts, &sides)))
     }
 
     fn recommendation(
@@ -636,7 +727,7 @@ impl Engine {
             let scopes = scopes(&db)?;
             let history = proposals(&db)?;
             let mark = mark(&db)?;
-            let mut signals = self.signals(&db, &layout, &scopes, &history, &mark)?;
+            let (mut signals, stranded) = self.signals(&db, &layout, &scopes, &history, &mark)?;
             let joined = layout.placement[0] == layout.placement[1];
             let (mut action, mut reasoning) = match (&propose, proposer) {
                 (Some(propose), Some(agent)) => {
@@ -652,6 +743,13 @@ impl Engine {
                 action = Action::Keep;
                 reasoning = format!("already in the requested arrangement; {reasoning}");
             }
+            // A split moves every unpublished draft: never apart from one it uses (#357).
+            if action == Action::Split
+                && let Some(edge) = stranded
+            {
+                action = Action::Keep;
+                reasoning = format!("suppressed Split: {UNSAFE}: {edge}; {reasoning}");
+            }
             // Reason-to-change rule: no reversal or repeat without new evidence or a failure report.
             let last = history
                 .iter()
@@ -660,11 +758,14 @@ impl Engine {
             if let Some((_, last)) = last
                 && action != Action::Keep
             {
+                // shortcut: compiler pairs compare by label, and `0:drafts 1:drafts` reads the
+                // same whatever the drafts hold; compare owning symbols if a changed edge
+                // between drafts must count as new. A compiler edge alone never joins (#14).
                 let new = signals.failing
                     || last.scopes != scopes
                     || last.signals.compiler != signals.compiler
                     || last.signals.declared != signals.declared
-                    || (action == Action::Join && signals.joining());
+                    || (action == Action::Join && signals.rejoining());
                 if !new {
                     reasoning = format!(
                         "suppressed {action:?}: it would reverse or repeat {} without materially new evidence or a failure report",
@@ -702,8 +803,13 @@ impl Engine {
                 return Ok(pending.clone());
             }
             let since = mark.proposal;
+            // A split voided as unsafe is proposed again once it is safe (#357).
+            // shortcut: the Stale cause is told apart by its reason prefix; type the cause if
+            // another rule must read it.
+            let unsafe_split = |p: &RegroupingProposal| matches!(&p.state, ProposalState::Stale { reason } if reason.starts_with(UNSAFE));
             if let Some((_, previous)) = history.iter().rev().find(|(seq, p)| {
                 *seq > since
+                    && !unsafe_split(p)
                     && p.proposer == proposer
                     && p.action == action
                     && p.target == target
@@ -816,18 +922,14 @@ impl Engine {
         Ok(())
     }
 
-    /// Independent safety checks. A failure names the specific blocker.
-    fn plan(
-        &self,
-        db: &Connection,
-        layout: &Layout,
-        proposal: &RegroupingProposal,
-    ) -> Result<std::result::Result<Vec<(usize, Capture)>, String>> {
+    /// Independent safety checks. A refusal is the state to record: `Blocked` naming the
+    /// blocker, or `Stale` for a split that unpublished drafts make unsafe (#357).
+    fn plan(&self, db: &Connection, layout: &Layout, proposal: &RegroupingProposal) -> Planned {
         if let Some(halt) = halted(db)? {
-            return Ok(Err(format!("engine halted: {halt}")));
+            return blocked(format!("engine halted: {halt}"));
         }
         if let Some(run) = publication::publishing(db)? {
-            return Ok(Err(format!("publication run {} in progress", run.id)));
+            return blocked(format!("publication run {} in progress", run.id));
         }
         let published = revision(db, published(db)?)?;
         for space in proposal.from {
@@ -836,10 +938,10 @@ impl Engine {
                 .included
                 .is_superset(&published.included)
             {
-                return Ok(Err(format!(
+                return blocked(format!(
                     "workspace {space} has not incorporated publication {}",
                     published.revision
-                )));
+                ));
             }
         }
         // Unpublished drafts per author, and a check that nothing else differs.
@@ -862,26 +964,46 @@ impl Engine {
         };
         let mut moves = Vec::new();
         match proposal.action {
-            Action::Keep => return Ok(Err("a keep proposal has nothing to apply".into())),
+            Action::Keep => return blocked("a keep proposal has nothing to apply".into()),
             Action::Split => {
                 let (stay, target) = (proposal.from[0], proposal.target[1]);
                 if target >= layout.roots.len() {
-                    return Ok(Err(format!("workspace root {target} is not provisioned")));
+                    return blocked(format!("workspace root {target} is not provisioned"));
                 }
                 if layout.placement.contains(&target) {
-                    return Ok(Err(format!("workspace {target} is occupied")));
+                    return blocked(format!("workspace {target} is occupied"));
                 }
                 let workspace = layout.current(stay)?;
                 let [kept, moved] = match drafts(workspace)? {
                     Ok(own) => own,
-                    Err(blocker) => return Ok(Err(blocker)),
+                    Err(blocker) => return blocked(blocker),
                 };
-                // ponytail: drafts move per file; two authors in one file wait for publication.
-                let interleaved: Vec<_> = kept.intersection(&moved).collect();
+                // shortcut: drafts move per file, so two authors in one file void the split until
+                // publication; move them per hunk if that keeps pairs joined too long.
+                // Reverted drafts drop out, as in `signals` (#357).
+                let differ = differing(&published, workspace);
+                let interleaved: Vec<_> = kept
+                    .intersection(&moved)
+                    .filter(|p| differ.contains(*p))
+                    .collect();
                 if !interleaved.is_empty() {
-                    return Ok(Err(format!(
+                    return unsafe_until_published(format!(
                         "interleaved unpublished drafts in {interleaved:?}"
-                    )));
+                    ));
+                }
+                // Required, not a backstop: drafts can change between proposal and application.
+                let evidence = [
+                    self.evidence_in(db, &published)?,
+                    self.evidence_in(db, workspace)?,
+                ];
+                let footprints = drafted(
+                    [&kept, &moved],
+                    &published,
+                    workspace,
+                    [&evidence[0], &evidence[1]],
+                );
+                if let Some(edge) = stranding(&footprints, &[&evidence[1]]) {
+                    return unsafe_until_published(edge);
                 }
                 let leaving: BTreeSet<u64> = workspace
                     .included
@@ -933,13 +1055,14 @@ impl Engine {
                         a.union(&b).cloned().collect::<BTreeSet<_>>(),
                         c.union(&d).cloned().collect::<BTreeSet<_>>(),
                     ),
-                    (Err(blocker), _) | (_, Err(blocker)) => return Ok(Err(blocker)),
+                    (Err(blocker), _) | (_, Err(blocker)) => return blocked(blocker),
                 };
                 let overlap: Vec<_> = host_drafts.intersection(&guest_drafts).collect();
                 if !overlap.is_empty() {
-                    return Ok(Err(format!(
+                    // A join waits for the publication instead: agreement to it still holds.
+                    return blocked(format!(
                         "both workspaces hold unpublished drafts of {overlap:?}"
-                    )));
+                    ));
                 }
                 if !guest_drafts.is_empty() {
                     let mut joined = host.clone();
@@ -963,12 +1086,11 @@ impl Engine {
         let layout = self.layout()?.clone();
         let moves = match self.plan(db, &layout, proposal)? {
             Ok(moves) => moves,
-            Err(blocker) => {
-                let blocked = ProposalState::Blocked { blocker };
-                if proposal.state == blocked {
+            Err(refused) => {
+                if proposal.state == refused {
                     return Ok(false);
                 }
-                proposal.state = blocked;
+                proposal.state = refused;
                 commit_state(db, proposal)?;
                 return Ok(true);
             }
@@ -1196,6 +1318,19 @@ impl Engine {
     }
 }
 
+type Planned = Result<std::result::Result<Vec<(usize, Capture)>, ProposalState>>;
+/// The arrangement waits; agreement holds and the proposal is retried at boundaries.
+fn blocked(blocker: String) -> Planned {
+    Ok(Err(ProposalState::Blocked { blocker }))
+}
+/// A split refused because of unpublished drafts: agreement is void, and the engine
+/// proposes it again once a publication makes it safe (#357).
+fn unsafe_until_published(reason: String) -> Planned {
+    Ok(Err(ProposalState::Stale {
+        reason: format!("{UNSAFE}: {reason}"),
+    }))
+}
+
 /// A failure once `shift` is recorded as installing, before its commit, leaves files the
 /// engine wrote: halt durably until restart restores the before state.
 fn interrupted<T>(db: &Connection, shift: i64, result: Result<T>) -> Result<T> {
@@ -1212,11 +1347,10 @@ fn interrupted<T>(db: &Connection, shift: i64, result: Result<T>) -> Result<T> {
 }
 
 /// The recency window: the latest settled review in each direction since the last
-/// applied transition.
+/// applied transition. It bounds collaboration evidence, not current work (#357).
 struct Window {
-    /// Per agent, the owning symbols of its live edits since the review before its peer's
-    /// latest one; `None` before it has edited.
-    edits: [Option<Footprint>; 2],
+    /// Per agent, whether it has edited since the last applied transition.
+    edited: [bool; 2],
     /// Latest settled reviews that decided `Revise`.
     revised: Vec<String>,
     /// The older of the two latest reviewed revisions; stale refusals since it count.
@@ -1231,7 +1365,11 @@ fn window(db: &Connection, mark: &Mark) -> Result<Window> {
         [mark.event as i64],
     )?;
     let mut reviews: [BTreeMap<u64, Vec<Review>>; 2] = Default::default();
-    let mut edits: [Vec<(u64, Vec<String>)>; 2] = Default::default();
+    let mut window = Window {
+        edited: [false, false],
+        revised: Vec::new(),
+        since: u64::MAX,
+    };
     for (_, body) in rows {
         match body {
             Body::Reviewed { agent, review } => reviews[agent]
@@ -1241,22 +1379,13 @@ fn window(db: &Connection, mark: &Mark) -> Result<Window> {
             Body::Message(Message {
                 kind: Kind::LiveEdit,
                 sender,
-                work: Work::Revision(revision),
-                scope,
                 ..
-            }) => edits[sender].push((revision, scope)),
+            }) => window.edited[sender] = true,
             _ => {}
         }
     }
-    let mut window = Window {
-        edits: [None, None],
-        revised: Vec::new(),
-        since: u64::MAX,
-    };
     for (reviewer, reviewed) in reviews.iter().enumerate() {
-        let mut latest = reviewed.iter().rev();
-        let current = latest.next();
-        let previous = latest.next().map_or(0, |(r, _)| *r);
+        let current = reviewed.iter().next_back();
         window.since = window.since.min(current.map_or(0, |(r, _)| *r));
         for review in current.into_iter().flat_map(|(_, r)| r) {
             if review.decision == Decision::Revise {
@@ -1265,14 +1394,6 @@ fn window(db: &Connection, mark: &Mark) -> Result<Window> {
                     review.scope, review.revision
                 ));
             }
-        }
-        let editor = 1 - reviewer;
-        if !edits[editor].is_empty() {
-            let mut footprint = Footprint::default();
-            for (_, scope) in edits[editor].iter().filter(|(r, _)| *r > previous) {
-                owners(scope, &mut footprint);
-            }
-            window.edits[editor] = Some(footprint);
         }
     }
     Ok(window)

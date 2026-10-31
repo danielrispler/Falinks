@@ -5,7 +5,7 @@
     "calibration/v2.json": "c0597650c95e4ebd4f0f0a083152c4705b41a70c2b4f7eef393cd2828251dccf",
     "calibration/v4.json": "5330fca431e224ed4716c112528902dbbbb8aeb92b849d2389f05656ebc83642",
     "code-quality.json": "7f048f480ed039ba650c196189998a4a4def4af83546d3f375286a80d84219cc",
-    "config.json": "11182f6e5ef12e813aacde78db6940b4756e415d5344817ebca3366193e47741",
+    "config.json": "b95eb1f40cde0752db8eef611d6f1614cb1a50c7d5b1c44a74a90f1e5207dc01",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
     "fixtures/go-invoice.json": "b647a36412839cd67d8cc904dfdd10df36e276fc606a7e28bb20a8e0eaae4210",
@@ -55,5 +55,5 @@
     "go-tasks": "12f2511ee050e318f13aa99ae0838b96ffd095a5",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 45
+  "version": 46
 }

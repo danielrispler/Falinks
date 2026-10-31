@@ -13,6 +13,8 @@ use support::{GO, edit, fail_commits, fails_with, go_toolchain, halt, incidents,
 use tempfile::TempDir;
 
 const LEFT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n";
+/// `LEFT` with a draft of Right too.
+const RIGHT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
 const CALLEE: &str = "package probe\n\nfunc Callee() int {\n\treturn 8\n}\n";
 
 fn reopen(root: &Path) -> (Engine, Client, Client) {
@@ -234,7 +236,7 @@ fn useful_split_moves_unfinished_drafts_and_preserves_history_and_offers() {
 fn compiler_edge_alone_keeps_a_split_and_collaboration_evidence_joins_it() {
     let (dir, engine, alice, bob) = fixture();
     split(&dir, &engine, &alice, &bob);
-    // Right calls Callee: a compiler edge between the scopes, nothing else.
+    // Alice's draft of Right calls Bob's draft of Callee: a compiler edge, nothing else.
     register(
         &engine,
         &alice,
@@ -242,9 +244,10 @@ fn compiler_edge_alone_keeps_a_split_and_collaboration_evidence_joins_it() {
         "right task",
         &["siblings.go#Right"],
     );
+    applied(&engine, &alice, "right", "siblings.go", RIGHT);
     let keep = engine.reconsider().unwrap();
     assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
-    assert_eq!(keep.signals.compiler, vec!["0:right 1:callee".to_string()]);
+    assert_eq!(keep.signals.compiler, vec!["0:drafts 1:drafts".to_string()]);
     assert!(keep.reasoning.contains("compiler relationship alone"));
     assert_eq!(engine.reconsider().unwrap().id, keep.id, "unchanged repeat");
 
@@ -262,11 +265,18 @@ fn compiler_edge_alone_keeps_a_split_and_collaboration_evidence_joins_it() {
     let waited = engine.reconsider().unwrap();
     assert_eq!(waited.id, keep.id, "{}", waited.reasoning);
 
-    // Bob's work now names Right too: overlap joins.
-    register(&engine, &bob, "both", "callee task", &["siblings.go#Right"]);
+    // Bob now declares a dependency on Right: new collaboration evidence joins.
+    declare(
+        &engine,
+        &bob,
+        "callee",
+        "callee task",
+        &["callee.go#Callee"],
+        &["siblings.go#Right"],
+    );
     let join = engine.reconsider().unwrap();
     assert_eq!(join.action, Action::Join, "{}", join.reasoning);
-    assert_eq!(join.signals.overlap, vec!["0:right 1:both".to_string()]);
+    assert_eq!(join.signals.redeclared, vec!["1:callee".to_string()]);
     assert_eq!(join.target, [0, 0]);
     agree(&engine, &bob, &join);
     let applied = agree(&engine, &alice, &join);
@@ -278,7 +288,7 @@ fn compiler_edge_alone_keeps_a_split_and_collaboration_evidence_joins_it() {
     // Both unfinished drafts share the live root; Bob's root no longer applies.
     assert_eq!(engine.placement().unwrap(), [0, 0]);
     let live = engine.root(&bob).unwrap();
-    assert_eq!(read(&live, "siblings.go"), LEFT);
+    assert_eq!(read(&live, "siblings.go"), RIGHT);
     assert_eq!(read(&live, "callee.go"), CALLEE);
     let candidate = engine
         .candidate(engine.capture().unwrap().revision)
@@ -348,48 +358,54 @@ fn changed_task_context_invalidates_agreement() {
     assert!(fresh.agreed.is_empty());
 }
 
+/// #357 decision 2: a split refused because two authors drafted one file is void, not
+/// held. Once a publication makes it safe, a new proposal applies.
 #[test]
-fn interleaved_drafts_stay_pending_until_published_then_split_applies() {
+fn interleaved_drafts_void_an_agreed_split_until_published() {
     let (dir, engine, alice, bob) = fixture();
     engine.add_workspace(&dir.path().join("second")).unwrap();
     applied(&engine, &alice, "left", "siblings.go", LEFT);
-    let both = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee() + 1\n}\n";
-    applied(&engine, &bob, "right", "siblings.go", both);
-    let proposal = engine
-        .propose(
-            &alice,
-            Propose {
-                action: Action::Split,
-                text: "Callee work next".into(),
-                failing: false,
-            },
-        )
-        .unwrap();
-    agree(&engine, &alice, &proposal);
-    let blocked = agree(&engine, &bob, &proposal);
+    let propose = || {
+        let text = "Callee work next".into();
+        let split = Propose {
+            action: Action::Split,
+            text,
+            failing: false,
+        };
+        engine.propose(&alice, split).unwrap()
+    };
+    let proposal = propose();
     assert_eq!(
-        blocked.state,
-        ProposalState::Blocked {
-            blocker: "interleaved unpublished drafts in [\"siblings.go\"]".into()
+        proposal.state,
+        ProposalState::Open,
+        "{}",
+        proposal.reasoning
+    );
+    agree(&engine, &alice, &proposal);
+    applied(&engine, &bob, "right", "siblings.go", RIGHT);
+    let stale = agree(&engine, &bob, &proposal);
+    assert_eq!(
+        stale.state,
+        ProposalState::Stale {
+            reason: "unsafe until publication: interleaved unpublished drafts in [\"siblings.go\"]"
+                .into()
         }
     );
     // Work continues in the current arrangement.
     assert_eq!(engine.placement().unwrap(), [0, 0]);
-    assert_eq!(read(&engine.root(&bob).unwrap(), "siblings.go"), both);
+    assert_eq!(read(&engine.root(&bob).unwrap(), "siblings.go"), RIGHT);
 
-    offer(&engine, &alice, "a");
-    offer(&engine, &bob, "b");
-    let run = engine.validate().unwrap().unwrap();
+    publish(&engine, &alice, &bob, "both");
+    assert_eq!(engine.proposal(&proposal.id).unwrap().unwrap(), stale);
+    let again = propose();
+    agree(&engine, &alice, &again);
+    let applied = agree(&engine, &bob, &again);
     assert!(
-        matches!(run.outcome, Some(RunOutcome::Published { .. })),
-        "{run:?}"
+        matches!(applied.state, ProposalState::Applied { .. }),
+        "{applied:?}"
     );
-    assert!(matches!(
-        engine.proposal(&proposal.id).unwrap().unwrap().state,
-        ProposalState::Applied { .. }
-    ));
     assert_eq!(engine.placement().unwrap(), [0, 1]);
-    assert_eq!(read(&engine.root(&bob).unwrap(), "siblings.go"), both);
+    assert_eq!(read(&engine.root(&bob).unwrap(), "siblings.go"), RIGHT);
 }
 
 #[test]
@@ -859,7 +875,8 @@ fn obligations_a_transition_raised_are_not_evidence_to_reverse_it() {
         !keep.signals.uncertain.is_empty(),
         "uncertainty alone keeps a split"
     );
-    assert_eq!(keep.signals.compiler, vec!["0:right 1:callee".to_string()]);
+    // After a transition Alice, with no drafts, has no current work: not her scope (#357).
+    assert!(keep.signals.compiler.is_empty(), "{:?}", keep.signals);
 
     // A declared dependency on Bob's work is new collaboration evidence.
     declare(
@@ -929,6 +946,16 @@ fn settle(engine: &Engine, client: &Client, scope: &str, decision: Decision) {
         )
         .unwrap();
 }
+/// Both joined agents offer their current revision, and it publishes.
+fn publish(engine: &Engine, alice: &Client, bob: &Client, id: &str) {
+    offer(engine, alice, id);
+    offer(engine, bob, id);
+    let run = engine.validate().unwrap().unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Published { .. })),
+        "{run:?}"
+    );
+}
 /// Appends `bytes` to the client's current copy of `path`.
 fn append(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) {
     let current = engine.capture_for(client).unwrap();
@@ -952,6 +979,9 @@ fn independent_follow_ups_after_a_contract_change_propose_a_split() {
     let keep = engine.reconsider().unwrap();
     assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
     assert!(!keep.signals.revised.is_empty(), "{:?}", keep.signals);
+    // Unpublished, Consume's draft uses Alice's draft of Record: a split would strand it.
+    assert_eq!(keep.signals.compiler, vec!["0:drafts 1:drafts".to_string()]);
+    publish(&engine, &alice, &bob, "contract");
 
     // Follow-ups in new functions, each reviewed Keep.
     append(
@@ -1005,7 +1035,7 @@ fn consumer_edits_calling_the_producer_keep_the_pair() {
     settle(&engine, &alice, "producer", Decision::Keep);
     let keep = engine.reconsider().unwrap();
     assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
-    assert_eq!(keep.signals.compiler, vec!["0:edits 1:edits".to_string()]);
+    assert_eq!(keep.signals.compiler, vec!["0:drafts 1:drafts".to_string()]);
     assert!(keep.signals.revised.is_empty() && keep.signals.overlap.is_empty());
 }
 
@@ -1020,7 +1050,7 @@ fn both_agents_editing_the_same_symbol_keep_the_pair() {
     settle(&engine, &alice, "producer", Decision::Keep);
     let keep = engine.reconsider().unwrap();
     assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
-    assert_eq!(keep.signals.overlap, vec!["0:edits 1:edits".to_string()]);
+    assert_eq!(keep.signals.overlap, vec!["0:drafts 1:drafts".to_string()]);
 }
 
 #[test]
@@ -1149,6 +1179,7 @@ fn a_pending_offer_keeps_the_pair_until_the_revision_advances() {
         );
         settle(&engine, other, scope, Decision::Keep);
     };
+    publish(&engine, &alice, &bob, "contract");
     follow_up(&bob, "Summary", "consumer.go", "producer", &alice);
     follow_up(&alice, "Stats", "producer.go", "consumer", &bob);
     assert_eq!(engine.reconsider().unwrap().action, Action::Split);
@@ -1466,5 +1497,407 @@ fn a_declined_failure_report_stops_driving_engine_proposals() {
         Action::Split,
         "{}",
         recommended.reasoning
+    );
+}
+
+/// A layered Go package (#331): core.go and model.go are the foundation (L1), disc.go and
+/// fx.go the independent layer (L2), summary.go the shared hot spot (L3).
+const LAYERED: &[(&str, &str)] = &[
+    ("go.mod", "module example.com/probe\n\ngo 1.22\n"),
+    (
+        "core.go",
+        "package probe\n\nfunc Money() int {\n\treturn 0\n}\n",
+    ),
+    (
+        "model.go",
+        "package probe\n\nfunc Item() int {\n\treturn 0\n}\n",
+    ),
+    (
+        "disc.go",
+        "package probe\n\nfunc Disc() int {\n\treturn 0\n}\n",
+    ),
+    ("fx.go", "package probe\n\nfunc Fx() int {\n\treturn 0\n}\n"),
+    (
+        "summary.go",
+        "package probe\n\nfunc Summary() int {\n\treturn 0\n}\n",
+    ),
+];
+fn layered(files: &[(&str, &str)]) -> (TempDir, Engine, Client, Client) {
+    let (dir, engine, alice, bob) = support::fixture(files);
+    fs::create_dir_all(dir.path().join("second")).unwrap();
+    configure(&engine);
+    (dir, engine, alice, bob)
+}
+/// A Go file holding one function `name` that returns `body`.
+fn go(name: &str, body: &str) -> String {
+    format!("package probe\n\nfunc {name}() int {{\n\treturn {body}\n}}\n")
+}
+fn split_by(engine: &Engine, client: &Client) -> RegroupingProposal {
+    let propose = Propose {
+        action: Action::Split,
+        text: "separate".into(),
+        failing: false,
+    };
+    engine.propose(client, propose).unwrap()
+}
+
+/// #357 decision 2: an agent's `Split` that would strand a draft's use of the peer's
+/// unpublished draft is kept, and the reason names the edge.
+#[test]
+fn an_agent_split_whose_drafts_relate_is_kept_naming_the_edge() {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
+    register(&engine, &bob, "b", "b", &["fx.go#Fx"]);
+    applied(&engine, &alice, "disc", "disc.go", &go("Disc", "1"));
+    applied(&engine, &bob, "fx", "fx.go", &go("Fx", "Disc() + 2"));
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let keep = split_by(&engine, &bob);
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert_eq!(keep.state, ProposalState::Kept);
+    for named in ["unsafe until publication", "disc.go#Disc", "fx.go#Fx"] {
+        assert!(keep.reasoning.contains(named), "{}", keep.reasoning);
+    }
+    assert_eq!(engine.placement().unwrap(), [0, 0]);
+}
+
+/// #357 decision 2: a draft that lands between agreement and application and relates the
+/// moving drafts to the staying ones voids the agreed `Split`; the joined root still builds.
+#[test]
+fn an_agreed_split_that_would_strand_a_draft_becomes_stale() {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
+    register(&engine, &bob, "b", "b", &["fx.go#Fx"]);
+    applied(&engine, &alice, "disc", "disc.go", &go("Disc", "1"));
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = split_by(&engine, &bob);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    agree(&engine, &alice, &split);
+    applied(&engine, &bob, "fx", "fx.go", &go("Fx", "Disc() + 2"));
+    let stale = agree(&engine, &bob, &split);
+    let ProposalState::Stale { reason } = &stale.state else {
+        panic!("{:?}", stale.state);
+    };
+    assert!(reason.starts_with("unsafe until publication: "), "{reason}");
+    assert!(
+        reason.contains("disc.go#Disc") && reason.contains("fx.go#Fx"),
+        "{reason}"
+    );
+    assert_eq!(engine.placement().unwrap(), [0, 0]);
+    assert!(vets(&engine.root(&bob).unwrap()));
+}
+/// Whether `go vet` passes in `root`.
+fn vets(root: &Path) -> bool {
+    std::process::Command::new("go")
+        .args(["vet", "."])
+        .current_dir(root)
+        .env("GOTOOLCHAIN", "local")
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// #331's E1 (`split_strands`): L2 drafts use the peer's unpublished L1 drafts. Whether or not
+/// the review rounds turned the recency window over, the drafts keep the pair (#357).
+fn strands(rounds: usize) {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(&engine, &alice, "a", "a", &["core.go", "disc.go"]);
+    register(&engine, &bob, "b", "b", &["model.go", "fx.go"]);
+    // Each agent adds an L1 function after the foundation's own.
+    let added = |file: &str, name: &str| format!("{file}\nfunc {name}() int {{\n\treturn 2\n}}\n");
+    let rate = added(LAYERED[1].1, "Rate");
+    let price = added(LAYERED[2].1, "Price");
+    applied(&engine, &alice, "core", "core.go", &rate);
+    applied(&engine, &bob, "model", "model.go", &price);
+    for n in 1..=rounds {
+        let disc = go("Disc", &format!("Price() * {n}"));
+        applied(&engine, &alice, &format!("disc{n}"), "disc.go", &disc);
+        settle(&engine, &bob, "b", Decision::Keep);
+        let fx = go("Fx", &format!("Rate() * {n}"));
+        applied(&engine, &bob, &format!("fx{n}"), "fx.go", &fx);
+        settle(&engine, &alice, "a", Decision::Keep);
+    }
+    assert!(vets(&engine.root(&alice).unwrap()));
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert_eq!(keep.signals.compiler, vec!["0:drafts 1:drafts".to_string()]);
+    let own = split_by(&engine, &bob);
+    assert_eq!(own.action, Action::Keep, "{}", own.reasoning);
+    assert!(
+        own.reasoning
+            .contains("unpublished drafts core.go#Rate (agent 0) and fx.go#Fx (agent 1)"),
+        "{}",
+        own.reasoning
+    );
+}
+#[test]
+fn drafts_using_the_peers_unpublished_foundation_keep_the_pair_after_two_rounds() {
+    strands(2);
+}
+#[test]
+fn drafts_using_the_peers_unpublished_foundation_keep_the_pair_after_one_round() {
+    strands(1);
+}
+
+/// L1, the foundation L2 uses, before the L2 drafts.
+#[derive(PartialEq)]
+enum L1 {
+    Untouched,
+    Drafted,
+    Published,
+}
+/// #331's E2 (`window_never_turns_over`): with narrowed scopes no review turns the window
+/// over, and before L1 publishes L2 still uses it: the pair is kept. Once L1 publishes, the
+/// L2 drafts are independent: the split applies and both spaces build (#357).
+fn foundation(l1: L1) -> (TempDir, Engine, Client, Client, RegroupingProposal) {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(&engine, &alice, "a", "a", &["core.go#Money"]);
+    register(&engine, &bob, "b", "b", &["model.go#Item"]);
+    if l1 != L1::Untouched {
+        applied(&engine, &alice, "money", "core.go", &go("Money", "100"));
+        applied(&engine, &bob, "item", "model.go", &go("Item", "3"));
+    }
+    if l1 == L1::Published {
+        publish(&engine, &alice, &bob, "l1");
+    }
+    register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
+    register(&engine, &bob, "b", "b", &["fx.go#Fx"]);
+    for n in 1..=3 {
+        let disc = go("Disc", &format!("Money() * {n}"));
+        applied(&engine, &alice, &format!("disc{n}"), "disc.go", &disc);
+        let fx = go("Fx", &format!("Money() + {n}"));
+        applied(&engine, &bob, &format!("fx{n}"), "fx.go", &fx);
+    }
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let proposal = engine.reconsider().unwrap();
+    (dir, engine, alice, bob, proposal)
+}
+#[test]
+fn an_unpublished_foundation_keeps_the_pair_without_reviews() {
+    let (_dir, _engine, _alice, _bob, keep) = foundation(L1::Drafted);
+    assert_eq!(keep.action, Action::Keep, "{}", keep.reasoning);
+    assert_eq!(keep.signals.compiler, vec!["0:drafts 1:drafts".to_string()]);
+}
+#[test]
+fn a_published_foundation_lets_independent_drafts_split_and_both_spaces_build() {
+    let (_dir, engine, alice, bob, split) = foundation(L1::Published);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    agree(&engine, &alice, &split);
+    let applied = agree(&engine, &bob, &split);
+    assert!(
+        matches!(applied.state, ProposalState::Applied { .. }),
+        "{applied:?}"
+    );
+    assert!(vets(&engine.root(&alice).unwrap()));
+    assert!(vets(&engine.root(&bob).unwrap()));
+}
+
+/// #331's control for E2: the same L2 drafts with no L1 drafts split.
+#[test]
+fn the_same_drafts_without_foundation_drafts_split() {
+    let (_dir, _engine, _alice, _bob, split) = foundation(L1::Untouched);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+}
+
+/// Splits Alice's `disc.go` draft from Bob's `fx.go` draft by the engine's recommendation.
+fn layered_split(dir: &TempDir, engine: &Engine, alice: &Client, bob: &Client) {
+    applied(engine, alice, "disc", "disc.go", &go("Disc", "1"));
+    applied(engine, bob, "fx", "fx.go", &go("Fx", "2"));
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    agree(engine, alice, &split);
+    let applied = agree(engine, bob, &split);
+    assert!(
+        matches!(applied.state, ProposalState::Applied { .. }),
+        "{applied:?}"
+    );
+}
+
+/// #331's E3 (`split_is_followed_by`): scopes that both name the hot spot are not current
+/// work once the agents have drafts, so the split is not reversed at the same boundary.
+#[test]
+fn a_split_is_not_followed_by_a_join_on_overlapping_scopes() {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(
+        &engine,
+        &alice,
+        "a",
+        "a",
+        &["disc.go#Disc", "summary.go#Summary"],
+    );
+    register(&engine, &bob, "b", "b", &["fx.go#Fx", "summary.go#Summary"]);
+    layered_split(&dir, &engine, &alice, &bob);
+    let proposals = engine.proposals().unwrap();
+    assert!(
+        proposals.iter().all(|p| p.action != Action::Join),
+        "{proposals:?}"
+    );
+    let last = proposals.last().unwrap();
+    assert_eq!(last.action, Action::Keep);
+    assert!(
+        last.reasoning.contains("independent progress continues"),
+        "{}",
+        last.reasoning
+    );
+}
+
+/// #357 decisions 3 and 4: after a split, both agents drafting the hot spot is new evidence.
+/// The join is proposed, waits while both spaces hold drafts of the file, and applies once
+/// one agent publishes and the other incorporates.
+#[test]
+fn a_post_split_overlap_between_drafts_joins_after_a_publication() {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
+    register(&engine, &bob, "b", "b", &["fx.go#Fx"]);
+    layered_split(&dir, &engine, &alice, &bob);
+    let quiet = engine.reconsider().unwrap();
+    assert_eq!(quiet.action, Action::Keep, "{}", quiet.reasoning);
+    applied(&engine, &alice, "s1", "summary.go", &go("Summary", "1"));
+    applied(&engine, &bob, "s2", "summary.go", &go("Summary", "2"));
+    let join = engine.reconsider().unwrap();
+    assert_eq!(join.action, Action::Join, "{}", join.reasoning);
+    assert_eq!(join.signals.overlap, vec!["0:drafts 1:drafts".to_string()]);
+    agree(&engine, &alice, &join);
+    let blocked = agree(&engine, &bob, &join);
+    assert_eq!(
+        blocked.state,
+        ProposalState::Blocked {
+            blocker: "both workspaces hold unpublished drafts of [\"summary.go\"]".into()
+        }
+    );
+
+    offer(&engine, &alice, "l3");
+    let run = engine.validate().unwrap().unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Published { .. })),
+        "{run:?}"
+    );
+    let mine = engine.capture_for(&bob).unwrap();
+    let merged = go("Summary", "1 + 2");
+    let outcome = engine
+        .incorporate(&bob, edit("merge", &mine, "summary.go", &merged))
+        .unwrap();
+    assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
+    let joined = engine.proposal(&join.id).unwrap().unwrap();
+    assert!(
+        matches!(joined.state, ProposalState::Applied { .. }),
+        "{joined:?}"
+    );
+    assert_eq!(engine.placement().unwrap(), [0, 0]);
+    assert_eq!(read(&engine.root(&alice).unwrap(), "summary.go"), merged);
+}
+
+/// #357's `agent_split_scope_edge_then_join`: the published Fx calls Disc and Bob has not
+/// edited, so his edge comes from his scope. With no moving drafts his split applies; after it
+/// he has no current work, and a later overlap between drafts proposes a join.
+#[test]
+fn an_agent_split_over_a_scope_edge_applies_and_a_later_draft_overlap_joins() {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
+    register(&engine, &bob, "b", "b", &["fx.go#Fx"]);
+    applied(&engine, &alice, "fxbase", "fx.go", &go("Fx", "Disc() + 2"));
+    offer(&engine, &alice, "base");
+    let run = engine.validate().unwrap().unwrap();
+    assert!(
+        matches!(run.outcome, Some(RunOutcome::Published { .. })),
+        "{run:?}"
+    );
+    applied(&engine, &alice, "disc", "disc.go", &go("Disc", "1"));
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = split_by(&engine, &bob);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    assert_eq!(split.signals.compiler, vec!["0:drafts 1:b".to_string()]);
+    agree(&engine, &alice, &split);
+    let applied_split = agree(&engine, &bob, &split);
+    assert!(
+        matches!(applied_split.state, ProposalState::Applied { .. }),
+        "{applied_split:?}"
+    );
+    let quiet = engine.reconsider().unwrap();
+    assert!(
+        quiet.reasoning.contains("independent progress continues"),
+        "{}",
+        quiet.reasoning
+    );
+    applied(&engine, &alice, "s1", "summary.go", &go("Summary", "1"));
+    applied(&engine, &bob, "s2", "summary.go", &go("Summary", "2"));
+    let join = engine.reconsider().unwrap();
+    assert_eq!(join.action, Action::Join, "{}", join.reasoning);
+}
+
+/// #357: a draft whose relevance is unbounded (a manifest) relates to every other draft, so
+/// it voids an agreed split, and an agent's split is kept.
+#[test]
+fn a_draft_with_unbounded_relevance_refuses_a_split() {
+    let (dir, engine, alice, bob) = layered(LAYERED);
+    register(&engine, &alice, "a", "a", &["disc.go#Disc"]);
+    register(&engine, &bob, "b", "b", &["fx.go#Fx"]);
+    applied(&engine, &bob, "fx", "fx.go", &go("Fx", "2"));
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = split_by(&engine, &bob);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    agree(&engine, &alice, &split);
+    let manifest = "module example.com/probe\n\n// pinned\ngo 1.22\n";
+    applied(&engine, &alice, "pin", "go.mod", manifest);
+    let unbounded = "unsafe until publication: unbounded relevance of unpublished drafts";
+    let stale = agree(&engine, &bob, &split);
+    assert_eq!(
+        stale.state,
+        ProposalState::Stale {
+            reason: unbounded.into()
+        }
+    );
+    let own = split_by(&engine, &bob);
+    assert_eq!(own.action, Action::Keep, "{}", own.reasoning);
+    assert!(own.reasoning.contains(unbounded), "{}", own.reasoning);
+    assert_eq!(engine.placement().unwrap(), [0, 0]);
+}
+
+/// `Rate` before a long `Money`: once `Rate` is deleted, its old bytes fall inside `Money`'s
+/// new range, so only the publication's own evidence names `Rate`.
+const RATED: &str = "package probe\n\nfunc Rate() int {\n\treturn 2\n}\n\nfunc Money() int {\n\treturn 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1\n}\n";
+
+/// #364: a draft that deletes a symbol the peer's draft uses is named through the
+/// publication-side evidence, so the relationship is seen.
+#[test]
+fn a_draft_deleting_a_symbol_the_peers_draft_uses_is_related() {
+    let mut files = LAYERED.to_vec();
+    files[1] = ("core.go", RATED);
+    let (dir, engine, alice, bob) = layered(&files);
+    register(&engine, &alice, "a", "a", &["core.go#Money"]);
+    register(&engine, &bob, "b", "b", &["fx.go#Fx"]);
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = split_by(&engine, &bob);
+    agree(&engine, &alice, &split);
+    agree(&engine, &bob, &split);
+    assert_eq!(engine.placement().unwrap(), [0, 1]);
+    let deleted = RATED.replace("func Rate() int {\n\treturn 2\n}\n\n", "");
+    applied(&engine, &alice, "delete", "core.go", &deleted);
+    applied(&engine, &bob, "fx", "fx.go", &go("Fx", "Rate() * 2"));
+    let keep = engine.reconsider().unwrap();
+    assert_eq!(keep.signals.compiler, vec!["0:drafts 1:drafts".to_string()]);
+    assert!(
+        keep.reasoning.contains("compiler relationship alone"),
+        "{}",
+        keep.reasoning
+    );
+}
+
+/// #357 decision 1: reverted drafts drop out, for `plan` too. A file two authors wrote back
+/// to its published bytes does not interleave, so the split applies.
+#[test]
+fn a_file_both_authors_reverted_does_not_void_a_split() {
+    let (dir, engine, alice, bob) = fixture();
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    applied(&engine, &alice, "left", "siblings.go", LEFT);
+    applied(&engine, &bob, "revert", "siblings.go", GO[1].1);
+    let split = split_by(&engine, &alice);
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    agree(&engine, &alice, &split);
+    let applied = agree(&engine, &bob, &split);
+    assert!(
+        matches!(applied.state, ProposalState::Applied { .. }),
+        "{applied:?}"
     );
 }
