@@ -1,5 +1,5 @@
 //! `CLAUDE_CODE_SHELL_PREFIX` for per-command Bash confinement (#236, #295). Claude Code
-//! 2.1.308 runs each Bash command as `PREFIX 'COMMAND'`, and launches each stdio MCP
+//! 2.1.309 runs each Bash command as `PREFIX 'COMMAND'`, and launches each stdio MCP
 //! server as `PREFIX 'SERVER ARGS'`. This confines itself, then execs `SHELL -c COMMAND`
 //! with the shell Claude Code uses: reads outside the denied roots, writes only beneath
 //! scratch and `/dev/null`, no network. The `falinks` relay's exact command line is the one

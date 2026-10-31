@@ -1,4 +1,4 @@
-//! Per-command confinement (#236, #295): `falinks-claude-shell` run as Claude Code 2.1.308
+//! Per-command confinement (#236, #295): `falinks-claude-shell` run as Claude Code 2.1.309
 //! runs its prefix, `bash -c "'PREFIX' 'COMMAND'"`, with the environment `settings` gives
 //! the runtime, on the #33 fixture layout.
 use falinks_claude::{Launch, settings};
