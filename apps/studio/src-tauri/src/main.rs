@@ -41,6 +41,7 @@ fn select(id: String, studio: State<Mutex<Studio>>) {
     studio.lock().unwrap().select(&id);
 }
 
+/// The session Daniel selected, or `None` before his first click.
 #[tauri::command]
 fn selected(studio: State<Mutex<Studio>>) -> Option<Session> {
     studio.lock().unwrap().selected().cloned()
@@ -129,8 +130,8 @@ fn main() {
 /// Reads the log from its start, then from where it stopped. A line counts once it ends in a newline,
 /// so a line the hook is still writing waits for the next read. The lines there at start are
 /// replayed, so steps that ran while the app was down get no cards and no notifications. Live lines
-/// get the worktree fingerprint the core asks for; replayed ones get none. Each read, and so once
-/// after the replay, ends with a tick.
+/// get the worktree fingerprint the core asks for; replayed ones get none. Each pass ends with a
+/// tick, the first right after the replay.
 // shortcut: polls every 200 ms; switch to file-system events if the delay or the wake-ups matter.
 fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
     let mut read_to = 0;

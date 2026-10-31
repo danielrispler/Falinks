@@ -211,3 +211,24 @@ fn the_list_shows_needs_you_first_then_running_then_ended() {
         ]
     );
 }
+
+#[test]
+fn the_selection_holds_all_day_while_its_session_changes_group_and_others_are_prompted() {
+    let mut studio = Studio::default();
+    let first = "5d7f69ab-91ca-427e-9d9c-9180c2c0c74b";
+    let mut groups = BTreeSet::new();
+
+    for line in DAY.lines() {
+        studio.apply(line);
+        if studio.session(first).is_some() && studio.selected().is_none() {
+            studio.select(first);
+        }
+        groups.insert(studio.selected().map(|s| s.state));
+    }
+
+    assert_eq!(studio.selected().map(|s| s.id.as_str()), Some(first));
+    assert_eq!(
+        groups,
+        BTreeSet::from([NeedsYou, Running, YourTurn, Ended].map(Some))
+    );
+}

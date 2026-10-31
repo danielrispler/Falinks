@@ -625,8 +625,8 @@ impl Studio {
         }
     }
 
-    /// The shell's clock, in Unix milliseconds, on each read of the log and once after the replay.
-    /// Rules that fire with no event use it. Returns whether a session changed state.
+    /// The shell's clock, in Unix milliseconds, on each pass of its read loop, the first right after
+    /// the replay. Rules that fire with no event use it. Returns whether a session changed state.
     pub fn tick(&mut self, now: u64) -> bool {
         self.now = now;
         let mut changed = false;

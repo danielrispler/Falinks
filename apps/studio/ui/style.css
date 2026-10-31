@@ -21,7 +21,7 @@ html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 
 .row .row-step { color: var(--muted); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 h1 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
 .session { font-size: 14px; color: var(--muted); margin: 0 0 6px; }
-/* Colour only on "needs you" (#328, module 3): "your turn" stays as neutral as "working". */
+/* Colour only on "needs you" (#328, module 3): "your turn" stays as neutral as "running". */
 .state { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
 .state[data-state="needs_you"] { color: var(--needs-you); background: var(--needs-you-bg); border-radius: 6px;
                                  padding: 2px 8px; display: inline-block; }

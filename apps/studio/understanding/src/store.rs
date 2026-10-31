@@ -55,6 +55,7 @@ pub struct SessionCards {
     pub older: Vec<StoredCard>,
 }
 
+/// The last 30 minutes (#369, decision 18).
 const RECENT_MS: u64 = 30 * 60 * 1000;
 
 /// Now, in Unix milliseconds, as the store's records keep time.
