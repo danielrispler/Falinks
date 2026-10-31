@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
   "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4); and #205's go-invoice in its three arms, one agent, two Git agents and two Falinks agents (#336). A team of one's final snapshot is measured as a two-agent team's: the same metrics, properties and ratings.",
   "amendments": [
@@ -32,6 +32,11 @@
       "version": 7,
       "ticket": 336,
       "reason": "Calibration of go-invoice (calibration/v6.json, 15 calls), run by Daniel outside auto mode on the copies as frozen in v6, none changed. The record names manifest v46, this branch's freeze before it was rebased onto #364, which took v46 first; v47 holds the same files except config.json's protocol text, which the judge does not read. Only go-invoice was rated; rust-errors, go-page and go-relationships keep their records, because nothing the judge reads for them changed. All four dimensions passed on the first calibration (reference medians 3, 4, 4 and 4; copy medians 2, 3, 1 and 2 for duplication, maintainability, test_quality and unnecessary_changes), so none is amended or dropped. judge.calibration records go-invoice's outcome, and go-invoice leaves uncalibrated_fixtures."
+    },
+    {
+      "version": 8,
+      "ticket": 382,
+      "reason": "The Claude Code pin moves from 2.1.308 to 2.1.309 (#382), before #205's final freeze (#338) and before any #205 value was computed. falinks-arm requires the run configuration's runtime_version to equal the adapter's pin, and the judge requires judge.runtime_version to equal the run configuration's, so the judge pin moves with them (Daniel, 2026-10-31, on #382). The judge model, prompt, anchors, k, material and rules are unchanged. The calibration records stand and were not re-run: calibration/v2.json, v4.json and v6.json were made on 2.1.308, and only the CLI version the calls go through changed."
     }
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
@@ -247,7 +252,7 @@
   },
   "judge": {
     "runtime": "the run configuration's runtime_version, runtime_sha256 and model (evaluation/config.json)",
-    "runtime_version": "2.1.308",
+    "runtime_version": "2.1.309",
     "model": "claude-opus-5-5",
     "session": "No tools and a fresh session per call. (#228 decision 15)",
     "k": 3,

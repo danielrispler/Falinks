@@ -15,6 +15,16 @@ cargo build --release --bins
 
 The verifier expects sibling `sandbox-probe`, `falinks-claude-tool` and `falinks-claude-shell` executables (`--probe` and `--tool` override the first two; the shell sits beside the tool); a missing one fails before any runtime launch. It needs the existing subscription login and network access for three short model turns. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. The evidence's `outcome` is `passed`, `failed` or `inconclusive`. A failed check exits 1; inspect `failure`. A `model_refusal_fallback` still fails the run as below, but exits 2 and prints `inconclusive: model refusal (not evidence either way)`.
 
+### Moving the pin
+
+To move to a new Claude Code release:
+
+1. Read the release's `CHANGELOG.md` entry for changes to the launch profile, `CLAUDE_CODE_SHELL_PREFIX`, stream-json events, hooks, MCP and the macOS sandbox profile.
+2. Copy the `darwin-arm64`, `linux-x64` and `linux-arm64` checksums from `$DIST/VERSION/manifest.json` into `PINS`, and set `VERSION`. `DIST` is in `.github/workflows/adapter-linux.yml`. Check a local copy against its checksum.
+3. Change the version in this README and `tests/session.rs`. Change it in `shell.rs`, `tests/shell.rs` and `docs/platforms.md` once the behaviour they describe is checked on the new binary, including the hand mirror of Claude Code's Seatbelt profile.
+4. The Falinks arm and the judge require the evaluation's runtime to match. Set `runtime_version`, `runtime_sha256` (macOS arm64) and `runtime_binary` in `evaluation/config.json`, the version in `evaluation/README.md` and the judge configurations in `evaluation/tests/harness.rs`. Move `code-quality.json`'s `judge.runtime_version` by a versioned amendment, then re-freeze and record the pin in `setup.json`'s `status` (see "Freeze and setup ledger" in `evaluation/README.md`). If a final freeze names the old version and its batch has not finished, ask before moving.
+5. Run `check-claude-adapter` and `check-integration` on the new binary, then `cargo run --bin ci-checks`. Suggest the heavy evaluation tests on the branch.
+
 ## Launch profile
 
 The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Glob,Grep,Read` (from `NATIVE`, the list `init` must report), `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables except `CLAUDE_CODE_OAUTH_TOKEN`, the subscription login that `claude setup-token` creates for CI, and sets `DISABLE_AUTOUPDATER=1`. Like the Git-arm worker, it sets `GOCACHE=scratch/go-cache`, `GOTOOLCHAIN=local` and `GOPROXY=off`: the sandbox denies Go's default cache (#112). Edit, Write, web, Agent/Task and Skill are denied.
