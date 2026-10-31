@@ -261,11 +261,15 @@ const TREATMENT: [&str; 2] = [
     "Formatter access differs: the Git arm runs gofmt and cargo fmt directly, while the Falinks arm has only an enrolled gofmt job and no rustfmt job (#224). Formatting is normalized before measurement and is not a metric.",
 ];
 
-/// One fixture's deterministic code-quality metrics from `quality` (#230), per arm, with the
-/// usual statistics and labels. Each repetition that lacks a value names why in
-/// `missing_reasons`; each lint count gives its per-lint breakdown per repetition, and
-/// `failing_properties` (#231) the failing property IDs.
-fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
+/// One fixture's deterministic code-quality metrics from `quality` (#230), per arm in `slots`,
+/// with the usual statistics, and labels between the two `labelled` arms. Each repetition that
+/// lacks a value names why in `missing_reasons`; each lint count gives its per-lint breakdown
+/// per repetition, and `failing_properties` (#231) the failing property IDs.
+fn code_quality(
+    fixture: &str,
+    slots: &BTreeMap<&str, Vec<Option<&Value>>>,
+    labelled: [&str; 2],
+) -> Value {
     let rust = crate::fixture(fixture).is_ok_and(|f| f["language"] == "rust");
     let lint = if rust {
         "clippy_findings"
@@ -282,7 +286,7 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
     let mut out = serde_json::Map::new();
     let mut labels = serde_json::Map::new();
     let mut values = BTreeMap::new();
-    for arm in ARMS {
+    for &arm in slots.keys() {
         let mut entry = serde_json::Map::new();
         for metric in metrics {
             let cells: Vec<(Option<f64>, Value)> = slots[arm]
@@ -335,10 +339,14 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
     for metric in metrics {
         labels.insert(
             metric.into(),
-            label(&values[&("git", metric)], &values[&("falinks", metric)]).into(),
+            label(
+                &values[&(labelled[0], metric)],
+                &values[&(labelled[1], metric)],
+            )
+            .into(),
         );
     }
-    let measured = ARMS.iter().flat_map(|arm| slots[arm].iter().flatten());
+    let measured = slots.values().flat_map(|runs| runs.iter().flatten());
     let reference = measured
         .clone()
         .map(|r| &r["quality"]["reference_production_lines_changed"])
@@ -358,7 +366,10 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
         json!(reference),
     );
     let definitions = crate::judge::definitions().unwrap_or(Value::Null);
-    out.insert("judge".into(), judge_cells(fixture, slots, &definitions));
+    out.insert(
+        "judge".into(),
+        judge_cells(fixture, slots, labelled, &definitions),
+    );
     out.insert("treatment_properties".into(), json!(TREATMENT));
     out.insert("measurements".into(), json!(measurements));
     Value::Object(out)
@@ -367,22 +378,25 @@ fn code_quality(fixture: &str, slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> V
 /// Where the judge's known-answer set lives (#233).
 const KNOWN_ANSWER_SET: &str = "evaluation/protected/known-answer.json";
 
-/// One fixture's judge cells from `quality --judge` (#232): per arm and dimension, the runs'
-/// medians with the usual statistics, each run's spread, and why a repetition lacks a value. A
+/// One fixture's judge cells from `quality --judge` (#232): per arm in `slots` and dimension, the
+/// runs' medians with the usual statistics, each run's spread, and why a repetition lacks a value.
+/// When the two `labelled` arms' medians agree, both name the set's sensitivity. A
 /// dimension without a passing calibration record prints "Not yet calibrated" instead, as does
 /// every dimension of a fixture whose known-answer set predates it (`uncalibrated_fixtures`). A
 /// dimension dropped overall or on this fixture alone (#263) prints the dropped wording.
-/// The blinding check prints `arm guessed k/n` over parsed guesses, with the frozen note.
+/// The blinding check prints `arm guessed k/n` over parsed guesses, with the frozen note; a team
+/// of one has no guess (#336).
 fn judge_cells(
     fixture: &str,
     slots: &BTreeMap<&str, Vec<Option<&Value>>>,
+    labelled: [&str; 2],
     definitions: &Value,
 ) -> Value {
     let stale = (definitions["judge"]["uncalibrated_fixtures"].as_array())
         .is_some_and(|f| f.iter().any(|f| f == fixture));
     let mut out = serde_json::Map::new();
     let (mut correct, mut parsed, mut missing) = (0, 0, 0);
-    for arm in ARMS {
+    for &arm in slots.keys() {
         let mut entry = serde_json::Map::new();
         for dimension in crate::judge::DIMENSIONS {
             let calibration = &definitions["judge"]["calibration"][dimension];
@@ -444,7 +458,7 @@ fn judge_cells(
     }
     // #228 decision 24: a calibrated dimension whose arms' medians agree names the set's sensitivity.
     for dimension in crate::judge::DIMENSIONS {
-        let medians: Vec<&Value> = ARMS.iter().map(|a| &out[*a][dimension]["median"]).collect();
+        let medians = labelled.map(|a| &out[a][dimension]["median"]);
         if medians[0].is_number() && medians.iter().all(|m| *m == medians[0]) {
             let flat = format!(
                 "{} ({KNOWN_ANSWER_SET}).",
@@ -452,7 +466,7 @@ fn judge_cells(
                     .as_str()
                     .unwrap_or_default()
             );
-            for arm in ARMS {
+            for arm in labelled {
                 out[arm][dimension]["note"] = flat.clone().into();
             }
         }
@@ -659,7 +673,7 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
                 "median_seconds": {"git": git, "falinks": falinks}, "median_reduction": reduction,
                 "metrics": metrics, "label_note": LABEL_NOTE,
                 "cost": costs,
-                "code_quality": code_quality(fixture, &slots),
+                "code_quality": code_quality(fixture, &slots, ARMS),
                 "falinks_edits": edits,
                 "falinks_request_key_refusals": refusals,
                 "reverted_peer_text": reverted,
@@ -1608,6 +1622,12 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         let hits = runs.iter().filter(|r| team(r).as_deref() == Some(arm));
         hits.filter(|r| !r["nested_agent"].is_null()).count()
     };
+    let slots = arms
+        .iter()
+        .map(|(a, runs)| (*a, runs.iter().map(|r| Some(*r)).collect()))
+        .collect();
+    // #336: all three arms are measured; the labels compare the payback arms only.
+    let quality = code_quality(LARGE_SPEC_FIXTURE, &slots, PAYBACK_ARMS);
     json!({
         "qualification": "Scored: #205's eight rotations, read by the #5 decision's fixed payback criteria, which the decision may not amend. P1–P3 and the mechanism compare two Falinks agents with two Git agents only; one agent is descriptive. Judge cells, size metrics and cross-batch ratios are not payback. Cost is API-equivalent list price, not billed cost.",
         "fixture": LARGE_SPEC_FIXTURE,
@@ -1627,6 +1647,7 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         "git_1": git_1,
         "per_arm": per_arm, "per_arm_note": PER_ARM_NOTE, "coordination_note": COORDINATION_NOTE,
         "cost": costs,
+        "code_quality": quality,
         "gaps": gaps,
         "nested_agent_hits": STEP_6_ARMS.iter().map(|a| (a.to_string(), json!(nested(a)))).collect::<serde_json::Map<_, _>>(),
         "replaced_runs": replaced,
@@ -1804,6 +1825,36 @@ mod large_spec_tests {
         let out = large_spec_report(&runs);
         assert_eq!(out["mechanism"]["status"], "missing");
         assert_eq!(out["collisions"]["falinks-2"]["waste_lines"]["missing"], 1);
+    }
+
+    /// #336: code quality covers one agent too; its label compares the payback arms only, and
+    /// one agent is never asked the blinding question.
+    #[test]
+    fn code_quality_covers_one_agent_and_labels_the_payback_arms() {
+        let mut runs = even();
+        for (i, run) in runs.iter_mut().enumerate() {
+            let lines = match (run["arm"].as_str(), run["team_size"].as_u64()) {
+                (Some("git"), Some(1)) => 600,
+                (Some("git"), _) => 650 + i,
+                _ => 700 + i,
+            };
+            let guess = (run["team_size"] == 2)
+                .then(|| json!({"arm": "git", "correct": run["arm"] == "git"}));
+            run["quality"] = json!({"metrics": {"production_lines_changed": {"value": lines}},
+                "judge": {"guess": guess}});
+        }
+        let quality = &large_spec_report(&runs)["code_quality"];
+        assert_eq!(
+            quality["git-1"]["production_lines_changed"]["values"],
+            json!(vec![600.0; 8])
+        );
+        assert_eq!(quality["falinks-2"]["production_lines_changed"]["n"], 8);
+        assert_eq!(quality["labels"]["production_lines_changed"], "consistent");
+        assert!(quality["judge"]["git-1"].is_object());
+        assert_eq!(
+            quality["judge"]["blinding"]["arm_guessed"],
+            "arm guessed 8/16"
+        );
     }
 
     fn waste(runs: &mut [Value], falinks: f64) {
@@ -2432,7 +2483,7 @@ mod tests {
         ]);
         let mut definitions = crate::judge::definitions().unwrap();
         definitions["judge"]["calibration"] = Value::Null;
-        let cells = judge_cells("go-page", &slots, &definitions);
+        let cells = judge_cells("go-page", &slots, ARMS, &definitions);
         for dimension in crate::judge::DIMENSIONS {
             assert_eq!(cells["falinks"][dimension], "Not yet calibrated");
         }
@@ -2449,10 +2500,10 @@ mod tests {
         definitions["judge"]["calibration"] = json!({"duplication": {"passed": true}});
         // #250: a fixture whose known-answer set predates it is not calibrated.
         definitions["judge"]["uncalibrated_fixtures"] = json!(["go-page"]);
-        let stale = judge_cells("go-page", &slots, &definitions);
+        let stale = judge_cells("go-page", &slots, ARMS, &definitions);
         assert_eq!(stale["falinks"]["duplication"], "Not yet calibrated");
         definitions["judge"]["uncalibrated_fixtures"] = Value::Null;
-        let cells = judge_cells("go-page", &slots, &definitions);
+        let cells = judge_cells("go-page", &slots, ARMS, &definitions);
         let falinks = &cells["falinks"]["duplication"];
         assert_eq!(falinks["values"], json!([2.0, 3.0]));
         assert_eq!(falinks["spreads"], json!([[1, 2], [2, 3]]));
@@ -2471,7 +2522,7 @@ mod tests {
             ("git", vec![Some(&flat[0])]),
             ("falinks", vec![Some(&flat[1])]),
         ]);
-        let cells = judge_cells("go-page", &slots, &definitions);
+        let cells = judge_cells("go-page", &slots, ARMS, &definitions);
         for arm in ARMS {
             let note = cells[arm]["duplication"]["note"].as_str().unwrap();
             assert!(
@@ -2488,13 +2539,25 @@ mod tests {
         // #263: a dimension dropped on one fixture prints the dropped wording there only.
         definitions["judge"]["calibration"]["duplication"]["go-relationships"] =
             json!({"dropped": true});
-        let dropped = judge_cells("go-relationships", &slots, &definitions);
+        let dropped = judge_cells("go-relationships", &slots, ARMS, &definitions);
         assert_eq!(
             dropped["git"]["duplication"],
             "Failed calibration; not reported."
         );
-        let kept = judge_cells("go-page", &slots, &definitions);
+        let kept = judge_cells("go-page", &slots, ARMS, &definitions);
         assert!(kept["git"]["duplication"]["note"].is_string());
+
+        // #336: beside a third arm, the note compares the labelled arms only.
+        let one = run(5, Value::Null);
+        let slots = BTreeMap::from([
+            ("git", vec![Some(&flat[0])]),
+            ("falinks", vec![Some(&flat[1])]),
+            ("git-1", vec![Some(&one)]),
+        ]);
+        let cells = judge_cells("go-page", &slots, ARMS, &definitions);
+        assert!(cells["falinks"]["duplication"]["note"].is_string());
+        assert_eq!(cells["git-1"]["duplication"]["median"], 5.0);
+        assert!(cells["git-1"]["duplication"].get("note").is_none());
     }
 
     #[test]

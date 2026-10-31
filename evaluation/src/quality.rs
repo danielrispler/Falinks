@@ -702,7 +702,10 @@ pub fn quality(dirs: &[&Path], judge: Option<&Path>) -> Result<i32> {
                     Some(last) => {
                         let material = crate::judge::material(&base.initial, &last);
                         let requirements = crate::judge::requirements(&fixture(&name)?);
-                        let arm = entry["arm"].as_str().unwrap_or_default();
+                        // A team of one is measured like any run, but not asked the
+                        // two-agent blinding question (#336).
+                        let arm = (entry["team_size"] != 1)
+                            .then(|| entry["arm"].as_str().unwrap_or_default());
                         let mut call = |prompt: &str| runtime.call(prompt);
                         crate::judge::judge(&mut call, &definitions, &requirements, &material, arm)
                     }

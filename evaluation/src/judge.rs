@@ -359,15 +359,19 @@ pub fn rate(
 }
 
 /// One measured snapshot's ratings and arm guess (#228 decision 19). A missing guess is not
-/// retried.
+/// retried. A team of one (`arm` None) gets no guess: the frozen question assumes two agents
+/// (#336).
 pub fn judge(
     call: &mut Call,
     definitions: &Value,
     requirements: &str,
     material: &Material,
-    arm: &str,
+    arm: Option<&str>,
 ) -> Value {
     let (ratings, mut calls) = rate(call, definitions, requirements, material);
+    let Some(arm) = arm else {
+        return json!({"ratings": ratings, "calls": calls});
+    };
     let (text, mut record) = call(&blinding_prompt(definitions, requirements, material));
     record["purpose"] = "blinding".into();
     let guessed = match text.and_then(|t| guess(&t, definitions)) {
@@ -419,7 +423,7 @@ mod tests {
                 None => (Err("runtime call failed".to_string()), usage),
             }
         };
-        let value = judge(&mut call, &definitions, "Add b.", &material, arm);
+        let value = judge(&mut call, &definitions, "Add b.", &material, Some(arm));
         (value, prompts)
     }
 
@@ -464,6 +468,26 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(prompts[3].starts_with(question) && prompts[3].contains("Add b."));
+    }
+
+    /// #336: the blinding question asks about two agents, so a team of one is not asked it.
+    #[test]
+    fn a_team_of_one_gets_no_blinding_call() {
+        let definitions = definitions().unwrap();
+        let material = Material {
+            initial: "a".into(),
+            change: "+b".into(),
+            tests: String::new(),
+        };
+        let mut calls = 0;
+        let mut call = |_: &str| {
+            calls += 1;
+            (Ok(reply([4; 4])), json!({"usage": null}))
+        };
+        let value = judge(&mut call, &definitions, "Add b.", &material, None);
+        assert_eq!(calls, 3);
+        assert_eq!(value["ratings"]["duplication"]["value"], 4);
+        assert!(value.get("guess").is_none(), "{value}");
     }
 
     #[test]

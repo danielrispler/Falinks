@@ -1,7 +1,7 @@
 {
-  "version": 5,
+  "version": 7,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
-  "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4).",
+  "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4); and #205's go-invoice in its three arms, one agent, two Git agents and two Falinks agents (#336). A team of one's final snapshot is measured as a two-agent team's: the same metrics, properties and ratings.",
   "amendments": [
     {
       "version": 2,
@@ -22,6 +22,16 @@
       "version": 5,
       "ticket": 263,
       "reason": "Recalibration of go-relationships on fixture 3 version 2 (#263). Its known-answer set was rebuilt on the v2 reference: records_test.go covers Produce, Consume, Stats, Duplicates, Parse and IDs, and the four copies (Daniel signed them off) were frozen in manifest v35 before any calibration call. Decision 23 is read as allowing a new set for a new fixture version: no calibrated copy changed. Only go-relationships was rated (calibration/v4.json, 15 calls); rust-errors and go-page keep calibration/v2.json, because nothing the judge reads for them (fixture, reference, copies, prompt, anchors, material code, runtime pin) changed since it. duplication, test_quality and unnecessary_changes passed (reference medians 5, 4 and 5; copy medians 2, 1 and 3). maintainability tied at median 4 (reference 4,4,5; copy 4,4,3): every copy reason named its manual loop, but the reference lost a point for Duplicates' count reset. maintainability is dropped for go-relationships only, where it prints Failed calibration; not reported. It stays calibrated on rust-errors and go-page, whose reported values are unchanged, and its prompt is not amended (Daniel, 2026-10-24, on #263). go-relationships leaves uncalibrated_fixtures, and the inspection rule is lifted for it."
+    },
+    {
+      "version": 6,
+      "ticket": 336,
+      "reason": "#205's code quality (#205 resolution, \"Code quality\"): go-invoice and the one-agent arm join the scope. Properties I1-I9 add one per ticket, 22 in all; the reference passes them and each fails on its broken copy. None calls discount.Line, whose result the requirement leaves to the implementer (#332): I3 reads each rule's discount through Totals with a zero tax Table, as the oracle does, and a reference variant with the other choice passes all nine. The suite prints only what the requirements fix; the new exclusions name what it leaves out. Titles are never empty, since whether a rule drops the trailing spaces of an empty last column is open; an error's Line is the first bad line, the one a line-by-line reader meets. The known-answer base is the reference plus invoice_test.go, one test function with a subtest per ticket, so the test_quality copy changes one declaration; it checks errors by type assertion, so the copy leaves no import unused. The copies: Statement sums the discount, tax and total itself instead of calling Totals (duplication); an unrequested render.Markdown (unnecessary_changes); Validate as a flag-driven loop (maintainability); happy-path tests (test_quality). Daniel signs off each copy as plausible (subtlety_rule). This version freezes the copies for that review; a copy he changes is re-frozen in a new version before the first calibration call, and none changes after it (amendment_rule). go-invoice is in uncalibrated_fixtures, so its judge cells print Not yet calibrated until `known-answer --judge CONFIG --fixtures go-invoice` (15 calls) records its calibration and a further amendment sets each dimension's outcome; a dimension that fails is dropped for go-invoice alone (#263). The blinding question assumes two agents, so a team of one is rated but not asked it. No go-invoice run exists and its scored batch (#339) follows its calibration, so the lifted inspection rule needs no exception."
+    },
+    {
+      "version": 7,
+      "ticket": 336,
+      "reason": "Calibration of go-invoice (calibration/v6.json, 15 calls), run by Daniel outside auto mode on the copies as frozen in v6, none changed. The record names manifest v46, this branch's freeze before it was rebased onto #364, which took v46 first; v47 holds the same files except config.json's protocol text, which the judge does not read. Only go-invoice was rated; rust-errors, go-page and go-relationships keep their records, because nothing the judge reads for them changed. All four dimensions passed on the first calibration (reference medians 3, 4, 4 and 4; copy medians 2, 3, 1 and 2 for duplication, maintainability, test_quality and unnecessary_changes), so none is amended or dropped. judge.calibration records go-invoice's outcome, and go-invoice leaves uncalibrated_fixtures."
     }
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
@@ -42,7 +52,17 @@
       "repeated query parameters",
       "whitespace other than ASCII space and tab",
       "error bodies",
-      "sums that overflow u32"
+      "sums that overflow u32",
+      "error messages",
+      "the value returned with an error",
+      "nil against empty slices",
+      "rule counts outside int64",
+      "arithmetic outside int64",
+      "empty titles and titles with line breaks",
+      "Format of an invoice that does not parse cleanly",
+      "Totals of a line with a quantity below 1 or a negative price",
+      "the type of a conversion error",
+      "discount.Line, whose result the implementer chooses"
     ],
     "gates": "Enforced by the measuring command before it computes any property value: the reference passes every property, and each property fails on at least one deliberately broken copy of the reference. If either gate fails on a fixture, every run's property value for that fixture is missing, and the reason names the property and the gate it failed. The gates are not part of verify. (#228 decision 13)",
     "containment": "Suites compile and run agent code, so they run through the same contained check path as the oracle. (#228 decision 14)",
@@ -150,6 +170,78 @@
         "requirement": {"at": "/milestones/1/requirements/0", "text": "add Stats(lines []string) (kept int, dropped int) using the same trimming/blank policy as Produce, and Duplicates(lines []string) []string returning each trimmed nonblank text that occurs more than once, once each, in order of first occurrence; empty when none. Neither mutates its input."},
         "domain": "line lists of length 0-12; each line is blank or 1-3 words from a, b and ab, with ASCII spaces and tabs around and between them",
         "excluded": ["whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "I1",
+        "fixture": "go-invoice",
+        "checks": "ParseMoney and ParseRate values and errors, Money and Rate String and their round trips, MulRate's and DivRound's rounding, and DivRound's panic on 0",
+        "requirement": {"at": "/requirements/0", "text": "Money is an amount in cents (int64). ParseMoney(s string) (Money, error) accepts an optional leading -, one or more ASCII digits, and optionally a . followed by one or two digits; it returns an error for anything else, including spaces, a leading + and amounts outside int64. \"-0\" is 0. String() prints a - for a negative amount, the whole units in decimal without leading zeros (0 below one unit), a . and exactly two digits, so ParseMoney(m.String()) is m. Rate is a nonnegative factor in millionths (int64): 1000000 is 1 and 82500 is 8.25%. ParseRate(s string) (Rate, error) accepts one or more digits, optionally followed by a . and one to six digits, or the same with at most four decimals followed directly by %, which divides it by 100; it returns an error for anything else, including a sign, spaces and values outside int64. Rate's String() formats it as a percentage with at most four decimals, dropping trailing zeros and a trailing ., followed by %, such as 8.25%, 100% or 0%, so ParseRate(r.String()) is r. (m Money) MulRate(r Rate) Money returns m × r ÷ 1,000,000 rounded to the nearest cent, halves away from zero, exactly whenever m × r fits in int64. DivRound(a, b int64) int64 returns a ÷ b rounded to the nearest integer, halves away from zero, and panics when b is 0."},
+        "domain": "amounts as an optional -, 1-6 digits and an optional . with 0-3 digits, rates likewise with 0-7 decimals or as percentages with 0-5, strings of 0-8 characters from digits, '-', '.', '+', '%', 'e' and space, and edge strings at the int64 limits; any int64 Money and nonnegative Rate printed and parsed back; MulRate on amounts up to ±10^9 cents and rates up to 3, halves included; DivRound on numerators up to ±10^12 and divisors -20 to 20, 0 included",
+        "excluded": ["error messages", "the value returned with an error", "arithmetic outside int64"]
+      },
+      {
+        "id": "I2",
+        "fixture": "go-invoice",
+        "checks": "Gross, Subtotal, Validate's first broken rule and its Line, and Summarize",
+        "requirement": {"at": "/requirements/1", "text": "LineItem{SKU string; Qty int64; Unit Money; Category string} is Qty units of SKU at Unit each, and its Gross() is Qty × Unit. Invoice{ID, Customer, Currency string; Lines []LineItem} has Subtotal(), the sum of its lines' Gross. Validate() error returns nil for a valid invoice, or an *Error for the first rule it breaks, checked in this order: ID is nonempty and has no whitespace; Customer is not empty or only whitespace; Currency is three ASCII capital letters; there is at least one line; then, line by line, SKU is nonempty, has no whitespace and is not used by an earlier line, Qty is at least 1, Unit is not negative, and Category is nonempty and made only of ASCII lowercase letters, digits and -. Error.Line is the 1-based index of the line at fault, or 0 for the invoice's own fields, including having no lines; Msg is free text. In the root package invoice, Summary starts with ID, Customer string and Subtotal core.Money, and Summarize(inv core.Invoice) Summary returns inv's ID, Customer and Subtotal with every other field zero."},
+        "domain": "invoices of 0-6 lines whose ID, customer and currency are valid five times in six and whose lines are valid three times in four, the rest drawn from empty or spaced IDs, blank customers, lowercase or wrong-length currencies, invalid or repeated SKUs, quantities 0 and -1, negative prices, and categories that are empty or hold capitals, spaces, '_' or 'é'",
+        "excluded": ["error messages", "whitespace other than ASCII space and tab", "arithmetic outside int64"]
+      },
+      {
+        "id": "I3",
+        "fixture": "go-invoice",
+        "checks": "ParseRules values, error lines and nil slice, Rule.String, and the discount each rule set takes, read through Totals with a zero tax Table",
+        "requirement": {"at": "/requirements/2", "text": "ParseRules(text string) ([]Rule, error) reads one rule per line of text, split at \\n. Spaces, tabs and \\r are trimmed from both ends of each line, blank lines and lines starting with # are skipped, and fields are separated by whitespace. A rule is one of: percent CATEGORY RATE [min QTY] [cap AMOUNT], which takes RATE of the Gross off each line in CATEGORY with at least QTY units (QTY defaults to 1); tier CATEGORY QTY:RATE... [cap AMOUNT], one or more tiers with strictly increasing quantities, which takes off each line in CATEGORY the RATE of its Gross of the last tier whose QTY the line's Qty reaches, and nothing below the first; bundle SKU BUY FREE, which takes Qty ÷ (BUY + FREE), rounded down, × FREE × Unit off the line with that SKU; and off SKU AMOUNT, which takes AMOUNT, but at most Unit, off each unit of the line with that SKU. Optional parts appear in the order shown. RATE is what core.ParseRate accepts, at most 100%; QTY, BUY and FREE are positive integers written only with digits; AMOUNT is what core.ParseMoney accepts, above zero. With a cap, a rule takes at most AMOUNT off a line. Rates apply with Money.MulRate. Any other line returns a nil slice and an *Error whose Line is the 1-based line number; Msg is free text. (r Rule) String() formats a parsed rule as ParseRules reads it, on one line with single spaces: rates by Rate.String, amounts by Money.String, counts in decimal, tiers as QTY:RATE, min only when above 1 and cap only when set, so a rule's String parses back to a rule with the same String. Line(item core.LineItem, rules []Rule) core.Money applies the one rule in rules that takes the most off item: rules never combine, and when none applies nothing is taken off."},
+        "domain": "rules texts of 0-5 percent, tier, bundle and off lines over a few categories and SKUs, with blank, comment and padded lines; half the texts also draw invalid rates, amounts, counts, tiers and keywords; each applied to four single-line invoices of 1-12 units at up to 200.00",
+        "excluded": ["error messages", "nil against empty slices", "rule counts outside int64", "discount.Line, whose result the implementer chooses", "whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "I4",
+        "fixture": "go-invoice",
+        "checks": "ParseTable values and error lines, Table.String, and Rate and Line for exempt SKUs, categories, thresholds and the default",
+        "requirement": {"at": "/requirements/3", "text": "ParseTable(text string) (Table, error) reads a tax table, one entry per line, with discount.ParseRules's line rules (split at \\n; trim spaces, tabs and \\r; skip blank lines and lines starting with #; fields separated by whitespace). The entries are rate CATEGORY RATE [over AMOUNT RATE2], where lines in CATEGORY whose Unit is above AMOUNT pay RATE2 instead of RATE; default RATE, the rate of categories without a rate entry; and exempt SKU, a SKU that pays no tax. RATE and RATE2 are what core.ParseRate accepts, and AMOUNT is what core.ParseMoney accepts, not negative. A category, the default or an exempt SKU given twice, or any other line, returns a zero Table and an *Error whose Line is the 1-based line number. The zero Table taxes nothing. (t Table) Rate(item core.LineItem) core.Rate returns 0 for an exempt SKU, otherwise the rate of item's category (RATE2 when its Unit is above AMOUNT), otherwise the default rate, otherwise 0. (t Table) Line(item core.LineItem, net core.Money) core.Money returns the tax on item when its price after discount is net: net.MulRate(t.Rate(item)), so tax is rounded per line. (t Table) String() formats t as ParseTable reads it: the default entry if there is one, then the rate entries sorted by category, then the exempt entries sorted by SKU, one per line with single spaces, each ending in \\n, rates by Rate.String and amounts by Money.String."},
+        "domain": "tax tables with a default half the time, rates for about half the categories (some over a threshold) and some exempt SKUs; half the tables are 0-5 entries that may be invalid or repeated; each rated on four lines priced at or around the thresholds, with nets up to 500.00",
+        "excluded": ["error messages", "whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "I5",
+        "fixture": "go-invoice",
+        "checks": "ParseTable values and error lines, Table.String, and Convert's route, tie-break, rounding and whole currencies",
+        "requirement": {"at": "/requirements/4", "text": "ParseTable(text string) (Table, error) reads exchange rates, one entry per line, with discount.ParseRules's line rules. FROM TO RATE means one unit of FROM is worth RATE units of TO: FROM and TO are different codes of three ASCII capital letters, and RATE is what core.ParseRate accepts, above zero and without %. A pair may be given once, in either direction. whole CODE marks a currency without minor units, once per code. Any other line returns a zero Table and an *Error whose Line is the 1-based line number. (t Table) Convert(m core.Money, from, to string) (core.Money, error) returns m unchanged when from equals to. Otherwise it converts along the route of fewest pairs, and among equally short routes the one whose sequence of currencies is alphabetically first, compared currency by currency. A step along a pair as given is m.MulRate(RATE), a step against it is core.DivRound(m × 1,000,000, RATE), and a step into a whole currency then rounds to whole units, a multiple of 100 cents, halves away from zero. With no route it returns an error. (t Table) String() formats t as ParseTable reads it: the whole entries sorted by code, then the pairs as given sorted by FROM and then TO, one per line with single spaces, each ending in \\n, rates as decimals without trailing zeros or a trailing ."},
+        "domain": "exchange tables pairing each two of USD, EUR, JPY, GBP and CHF half the time in either direction, rates 0.25 to 4, each currency whole one time in five; half the tables are 0-5 lines that may be invalid or repeated; four conversions each of up to ±10,000.00 between those codes, usd and the same code",
+        "excluded": ["error messages", "the value returned with an error", "arithmetic outside int64", "whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "I6",
+        "fixture": "go-invoice",
+        "checks": "the whole table text: widths, alignment, Max, multi-line cells, missing and extra cells, rules and footer",
+        "requirement": {"at": "/requirements/5", "text": "Table(cols []Column, rows, footer [][]string) string lays out a plain-text table, with Column{Title string; Right bool; Max int}. With no columns it returns \"\". The title line comes first, then a rule, then the rows; when footer is nonempty, another rule and then the footer rows follow. A row's missing cells are empty, and cells beyond the columns are ignored. A cell's text is split at \\n into cell lines, and a row prints as many lines as its tallest cell, at least one. When Max > 0, a cell line, titles included, longer than Max runes is cut to its first Max − 1 runes followed by …. Each column is as wide as its widest cell line, in runes. Each printed line pads every cell line with spaces to its column's width, on the left when Right is set and on the right otherwise, joins them with two spaces and drops trailing spaces; a rule is each column's width in -, joined the same way. Every line ends in \\n."},
+        "domain": "0-4 columns with nonempty titles from a small pool, either alignment and Max 0, 1, 2, 3 or 5; 0-4 rows and 0-2 footer rows of 0-5 cells, multi-byte, empty and multi-line cells included",
+        "excluded": ["empty titles and titles with line breaks"]
+      },
+      {
+        "id": "I7",
+        "fixture": "go-invoice",
+        "checks": "Parse's invoice, its syntax or validation error and Line, and Format of each invoice that parses cleanly",
+        "requirement": {"at": "/requirements/6", "text": "Parse(text string) (core.Invoice, error) reads an invoice, one entry per line of text split at \\n. A # at the start of a line or after a space or tab starts a comment that runs to the end of the line; then spaces, tabs and \\r are trimmed from both ends, blank lines are skipped, and fields are separated by whitespace. invoice ID sets the ID and currency CODE the Currency, each with exactly one field after the keyword; customer NAME sets Customer to the rest of the line, at least one field, with each run of whitespace made one space. Each of these three appears at most once, anywhere in the text. Every other line is an item, SKU QTY UNIT CATEGORY, with QTY written only with digits and fitting int64 and UNIT what core.ParseMoney accepts; items keep their order. Any other line returns a zero Invoice and an *Error whose Line is the 1-based line number. Otherwise Parse returns the invoice and its Validate() result, so Validate reports a missing header. Format(inv core.Invoice) string writes inv as Parse reads it: the invoice, customer and currency lines in that order, then one line per item, with single spaces, QTY in decimal and UNIT by Money.String, each line ending in \\n."},
+        "domain": "invoice texts with the three headers anywhere and 1-4 items, comments after spaces or tabs, padding and blank lines; half also hold one more line that is malformed, repeats a header or breaks a validation rule",
+        "excluded": ["error messages", "nil against empty slices", "Format of an invoice that does not parse cleanly", "whitespace other than ASCII space and tab"]
+      },
+      {
+        "id": "I8",
+        "fixture": "go-invoice",
+        "checks": "Totals' ID, Customer, Subtotal, Discount, Tax and Total, on invoices it does not validate",
+        "requirement": {"at": "/requirements/7", "text": "Totals(inv core.Invoice, rules []discount.Rule, taxes tax.Table) Summary returns Summarize(inv) with three core.Money fields added to Summary: Discount, the sum over inv's lines of the amount rules take off each line; Tax, the sum over its lines of taxes.Line(line, net), where net is the line's Gross minus its discount; and Total, Subtotal − Discount + Tax. Totals does not validate inv."},
+        "domain": "invoices of 1-6 valid lines, a third with invalid header fields and a repeated line, with valid rules texts and tax tables as I3 and I4 draw them",
+        "excluded": ["discount.Line, whose result the implementer chooses", "arithmetic outside int64", "Totals of a line with a quantity below 1 or a negative price"]
+      },
+      {
+        "id": "I9",
+        "fixture": "go-invoice",
+        "checks": "Statement's error, every Summary field and the statement text",
+        "requirement": {"at": "/requirements/8", "text": "Statement(inv core.Invoice, rules []discount.Rule, taxes tax.Table, rates fx.Table, currency string) (Summary, string, error) returns inv.Validate()'s error, and otherwise any error from converting with rates, with a zero Summary and \"\". Otherwise its Summary is Totals(inv, rules, taxes) with two fields added to Summary: Currency string, set to currency, and Converted core.Money, set to rates.Convert(Total, inv.Currency, currency). Its text is \"Invoice ID for CUSTOMER (CURRENCY)\" with inv's ID, Customer and Currency, then \\n, then a render.Table with the columns SKU, Qty, Unit, Discount, Tax and Amount, all but SKU aligned right and none with a Max. Each line of inv gives a row, in order: its SKU, its Qty in decimal, its Unit, the amount rules take off it, its tax taxes.Line(line, Gross minus that amount), and its amount, Gross minus the discount plus the tax, with money by Money.String. The footer rows are Subtotal, Discount, Tax and Total, each with its label in the SKU column, the Summary's value in the Amount column and the cells between empty; when currency differs from inv.Currency, a last footer row \"Total in CURRENCY\" holds Converted. The statement's printed line amounts sum to its printed total."},
+        "domain": "invoices as I2 draws them, valid three times in four, with valid rules texts, tax tables and exchange tables as I3-I5 draw them, converted to their own currency a third of the time and otherwise to one of the five codes or NOK",
+        "excluded": ["error messages", "the type of a conversion error", "arithmetic outside int64"]
       }
     ]
   },
@@ -189,12 +281,13 @@
       "question": "This change was written by two AI agents working on the same task. Which is more likely? Answer with exactly one letter. A: they worked in separate Git worktrees, and their work was then merged. B: they worked in one shared workspace.",
       "answers": {"A": "git", "B": "falinks"},
       "calls": "A separate fresh call per final snapshot, on the same material. Each fixture's judge cells print `arm guessed k/n`, with no label and no cutoff. (#228 decision 19)",
+      "team_of_one": "Not asked: the question assumes two agents. A one-agent run is rated but makes no blinding call. (#336)",
       "note": "Chance is about n/2. A count far from n/2 in either direction means the arm can be guessed from the material, so treat the judge ratings for this fixture as possibly unblinded."
     },
     "known_answer_set": "Per fixture, the known-answer base: the formatted reference plus one test file covering the behaviour and the edge cases the requirements name, since the reference has no tests. Then four degraded copies of that base, one per dimension: copied-in logic (duplication), an untouched function rewritten or behaviour nobody asked for (unnecessary_changes), happy-path-only tests (test_quality), needlessly convoluted control flow (maintainability). The base and copies are in protected/known-answer.json; `known-answer` checks them. (#228 decision 20, amended by #233)",
     "calibration_record": "`known-answer --judge CONFIG` rates the base and each copy k times and writes calibration/v{version}.json, named by this file's version and recording the manifest version. A record is never overwritten. (#233) With --fixtures it rates only fixtures in uncalibrated_fixtures, whose judged inputs changed; the other fixtures keep their record. (#263)",
     "uncalibrated_fixtures": [],
-    "calibration": {"maintainability": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"dropped": true, "record": "calibration/v4.json"}}, "duplication": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}}, "unnecessary_changes": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}}, "test_quality": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}}},
+    "calibration": {"maintainability": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"dropped": true, "record": "calibration/v4.json"}, "go-invoice": {"passed": true, "record": "calibration/v6.json"}}, "duplication": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}, "go-invoice": {"passed": true, "record": "calibration/v6.json"}}, "unnecessary_changes": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}, "go-invoice": {"passed": true, "record": "calibration/v6.json"}}, "test_quality": {"passed": true, "record": "calibration/v2.json", "go-relationships": {"passed": true, "record": "calibration/v4.json"}, "go-invoice": {"passed": true, "record": "calibration/v6.json"}}},
     "subtlety_rule": "Each copy changes one declaration, changed or added, aimed at one dimension. It passes the oracle, all properties, vet and clippy with no findings on changed lines, and the formatter. No comment names or hints at the defect. It must be code a competent agent could write under the 30-minute limit. Daniel signs off each copy as plausible before it freezes. (#228 decision 21)",
     "calibration_criterion": "On every fixture, the targeted copy's median over three calls is lower than the reference's on that dimension. The #27 runs are rated for information only. (#228 decision 22)",
     "amendment_rule": "A failing dimension gets at most one versioned amendment to its prompt and anchors, checked against the same frozen copies, before any scored code is opened. The copies are never changed after the first calibration call. A dimension that fails twice is dropped. (#228 decision 23)",
