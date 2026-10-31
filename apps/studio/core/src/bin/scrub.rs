@@ -14,8 +14,8 @@ fn main() -> io::Result<()> {
         let Ok(Value::Object(event)) = serde_json::from_str(&line?) else {
             continue;
         };
-        let session = event["session_id"].as_str().unwrap_or_default();
-        if sessions.is_empty() || sessions.iter().any(|s| s == session) {
+        let session = event.get("session_id").and_then(Value::as_str);
+        if sessions.is_empty() || sessions.iter().any(|s| Some(s.as_str()) == session) {
             writeln!(out, "{}", Value::Object(scrub(event)))?;
         }
     }
@@ -24,7 +24,7 @@ fn main() -> io::Result<()> {
 
 /// Top-level text fields that stay as they are: ids, names, folders and states. Numbers and flags,
 /// timings among them, stay anywhere.
-const KEPT: &[&str] = &[
+const TOP_LEVEL_TEXT: &[&str] = &[
     "agent_id",
     "agent_type",
     "cwd",
@@ -40,19 +40,17 @@ const KEPT: &[&str] = &[
     "tool_use_id",
 ];
 
-/// Text fields of a tool's input or result, or of a background task, that stay: ids, types,
-/// statuses, paths, and the short label an agent gives a spawn or a command.
-const KEPT_TEXT: &[&str] = &[
+/// Text fields of a built-in tool's input or result, or of a background task, that stay: ids,
+/// types, statuses and paths. An MCP tool keeps none.
+const LABELS: &[&str] = &[
     "agentId",
     "agent_type",
     "backgroundTaskId",
     "commandName",
-    "description",
     "filePath",
     "file_path",
     "id",
     "isolation",
-    "name",
     "skill",
     "status",
     "subagent_type",
@@ -61,8 +59,14 @@ const KEPT_TEXT: &[&str] = &[
     "type",
 ];
 
+/// The tools whose `description` is the short label an agent gives a spawn or a command, as a
+/// background task's is.
+const DESCRIBED: &[&str] = &["Agent", "Bash", "background_tasks"];
+
 /// An event with its content gone: prompt text, messages, tool inputs and results, file contents.
 fn scrub(event: Map<String, Value>) -> Map<String, Value> {
+    let tool = event.get("tool_name").and_then(Value::as_str);
+    let tool = tool.unwrap_or_default().to_string();
     let field = |(key, value): (String, Value)| {
         let text = value.as_str().unwrap_or_default();
         let value = match key.as_str() {
@@ -70,15 +74,19 @@ fn scrub(event: Map<String, Value>) -> Map<String, Value> {
             // A turn whose last message asks Daniel something needs him, so the scrubbed one still asks.
             "last_assistant_message" if studio_core::asks(text) => "…?".into(),
             // The core tells a command that ran by the exit code on the error's first line.
-            "error" if text.starts_with("Exit code") => {
-                text.lines().next().unwrap_or_default().into()
-            }
-            "tool_input" | "tool_response" => fields(value),
+            "error" => match text.lines().next().filter(|line| exit_code(line)) {
+                Some(line) => line.into(),
+                None => blank(value),
+            },
+            "tool_input" | "tool_response" => labels_only(value, &tool),
             "background_tasks" => match value {
-                Value::Array(tasks) => tasks.into_iter().map(fields).collect(),
+                Value::Array(tasks) => tasks
+                    .into_iter()
+                    .map(|task| labels_only(task, "background_tasks"))
+                    .collect(),
                 other => blank(other),
             },
-            key if KEPT.contains(&key) => value,
+            key if TOP_LEVEL_TEXT.contains(&key) => value,
             _ => blank(value),
         };
         (key, value)
@@ -86,17 +94,27 @@ fn scrub(event: Map<String, Value>) -> Map<String, Value> {
     event.into_iter().map(field).collect()
 }
 
-/// A tool's input or result, or a background task, with only its labels' text. A label of several
-/// lines or over 200 bytes is content.
-fn fields(value: Value) -> Value {
+/// Whether a line is a command's exit code alone, as in `Exit code 101`.
+fn exit_code(line: &str) -> bool {
+    line.strip_prefix("Exit code ")
+        .is_some_and(|code| !code.is_empty() && code.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Tool `tool`'s input or result, or a background task, with only its labels' text. A label of
+/// several lines or over 200 bytes is content.
+fn labels_only(value: Value, tool: &str) -> Value {
     let Value::Object(fields) = value else {
         return blank(value);
     };
     let label = |key: &str, value: &Value| {
-        KEPT_TEXT.contains(&key)
-            && value
-                .as_str()
-                .is_some_and(|s| s.len() <= 200 && !s.contains('\n'))
+        let kept = match key {
+            "description" => DESCRIBED.contains(&tool),
+            "name" => tool == "Agent",
+            key => LABELS.contains(&key) && !tool.starts_with("mcp__"),
+        };
+        kept && value
+            .as_str()
+            .is_some_and(|s| s.len() <= 200 && !s.contains('\n'))
     };
     let field = |(key, value): (String, Value)| {
         let value = if label(&key, &value) {
@@ -119,10 +137,32 @@ fn blank(value: Value) -> Value {
     }
 }
 
+/// The tags Claude Code wraps around the prompts it sends and around pasted text.
+const TAGS: &[&str] = &[
+    "agent-message",
+    "duration_ms",
+    "note",
+    "output-file",
+    "pasted_content",
+    "result",
+    "status",
+    "subagent_tokens",
+    "summary",
+    "task-id",
+    "task-notification",
+    "tool-use-id",
+    "tool_uses",
+    "usage",
+    "worktree",
+    "worktreeBranch",
+    "worktreePath",
+];
+
 /// A prompt's markup without its text, so a wake-up stays one (#369, decision 7) and Daniel's prompt
-/// keeps none of its words. Each tag stays, with the attribute values that look like ids, as in
-/// `<agent-message from="a2526f0d7353298ee">`. So does an id or a status right after a tag named
-/// `status` or ending in `id`, as in `<task-id>a1191df87fb730aa0</task-id>`. Other text becomes `…`.
+/// keeps none of its words. Each tag in `TAGS` stays, with the attributes whose key and value look
+/// like ids, as in `<agent-message from="a2526f0d7353298ee">`. So does an id or a status right after
+/// `<status>` or a tag ending in `id`, as in `<task-id>a1191df87fb730aa0</task-id>`. Any other tag
+/// becomes `<…>`, which shows that new markup came without its name, and other text becomes `…`.
 fn markup(prompt: &str) -> String {
     let mut out = String::new();
     let mut text = String::new();
@@ -154,9 +194,9 @@ fn markup(prompt: &str) -> String {
     out
 }
 
-/// The tag at the start of `s`: rebuilt with its name and its attributes, each value that does not
-/// look like an id replaced by `…`; its length in `s`; and its name. `None` when the `<` opens no
-/// tag, as in `3 < 4`.
+/// The tag at the start of `s`, rebuilt: a tag in `TAGS` with its attributes whose key and value look
+/// like ids, any other as `<…>`. Also its length in `s`, and its name, `…` for any other. `None` when
+/// the `<` opens no tag, as in `3 < 4`.
 fn tag(s: &str) -> Option<(String, usize, &str)> {
     let end = s.find('>')?;
     let inner = s[1..end].trim_end_matches('/');
@@ -171,6 +211,9 @@ fn tag(s: &str) -> Option<(String, usize, &str)> {
     if inner.contains('<') || !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
         return None;
     }
+    if !TAGS.contains(&name) {
+        return Some((format!("<{close}…>"), end + 1, "…"));
+    }
     let mut tag = format!("<{close}{name}");
     // Quoted values sit between every other pair of quotes, each after its `key=`.
     let parts: Vec<&str> = inner[name_end..].split('"').collect();
@@ -178,8 +221,9 @@ fn tag(s: &str) -> Option<(String, usize, &str)> {
         if let [before, value] = pair
             && let Some(key) = before.trim_end().strip_suffix('=')
             && let Some(key) = key.split_whitespace().last()
+            && id_like(key)
+            && id_like(value)
         {
-            let value = if id_like(value) { value } else { "…" };
             tag.push_str(&format!(" {key}=\"{value}\""));
         }
     }
@@ -233,9 +277,15 @@ mod tests {
         );
         assert_eq!(
             scrubbed(message),
-            "<agent-message from=\"a2526f0d7353298ee\">…<String>…<a href=\"…\">…</a></agent-message>"
+            "<agent-message from=\"a2526f0d7353298ee\">…<…>…<…>…</…></agent-message>"
         );
         assert_eq!(scrubbed("continue"), "…");
+        assert_eq!(
+            scrubbed(
+                "Use <sk-ant-api03-AbCdEf> and <input value=\"hunter2\"> then a<b pass:word=\"Sekret99\" c>d"
+            ),
+            "…<…>…<…>…<…>…"
+        );
         assert_eq!(
             scrubbed(
                 "Is 3 < 4? Read <pasted_content id=\"fa32\">hunter2</pasted_content id=\"fa32\">"
@@ -283,6 +333,12 @@ mod tests {
             "tool_input": {"command": "cargo test", "description": "Run the tests\nsecond line"},
             "error": "Exit code 101\ntest result: FAILED"});
         let refused = json!({"hook_event_name": "PostToolUseFailure", "error": "This agent is isolated in /w"});
+        let masked =
+            json!({"hook_event_name": "PostToolUseFailure", "error": "Exit code 1 TOKEN=abc"});
+        let event = json!({"hook_event_name": "PreToolUse", "tool_name": "mcp__cal__create_event",
+            "tool_input": {"name": "Lawyer", "description": "Meet Dr Cohen", "status": "confirmed"}});
+        let task = json!({"hook_event_name": "PreToolUse", "tool_name": "TaskCreate",
+            "tool_input": {"subject": "Call the bank", "description": "Ask about the loan"}});
 
         assert_eq!(
             scrub(edit),
@@ -299,6 +355,13 @@ mod tests {
                 "tool_input": {"command": "…", "description": "…"}, "error": "Exit code 101"})
         );
         assert_eq!(scrub(refused)["error"], "…");
+        assert_eq!(scrub(masked)["error"], "…");
+        let input = |event| scrub(event)["tool_input"].clone();
+        assert_eq!(
+            input(event),
+            json!({"name": "…", "description": "…", "status": "…"})
+        );
+        assert_eq!(input(task), json!({"subject": "…", "description": "…"}));
     }
 
     #[test]

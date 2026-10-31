@@ -32,7 +32,7 @@ This builds `target/release/bundle/macos/Studio.app` with an ad-hoc signature (`
 
 `cargo test` runs:
 
-- `core/tests/`: hook events replayed through the core: what the pane shows and every event of the recorded logs (`replay`), needs you (`needs_you`), checks and guesses (`checks`), and Bash card steps (`bash_steps`);
+- `core/tests/`: hook events replayed through the core: what the pane shows and the two recorded logs (`replay`), needs you (`needs_you`), checks and guesses (`checks`), and Bash card steps (`bash_steps`);
 - `understanding/tests/`: the `claude -p` command, built but never run, the `claude` lookup with a stand-in shell, and the writer's replies (`writer`); the fingerprint against real `git` in temporary repositories (`fingerprint`); the card store (`store`); the weekly rates (`week`);
 - the unit tests of the event log's path (`hook`), of what `scrub` keeps (`studio-core`) and of the weekly rates' dates (`understanding`).
 
@@ -61,16 +61,16 @@ The log is never rotated. It holds tool inputs and results, file contents includ
 
 ## Recorded logs
 
-Two fixtures in `core/tests/fixtures/` are real event logs, scrubbed by `scrub` (`core/src/bin/scrub.rs`). It keeps each event's shape and drops its content: prompt text, messages, tool inputs and results and file contents become `…`. Ids, event names, folders, agent ids and types, the labels of spawns and commands, `isolation`, background tasks without their commands, file paths, exit codes and timings stay. A prompt keeps its markup with its ids and statuses, so a wake-up stays one. A last message that asks Daniel something becomes `…?`.
+Two fixtures in `core/tests/fixtures/` are real event logs, scrubbed by `scrub` (`core/src/bin/scrub.rs`). Each event keeps its shape and loses its content: text becomes `…`, and lists and objects become empty, except for what stays. What stays: ids, event names, `cwd`, the permission mode, a session's start source and end reason, agent ids and types, the `description` of a spawn or a Bash command, `isolation`, the paths of the files a tool reads or writes, skill names, the types and statuses in tool results, background tasks without their commands, exit codes, numbers, flags and timings. An MCP tool keeps no text. Transcript and output paths become `…`. A prompt keeps only the markup Claude Code adds, with its ids and statuses, so a wake-up stays one; any other tag becomes `<…>`. A last message that asks Daniel something becomes `…?`.
 
-- `checkpoint-day.jsonl`: the 8 sessions that started on 2026-10-30, the checkpoint day of #347, up to their ends on 2026-10-31.
+- `checkpoint-day.jsonl`: the events of 2026-10-30, the checkpoint day of #347. Some of its sessions were still open at midnight.
 - `subagent-run.jsonl`: a scripted session in a temporary repository that spawns a worktree worker and a read-only helper in the background, then stops the helper.
 
 Re-record the second when Claude Code's version changes. The script runs a nested `claude` on your subscription, so run it yourself, outside auto mode:
 
     core/tests/record-subagent-run.sh
 
-It builds `studio-hook`, runs the session with this checkout's plugin, and scrubs the session's events from the event log into the fixture. Before you commit the new fixture, run `cargo test` and check that each text it keeps is a label, an id or a path.
+Quit the studio app first: it would take the session as live and ask for cards. The script builds `studio-hook`, runs the session with this checkout's plugin, and scrubs the session's events from the event log into the fixture. Before you commit the new fixture, run `cargo test` and check that each text it keeps is a label, an id or a path.
 
 ## The card store
 

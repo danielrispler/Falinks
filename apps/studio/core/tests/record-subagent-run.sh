@@ -1,9 +1,10 @@
 #!/bin/sh
 # Records fixtures/subagent-run.jsonl (#370): a short scripted Claude Code session in a temporary
 # repository, with the studio plugin loaded, that spawns a worktree worker and a read-only helper in
-# the background and stops the helper. Its events land in the event log, and `scrub` copies them
-# here without their content. It runs a nested `claude` on your subscription, so run it yourself,
-# outside auto mode, from any folder:
+# the background and stops the helper mid-step. Its events land in the event log, and `scrub` copies
+# them here without their content. Quit the studio app first, or it takes the session as live and
+# asks for cards. It runs a nested `claude` on your subscription, so run it yourself, outside auto
+# mode, from any folder:
 #
 #     apps/studio/core/tests/record-subagent-run.sh
 set -eu
@@ -30,7 +31,7 @@ This session records a test fixture. Follow these steps exactly and keep every r
 1. In one message, start two subagents with the Agent tool, both in the background:
    - a worker: description "Add hello file", subagent_type "general-purpose", isolation "worktree". Its task: create hello.txt holding the line "hello", commit it with `git add hello.txt && git commit -m "Add hello"`, then reply "committed".
    - a helper: description "Wait and report", subagent_type "general-purpose", no isolation. Its task: run `sleep 100` with Bash, then reply "done". It must not change any file.
-2. Stop the helper with the TaskStop tool.
+2. Run `sleep 15` with Bash, so the helper's own step has started, then stop the helper with the TaskStop tool.
 3. Wait for the worker to finish, then reply with one line on what each subagent did.
 PROMPT
 

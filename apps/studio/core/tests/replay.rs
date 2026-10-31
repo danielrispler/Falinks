@@ -85,10 +85,11 @@ fn lines_that_are_not_hook_events_are_skipped() {
     assert_eq!(now.last_step, step("Bash", Some("ls does-not-exist")));
 }
 
-/// The two recorded logs (#370), scrubbed of their content: the checkpoint day's sessions, and the
-/// scripted session that spawns a worker and a helper (`record-subagent-run.sh`).
+/// The two recorded logs (#370), scrubbed of their content: the checkpoint day's events, and the
+/// scripted session that spawns a worker and a helper (`record-subagent-run.sh`). Each line names a
+/// session, and the core holds every session named.
 #[test]
-fn every_event_of_the_recorded_logs_reaches_its_session() {
+fn the_recorded_logs_replay_through_the_core() {
     for log in [
         include_str!("fixtures/checkpoint-day.jsonl"),
         include_str!("fixtures/subagent-run.jsonl"),
