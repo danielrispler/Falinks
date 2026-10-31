@@ -1811,7 +1811,8 @@ fn report_prints_reverted_lines_only_with_show_code() {
 fn code_quality_definitions_trace_to_fixture_requirements() {
     let definitions = read(root().join("code-quality.json"));
     let properties = definitions["properties"]["list"].as_array().unwrap();
-    assert_eq!(properties.len(), 13);
+    // 13 on the scored batch's fixtures and one per go-invoice ticket (#336).
+    assert_eq!(properties.len(), 22);
     for property in properties {
         let fixture = read(
             root()
@@ -2264,6 +2265,89 @@ func TestLabel(t *testing.T) {
     assert_eq!(
         kept["runs"]["rust-errors-1-git"]["judge"],
         quality["runs"]["rust-errors-1-git"]["judge"]
+    );
+}
+
+/// #336: `quality` measures a team of one's final snapshot as it measures a two-agent team's,
+/// with go-invoice's real gates, and the judge rates it without the two-agent blinding question.
+/// Both runs end on the reference.
+#[test]
+fn quality_judges_a_team_of_one_without_the_blinding_question() {
+    let tmp = tmp("falinks-quality-one-");
+    let batch = tmp.path();
+    let reference = reference("go-invoice");
+    let files: Vec<(&str, &str)> = reference
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(name, text)| (name.as_str(), text.as_str().unwrap()))
+        .collect();
+    let mut runs = vec![];
+    for size in [1, 2] {
+        let id = format!("go-invoice-1-git-{size}");
+        let run = batch.join(&id);
+        let sha = snapshot("go-invoice", &run.join("agents/repo"), &files);
+        fs::create_dir_all(run.join("controller")).unwrap();
+        fs::write(
+            run.join("controller/result.json"),
+            json!({"arm": "git", "outcome": "success", "final_snapshot": sha, "team_size": size})
+                .to_string(),
+        )
+        .unwrap();
+        runs.push(json!({"run_dir": run, "run_id": id, "pair": "go-invoice-1",
+            "fixture": "go-invoice", "arm": "git", "team_size": size, "scored": true}));
+    }
+    fs::write(
+        batch.join("batch.json"),
+        json!({"runs": runs, "invocations": []}).to_string(),
+    )
+    .unwrap();
+    let judge = tmp.path().join("judge");
+    fs::create_dir(&judge).unwrap();
+    let config = judge.join("config.json");
+    fs::write(
+        &config,
+        json!({"runtime_version": "2.1.308", "model": "claude-opus-5-5",
+            "runtime_binary": SCRIPTED, "runtime_sha256": hash(SCRIPTED)})
+        .to_string(),
+    )
+    .unwrap();
+    let rating = json!({"maintainability": {"rating": 4, "reason": "a."},
+        "duplication": {"rating": 5, "reason": "b."},
+        "unnecessary_changes": {"rating": 5, "reason": "c."},
+        "test_quality": {"rating": 1, "reason": "d."}})
+    .to_string();
+    // Ledger order: one agent's three ratings, then two agents' three ratings and a guess.
+    let mut replies = vec![rating; 6];
+    replies.push("A".into());
+    fs::write(judge.join("replies.json"), json!(replies).to_string()).unwrap();
+    let measured = Command::new(CLI)
+        .args(["quality", "--runs", batch.to_str().unwrap(), "--judge"])
+        .arg(&config)
+        .env("FALINKS_FAKE_JUDGE", &judge)
+        .output()
+        .unwrap();
+    assert!(measured.status.success(), "{}", text(&measured));
+    assert_eq!(read(judge.join("replies.json")), json!([]));
+    let quality = read(batch.join("quality.json"));
+    assert_eq!(quality["property_gates"], json!({"go-invoice": "passed"}));
+    let one = &quality["runs"]["go-invoice-1-git-1"];
+    let two = &quality["runs"]["go-invoice-1-git-2"];
+    assert_eq!(one["metrics"], two["metrics"]);
+    assert_eq!(
+        one["metrics"]["failing_properties"],
+        json!({"value": 0, "properties": []})
+    );
+    assert_eq!(
+        one["metrics"]["production_lines_changed"],
+        one["reference_production_lines_changed"]
+    );
+    assert_eq!(one["judge"]["ratings"]["test_quality"]["value"], 1);
+    assert_eq!(one["judge"]["calls"].as_array().unwrap().len(), 3);
+    assert!(one["judge"].get("guess").is_none(), "{}", one["judge"]);
+    assert_eq!(
+        two["judge"]["guess"],
+        json!({"arm": "git", "correct": true})
     );
 }
 

@@ -1,5 +1,5 @@
 //! The judge's known-answer set and its calibration (#228 decisions 20-23, #233).
-//! `protected/known-answer.json` holds, per scored fixture, the tests that join the reference
+//! `protected/known-answer.json` holds, per judged fixture (#336), the tests that join the reference
 //! to make the known-answer base, and one degraded copy per judge dimension as a declaration
 //! edit of the formatted base. `known-answer` checks the base and every copy against the
 //! subtlety rule: the formatter, the oracle, every property and the lints. With `--judge
@@ -149,22 +149,22 @@ fn calibrate(call: &mut judge::Call, definitions: &Value, fixtures: &[Rated]) ->
 /// stands (#263).
 fn may_calibrate(names: &[&str], definitions: &Value) -> bool {
     let uncalibrated = definitions["judge"]["uncalibrated_fixtures"].as_array();
-    crate::SCORED_FIXTURES.iter().all(|f| names.contains(f))
+    crate::JUDGED_FIXTURES.iter().all(|f| names.contains(f))
         || names
             .iter()
             .all(|n| uncalibrated.is_some_and(|list| list.iter().any(|f| f == n)))
 }
 
-/// Checks the known-answer trees of `only` (every scored fixture by default) and, with a run
+/// Checks the known-answer trees of `only` (every judged fixture by default) and, with a run
 /// configuration, calibrates the judge on the full set or on its uncalibrated fixtures.
 pub fn known_answer(judge_config: Option<&Path>, only: Option<&str>) -> Result<i32> {
     // The copies are frozen before any calibration call (#233).
     let manifest = frozen()?;
-    let names: Vec<&str> = only.map_or(crate::SCORED_FIXTURES.to_vec(), |list| {
+    let names: Vec<&str> = only.map_or(crate::JUDGED_FIXTURES.to_vec(), |list| {
         list.split(',').collect()
     });
-    if names.iter().any(|n| !crate::SCORED_FIXTURES.contains(n)) {
-        bail!("--fixtures takes {:?}", crate::SCORED_FIXTURES);
+    if names.iter().any(|n| !crate::JUDGED_FIXTURES.contains(n)) {
+        bail!("--fixtures takes {:?}", crate::JUDGED_FIXTURES);
     }
     let definitions = judge::definitions()?;
     if judge_config.is_some() && !may_calibrate(&names, &definitions) {
@@ -282,7 +282,9 @@ mod tests {
     #[test]
     fn a_subset_calibrates_only_uncalibrated_fixtures() {
         let definitions = json!({"judge": {"uncalibrated_fixtures": ["go-relationships"]}});
-        assert!(may_calibrate(&crate::SCORED_FIXTURES, &definitions));
+        assert!(may_calibrate(&crate::JUDGED_FIXTURES, &definitions));
+        // #336: the three scored fixtures without go-invoice are a calibrated subset.
+        assert!(!may_calibrate(&crate::SCORED_FIXTURES, &definitions));
         assert!(may_calibrate(&["go-relationships"], &definitions));
         assert!(!may_calibrate(&["go-page"], &definitions));
         assert!(!may_calibrate(

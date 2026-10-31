@@ -42,6 +42,14 @@ pub const FIXTURES: [&str; 7] = [
 pub const LARGE_SPEC_FIXTURE: &str = "go-invoice";
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
 pub const SCORED_FIXTURES: [&str; 3] = ["rust-errors", "go-page", "go-relationships"];
+/// The fixtures with a known-answer set the judge is calibrated on: the scored batch's and
+/// the large-spec one (#336).
+pub const JUDGED_FIXTURES: [&str; 4] = [
+    SCORED_FIXTURES[0],
+    SCORED_FIXTURES[1],
+    SCORED_FIXTURES[2],
+    LARGE_SPEC_FIXTURE,
+];
 pub const FIXED_ENV: [(&str, &str); 10] = [
     ("GIT_AUTHOR_NAME", "Fixture"),
     ("GIT_AUTHOR_EMAIL", "fixture@example.invalid"),

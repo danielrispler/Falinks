@@ -69,5 +69,52 @@
       "old": "; counts[record.Text] = 0 }",
       "new": " }"
     }
+  },
+  "go-invoice": {
+    "I1": {
+      "file": "core/money.go",
+      "old": "twice.Cmp(new(big.Int).Abs(b)) >= 0",
+      "new": "twice.Cmp(new(big.Int).Abs(b)) > 0"
+    },
+    "I2": {
+      "file": "core/model.go",
+      "old": "Line: i + 1",
+      "new": "Line: i"
+    },
+    "I3": {
+      "file": "discount/discount.go",
+      "old": "item.Qty >= t.qty",
+      "new": "item.Qty > t.qty"
+    },
+    "I4": {
+      "file": "tax/tax.go",
+      "old": "item.Unit > r.over",
+      "new": "item.Unit >= r.over"
+    },
+    "I5": {
+      "file": "fx/fx.go",
+      "old": "core.DivRound(int64(m), 100) * 100",
+      "new": "int64(m) / 100 * 100"
+    },
+    "I6": {
+      "file": "render/render.go",
+      "old": "cells[i] = pad + line[i]",
+      "new": "cells[i] = line[i] + pad"
+    },
+    "I7": {
+      "file": "parse/parse.go",
+      "old": "line[i-1] == ' ' || line[i-1] == '\\t'",
+      "new": "line[i-1] == ' '"
+    },
+    "I8": {
+      "file": "totals.go",
+      "old": "taxes.Line(l, l.Gross()-off)",
+      "new": "taxes.Line(l, l.Gross())"
+    },
+    "I9": {
+      "file": "statement.go",
+      "old": "if currency != inv.Currency {",
+      "new": "if currency == inv.Currency {"
+    }
   }
 }

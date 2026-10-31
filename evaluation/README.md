@@ -334,7 +334,8 @@ it; the runtime's own `<synthetic>` replies carry no effort and are skipped. A
           `usage` is in `calls`.
         - One forced-choice blinding call per snapshot, not retried. `report` prints
           `judge.blinding.arm_guessed` (`arm guessed k/n`, n counting parsed guesses), the
-          missing guesses and the frozen note.
+          missing guesses and the frozen note. A team of one (`team_size` 1 in `batch.json`)
+          is rated but not asked: the question assumes two agents (#336).
         - A dimension without a passing calibration record
           (`judge.calibration.<dimension>.passed` in `code-quality.json`) prints
           `Not yet calibrated` instead of its values. The calibration ticket adds the record.
@@ -600,6 +601,10 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/large-spec 
     table (acts, refused results and tool seconds per op). `runtime_refusals` is printed
     apart, outside the overhead. `collisions` gives each arm's collision cells, as `report`
     does.
+  - **`code_quality`** (#336): `report`'s code-quality cells (see **`code_quality`** above)
+    for all three arms, from `quality --runs DIR --judge CONFIG` over the batch. Labels
+    compare `falinks-2` with `git-2` only; `git-1`'s cells are descriptive, and it is never
+    asked the blinding question. Quality never enters P1–P3.
 
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and
@@ -635,7 +640,7 @@ jq -c '{shared: ([.sessions[].charged_seconds] | add), team_size_research: ([.te
 For the time to charge, `report --runs` gives each run's outcome and paired
 timings, and `timing RUN_DIR` gives per-agent figures (see "Paired evaluation (#27)" above).
 `code-quality.json` holds #228's frozen code-quality definitions (stage 1): the
-normalization and deterministic metric rules, the thirteen differential properties
+normalization and deterministic metric rules, the 22 differential properties
 with their requirement sentences, generator domains, seed and input count, the judge
 pin, prompt, anchors and rules, and the inspection and diagnosis rules.
 `code_quality_definitions_trace_to_fixture_requirements` fails when a quoted sentence
@@ -643,12 +648,13 @@ no longer appears verbatim in its fixture. Stage 2 changes the file only by a ve
 amendment: bump its `version` and add an `amendments` entry with the reason, then
 re-freeze.
 
-The judge's known-answer set (#233) is `protected/known-answer.json`: per fixture, the
+The judge's known-answer set (#233) is `protected/known-answer.json`: per judged fixture
+(the three scored ones and, since #336, `go-invoice`), the
 test file that joins the reference to make the known-answer base, and one degraded copy per
 dimension as a declaration edit of the formatted base. `known-answer` checks the base and
 every copy: the formatter leaves it unchanged, the oracle and its tests pass, no property
 fails, and `vet` or `clippy` report nothing on changed lines. With `--judge CONFIG`, from a
-session outside auto mode, it then rates each tree three times (45 calls) and writes
+session outside auto mode, it then rates each tree three times (15 calls per fixture) and writes
 `calibration/v<definitions version>.json`, which names the manifest version; re-freeze to
 freeze it. After an amendment, the next record gets the new version's name. `--judge` with
 `--fixtures` is refused unless every fixture named is in `judge.uncalibrated_fixtures`: their

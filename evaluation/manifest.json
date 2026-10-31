@@ -4,7 +4,7 @@
     "Cargo.toml": "1c6bc262c1b4b81b4c7bd5ae291db2fc06de3578cd672c060337c0ebe5ae9ec0",
     "calibration/v2.json": "c0597650c95e4ebd4f0f0a083152c4705b41a70c2b4f7eef393cd2828251dccf",
     "calibration/v4.json": "5330fca431e224ed4716c112528902dbbbb8aeb92b849d2389f05656ebc83642",
-    "code-quality.json": "7f048f480ed039ba650c196189998a4a4def4af83546d3f375286a80d84219cc",
+    "code-quality.json": "365f7fcd7afe769e45cd13e12d1b8022f2a56d818e11190eaa4d4952671eb1a8",
     "config.json": "b95eb1f40cde0752db8eef611d6f1614cb1a50c7d5b1c44a74a90f1e5207dc01",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
@@ -22,8 +22,9 @@
     "protected/go-page.json": "30c91a06e9c56e6449e77a029eaf05c89c84bd4b620b1f7bc9a3671a3bb658d2",
     "protected/go-relationships.json": "13ac889733f00045cceda88badfc64036a36dad3ef9a05d8e3e418e5490cf10e",
     "protected/go-tasks.json": "55569b157da26a9f8ae1ce54559b64ff48ae69ee3a8779383cb8b694542cad3d",
-    "protected/known-answer.json": "81c0b7b9350f6bebeb78cbe62abd1e23192e431e2837e12fa9d00c38d5344211",
-    "protected/properties/broken.json": "4639f328730c82e81524e4f0d18d1ed47b5c0e5b50a7bfdd9124d0cc45ec8e55",
+    "protected/known-answer.json": "5eacfa85fd71ed853509cf6e5f3b5250ba5869a33df167c68423543d56ae6e59",
+    "protected/properties/broken.json": "99c7932af6d13548d320596e4ce6a1dd8c32a2e51a8e19146605dec9cee08c3b",
+    "protected/properties/go-invoice_test.go": "12a71760dbfd32ca14c9f8cd09622c49359cc61312f0dcf0f7cf2b3c0c1beda1",
     "protected/properties/go-page_test.go": "b79de8d8007f108c0c6ad5e386fe06853dee7ca181236c7b16b563f6d1b5e41c",
     "protected/properties/go-relationships_test.go": "ba1242b7a0bda573743d14043f1def6c8f9c7115dd9389d30c8af6d00f635d25",
     "protected/properties/rust-errors.rs": "74f6bb23fa4580200262715798604ba492e4f2271c9bc448317f6d09d4b817e7",
@@ -37,11 +38,11 @@
     "src/bin/falinks-eval-contain.rs": "c5c53fad8087a3b8d6cf3f31f04b96ae2946dfa530093d9b902c307871513a10",
     "src/bin/scripted-worker.rs": "12a4216381b2d3a23ebbfcc03832c51b97f5ff62a2d3e4197753e691130a0e7b",
     "src/collisions.rs": "3b4a6412359a30030c2236a15caa2b4359431fd74418b04a376956cff7083492",
-    "src/judge.rs": "97d757145098a4d234e33a6892ebc56ed66aae7163d3019ec9df72bf67a2cb5c",
-    "src/known_answer.rs": "572dd86fc5e3c36e66ba48238abec5335234d138d296bd9b1c32eea43bcd4e08",
-    "src/main.rs": "d69d2a3abc63302f2ae95684874ba946ae788b969a2965d0bdfc2a6253ca0f9e",
-    "src/quality.rs": "231d5aa450782eff53e559bfbd0950e3eef51656526c0c7185a5c4ae5bc7ad14",
-    "src/report.rs": "cb7623eca49801bc8c9d00d749b2a6aafe6a13714e53a92a6aad8a54c4fdc38d",
+    "src/judge.rs": "a1e6b4b62fde4df561afc2b45285de40d59662a7d5c3d8f5d2bb0e56dfc93ad1",
+    "src/known_answer.rs": "7db81cd188e3380beeb5fe96c6779db891e3ea45a04efc31f421ea986f004a73",
+    "src/main.rs": "6d7b3308457e47659968cb7e8550992f1c950563fef7aac16eb020888827a5c8",
+    "src/quality.rs": "f7a4e425033e6aa2b781cc394acef32d28d8eeec2e3f052fe6ef57c99659747d",
+    "src/report.rs": "8af473f9dbe6f39a5286d33c00da9288f5fd032e9606073b6724c26411cc49c7",
     "src/significance.rs": "6fe97d8ba59392d48ebaaedee5c6c29e49f47d778530cfe738f1eb74652399ff",
     "src/timing.rs": "866a5c98ccd1e40a911fa10cc3d1270dc9a0c9312f123cc2c8bda55ed5829c25",
     "src/tokens.rs": "f98b5bdf3b38a0d68674b38e2345c3e16c129063af0520fe450db92249917a48"
@@ -55,5 +56,5 @@
     "go-tasks": "12f2511ee050e318f13aa99ae0838b96ffd095a5",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 46
+  "version": 47
 }

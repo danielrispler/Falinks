@@ -404,7 +404,7 @@
     "scope": "#205's research (its resolution, \"Budget (B1)\"): engine waves, pilots, smoke runs and the scored batch. It never draws on the setup budget above or on track T's. Each session charges run wall time (including the usage drain) and harness preparation, with complete-only usage; implementation is recorded but not charged, as in track T. Hard stop: stop and ask before exceeding cap_seconds; re-estimated after the smoke runs, when git-1 is dropped first if the batch at n = 8 does not fit.",
     "cap_seconds": 43200,
     "totals": {
-      "implementation_seconds": 47283,
+      "implementation_seconds": 49631,
       "run_seconds": 0,
       "preparation_seconds": 0,
       "charged_seconds": 0,
@@ -454,6 +454,25 @@
         },
         "measurement": "Session wall time from assigning #325, #329, #330, #333, #334 and #337 to this entry. It includes a machine sleep, a usage-limit pause and waits for Daniel's two answers, none measured. All of it is implementation: the six tickets built in parallel worktrees, their code review and one fix pass, and the v42 -> v43 freeze. No agent ran on go-tasks or go-invoice, so there is no run or preparation time and no usage.",
         "work": "#325, #329, #330, #333, #334 and #337 on one integration branch, re-frozen once v42 -> v43: changed bytes by authorship from each arm's records; go-tasks, the layered dev fixture; effort medium passed and checked in both arms; the large-spec schedule and payback reading; collisions and collision waste; collision handling cost, rereads and coordination overhead without runtime refusals."
+      },
+      {
+        "issue": 336,
+        "start_utc": "2026-10-30T19:02:30Z",
+        "stop_utc": "2026-10-30T19:41:38Z",
+        "measured_seconds": 2348,
+        "implementation_seconds": 2348,
+        "run_seconds": 0,
+        "preparation_seconds": 0,
+        "charged_seconds": 0,
+        "complete_usage": {
+          "runs": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation_input_tokens": 0
+        },
+        "measurement": "Session wall time from the start of the session that claimed #336 to this entry. All of it is implementation: the nine properties and their broken copies, the known-answer base and four copies, the one-agent arm in quality, judge and the large-spec report, the v6 amendment, a two-axis code review with one fix pass, and the v46 -> v47 freeze. No judge call was made and no agent ran on go-invoice, so there is no run or preparation time and no usage; calibration (15 calls) is Daniel's session outside auto mode.",
+        "work": "#336: go-invoice properties I1-I9 with broken copies; its known-answer set; code-quality.json v6 (scope, the one-agent arm, no blinding for a team of one, go-invoice uncalibrated); quality and report code-quality cells for all three large-spec arms."
       }
     ]
   }
