@@ -4,20 +4,30 @@ Issue [#33](https://github.com/danielrispler/Falinks/issues/33) ports the [#23](
 
 ## Run
 
-Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) and Claude Code `2.1.308`, whose per-platform SHA-256 is in `PINS`. On Linux use the glibc `linux-x64`/`linux-arm64` release binary and meet the Linux adapter requirements there. Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
+Use a pinned platform from [`docs/platforms.md`](../../docs/platforms.md) and Claude Code `2.1.309`, whose per-platform SHA-256 is in `PINS`. On Linux use the glibc `linux-x64`/`linux-arm64` release binary and meet the Linux adapter requirements there. Copy the executable into a dedicated directory so a package upgrade cannot replace it. Startup checks the hash before running anything and never substitutes another installed CLI.
 
 ```sh
 cargo build --release --bins
 ./target/release/check-claude-adapter \
-  --binary /path/to/pinned/claude-2.1.308 \
+  --binary /path/to/pinned/claude-2.1.309 \
   --output /path/to/current-claude-controls.json
 ```
 
 The verifier expects sibling `sandbox-probe`, `falinks-claude-tool` and `falinks-claude-shell` executables (`--probe` and `--tool` override the first two; the shell sits beside the tool); a missing one fails before any runtime launch. It needs the existing subscription login and network access for three short model turns. It creates a fixture under `/tmp/falinks-claude-adapter-*` (`/private/tmp` on macOS) and removes only that fixture's session folder from `~/.claude/projects/`. The evidence's `outcome` is `passed`, `failed` or `inconclusive`. A failed check exits 1; inspect `failure`. A `model_refusal_fallback` still fails the run as below, but exits 2 and prints `inconclusive: model refusal (not evidence either way)`.
 
+### Moving the pin
+
+To move to a new Claude Code release:
+
+1. Read the release's `CHANGELOG.md` entry for changes to the launch profile, `CLAUDE_CODE_SHELL_PREFIX`, stream-json events, hooks, MCP and the macOS sandbox profile.
+2. Copy the `darwin-arm64`, `linux-x64` and `linux-arm64` checksums from `$DIST/<version>/manifest.json` into `PINS`, and set `VERSION`. `DIST` is in `.github/workflows/adapter-linux.yml`. Check a local copy against its checksum.
+3. Change the version in this README. Change it in `shell.rs`, `tests/shell.rs` and `docs/platforms.md` once the behaviour they describe is checked on the new binary, including the hand mirror of Claude Code's Seatbelt profile.
+4. The Falinks arm and the judge require the evaluation's runtime to match. Set `runtime_version`, `runtime_sha256` (macOS arm64) and `runtime_binary` in `evaluation/config.json` and the version in `evaluation/README.md`. Move `code-quality.json`'s `judge.runtime_version` by a versioned amendment, then re-freeze and record the pin in `setup.json`'s `status` (see "Freeze and setup ledger" in `evaluation/README.md`). If a final freeze names the old version and its batch has not finished, ask before moving.
+5. Run `check-claude-adapter` and `check-integration` on the new binary, then `cargo run --bin ci-checks`. Suggest the heavy evaluation tests on the branch.
+
 ## Launch profile
 
-The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Glob,Grep,Read` (from `NATIVE`, the list `init` must report), `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables except `CLAUDE_CODE_OAUTH_TOKEN`, the subscription login that `claude setup-token` creates for CI, and sets `DISABLE_AUTOUPDATER=1`. Like the Git-arm worker, it sets `GOCACHE=scratch/go-cache`, `GOTOOLCHAIN=local` and `GOPROXY=off`: the sandbox denies Go's default cache (#112). Edit, Write, web, Agent/Task and Skill are denied.
+The worker runs `claude -p` over stream-json with `--setting-sources ""`, inline-generated `--settings`, `--strict-mcp-config`, `--disable-slash-commands`, `--tools Bash,Glob,Grep,Read` (from `NATIVE`, the list `init` must report), `--permission-mode dontAsk`, `--max-turns 12`, the pinned `--model` and a host-chosen `--session-id`. Its environment drops inherited `CLAUDE*` variables except `CLAUDE_CODE_OAUTH_TOKEN`, the subscription login that `claude setup-token` creates for CI, and sets `DISABLE_AUTOUPDATER=1`. Like the Git-arm worker, it sets `GOCACHE=scratch/go-cache`, `GOTOOLCHAIN=local` and `GOPROXY=off`: the sandbox denies Go's default cache (#112). Edit, Write, web, Agent/Task and Skill are denied. Since 2.1.309, `sed -i` is a Bash command, not an edit, so it runs through the wrapper below.
 
 Settings turn Claude Code's own sandbox off and set `CLAUDE_CODE_SHELL_PREFIX` to `worker-tools/falinks-claude-shell` (#236, #295). Claude Code runs each Bash command, foreground or background, as `PREFIX 'COMMAND'`. The wrapper confines itself, then runs `/bin/bash -c COMMAND`: Seatbelt on macOS, the engine's Landlock and seccomp on Linux. A confined command writes only beneath `scratch/` (its `TMPDIR` is `scratch/.tmp`) and `/dev/null`, cannot read controller, snapshot or validation storage, and has no network. Every failure exits 126 before the command runs. Claude Code also prefixes stdio MCP servers; the `falinks` relay's exact command line is the one the wrapper runs unconfined. The exec-form hook is not prefixed. `tests/shell.rs` checks the wrapper directly.
 
@@ -73,7 +83,7 @@ These are finite probes on one binary and machine; any version change requires r
 ```sh
 cargo build --release --bins
 ./target/release/check-integration \
-  --binary /path/to/pinned/claude-2.1.308 \
+  --binary /path/to/pinned/claude-2.1.309 \
   --output /path/to/integration-report.json
 ```
 

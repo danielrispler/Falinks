@@ -1,4 +1,4 @@
-use falinks_claude::{Launch, MODEL, Session};
+use falinks_claude::{Launch, MODEL, Session, VERSION};
 use falinks_host::{EngineOutcome, Notice};
 use serde_json::{Value, json};
 use std::{cell::RefCell, path::Path, rc::Rc};
@@ -8,7 +8,7 @@ const TOKEN: &str = "host-token";
 
 /// Shapes recorded from the pinned binary in #32 (`2026-10-10-probe.json`).
 fn init(workspace: &Path) -> Value {
-    json!({"type":"system","subtype":"init","claude_code_version":"2.1.308","cwd":workspace.with_file_name("scratch"),
+    json!({"type":"system","subtype":"init","claude_code_version":VERSION,"cwd":workspace.with_file_name("scratch"),
         "model":MODEL,"permissionMode":"dontAsk","session_id":SESSION,"tools":Launch::fixture(workspace.parent().unwrap()).allowed(),
         "mcp_servers":[{"name":"falinks","source":"dynamic","status":"connected"}],
         "plugins":[{"name":"cc-plugin-agents-md","path":"builtin","source":"cc-plugin-agents-md@builtin"},
@@ -461,7 +461,11 @@ fn delivery_is_presentation_only_and_records_its_turn() {
 fn only_the_pinned_claude_executable_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     let impostor = dir.path().join("claude");
-    std::fs::write(&impostor, b"#!/bin/sh\necho '2.1.308 (Claude Code)'\n").unwrap();
+    std::fs::write(
+        &impostor,
+        format!("#!/bin/sh\necho '{VERSION} (Claude Code)'\n"),
+    )
+    .unwrap();
     let error = falinks_claude::verify_binary(&impostor)
         .unwrap_err()
         .to_string();

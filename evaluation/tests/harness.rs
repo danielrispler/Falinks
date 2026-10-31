@@ -2044,7 +2044,7 @@ func TestLabel(t *testing.T) {
     let config = judge.join("config.json");
     fs::write(
         &config,
-        json!({"runtime_version": "2.1.308", "model": "claude-opus-5-5",
+        json!({"runtime_version": read(root().join("code-quality.json"))["judge"]["runtime_version"], "model": "claude-opus-5-5",
             "runtime_binary": SCRIPTED, "runtime_sha256": hash(SCRIPTED)})
         .to_string(),
     )
@@ -2307,7 +2307,7 @@ fn quality_judges_a_team_of_one_without_the_blinding_question() {
     let config = judge.join("config.json");
     fs::write(
         &config,
-        json!({"runtime_version": "2.1.308", "model": "claude-opus-5-5",
+        json!({"runtime_version": read(root().join("code-quality.json"))["judge"]["runtime_version"], "model": "claude-opus-5-5",
             "runtime_binary": SCRIPTED, "runtime_sha256": hash(SCRIPTED)})
         .to_string(),
     )
