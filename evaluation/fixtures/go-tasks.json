@@ -25,8 +25,8 @@
     "T8 report.go, package tasks: the report command. Add \"report\": report to commands. report takes no words and only the flag --tag QUERY, which limits the report to the tasks that query.Parse(QUERY) matches (all tasks without it); anything else is an error. An open task is overdue when its due date is in due.Window(\"overdue\", env.Clock); a done task is never overdue. For each tag that a counted task has, in ascending order, report prints \"TAG: O open, V overdue, D done\\n\", where O counts the open tasks with that tag, V the overdue ones among them and D the done ones; then \"TOTAL: O open, V overdue, D done\\n\" over every counted task, tagged or not. Cross-ticket requirement, T7 and T8: report's counts agree with what list's filters show. With the same --tag flag, or none, the TOTAL line's O, V and D are the numbers of tasks that list, list --due overdue and list --status done print, and each tag's line gives the same numbers when the query also requires that tag."
   ],
   "allocation": {
-    "A": "T1, T3, T4 and T7: core/task.go, due/due.go, recur/recur.go and list.go, with focused tests.",
-    "B": "T2, T5, T6 and T8: commands.go, query/query.go, export/export.go and report.go, with focused tests."
+    "A": "T1, T3, T4 and T7: core/task.go, due/due.go, recur/recur.go and list.go, with focused tests. Complete and hand off T1 before starting T3 or T4, and hand off T7 on its own, apart from T3 and T4.",
+    "B": "T2, T5, T6 and T8: commands.go, query/query.go, export/export.go and report.go, with focused tests. Complete and hand off T2 before starting T5 or T6, and hand off T8 on its own, apart from T5 and T6."
   },
   "dependencies": [
     "Packages: core imports no package of the module; due, recur, query and export import only core; the root package tasks imports them all.",

@@ -9,10 +9,10 @@
     "config.json": "0a04cf2040806aa2b53e7f9f8bf65b6afdfe1626baaffc91946725fe6e1ea44d",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
-    "fixtures/go-invoice.json": "b647a36412839cd67d8cc904dfdd10df36e276fc606a7e28bb20a8e0eaae4210",
+    "fixtures/go-invoice.json": "1809c06a0161ff87f3250b89249df7738121395b1a6afc426ff095ab1dfd9376",
     "fixtures/go-page.json": "2ce830d8f253af88b7255df2221b4b850faf7e5dad928b22ebe82b375c0321e3",
     "fixtures/go-relationships.json": "c617cec9c7a41a2176c7bac93f33753af2c1b411aa896c4f6848f0c91c17e196",
-    "fixtures/go-tasks.json": "5529dc3afb3f7c1e6db2f572fe42d8bcabb13569ecd26b78723bc859ef2f51bf",
+    "fixtures/go-tasks.json": "f18b94cc99602d0735b098dfa7c6ad7cc23bf9c0815289b13e7c79e1973b5be0",
     "fixtures/rust-errors.json": "c1ef8768913cd2e7278ae92bf64be61e6b25782814345d0e56d74bfe92002b0e",
     "instructions/falinks.md": "9733e492c42ec0ec0ebf74e42b8541ad8b32159e58d8e32c5a229be6f6612f0b",
     "instructions/git-solo.md": "b535ddefe9edc94ac1d58063fc8f910bf5a2ecfd1524a86da3b6de5d375057fb",
@@ -57,5 +57,5 @@
     "go-tasks": "12f2511ee050e318f13aa99ae0838b96ffd095a5",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 49
+  "version": 50
 }

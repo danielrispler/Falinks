@@ -28,8 +28,8 @@
     "T9 statement.go: Statement(inv core.Invoice, rules []discount.Rule, taxes tax.Table, rates fx.Table, currency string) (Summary, string, error) returns inv.Validate()'s error, and otherwise any error from converting with rates, with a zero Summary and \"\". Otherwise its Summary is Totals(inv, rules, taxes) with two fields added to Summary: Currency string, set to currency, and Converted core.Money, set to rates.Convert(Total, inv.Currency, currency). Its text is \"Invoice ID for CUSTOMER (CURRENCY)\" with inv's ID, Customer and Currency, then \\n, then a render.Table with the columns SKU, Qty, Unit, Discount, Tax and Amount, all but SKU aligned right and none with a Max. Each line of inv gives a row, in order: its SKU, its Qty in decimal, its Unit, the amount rules take off it, its tax taxes.Line(line, Gross minus that amount), and its amount, Gross minus the discount plus the tax, with money by Money.String. The footer rows are Subtotal, Discount, Tax and Total, each with its label in the SKU column, the Summary's value in the Amount column and the cells between empty; when currency differs from inv.Currency, a last footer row \"Total in CURRENCY\" holds Converted. The statement's printed line amounts sum to its printed total."
   ],
   "allocation": {
-    "A": "T1, T3, T4 and T8, with focused tests.",
-    "B": "T2, T5, T6, T7 and T9, with focused tests."
+    "A": "T1, T3, T4 and T8, with focused tests. Complete and hand off T1 before starting T3 or T4, and hand off T8 on its own, apart from T3 and T4.",
+    "B": "T2, T5, T6, T7 and T9, with focused tests. Complete and hand off T2 before starting T5, T6 or T7, and hand off T9 on its own, apart from T5, T6 and T7."
   },
   "dependencies": [
     "T3 and T4 use T1's Money and Rate and T2's LineItem.",
