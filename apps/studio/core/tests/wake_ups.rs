@@ -5,11 +5,7 @@ use serde_json::json;
 use studio_core::{Output, Sender, State, Studio};
 
 fn replay(log: &str) -> Studio {
-    let mut studio = Studio::default();
-    for line in log.lines() {
-        studio.replay(line);
-    }
-    studio
+    Studio::replayed(log.lines())
 }
 
 /// The checkpoint day of #347, scrubbed (#370).

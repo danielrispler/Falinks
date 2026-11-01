@@ -68,10 +68,7 @@ const TREE_EXPLORE: &str = "a5d9f1b3c7e2a4b6d";
 
 #[test]
 fn a_notice_says_its_sessions_folder_and_short_id_and_the_child_it_names() {
-    let mut studio = Studio::default();
-    for line in TREE.lines() {
-        studio.replay(line);
-    }
+    let studio = Studio::replayed(TREE.lines());
 
     assert_eq!(studio.notice_body(TREE_SESSION, None), "Falinks e3b1c7a2");
     assert_eq!(

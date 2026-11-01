@@ -21,7 +21,7 @@ pub struct Studio {
     now: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Session {
     pub id: String,
     /// The folder the session works in, from its latest event.
@@ -121,6 +121,13 @@ pub enum Sender {
     Unrecognised(String),
 }
 
+impl Sender {
+    /// Whether the prompt counts as Daniel's: anything but a wake-up, drift included.
+    pub fn is_daniels(&self) -> bool {
+        !matches!(self, Sender::WakeUp(_))
+    }
+}
+
 /// An `AskUserQuestion` call, which Daniel answers in the terminal (#369, decision 21).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Question {
@@ -145,7 +152,7 @@ pub enum Answer {
 }
 
 /// A subagent of a session (#369, decisions 5, 6 and 8).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Subagent {
     /// Its `agent_id`.
     pub id: String,
@@ -206,24 +213,31 @@ impl Subagent {
 }
 
 /// Who spawned a subagent: the session's own agent, another subagent, or no known spawn.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Parent {
     Session,
     Agent(String),
+    #[default]
     Unattached,
 }
 
 /// A worker is spawned with its own worktree, or changes files; any other subagent is a helper
 /// (#369, decision 6).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Worker,
+    #[default]
     Helper,
 }
 
 impl Session {
+    /// Its subagent `id`, at any depth.
+    pub fn subagent(&self, id: &str) -> Option<&Subagent> {
+        self.agents.iter().find(|a| a.id == id)
+    }
+
     /// Subagent `id`, added in "unattached" when this is the first event that names it.
     fn agent(&mut self, id: &str, at: u64) -> &mut Subagent {
         let index = match self.agents.iter().position(|a| a.id == id) {
@@ -231,22 +245,10 @@ impl Session {
             None => {
                 self.agents.push(Subagent {
                     id: id.into(),
-                    parent: Parent::Unattached,
-                    kind: Kind::Helper,
-                    description: None,
-                    agent_type: None,
                     status: "running".into(),
                     started_at: at,
-                    ended_at: None,
-                    last_step: None,
-                    result: None,
-                    failed: false,
-                    opened: false,
-                    faded: false,
                     last_event_at: at,
-                    folder: None,
-                    prompt: String::new(),
-                    since: Since::default(),
+                    ..Subagent::default()
                 });
                 self.agents.len() - 1
             }
@@ -384,7 +386,7 @@ impl Session {
     /// The subagent whose cards cover subagent `id`'s changes in `folder`: `id` itself when its parent
     /// works in another folder, else its parent's; `None` for the session's own agent's cards.
     fn owner(&self, id: &str, folder: &str) -> Option<String> {
-        let find = |id: &str| self.agents.iter().find(|a| a.id == id);
+        let find = |id: &str| self.subagent(id);
         match find(id).map(|a| &a.parent) {
             Some(Parent::Agent(parent)) => {
                 if find(parent).and_then(|a| a.folder.as_deref()) != Some(folder) {
@@ -398,8 +400,7 @@ impl Session {
 
     /// Whether subagent `id` gets cards of its own: a worker in a folder of its own.
     fn has_cards(&self, id: &str) -> bool {
-        let agent = self.agents.iter().find(|a| a.id == id);
-        agent.is_some_and(|a| {
+        self.subagent(id).is_some_and(|a| {
             let folder = a.folder.as_deref().unwrap_or_default();
             a.kind == Kind::Worker && self.owner(id, folder).as_deref() == Some(id)
         })
@@ -418,14 +419,13 @@ impl Session {
     /// at `at`: `change`, or else its workers' cards.
     fn card(&mut self, owner: Option<&str>, change: Option<Change>, at: u64) -> CardRequest {
         // A worker's cards belong to its task, and a session's to Daniel's latest prompt.
-        let daniels = |p: &&Prompt| !matches!(p.sender, Sender::WakeUp(_));
         let prompt = match owner {
-            Some(id) => self
-                .agents
+            Some(id) => self.subagent(id).map(|a| a.started_at),
+            None => self
+                .prompts
                 .iter()
-                .find(|a| a.id == id)
-                .map(|a| a.started_at),
-            None => self.prompts.iter().rfind(daniels).map(|p| p.at),
+                .rfind(|p| p.sender.is_daniels())
+                .map(|p| p.at),
         };
         let since = std::mem::take(self.since(owner));
         self.since(owner).at = at;
@@ -504,13 +504,14 @@ fn waits_on(block: &Call, call: &Call) -> bool {
 
 /// A session's state (#369, decision 4). Each has a named clearer: an event, or the tick for idle.
 /// The order is the session list's: needs you first, then the groups the list collapses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
     /// Blocked on Daniel (#328, module 3, "Needs you"), until the step that asks resolves, a prompt
     /// of Daniel's, `Stop` or `SessionEnd`.
     NeedsYou,
     /// In a turn, from a prompt until `Stop` or `SessionEnd`.
+    #[default]
     Running,
     /// The turn ended, or the session started and has had no prompt yet, until a prompt.
     YourTurn,
@@ -752,13 +753,18 @@ fn step_detail(input: &Value, cwd: &str) -> Option<String> {
         return Some(question.into());
     }
     if let Some(path) = input["file_path"].as_str() {
-        let relative = path.strip_prefix(cwd).and_then(|p| p.strip_prefix('/'));
-        return Some(relative.unwrap_or(path).into());
+        return Some(relative(path, cwd).into());
     }
     ["pattern", "url", "query", "description"]
         .iter()
         .find_map(|key| input[key].as_str())
         .map(Into::into)
+}
+
+/// `path` relative to `folder`, or else `path` as it is.
+fn relative<'a>(path: &'a str, folder: &str) -> &'a str {
+    let relative = path.strip_prefix(folder).and_then(|p| p.strip_prefix('/'));
+    relative.unwrap_or(path)
 }
 
 /// A command that runs a check from the check list (#328, module 3): `cargo
@@ -850,8 +856,9 @@ impl Studio {
             && let Some(session) = session
         {
             for (id, _) in reported(&event.prompt) {
-                let agent = session.agents.iter().find(|a| a.id == id);
-                let agent = agent.filter(|a| a.ended_at.is_none() && session.has_cards(id));
+                let agent = session
+                    .subagent(id)
+                    .filter(|a| a.ended_at.is_none() && session.has_cards(id));
                 looks.extend(agent.and_then(|a| {
                     Some(Fingerprint {
                         key: id.into(),
@@ -888,14 +895,14 @@ impl Studio {
         };
         let Some(id) = &event.agent_id else {
             let at = match name {
-                "UserPromptSubmit" => !self.in_turn(&event.session_id),
+                "UserPromptSubmit" => !session.is_some_and(Session::in_turn),
                 "Stop" => true,
                 _ => session.is_some_and(session_due),
             };
             return look(&event.session_id, &event.cwd, Keep::Always).filter(|_| at);
         };
         let session = session?;
-        let agent = session.agents.iter().find(|a| &a.id == id);
+        let agent = session.subagent(id);
         let Some(folder) = agent.and_then(|a| a.folder.as_deref()) else {
             return look(id, &event.cwd, Keep::Always);
         };
@@ -907,7 +914,7 @@ impl Studio {
         }
         let bash = step && bash;
         let owner = session.owner(id, folder);
-        let owner = owner.and_then(|o| session.agents.iter().find(|a| a.id == o));
+        let owner = owner.and_then(|o| session.subagent(&o));
         match owner {
             Some(own)
                 if &own.id == id && worker(own) && (name == "SubagentStop" || due(&own.since)) =>
@@ -925,16 +932,11 @@ impl Studio {
         }
     }
 
-    /// Whether session `id` is in a turn: prompted, and neither stopped nor ended since.
-    fn in_turn(&self, id: &str) -> bool {
-        self.sessions.get(id).is_some_and(Session::in_turn)
-    }
-
     /// The sessions in a turn and the running subagents, with their folders, by their fingerprints'
     /// keys. After a replay the shell fingerprints them once, so a restart mid-turn leaves the
     /// turn's `Stop` and each subagent's next look a base to compare with.
     pub fn waiting_folders(&self) -> impl Iterator<Item = (&str, &str)> {
-        let waiting = self.sessions.values().filter(|s| self.in_turn(&s.id));
+        let waiting = self.sessions.values().filter(|s| s.in_turn());
         let agents = self.sessions.values().flat_map(|s| &s.agents);
         let running = agents.filter(|a| a.status == "running");
         let running = running.filter_map(|a| Some((a.id.as_str(), a.folder.as_deref()?)));
@@ -967,29 +969,12 @@ impl Studio {
             .entry(event.session_id.clone())
             .or_insert_with(|| Session {
                 id: event.session_id.clone(),
-                cwd: String::new(),
-                last_step: None,
-                state: State::Running,
                 started_at: event.studio_received_ms,
-                last_event_at: 0,
-                checks: Vec::new(),
-                running: Vec::new(),
-                blocks: Vec::new(),
-                asked: false,
-                turn_ended: false,
-                ended: false,
-                versioned: false,
-                agents: Vec::new(),
-                asker: None,
-                prompts: Vec::new(),
-                tasks: BTreeSet::new(),
-                questions: Vec::new(),
-                stopped: None,
-                woken: false,
                 since: Since {
                     at: event.studio_received_ms,
                     ..Since::default()
                 },
+                ..Session::default()
             });
         // The hooks are async, so the latest event can land before an earlier one.
         session.last_event_at = session.last_event_at.max(event.studio_received_ms);
@@ -1021,15 +1006,14 @@ impl Studio {
             && matches!(tool.as_str(), "Edit" | "Write")
             && let Some(path) = event.tool_input["file_path"].as_str()
         {
-            let folder = session.agents.iter().find(|a| &a.id == agent);
+            let folder = session.subagent(agent);
             let folder = folder.and_then(|a| a.folder.clone()).unwrap_or_default();
             let owner = session.owner(agent, &folder);
             if owner.as_ref() != Some(agent) {
-                let relative = path.strip_prefix(&folder).and_then(|p| p.strip_prefix('/'));
                 let by = &mut session.since(owner.as_deref()).by;
                 by.entry(agent.clone())
                     .or_default()
-                    .insert(relative.unwrap_or(path).into());
+                    .insert(relative(path, &folder).into());
             }
         }
         // A worker's card at its commit, seen after its Bash step, or at its end, and any worktree's
@@ -1057,7 +1041,7 @@ impl Studio {
             // A prompt opens a wait, also after an interrupt, which fires no `Stop`.
             "UserPromptSubmit" => {
                 let sender = session.sender(&event.prompt);
-                let wake_up = matches!(sender, Sender::WakeUp(_));
+                let wake_up = !sender.is_daniels();
                 session.woken = wake_up && (session.woken || !session.in_turn());
                 // A base for the prompt: what Daniel changed himself before it is no one's.
                 if looks.iter().any(|look| look.key == session.id) {
@@ -1243,6 +1227,15 @@ impl Studio {
         outputs
     }
 
+    /// A new studio with `lines` replayed into it, in order.
+    pub fn replayed<S: AsRef<str>>(lines: impl IntoIterator<Item = S>) -> Self {
+        let mut studio = Self::default();
+        lines
+            .into_iter()
+            .for_each(|line| studio.replay(line.as_ref()));
+        studio
+    }
+
     /// Takes one event log line replayed at app start. It updates state exactly like `apply` and
     /// requests nothing, so turns that ended while the app was down get no cards and no notices.
     pub fn replay(&mut self, line: &str) {
@@ -1316,7 +1309,7 @@ impl Studio {
         let folder = session.and_then(|s| s.cwd.rsplit('/').next());
         let mut body = format!("{} {}", folder.unwrap_or_default(), short(id, 8));
         if let Some(agent) = agent {
-            let child = session.and_then(|s| s.agents.iter().find(|a| a.id == agent));
+            let child = session.and_then(|s| s.subagent(agent));
             let name = child.and_then(|a| a.description.as_deref());
             body = format!("{body} · {}", name.unwrap_or(short(agent, 5)));
         }

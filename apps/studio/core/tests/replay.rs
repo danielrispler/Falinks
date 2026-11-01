@@ -5,11 +5,7 @@
 use studio_core::{Step, Studio};
 
 fn replay(log: &str) -> Studio {
-    let mut studio = Studio::default();
-    for line in log.lines() {
-        studio.replay(line);
-    }
-    studio
+    Studio::replayed(log.lines())
 }
 
 fn step(tool: &str, detail: Option<&str>) -> Option<Step> {

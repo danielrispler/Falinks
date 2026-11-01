@@ -8,7 +8,7 @@ use std::{
     process::Command,
     sync::Mutex,
 };
-use studio_core::{CardRequest, Kind, Sender, Session};
+use studio_core::{CardRequest, Kind, Session};
 
 mod drift;
 mod fingerprint;
@@ -302,7 +302,7 @@ fn rebrief(
                 own.find_map(|kept| kept.request.base.head.clone()),
             )
         };
-        let worker = session.agents.iter().find(|a| Some(&*a.id) == agent);
+        let worker = agent.and_then(|id| session.subagent(id));
         let folder = worker
             .and_then(|a| a.folder.as_deref())
             .unwrap_or(&session.cwd);
@@ -313,7 +313,7 @@ fn rebrief(
             Some(worker) => vec![&worker.prompt],
             None => {
                 let daniels = session.prompts.iter();
-                let daniels = daniels.filter(|p| !matches!(p.sender, Sender::WakeUp(_)));
+                let daniels = daniels.filter(|p| p.sender.is_daniels());
                 daniels.map(|p| p.text.as_str()).collect()
             }
         };
