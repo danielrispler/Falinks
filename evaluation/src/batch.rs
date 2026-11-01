@@ -120,31 +120,34 @@ pub fn large_spec_slots() -> Vec<Value> {
     rotations(LARGE_SPEC_FIXTURE, 8, true)
 }
 
-/// #205's engine waves (#335), unscored, one batch directory per wave: `wave-1` to `wave-4`
-/// (the cap) run two Falinks agents four times and two Git agents once on the dev fixture, then
-/// two Falinks agents on one small fixture, rotating by wave; `sweep`, the final regression
-/// sweep, runs two Falinks agents once on each small fixture. None for any other name.
+/// #205's engine waves (#335), unscored, one batch directory each: `wave-1` to `wave-4` (the
+/// cap) run two Falinks agents four times and two Git agents once on the dev fixture, then two
+/// Falinks agents on one small fixture, rotating by wave; `sweep`, the final regression sweep,
+/// runs two Falinks agents once on each small fixture; `confirm` gives a sweep regression's fix
+/// its two confirming dev runs. None for any other name.
 pub fn wave_slots(name: &str) -> Option<Vec<Value>> {
     let small = &FIXTURES[..5];
-    let runs: Vec<(String, &str, &str)> = if name == "sweep" {
-        small
+    let dev = |i: usize| (format!("go-tasks-{i}-falinks-2"), "go-tasks", "falinks");
+    let planned: Vec<(String, &str, &str)> = match name {
+        "sweep" => small
             .iter()
             .map(|f| (format!("{f}-falinks-2"), *f, "falinks"))
-            .collect()
-    } else {
-        let wave: usize = name.strip_prefix("wave-")?.parse().ok()?;
-        if !(1..=4).contains(&wave) {
-            return None;
+            .collect(),
+        "confirm" => (1..=2).map(dev).collect(),
+        _ => {
+            let wave: usize = name.strip_prefix("wave-")?.parse().ok()?;
+            if !(1..=4).contains(&wave) {
+                return None;
+            }
+            // Four waves reach go-indep-2; go-indep-4 is in the sweep.
+            let regression = small[wave - 1];
+            let mut planned: Vec<_> = (1..=4).map(dev).collect();
+            planned.push(("go-tasks-5-git-2".into(), "go-tasks", "git"));
+            planned.push((format!("{regression}-falinks-2"), regression, "falinks"));
+            planned
         }
-        let regression = small[(wave - 1) % small.len()];
-        let mut runs: Vec<_> = (1..=4)
-            .map(|i| (format!("go-tasks-{i}-falinks-2"), "go-tasks", "falinks"))
-            .collect();
-        runs.push(("go-tasks-5-git-2".into(), "go-tasks", "git"));
-        runs.push((format!("{regression}-falinks-2"), regression, "falinks"));
-        runs
     };
-    let slots = runs
+    let slots = planned
         .into_iter()
         .enumerate()
         .map(|(order, (slot, fixture, arm))| {
@@ -872,18 +875,30 @@ mod tests {
         );
         // The cap is four waves; the sweep follows the last engine change.
         assert!(wave_slots("wave-5").is_none() && wave_slots("wave-0").is_none());
-        let sweep = wave_slots("sweep").unwrap();
-        let sweep: Vec<(&str, &str)> = sweep
-            .iter()
-            .map(|s| (s["fixture"].as_str().unwrap(), s["arm"].as_str().unwrap()))
-            .collect();
-        assert_eq!(
-            sweep,
-            FIXTURES[..5]
+        let runs = |name: &str| -> Vec<(String, String)> {
+            let slots = wave_slots(name).unwrap();
+            let field = |s: &Value, key: &str| s[key].as_str().unwrap().to_string();
+            slots
                 .iter()
-                .map(|f| (*f, "falinks"))
-                .collect::<Vec<_>>()
-        );
+                .map(|s| (field(s, "fixture"), field(s, "arm")))
+                .collect()
+        };
+        let falinks = |fixtures: &[&str]| -> Vec<(String, String)> {
+            fixtures
+                .iter()
+                .map(|f| (f.to_string(), "falinks".into()))
+                .collect()
+        };
+        let small = [
+            "rust-errors",
+            "go-page",
+            "go-relationships",
+            "go-indep-2",
+            "go-indep-4",
+        ];
+        assert_eq!(runs("sweep"), falinks(&small));
+        // A regression the sweep finds gets a fix and two confirming dev runs.
+        assert_eq!(runs("confirm"), falinks(&["go-tasks", "go-tasks"]));
     }
 
     /// #205: eight scored rotations on go-invoice, each arm first two or three times.

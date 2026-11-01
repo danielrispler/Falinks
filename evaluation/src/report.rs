@@ -1163,7 +1163,7 @@ pub fn wave_report(runs: &[Value]) -> Value {
         .iter()
         .map(|r| {
             json!({"run_id": r["run_id"], "fixture": r["fixture"], "arm": r["arm"],
-                "outcome": r["outcome"], "failure_reason": r.get("failure_reason"),
+                "identity": r["identity"], "outcome": r["outcome"], "failure_reason": r.get("failure_reason"),
                 "replaces": r.get("replaces"), "elapsed_seconds": r["timing"]["elapsed_seconds"],
                 "transitions": r["transitions"], "proposals": r["regrouping"]["proposals"],
                 "collisions": r["collisions"], "collision_waste": r["discarded_or_rewritten_work"],
@@ -2365,6 +2365,7 @@ mod tests {
         runs[0]["transcript"] = json!({"agents": {"agent-0": {"coordination_overhead":
             {"round_trips": 3, "model_seconds": 12.5}}}});
         runs[0]["tokens"] = json!({"cost_usd": 1.25});
+        runs[0]["identity"] = json!({"manifest_version": 51});
         runs[2]["replaces"] = json!("go-tasks-2-falinks-2");
         runs[3]["nested_agent"] = json!("codex");
         let out = wave_report(&runs);
@@ -2372,7 +2373,7 @@ mod tests {
         assert_eq!(rows.len(), 4);
         assert_eq!(
             rows[0]["proposals"]["Split"]["engine"], 1,
-            "the pilot gate reads engine proposals"
+            "a wave log names each Split and Join proposal"
         );
         assert_eq!(
             (
@@ -2384,6 +2385,8 @@ mod tests {
         );
         assert_eq!(rows[0]["coordination_overhead"], json!([3.0, 12.5]));
         assert_eq!(rows[0]["cost_usd"], 1.25);
+        // Early stop counts clean runs on one engine version.
+        assert_eq!(rows[0]["identity"]["manifest_version"], 51);
         assert_eq!(rows[2]["replaces"], "go-tasks-2-falinks-2");
         assert_eq!(out["replaced_runs"], json!(["go-tasks-2-falinks-2"]));
         assert_eq!(

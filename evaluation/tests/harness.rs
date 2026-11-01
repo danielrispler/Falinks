@@ -1762,7 +1762,8 @@ fn track_t_batch_runs_both_team_sizes_with_run_isolation() {
 }
 
 /// #335: a wave is a batch schedule, isolated and gated like the others, whose report lists its
-/// runs; wave 3's regression run is on go-relationships.
+/// runs; wave 3's regression run is on go-relationships. Its first run is a Falinks run, whose
+/// fake runner checks that every entry of the batch directory, `configs` included, is denied.
 #[test]
 fn wave_batch_runs_its_regression_slot_and_writes_the_wave_report() {
     let tmp = tmp("falinks-wave-test-");
