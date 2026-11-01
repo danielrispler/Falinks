@@ -229,3 +229,20 @@ fn a_folder_outside_git_has_no_fingerprint() {
 
     assert_eq!(diff(&mut prints, dir.path()), None);
 }
+
+#[test]
+fn a_folder_that_becomes_a_repository_is_fingerprinted_from_then_on() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("lib.rs"), "fn a() {}\n").unwrap();
+    let mut prints = Fingerprints::default();
+    assert_eq!(diff(&mut prints, dir.path()), None);
+
+    git(dir.path(), &["init", "-q"]);
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "Start"]);
+    assert_eq!(diff(&mut prints, dir.path()), None);
+    fs::write(dir.path().join("lib.rs"), "fn b() {}\n").unwrap();
+
+    let change = "--- a/lib.rs\n+++ b/lib.rs\n@@ -1 +1 @@\n-fn a() {}\n+fn b() {}\n";
+    assert_eq!(diff(&mut prints, dir.path()).as_deref(), Some(change));
+}

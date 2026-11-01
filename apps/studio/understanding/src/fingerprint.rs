@@ -45,6 +45,8 @@ fn read(path: &Path) -> Option<Content> {
 #[derive(Default)]
 pub struct Fingerprints {
     records: HashMap<PathBuf, Record>,
+    /// Each folder's worktree root, once a lookup found one; a folder with none is asked again.
+    roots: HashMap<PathBuf, PathBuf>,
 }
 
 impl Fingerprints {
@@ -57,8 +59,15 @@ impl Fingerprints {
 
     /// Like `take`, but the record becomes the next change's base only as `keep` says.
     pub fn look(&mut self, folder: &Path, keep: Keep) -> Option<Change> {
-        let root = git(folder, &["rev-parse", "--show-toplevel"])?;
-        let root = PathBuf::from(String::from_utf8(root).ok()?.trim_end());
+        let root = match self.roots.get(folder) {
+            Some(root) => root.clone(),
+            None => {
+                let root = git(folder, &["rev-parse", "--show-toplevel"])?;
+                let root = PathBuf::from(String::from_utf8(root).ok()?.trim_end());
+                self.roots.insert(folder.to_owned(), root.clone());
+                root
+            }
+        };
         let head = git(&root, &["rev-parse", "HEAD"]);
         let head = head.and_then(|sha| Some(String::from_utf8(sha).ok()?.trim_end().to_owned()));
         // Untracked files one by one rather than their folders; a rename as a deletion and an addition.
