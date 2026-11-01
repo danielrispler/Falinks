@@ -86,7 +86,7 @@ A change covers the owners touched by its single per-file diff hunk in both the 
 
 ## Messages, offers and replay
 
-Events carry the SQLite commit sequence and a stable `workspace:seq` ID. Message kinds: `Plan` (client `post`, reserves nothing), `LiveEdit` (engine, on commit, with the edit's note as text), and `CheckpointOffer` (`offer`). Committed acceptance is a separate `Published` event, and check results are `Validated` events (see #22). Every message names its sender, workspace, task, scope and work. A reply must repeat the original message's exact work. Offers name a captured revision and stay available through later live edits until `withdraw` or an explicit `supersedes`.
+Events carry the SQLite commit sequence and a stable `workspace:seq` ID. Message kinds: `Plan` (client `post`, reserves nothing), `LiveEdit` (engine, on commit, with the edit's note as text), and `CheckpointOffer` (`offer`). Committed acceptance is a separate `Published` event, and check results are `Validated` events (see #22). Every message names its sender, workspace, task, scope and work. A reply must repeat the original message's exact work. Offers name a captured revision and stay available through later live edits until `withdraw` or an explicit `supersedes`. Both name the agent's own offer by its ID or by the ID the offer's reply gave (`0/<id>`); another agent's offer stays out of reach.
 
 `events(client, after)` replays in order. `handle(client, through, deferred, processed)` is one transaction that applies all of its parts or none:
 
