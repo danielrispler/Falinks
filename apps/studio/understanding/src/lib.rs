@@ -8,7 +8,7 @@ use std::{
     process::Command,
     sync::Mutex,
 };
-use studio_core::{CardRequest, Kind, Session};
+use studio_core::{CardRequest, Kind, Session, Status};
 
 mod drift;
 mod fingerprint;
@@ -255,7 +255,7 @@ fn workers(store: &CardStore, request: &CardRequest, session: &Session) -> Optio
     let lines = session.agents.iter().filter_map(|agent| {
         let of = cards.iter().filter(|kept| kept.request.owner() == agent.id);
         let summaries: Vec<&str> = of.map(|kept| kept.card.summary.as_str()).collect();
-        let running = agent.status == "running" && agent.kind == Kind::Worker;
+        let running = agent.status == Status::Running && agent.kind == Kind::Worker;
         let name = agent.description.as_deref().unwrap_or(&agent.id);
         let did = match &summaries[..] {
             [] if running => "no card yet".into(),
