@@ -708,6 +708,21 @@ fn drain_usage(
     Ok(())
 }
 
+/// The exact commit an agent's resolved ID names: a full or an unambiguous short commit ID,
+/// never a ref name (#335: the instructions do not ask for the full ID, and agents give 7).
+fn resolved_commit(integration: &Path, resolved: &str, guard: Option<&Sandbox>) -> Result<String> {
+    if !(4..=40).contains(&resolved.len())
+        || !resolved.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+    {
+        bail!("Resolved candidate must be a Git commit ID (4 to 40 lowercase hex digits)");
+    }
+    git(
+        integration,
+        &["rev-parse", "--verify", &format!("{resolved}^{{commit}}")],
+        guard,
+    )
+}
+
 #[allow(clippy::too_many_arguments)] // Mirrors the single host call site; a struct adds nothing.
 fn combine(
     public: &Path,
@@ -741,22 +756,15 @@ fn combine(
     // Agents may resolve conflicts with ordinary Git in the integration worktree.
     let candidate = match resolved.filter(|r| !r.is_empty()) {
         Some(resolved) => {
-            if resolved.len() != 40 || !resolved.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
-            {
-                bail!("Resolved candidate must be an exact 40-character Git commit ID");
-            }
+            let resolved = resolved_commit(&integration, resolved, Some(&guard))?;
             for commit in &drafts {
                 git(
                     &integration,
-                    &["merge-base", "--is-ancestor", commit, resolved],
+                    &["merge-base", "--is-ancestor", commit, &resolved],
                     Some(&guard),
                 )?;
             }
-            git(
-                &integration,
-                &["rev-parse", &format!("{resolved}^{{commit}}")],
-                Some(&guard),
-            )?
+            resolved
         }
         None => {
             git(&integration, &["reset", "--hard", drafts[0]], Some(&guard))?;
@@ -806,4 +814,21 @@ fn combine(
         "passed": checks["visible"]["passed"] == true && checks["oracle"]["passed"] == true,
         "conflict": null, "visible": checks["visible"], "oracle": checks["oracle"],
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_resolved_commit_may_be_named_by_a_short_id_but_never_by_a_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let full = initial(&repo, &json!({"files": {"a.txt": "a\n"}})).unwrap();
+        assert_eq!(resolved_commit(&repo, &full, None).unwrap(), full);
+        assert_eq!(resolved_commit(&repo, &full[..7], None).unwrap(), full);
+        for name in ["HEAD", "main", "--all", &full[..3], "0000000"] {
+            assert!(resolved_commit(&repo, name, None).is_err(), "{name}");
+        }
+    }
 }
