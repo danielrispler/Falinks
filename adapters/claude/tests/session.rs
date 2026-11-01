@@ -276,6 +276,21 @@ fn runtime_mismatch_latches_failure_and_blocks_engine() {
     }
 }
 
+/// #335 wave 1: when a deny rule blocks a tool call, the runtime writes a `permission_denied`
+/// line whose `message` is a string. It is recorded like any line; it neither stops the host
+/// nor invalidates the run (the denial also reaches the turn's `permission_denials`).
+#[test]
+fn a_deny_rule_line_with_a_text_message_is_recorded_without_failing() {
+    let mut f = fixture();
+    f.session.line(&init(&f.workspace)).unwrap();
+    let denied = json!({"type":"system","subtype":"permission_denied","tool_name":"Bash",
+        "tool_use_id":"toolu_9","decision_reason_type":"rule",
+        "message":"ls from '/runs/r/space1' was blocked by a deny rule.","session_id":SESSION});
+    f.session.line(&denied).unwrap();
+    f.session.line(&result()).unwrap();
+    assert!(!f.session.gate.failed);
+}
+
 /// A nested agent started through Bash, or a session the host did not launch, makes the run
 /// invalid and is recorded (#178 C7).
 #[test]
