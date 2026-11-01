@@ -124,3 +124,15 @@ fn nothing_is_selected_until_daniel_clicks() {
 
     assert_eq!(studio.selected().map(|s| s.id.as_str()), Some(PROBE));
 }
+
+/// Only four fields of a tool response are read, and lazily (#410, decision 20). A response that is
+/// not a JSON object yields none of them and still counts as an event.
+#[test]
+fn a_tool_response_that_is_a_string_still_updates_its_session() {
+    let line = r#"{"session_id":"s1","cwd":"/work","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"t1","tool_response":"plain text","studio_received_ms":1}"#;
+
+    let studio = replay(line);
+
+    let session = studio.session("s1").expect("the session");
+    assert_eq!(session.cwd, "/work");
+}
