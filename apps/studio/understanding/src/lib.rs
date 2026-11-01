@@ -8,14 +8,14 @@ use std::{
     process::Command,
     sync::Mutex,
 };
-use studio_core::{CardRequest, Kind, Sender, Session};
+use studio_core::{CardRequest, Kind, Session, Status};
 
 mod drift;
 mod fingerprint;
 mod store;
 mod week;
 pub use drift::{Drift, Versions, drift};
-pub use fingerprint::Fingerprints;
+pub use fingerprint::{Fingerprints, fingerprint_changes};
 pub use store::{
     Brief, CardStore, Guess, Level, Rating, Reason, Row, SessionCards, StoredCard, millis,
 };
@@ -158,7 +158,6 @@ pub fn write_stop(
     mut log: impl FnMut(String),
 ) -> bool {
     let owner = request.owner().to_owned();
-    let summary = |kept: &StoredCard| Some(kept.card.summary.clone()).filter(|s| !s.is_empty());
     let (earlier, brief, workers) = {
         let store = store.lock().unwrap();
         let cards = store
@@ -219,7 +218,7 @@ pub fn write_brief(
     let reply = workers
         .ok_or("its workers' cards are not in the store".to_owned())
         .and_then(|workers| writer.update(&brief.text, &workers));
-    match reply.and_then(|reply| brief_in(&reply).ok_or(HOLDS_NONE.into())) {
+    match reply.and_then(|reply| brief_in(&reply)) {
         Ok(updated) => {
             rebrief(
                 store,
@@ -255,7 +254,7 @@ fn workers(store: &CardStore, request: &CardRequest, session: &Session) -> Optio
     let lines = session.agents.iter().filter_map(|agent| {
         let of = cards.iter().filter(|kept| kept.request.owner() == agent.id);
         let summaries: Vec<&str> = of.map(|kept| kept.card.summary.as_str()).collect();
-        let running = agent.status == "running" && agent.kind == Kind::Worker;
+        let running = agent.status == Status::Running && agent.kind == Kind::Worker;
         let name = agent.description.as_deref().unwrap_or(&agent.id);
         let did = match &summaries[..] {
             [] if running => "no card yet".into(),
@@ -287,7 +286,6 @@ fn rebrief(
 ) {
     let (owner, agent) = (request.owner(), request.agent.as_deref());
     if (updates + 1).is_multiple_of(REWRITE_EVERY) {
-        let summary = |kept: &StoredCard| Some(kept.card.summary.clone()).filter(|s| !s.is_empty());
         let read = |kept: &&StoredCard| match agent {
             Some(_) => kept.request.agent.as_deref() == agent,
             None => kept.request.session_id == session.id,
@@ -302,7 +300,7 @@ fn rebrief(
                 own.find_map(|kept| kept.request.base.head.clone()),
             )
         };
-        let worker = session.agents.iter().find(|a| Some(&*a.id) == agent);
+        let worker = agent.and_then(|id| session.subagent(id));
         let folder = worker
             .and_then(|a| a.folder.as_deref())
             .unwrap_or(&session.cwd);
@@ -313,12 +311,12 @@ fn rebrief(
             Some(worker) => vec![&worker.prompt],
             None => {
                 let daniels = session.prompts.iter();
-                let daniels = daniels.filter(|p| !matches!(p.sender, Sender::WakeUp(_)));
+                let daniels = daniels.filter(|p| p.sender.is_daniels());
                 daniels.map(|p| p.text.as_str()).collect()
             }
         };
         let rewritten = writer.rewrite(&prompts, &summaries, &diffstat);
-        match rewritten.and_then(|reply| brief_in(&reply).ok_or(HOLDS_NONE.into())) {
+        match rewritten.and_then(|reply| brief_in(&reply)) {
             Ok(brief) => updated = Some(brief),
             Err(line) => log(format!("no brief rewrite on {}: {line}", request.id)),
         }
@@ -340,16 +338,23 @@ fn object(reply: &str) -> &str {
 /// Why a reply gave no brief, for the log.
 const HOLDS_NONE: &str = "the reply holds none";
 
+/// A stored card's summary, when it has one.
+fn summary(kept: &StoredCard) -> Option<String> {
+    Some(kept.card.summary.clone()).filter(|s| !s.is_empty())
+}
+
 /// A brief as the writer reads it: "none yet" before its first update.
 fn so_far(brief: &str) -> &str {
     if brief.is_empty() { "none yet" } else { brief }
 }
 
-/// The brief in a writer's reply, when it holds one that is not empty.
-fn brief_in(reply: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(object(reply)).ok()?;
-    let brief = value["brief"].as_str()?.trim();
-    (!brief.is_empty()).then(|| brief.into())
+/// The brief in a writer's reply, when it holds one that is not empty, or else why not, for the log.
+fn brief_in(reply: &str) -> Result<String, String> {
+    let value: serde_json::Value = serde_json::from_str(object(reply)).unwrap_or_default();
+    match value["brief"].as_str().map(str::trim) {
+        Some(brief) if !brief.is_empty() => Ok(brief.into()),
+        _ => Err(HOLDS_NONE.into()),
+    }
 }
 
 /// The longer explanation of card `id` in `store`: the one kept, or else one more call to `writer`,
@@ -405,7 +410,7 @@ pub fn write_card(
 ) -> Option<(Card, Option<String>)> {
     let card = || {
         let reply = writer.reply(request, earlier, brief)?;
-        Card::from_reply(&reply).map(|(card, problem)| (card, problem, brief_in(&reply)))
+        Card::from_reply(&reply).map(|(card, problem)| (card, problem, brief_in(&reply).ok()))
     };
     match card().or_else(|_| card()) {
         Ok((card, problem, brief)) => {
@@ -507,6 +512,15 @@ pub fn find_claude(shell: &Path) -> PathBuf {
 impl ClaudeWriter {
     pub fn new(program: PathBuf, folder: PathBuf) -> Self {
         Self { program, folder }
+    }
+
+    /// The writer for event log `log`: its neutral folder, `card-writer` beside the log, made here,
+    /// and `claude` as the login shell finds it. An error when the folder cannot be made.
+    pub fn beside(log: &Path) -> std::io::Result<Self> {
+        let folder = log.with_file_name("card-writer");
+        std::fs::create_dir_all(&folder)?;
+        let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
+        Ok(Self::new(find_claude(shell.as_ref()), folder))
     }
 
     /// The `claude -p` run for one change's card, read with the summaries of the prompt's `earlier`

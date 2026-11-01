@@ -13,7 +13,8 @@ use std::{
 };
 use studio_core::{CardRequest, Kind, Output, Studio};
 use studio_understanding::{
-    Card, CardStore, CardWriter, FakeWriter, Fingerprints, write_brief, write_stop,
+    Card, CardStore, CardWriter, FakeWriter, Fingerprints, fingerprint_changes, write_brief,
+    write_stop,
 };
 
 /// What a rewrite read: the prompts, the summaries and the diffstat.
@@ -125,11 +126,8 @@ impl Shell {
             .extend(fields.as_object().unwrap().clone());
         let line = event.to_string();
         let looks = self.studio.fingerprint_folders(&line);
-        let changes = looks.into_iter().filter_map(|look| {
-            let prints = self.fingerprints.entry(look.key.clone()).or_default();
-            Some((look.key, prints.look(Path::new(&look.folder), look.keep)?))
-        });
-        let outputs = self.studio.apply_with_changes(&line, changes.collect());
+        let changes = fingerprint_changes(looks, &mut self.fingerprints);
+        let outputs = self.studio.apply_with_changes(&line, changes);
         let requested = |output: &Output| matches!(output, Output::Card(_) | Output::Brief(_));
         outputs.into_iter().filter(requested).collect()
     }

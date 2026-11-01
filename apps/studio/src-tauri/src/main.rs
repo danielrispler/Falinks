@@ -8,7 +8,7 @@
 
 use std::{
     collections::HashMap,
-    fs::{self, File},
+    fs::File,
     io::{self, BufRead, BufReader, Seek, SeekFrom},
     path::Path,
     sync::{Arc, Mutex, mpsc},
@@ -18,7 +18,7 @@ use std::{
 use studio_core::{CardRequest, Notifications, Output, Session, State::NeedsYou, Studio};
 use studio_understanding::{
     CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, Rating, Row, SessionCards,
-    Versions, find_claude, millis, write_brief, write_stop,
+    Versions, fingerprint_changes, millis, write_brief, write_stop,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -126,16 +126,10 @@ fn main() {
     let log = studio_hook::event_log(&std::env::home_dir().expect("a home directory"));
     // The store sits beside the log, in the studio's data directory.
     let store = CardStore::open_beside(&log).expect("read the card store");
-    // The card writer's neutral folder, beside the log.
-    let folder = log.with_file_name("card-writer");
-    fs::create_dir_all(&folder).expect("create the card writer's folder");
     let studio = Studio::default();
     let writer: Writer = match std::env::var("STUDIO_CARD_WRITER").as_deref() {
         Ok("fake") => Arc::new(FakeWriter),
-        _ => {
-            let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
-            Arc::new(ClaudeWriter::new(find_claude(shell.as_ref()), folder))
-        }
+        _ => Arc::new(ClaudeWriter::beside(&log).expect("create the card writer's folder")),
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -202,11 +196,7 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                     // so an edit in between counts as Daniel's; take the fingerprint in the hook if a
                     // card ever misses one.
                     let looks = state.lock().unwrap().fingerprint_folders(&text);
-                    let changes = looks.into_iter().filter_map(|look| {
-                        let prints = fingerprints.entry(look.key.clone()).or_default();
-                        Some((look.key, prints.look(Path::new(&look.folder), look.keep)?))
-                    });
-                    let changes = changes.collect();
+                    let changes = fingerprint_changes(looks, &mut fingerprints);
                     outputs.extend(state.lock().unwrap().apply_with_changes(&text, changes));
                 } else {
                     state.lock().unwrap().replay(&text);
@@ -216,16 +206,8 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
             // A worktree's first fingerprint only records it, so the turns still open after the
             // replay get their base now, and their `Stop` has something to compare with.
             if !live {
-                let waiting: Vec<(String, String)> = state
-                    .lock()
-                    .unwrap()
-                    .waiting_folders()
-                    .map(|(session, folder)| (session.into(), folder.into()))
-                    .collect();
-                for (key, folder) in waiting {
-                    let prints = fingerprints.entry(key).or_default();
-                    prints.take(Path::new(&folder));
-                }
+                let waiting = state.lock().unwrap().waiting_folders();
+                fingerprint_changes(waiting, &mut fingerprints);
             }
             for output in outputs {
                 match output {

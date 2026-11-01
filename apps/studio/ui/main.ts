@@ -143,13 +143,40 @@ function age(from: number, to = Date.now()): string {
   return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h`;
 }
 
-const parentId = (parent: Parent) => (typeof parent === "string" ? parent : parent.agent);
-const childrenOf = (session: Session, parent: string) =>
-  session.agents.filter((agent) => parentId(agent.parent) === parent);
+// A button's type, pressed state and click.
+function pressable<T extends HTMLElement>(button: T, pressed: boolean, click: () => void): T {
+  button.setAttribute("type", "button");
+  button.setAttribute("aria-pressed", String(pressed));
+  button.addEventListener("click", click);
+  return button;
+}
+
+// A subagent's state label and its state: "Needs you" while it asks, else its status.
+function agentState(session: Session, agent: Subagent): [string, string] {
+  return session.asker?.agent === agent.id ? [stateLabels.needs_you, "needs_you"] : [agent.status, agent.status];
+}
+
+// Asks the shell for the selected session's cards and draws them.
+async function refreshCards() {
+  showCards(await window.__TAURI__.core.invoke<SessionCards>("cards"));
+}
+
+// A session's subagents by the id of the agent that spawned them: "session", "unattached" or a
+// subagent's id. Built once per draw, so the tree and the "done" counts do not scan every subagent.
+type Children = Map<string, Subagent[]>;
+function childrenOf(session: Session): Children {
+  const children: Children = new Map();
+  for (const agent of session.agents) {
+    const parent = typeof agent.parent === "string" ? agent.parent : agent.parent.agent;
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent)!.push(agent);
+  }
+  return children;
+}
 
 // The count of a parent's helpers that faded into its line.
-function done(session: Session, parent: string): HTMLElement[] {
-  const faded = childrenOf(session, parent).filter((agent) => agent.faded).length;
+function done(children: Subagent[] = []): HTMLElement[] {
+  const faded = children.filter((agent) => agent.faded).length;
   return faded ? [text("span", `${faded} done`, "id")] : [];
 }
 
@@ -174,36 +201,34 @@ function rowText(session: Session): string {
 }
 
 // One line: the folder, the session's short id, its state and what it is doing.
-function row(session: Session): HTMLElement {
-  const button = document.createElement("button");
-  button.type = "button";
+function row(session: Session, children: Children): HTMLElement {
+  const pressed = session.id === selectedId && viewedAgent === null;
+  const button = pressable(document.createElement("button"), pressed, () => select(session.id));
   button.className = "row";
-  button.setAttribute("aria-pressed", String(session.id === selectedId && viewedAgent === null));
   const state = text("span", stateLabels[session.state], "row-state");
   state.dataset.state = session.state;
   button.append(
     text("span", folder(session), "name"),
     text("span", session.id.slice(0, 8), "id"),
     state,
-    ...done(session, "session"),
+    ...done(children.get("session")),
     text("span", rowText(session), "row-step"),
   );
-  button.addEventListener("click", () => select(session.id));
   return button;
 }
 
 // A subagent's line, indented under the agent that spawned it. A worker shows its task, status and
 // last step; a helper its task, type, status, duration and result. A failed child stands out until
 // Daniel opens it.
-function agentRow(session: Session, agent: Subagent, depth: number): HTMLElement {
-  const button = document.createElement("button");
-  button.type = "button";
+function agentRow(session: Session, children: Children, agent: Subagent, depth: number): HTMLElement {
+  const button = pressable(document.createElement("button"), agent.id === viewedAgent, () =>
+    select(session.id, agent.id),
+  );
   button.className = `row ${agent.kind}`;
-  button.setAttribute("aria-pressed", String(agent.id === viewedAgent));
   button.style.paddingLeft = `${8 + 16 * depth}px`;
-  const asks = session.asker?.agent === agent.id;
-  const state = text("span", asks ? stateLabels.needs_you : agent.status, "row-state");
-  if (asks) state.dataset.state = "needs_you";
+  const [label, stateName] = agentState(session, agent);
+  const state = text("span", label, "row-state");
+  state.dataset.state = stateName;
   state.classList.toggle("failed", agent.failed && !agent.opened);
   const details =
     agent.kind === "worker"
@@ -212,24 +237,24 @@ function agentRow(session: Session, agent: Subagent, depth: number): HTMLElement
   button.append(
     text("span", agent.description ?? agent.id.slice(0, 5), "name"),
     state,
-    ...done(session, agent.id),
+    ...done(children.get(agent.id)),
     text("span", details.filter(Boolean).join(" · "), "row-step"),
   );
-  button.addEventListener("click", () => select(session.id, agent.id));
   return button;
 }
 
 // A session's row, then its subagents under the agent that spawned them, at any depth, and those
 // with no known spawn under "Unattached". A faded helper is not drawn; its parent's line counts it.
 function tree(session: Session): HTMLElement[] {
+  const children = childrenOf(session);
   const nested = (parent: string, depth: number): HTMLElement[] =>
-    childrenOf(session, parent).flatMap((agent) => [
-      ...(agent.faded ? [] : [agentRow(session, agent, depth)]),
+    (children.get(parent) ?? []).flatMap((agent) => [
+      ...(agent.faded ? [] : [agentRow(session, children, agent, depth)]),
       ...nested(agent.id, depth + 1),
     ]);
   const unattached = nested("unattached", 2);
   const label = text("p", "Unattached", "unattached");
-  return [row(session), ...nested("session", 1), ...(unattached.length ? [label, ...unattached] : [])];
+  return [row(session, children), ...nested("session", 1), ...(unattached.length ? [label, ...unattached] : [])];
 }
 
 // The core sends the sessions grouped by state, so a group starts where the state changes. Idle and
@@ -273,7 +298,7 @@ async function select(id: string, agent: string | null = null) {
     showSessions(await window.__TAURI__.core.invoke<Session[]>("sessions"));
   }
   show(await window.__TAURI__.core.invoke<Session | null>("selected"));
-  showCards(await window.__TAURI__.core.invoke<SessionCards>("cards"));
+  await refreshCards();
 }
 
 function show(session: Session | null) {
@@ -286,13 +311,7 @@ function show(session: Session | null) {
   if (session === null) return;
   // A subagent's view shows its own line, questions, brief and cards; the checks are its session's.
   const agent = session.agents.find((a) => a.id === viewedAgent) ?? null;
-  const asks = agent !== null && session.asker?.agent === agent.id;
-  const [label, state] =
-    agent === null
-      ? [stateLabels[session.state], session.state]
-      : asks
-        ? [stateLabels.needs_you, "needs_you"]
-        : [agent.status, agent.status];
+  const [label, state] = agent === null ? [stateLabels[session.state], session.state] : agentState(session, agent);
   const step = (agent ?? session).last_step;
   element("view").toggleAttribute("data-agent", agent !== null);
   element("session").textContent =
@@ -333,7 +352,7 @@ function questionElement({ questions, answer }: Question): HTMLElement {
       }),
     );
     block.append(text("p", asked.header ?? "", "header"), text("p", asked.question, "asked"), choices);
-    if (chosen !== null) block.append(text("p", `Your answer: ${chosen}`, "chosen-text"));
+    if (chosen !== null) block.append(text("p", `Your answer: ${chosen}`));
   }
   return block;
 }
@@ -381,7 +400,7 @@ function hebrew(tag: string, text: string): HTMLElement {
 // Records Daniel's tap, his flag on the key or his rating, and draws the cards again at once.
 async function record(command: "guess" | "key_wrong" | "rate", args: Record<string, unknown>) {
   await window.__TAURI__.core.invoke(command, args);
-  showCards(await window.__TAURI__.core.invoke<SessionCards>("cards"));
+  await refreshCards();
 }
 
 // A card's quiz and its options, one tap each. Once Daniel taps, it shows whether he was right and,
@@ -393,11 +412,10 @@ function quizElements(id: string, quiz: Quiz, guess: Guess | null): HTMLElement[
   options.append(
     ...quiz.options.map((option, i) => {
       const item = document.createElement("li");
-      const button = hebrew("button", option.text) as HTMLButtonElement;
-      button.type = "button";
+      const button = pressable(hebrew("button", option.text) as HTMLButtonElement, guess?.option === i, () =>
+        record("guess", { id, option: i }),
+      );
       button.disabled = guess !== null;
-      button.setAttribute("aria-pressed", String(guess?.option === i));
-      button.addEventListener("click", () => record("guess", { id, option: i }));
       item.append(button);
       if (guess) {
         item.append(hebrew("p", `${i === quiz.key ? "התשובה הנכונה. " : ""}${option.why}`));
@@ -462,12 +480,10 @@ function changedBy({ session_id, changed_by }: CardRequest): HTMLElement[] {
 
 // "The key is wrong": one record, flagged from the quiz or from the rating, and never undone.
 function keyWrongButton(id: string, keyWrong: boolean): HTMLElement {
-  const flag = hebrew("button", keyWrong ? "סימנת שהמפתח שגוי" : "המפתח שגוי") as HTMLButtonElement;
-  flag.type = "button";
+  const label = keyWrong ? "סימנת שהמפתח שגוי" : "המפתח שגוי";
+  const flag = pressable(hebrew("button", label) as HTMLButtonElement, keyWrong, () => record("key_wrong", { id }));
   flag.className = "key-wrong";
   flag.disabled = keyWrong;
-  flag.setAttribute("aria-pressed", String(keyWrong));
-  flag.addEventListener("click", () => record("key_wrong", { id }));
   return flag;
 }
 
@@ -501,7 +517,7 @@ async function explainMore(id: string) {
   asking.delete(id);
   if (more === null) moreOpen.delete(id);
   drawn.delete(id);
-  showCards(await window.__TAURI__.core.invoke<SessionCards>("cards"));
+  await refreshCards();
 }
 
 const levels: [Level, string][] = [
@@ -519,13 +535,8 @@ const reasons: [Reason, string][] = [
 // Daniel's rating of the explanation: a level, then, once he picked one, the reasons, each tap
 // toggling one. `keyWrong` is the quiz's flag, offered as a reason on a card with a quiz.
 function ratingElement(id: string, rating: Rating | null, keyWrong: boolean | null): HTMLElement {
-  const choice = (label: string, pressed: boolean, picked: Rating) => {
-    const button = hebrew("button", label) as HTMLButtonElement;
-    button.type = "button";
-    button.setAttribute("aria-pressed", String(pressed));
-    button.addEventListener("click", () => record("rate", { id, rating: picked }));
-    return button;
-  };
+  const choice = (label: string, pressed: boolean, picked: Rating) =>
+    pressable(hebrew("button", label), pressed, () => record("rate", { id, rating: picked }));
   const node = document.createElement("div");
   node.className = "rating";
   const row = document.createElement("p");

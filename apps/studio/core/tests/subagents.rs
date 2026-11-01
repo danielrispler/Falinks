@@ -4,17 +4,15 @@
 
 use serde_json::json;
 use std::collections::BTreeMap;
-use studio_core::{Asker, Base, Change, Kind, Output, Parent, State, Step, Studio, Subagent};
+use studio_core::{
+    Asker, Base, Change, Kind, Output, Parent, State, Status, Step, Studio, Subagent,
+};
 
 use Kind::{Helper, Worker};
 use State::{NeedsYou, Running, YourTurn};
 
 fn replay(log: &str) -> Studio {
-    let mut studio = Studio::default();
-    for line in log.lines() {
-        studio.replay(line);
-    }
-    studio
+    Studio::replayed(log.lines())
 }
 
 /// The checkpoint day of #347, scrubbed (#370).
@@ -85,7 +83,7 @@ fn the_runs_worker_completes_with_its_last_message_and_its_killed_helper_stays_v
     // wake-up (line 22) says `completed`.
     assert_eq!(
         (
-            worker.status.as_str(),
+            worker.status.to_string().as_str(),
             worker.ended_at,
             worker.result.as_deref()
         ),
@@ -103,7 +101,7 @@ fn the_runs_worker_completes_with_its_last_message_and_its_killed_helper_stays_v
     // Only its wake-up (line 25) tells it was killed; it has no `SubagentStop` and no result.
     assert_eq!(
         (
-            helper.status.as_str(),
+            helper.status.to_string().as_str(),
             helper.ended_at,
             helper.result.as_deref()
         ),
@@ -111,12 +109,15 @@ fn the_runs_worker_completes_with_its_last_message_and_its_killed_helper_stays_v
     );
     assert_eq!(helper.started_at, 1_793_471_818_599);
     // The pane draws it as failed from the core's flag, not from its status.
-    assert!(helper.failed);
-    assert!(!helper.faded, "a killed helper stays on its parent's line");
+    assert!(helper.failed());
+    assert!(
+        !helper.faded(),
+        "a killed helper stays on its parent's line"
+    );
 
     studio.open(RUN_HELPER);
 
-    assert!(agent(&studio, RUN_SESSION, RUN_HELPER).faded);
+    assert!(agent(&studio, RUN_SESSION, RUN_HELPER).faded());
 }
 
 #[test]
@@ -131,7 +132,11 @@ fn a_helper_that_succeeds_fades_and_a_worker_keeps_its_row() {
         "aed99c8576ffec532",
     );
     assert_eq!(
-        (review.status.as_str(), review.ended_at, review.faded),
+        (
+            review.status.to_string().as_str(),
+            review.ended_at,
+            review.faded()
+        ),
         ("completed", Some(1_793_376_171_071), true)
     );
     let worker = agent(
@@ -139,7 +144,10 @@ fn a_helper_that_succeeds_fades_and_a_worker_keeps_its_row() {
         "5d7f69ab-91ca-427e-9d9c-9180c2c0c74b",
         "a1191df87fb730aa0",
     );
-    assert_eq!((worker.status.as_str(), worker.faded), ("completed", false));
+    assert_eq!(
+        (worker.status.to_string().as_str(), worker.faded()),
+        ("completed", false)
+    );
 }
 
 #[test]
@@ -152,7 +160,7 @@ fn a_worker_its_parent_continues_runs_again_until_its_next_wake_up() {
             "5d7f69ab-91ca-427e-9d9c-9180c2c0c74b",
             "a1191df87fb730aa0",
         );
-        (worker.status.clone(), worker.ended_at)
+        (worker.status.to_string(), worker.ended_at)
     };
 
     // Its first wake-up (line 378), then the parent's `SendMessage` (line 442) and its next steps.
@@ -181,17 +189,10 @@ fn a_subagent_of_a_subagent_sits_under_it() {
     let studio = replay(TREE);
 
     let session = studio.session(TREE_SESSION).expect("the session");
-    let tree: Vec<(&str, &Parent, Option<&str>, &str)> = session
+    let tree: Vec<(&str, &Parent, Option<&str>, &Status)> = session
         .agents
         .iter()
-        .map(|a| {
-            (
-                a.id.as_str(),
-                &a.parent,
-                a.agent_type.as_deref(),
-                a.status.as_str(),
-            )
-        })
+        .map(|a| (a.id.as_str(), &a.parent, a.agent_type.as_deref(), &a.status))
         .collect();
     let worker = Parent::Agent(TREE_WORKER.into());
     assert_eq!(
@@ -201,15 +202,15 @@ fn a_subagent_of_a_subagent_sits_under_it() {
                 TREE_WORKER,
                 &Parent::Session,
                 Some("general-purpose"),
-                "running"
+                &Status::Running
             ),
             (
                 TREE_REVIEW,
                 &Parent::Session,
                 Some("general-purpose"),
-                "running"
+                &Status::Running
             ),
-            (TREE_EXPLORE, &worker, Some("Explore"), "completed"),
+            (TREE_EXPLORE, &worker, Some("Explore"), &Status::Completed),
         ]
     );
     let explore = agent(&studio, TREE_SESSION, TREE_EXPLORE);
@@ -360,5 +361,37 @@ fn a_childs_steps_are_its_own_not_its_sessions() {
     assert_eq!(
         agent(&studio, RUN_SESSION, RUN_WORKER).last_step,
         Some(write)
+    );
+}
+
+#[test]
+fn the_wire_keeps_each_subagents_status_failed_and_faded() {
+    let wire = |studio: &Studio, id: &str| {
+        let session = studio.sessions().into_iter().find(|s| s.id == RUN_SESSION);
+        let json = serde_json::to_value(session.unwrap()).unwrap();
+        let agents = json["agents"].as_array().unwrap().clone();
+        let agent = agents.into_iter().find(|a| a["id"] == id).unwrap();
+        (
+            agent["status"].clone(),
+            agent["failed"].clone(),
+            agent["faded"].clone(),
+        )
+    };
+    // The killed wake-up (line 25) names the worker instead of the helper.
+    let killed = RUN.replace(
+        &format!("<task-id>{RUN_HELPER}</task-id>"),
+        &format!("<task-id>{RUN_WORKER}</task-id>"),
+    );
+    let studio = replay(&killed);
+    assert_eq!(
+        wire(&studio, RUN_WORKER),
+        (json!("killed"), json!(true), json!(false))
+    );
+
+    let mut studio = replay(RUN);
+    studio.open(RUN_HELPER);
+    assert_eq!(
+        wire(&studio, RUN_HELPER),
+        (json!("killed"), json!(true), json!(true))
     );
 }

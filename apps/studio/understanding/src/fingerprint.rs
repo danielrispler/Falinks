@@ -13,7 +13,7 @@ use std::{
     process::Command,
     time::SystemTime,
 };
-use studio_core::{Base, Change, Keep};
+use studio_core::{Base, Change, Fingerprint, Keep};
 
 /// A worktree's `HEAD`, and the files `git status` listed, by path from the worktree's root, with
 /// their content: `None` for a file that is gone.
@@ -41,10 +41,25 @@ fn read(path: &Path) -> Option<Content> {
     fs::read(path).ok().map(Content::Bytes)
 }
 
+/// Takes the fingerprints `looks` asks for, each in its key's own `Fingerprints` in `prints`, and
+/// returns the changes they found by key, as `Studio::apply_with_changes` takes them.
+pub fn fingerprint_changes(
+    looks: Vec<Fingerprint>,
+    prints: &mut HashMap<String, Fingerprints>,
+) -> BTreeMap<String, Change> {
+    let changes = looks.into_iter().filter_map(|look| {
+        let print = prints.entry(look.key.clone()).or_default();
+        Some((look.key, print.look(Path::new(&look.folder), look.keep)?))
+    });
+    changes.collect()
+}
+
 /// Each worktree's latest record, by the worktree's root.
 #[derive(Default)]
 pub struct Fingerprints {
     records: HashMap<PathBuf, Record>,
+    /// Each folder's worktree root, once a lookup found one; a folder with none is asked again.
+    roots: HashMap<PathBuf, PathBuf>,
 }
 
 impl Fingerprints {
@@ -57,8 +72,15 @@ impl Fingerprints {
 
     /// Like `take`, but the record becomes the next change's base only as `keep` says.
     pub fn look(&mut self, folder: &Path, keep: Keep) -> Option<Change> {
-        let root = git(folder, &["rev-parse", "--show-toplevel"])?;
-        let root = PathBuf::from(String::from_utf8(root).ok()?.trim_end());
+        let root = match self.roots.get(folder) {
+            Some(root) => root.clone(),
+            None => {
+                let root = git(folder, &["rev-parse", "--show-toplevel"])?;
+                let root = PathBuf::from(String::from_utf8(root).ok()?.trim_end());
+                self.roots.insert(folder.to_owned(), root.clone());
+                root
+            }
+        };
         let head = git(&root, &["rev-parse", "HEAD"]);
         let head = head.and_then(|sha| Some(String::from_utf8(sha).ok()?.trim_end().to_owned()));
         // Untracked files one by one rather than their folders; a rename as a deletion and an addition.
