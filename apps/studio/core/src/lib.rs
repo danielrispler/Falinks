@@ -54,6 +54,7 @@ pub struct Session {
     #[serde(skip)]
     versioned: bool,
     /// Its subagents at any depth, in the order they were first seen (#369, decision 5).
+    #[serde(serialize_with = "serialize_agents")]
     pub agents: Vec<Subagent>,
     /// Who asks Daniel, and since when, while it needs him.
     pub asker: Option<Asker>,
@@ -164,20 +165,15 @@ pub struct Subagent {
     /// `running`, then how it ended: its wake-up's `<status>`, such as `completed` or `killed`, or
     /// `completed` when only its `SubagentStop`, its spawn's response or its session's `Stop` says it
     /// ended.
-    pub status: String,
+    pub status: Status,
     /// When its first event and its end were received, in Unix milliseconds.
     pub started_at: u64,
     pub ended_at: Option<u64>,
     pub last_step: Option<Step>,
     /// The first line of its last message, from its `SubagentStop`.
     pub result: Option<String>,
-    /// It ended with a status other than `completed`, such as `killed`.
-    pub failed: bool,
     /// Daniel opened its line.
     pub opened: bool,
-    /// A helper that succeeded, or one that failed and Daniel opened, folds into its parent's line
-    /// (#369, story 18). A failed child stays visible until he opens it.
-    pub faded: bool,
     #[serde(skip)]
     last_event_at: u64,
     /// The folder of its first event that has one: its worktree, or its parent's folder.
@@ -195,21 +191,80 @@ impl Subagent {
     /// status overrides the others.
     fn end(&mut self, status: Option<&str>, at: u64) {
         if let Some(status) = status {
-            self.status = status.into();
-        } else if self.status == "running" {
-            self.status = "completed".into();
+            self.status = Status::from(status);
+        } else if self.status == Status::Running {
+            self.status = Status::Completed;
         }
         self.ended_at.get_or_insert(at);
     }
 
-    fn fails(&self) -> bool {
-        !["running", "completed"].contains(&self.status.as_str())
+    /// It ended with a status other than `completed`, such as `killed`.
+    pub fn failed(&self) -> bool {
+        matches!(self.status, Status::Ended(_))
     }
 
-    fn fades(&self) -> bool {
-        let succeeded = self.status == "completed";
-        self.kind == Kind::Helper && (succeeded || self.failed && self.opened)
+    /// A helper that succeeded, or one that failed and Daniel opened, folds into its parent's line
+    /// (#369, story 18). A failed child stays visible until he opens it.
+    pub fn faded(&self) -> bool {
+        let succeeded = self.status == Status::Completed;
+        self.kind == Kind::Helper && (succeeded || self.failed() && self.opened)
     }
+}
+
+/// A subagent's status, serialized as its text: `running`, `completed`, or its wake-up's other
+/// `<status>`, such as `killed`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Status {
+    #[default]
+    Running,
+    Completed,
+    Ended(String),
+}
+
+impl From<&str> for Status {
+    fn from(text: &str) -> Self {
+        match text {
+            "running" => Status::Running,
+            "completed" => Status::Completed,
+            other => Status::Ended(other.into()),
+        }
+    }
+}
+
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            Status::Running => "running",
+            Status::Completed => "completed",
+            Status::Ended(text) => text,
+        })
+    }
+}
+
+impl Serialize for Status {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// Each subagent with its computed `failed` and `faded`, which the pane reads.
+fn serialize_agents<S: serde::Serializer>(
+    agents: &[Subagent],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Wire<'a> {
+        #[serde(flatten)]
+        agent: &'a Subagent,
+        failed: bool,
+        faded: bool,
+    }
+    let wire = agents.iter().map(|agent| Wire {
+        agent,
+        failed: agent.failed(),
+        faded: agent.faded(),
+    });
+    serializer.collect_seq(wire)
 }
 
 /// Who spawned a subagent: the session's own agent, another subagent, or no known spawn.
@@ -245,7 +300,7 @@ impl Session {
             None => {
                 self.agents.push(Subagent {
                     id: id.into(),
-                    status: "running".into(),
+                    status: Status::Running,
                     started_at: at,
                     last_event_at: at,
                     ..Subagent::default()
@@ -281,7 +336,7 @@ impl Session {
                         tool: tool.into(),
                         detail: step_detail(&event.tool_input, &event.cwd),
                     });
-                    agent.status = "running".into();
+                    agent.status = Status::Running;
                     agent.ended_at = None;
                 }
                 "PostToolUse" if changed => agent.kind = Kind::Worker,
@@ -342,17 +397,13 @@ impl Session {
             {
                 let listed = |id: &str| tasks.iter().any(|task| task["id"] == id);
                 let ended = self.agents.iter_mut().filter(|a| {
-                    a.parent == Parent::Session && a.status == "running" && !listed(&a.id)
+                    a.parent == Parent::Session && a.status == Status::Running && !listed(&a.id)
                 });
                 for agent in ended {
                     agent.end(None, agent.last_event_at);
                 }
             }
             _ => {}
-        }
-        for agent in &mut self.agents {
-            agent.failed = agent.fails();
-            agent.faded = agent.fades();
         }
         // A subagent that ended waits on nobody.
         let agents = &self.agents;
@@ -455,7 +506,7 @@ impl Session {
     fn failed_workers(&self) -> Vec<String> {
         self.agents
             .iter()
-            .filter(|a| a.kind == Kind::Worker && a.failed)
+            .filter(|a| a.kind == Kind::Worker && a.failed())
             .map(|a| a.id.clone())
             .collect()
     }
@@ -938,7 +989,7 @@ impl Studio {
     pub fn waiting_folders(&self) -> Vec<Fingerprint> {
         let waiting = self.sessions.values().filter(|s| s.in_turn());
         let agents = self.sessions.values().flat_map(|s| &s.agents);
-        let running = agents.filter(|a| a.status == "running");
+        let running = agents.filter(|a| a.status == Status::Running);
         let running = running.filter_map(|a| Some((a.id.as_str(), a.folder.as_deref()?)));
         let folders = waiting
             .map(|s| (s.id.as_str(), s.cwd.as_str()))
@@ -1293,7 +1344,6 @@ impl Studio {
         let agents = self.sessions.values_mut().flat_map(|s| &mut s.agents);
         for agent in agents.filter(|a| a.id == id) {
             agent.opened = true;
-            agent.faded = agent.fades();
         }
     }
 
