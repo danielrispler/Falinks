@@ -833,10 +833,10 @@ const USAGE: &str = "usage: falinks-eval <command>
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
   baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
-  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6|large-spec] [--fixtures NAME[,NAME]]
+  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6|large-spec|wave-1..wave-4|sweep] [--fixtures NAME[,NAME]]
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
-  report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec] [--show-code]
+  report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec|wave-1..wave-4|sweep] [--show-code]
   timing RUN_DIR
   collisions RUN_DIR
   duplicates --runs DIR";
@@ -956,14 +956,16 @@ fn run() -> Result<i32> {
             args.get("after-pilot").map(Path::new),
             match args.get("schedule") {
                 None => None,
-                Some(name @ ("track-t" | "step-6" | "large-spec"))
-                    if args.get("after-pilot").is_none() =>
+                Some(name)
+                    if (matches!(name, "track-t" | "step-6" | "large-spec")
+                        || batch::wave_slots(name).is_some())
+                        && args.get("after-pilot").is_none() =>
                 {
                     Some(name)
                 }
                 Some(_) => {
                     bail!(
-                        "--schedule takes track-t, step-6 or large-spec, without --after-pilot\n{USAGE}"
+                        "--schedule takes track-t, step-6, large-spec, wave-1 to wave-4 or sweep, without --after-pilot\n{USAGE}"
                     )
                 }
             },
@@ -981,7 +983,10 @@ fn run() -> Result<i32> {
                 Some("track-t") => report::track_t_report(&runs),
                 Some("step-6") => report::step_6_report(&runs),
                 Some("large-spec") => report::large_spec_report(&runs),
-                Some(_) => bail!("--schedule takes track-t, step-6 or large-spec\n{USAGE}"),
+                Some(name) if batch::wave_slots(name).is_some() => report::wave_report(&runs),
+                Some(_) => bail!(
+                    "--schedule takes track-t, step-6, large-spec, wave-1 to wave-4 or sweep\n{USAGE}"
+                ),
             };
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(0)

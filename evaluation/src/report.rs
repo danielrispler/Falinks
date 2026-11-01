@@ -1154,6 +1154,40 @@ pub fn step_6_report(runs: &[Value]) -> Value {
     })
 }
 
+/// #335's wave report: every run in ledger order, replaced ones included, with what a wave's
+/// log reads first. Wave runs check "not broken", never "faster" (#205, "Engine waves"), so it
+/// computes no comparison; defects are classed from the transcripts on the ticket.
+pub fn wave_report(runs: &[Value]) -> Value {
+    let (replaced, current) = unreplaced(runs);
+    let rows: Vec<Value> = runs
+        .iter()
+        .map(|r| {
+            json!({"run_id": r["run_id"], "fixture": r["fixture"], "arm": r["arm"],
+                "outcome": r["outcome"], "failure_reason": r.get("failure_reason"),
+                "replaces": r.get("replaces"), "elapsed_seconds": r["timing"]["elapsed_seconds"],
+                "transitions": r["transitions"], "proposals": r["regrouping"]["proposals"],
+                "collisions": r["collisions"], "collision_waste": r["discarded_or_rewritten_work"],
+                "coordination_overhead": coordination_overhead(r),
+                "agents": r["transcript"]["agents"], "usage_status": r["usage"]["status"],
+                "cost_usd": r["tokens"]["cost_usd"], "nested_agent": r.get("nested_agent"),
+                "control_failure": r.get("control_failure")})
+        })
+        .collect();
+    let unsafe_runs: Vec<&Value> = runs
+        .iter()
+        .filter(|r| r["outcome"] == "safety_failure")
+        .map(|r| &r["run_id"])
+        .collect();
+    json!({
+        "qualification": "Engine wave (#335): single runs check that nothing is broken, never that a change is faster. No comparison is computed; each defect's class and evidence is written on the ticket. Cost is API-equivalent list price, not billed cost.",
+        "runs": rows,
+        "gaps": run_gaps(runs, &current),
+        "safety_failures": unsafe_runs,
+        "replaced_runs": replaced,
+        "coordination_note": COORDINATION_NOTE,
+    })
+}
+
 /// P1–P3 compare these two arms only (#205, "Arms").
 const PAYBACK_ARMS: [&str; 2] = ["falinks-2", "git-2"];
 
@@ -2286,6 +2320,77 @@ mod tests {
             }
         }
         runs
+    }
+
+    /// #335: a wave lists every run in ledger order with what its log reads, compares nothing,
+    /// and names its gaps: here a replaced interruption and a run a nested agent made invalid.
+    #[test]
+    fn wave_lists_each_run_and_its_gaps_without_comparing_arms() {
+        let mut runs = vec![
+            run(
+                "go-tasks-1-falinks-2",
+                "go-tasks",
+                1,
+                "falinks",
+                "success",
+                400.0,
+            ),
+            run(
+                "go-tasks-2-falinks-2",
+                "go-tasks",
+                1,
+                "falinks",
+                "infrastructure_failure",
+                9.0,
+            ),
+            run(
+                "go-tasks-2-falinks-2-r1",
+                "go-tasks",
+                1,
+                "falinks",
+                "oracle_failure",
+                500.0,
+            ),
+            run(
+                "go-tasks-5-git-2",
+                "go-tasks",
+                1,
+                "git",
+                "run_invalid",
+                80.0,
+            ),
+        ];
+        runs[0]["transitions"] = json!(2);
+        runs[0]["regrouping"] = json!({"proposals": {"Split": {"engine": 1}}});
+        runs[0]["transcript"] = json!({"agents": {"agent-0": {"coordination_overhead":
+            {"round_trips": 3, "model_seconds": 12.5}}}});
+        runs[0]["tokens"] = json!({"cost_usd": 1.25});
+        runs[2]["replaces"] = json!("go-tasks-2-falinks-2");
+        runs[3]["nested_agent"] = json!("codex");
+        let out = wave_report(&runs);
+        let rows = out["runs"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            rows[0]["proposals"]["Split"]["engine"], 1,
+            "the pilot gate reads engine proposals"
+        );
+        assert_eq!(
+            (
+                &rows[0]["outcome"],
+                &rows[0]["elapsed_seconds"],
+                &rows[0]["transitions"]
+            ),
+            (&json!("success"), &json!(400.0), &json!(2))
+        );
+        assert_eq!(rows[0]["coordination_overhead"], json!([3.0, 12.5]));
+        assert_eq!(rows[0]["cost_usd"], 1.25);
+        assert_eq!(rows[2]["replaces"], "go-tasks-2-falinks-2");
+        assert_eq!(out["replaced_runs"], json!(["go-tasks-2-falinks-2"]));
+        assert_eq!(
+            out["gaps"],
+            json!(["invalid run go-tasks-5-git-2: nested agent"])
+        );
+        assert!(out.get("metrics").is_none() && out.get("outcome").is_none());
     }
 
     /// #316: each pair of arms gets its label and paired differences per rotation, completion

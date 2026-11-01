@@ -606,6 +606,29 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/large-spec 
     compare `falinks-2` with `git-2` only; `git-1`'s cells are descriptive, and it is never
     asked the blinding question. Quality never enters P1–P3.
 
+#205's engine waves (#335) run on the dev fixture `go-tasks`, never on `go-invoice`. Each
+wave and the final sweep is its own batch directory, all siblings under one parent, so every
+later batch denies the earlier ones:
+
+```sh
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/wave-1 --schedule wave-1
+evaluation/target/release/falinks-eval report --runs /private/tmp/ev/wave-1 --schedule wave-1
+```
+
+- **Schedule**: `wave-1` to `wave-4` (the cap) each run two Falinks agents on `go-tasks`
+  four times, two Git agents on `go-tasks` once, then one regression run of two Falinks
+  agents on a small fixture: `rust-errors`, `go-page`, `go-relationships` and `go-indep-2`
+  for waves 1 to 4. `sweep` is the final regression sweep after the last engine change: two
+  Falinks agents once on each of the five small fixtures. All slots are unscored. Batch
+  isolation, the gate, the ledger and the pause rules apply to every slot. Early stop, the
+  cap's stop-and-ask and defect classes are #205's rules, applied on the ticket.
+- **Report** (`report --schedule wave-N` or `sweep`, also the batch's `report.json`): each
+  run in ledger order, replaced ones included, with its outcome, failure reason, elapsed
+  seconds, transitions and regrouping proposals, collisions and collision waste,
+  coordination overhead, per-agent `timing` figures, usage status, cost, and any nested
+  agent or control failure; then the gaps, safety failures and replaced runs. It computes no
+  comparison: single runs check "not broken", never "faster".
+
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and
 session state need more `runtime_writable` paths under the host sandbox. Record any such

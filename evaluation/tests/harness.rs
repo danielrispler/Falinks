@@ -1761,6 +1761,50 @@ fn track_t_batch_runs_both_team_sizes_with_run_isolation() {
     assert_eq!(report["gaps"], json!([]));
 }
 
+/// #335: a wave is a batch schedule, isolated and gated like the others, whose report lists its
+/// runs; wave 3's regression run is on go-relationships.
+#[test]
+fn wave_batch_runs_its_regression_slot_and_writes_the_wave_report() {
+    let tmp = tmp("falinks-wave-test-");
+    let config = config(
+        tmp.path(),
+        SCRIPTED,
+        json!(["{worker}", "relationships"]),
+        SCRIPTED,
+    );
+    let runs = tmp.path().join("wave-3");
+    let output = Command::new(CLI)
+        .args([
+            "batch",
+            "--schedule",
+            "wave-3",
+            "--fixtures",
+            "go-relationships",
+            "--config",
+        ])
+        .arg(&config)
+        .arg("--runs")
+        .arg(&runs)
+        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+    let ledger = read(runs.join("batch.json"));
+    assert_eq!(ledger["invocations"][0]["track_t"], false);
+    let report = read(runs.join("report.json"));
+    let rows = report["runs"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{report}");
+    assert_eq!(
+        (&rows[0]["run_id"], &rows[0]["arm"], &rows[0]["outcome"]),
+        (
+            &json!("go-relationships-falinks-2"),
+            &json!("falinks"),
+            &json!("success")
+        )
+    );
+    assert_eq!(report["gaps"], json!([]));
+}
+
 /// #228 decision 28: `report` prints no source text unless `--show-code` asks for it.
 #[test]
 fn report_prints_reverted_lines_only_with_show_code() {
