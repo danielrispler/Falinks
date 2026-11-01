@@ -410,6 +410,13 @@ fn cursor(db: &Connection, agent: usize) -> Result<u64> {
 pub(crate) fn checkpoint(db: &Connection, id: &str) -> Result<Option<Checkpoint>> {
     one(db, "SELECT body FROM checkpoints WHERE id=?", [id])
 }
+/// An agent's own checkpoint, named by its offer ID or by the ID the offer's reply gave (#335).
+fn own_checkpoint(db: &Connection, agent: usize, offer: &str) -> Result<Option<Checkpoint>> {
+    match checkpoint(db, &format!("{agent}/{offer}"))? {
+        None if offer.starts_with(&format!("{agent}/")) => checkpoint(db, offer),
+        found => Ok(found),
+    }
+}
 pub(crate) fn save_checkpoint(db: &Connection, checkpoint: &Checkpoint) -> Result<()> {
     db.execute(
         "INSERT INTO checkpoints VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
@@ -868,8 +875,8 @@ impl Engine {
             .collect();
         let tx = db.unchecked_transaction()?;
         if let Some(old) = &offer.supersedes {
-            let old = format!("{}/{old}", client.agent);
-            let mut previous = checkpoint(&tx, &old)?.ok_or("unknown superseded checkpoint")?;
+            let mut previous =
+                own_checkpoint(&tx, client.agent, old)?.ok_or("unknown superseded checkpoint")?;
             if previous.state != Availability::Available {
                 return fail("only an available checkpoint can be superseded");
             }
@@ -881,7 +888,7 @@ impl Engine {
                 &tx,
                 others(client.agent),
                 &Body::Superseded {
-                    checkpoint: old,
+                    checkpoint: previous.id,
                     replacement: id.clone(),
                 },
             )?;
@@ -924,9 +931,8 @@ impl Engine {
     }
     pub fn withdraw(&self, client: &Client, offer: &str) -> Result<Checkpoint> {
         self.authorize(client)?;
-        let id = format!("{}/{offer}", client.agent);
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        let mut existing = checkpoint(&db, &id)?.ok_or("unknown checkpoint")?;
+        let mut existing = own_checkpoint(&db, client.agent, offer)?.ok_or("unknown checkpoint")?;
         if existing.state != Availability::Available {
             return fail("checkpoint is not available");
         }
@@ -936,7 +942,9 @@ impl Engine {
         emit(
             &tx,
             others(client.agent),
-            &Body::Withdrawn { checkpoint: id },
+            &Body::Withdrawn {
+                checkpoint: existing.id.clone(),
+            },
         )?;
         tx.commit()?;
         drop(db);
