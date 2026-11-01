@@ -5,7 +5,7 @@
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::{
     FIXTURES, LARGE_SPEC_FIXTURE, Result, bail, collisions, git, read,
-    report::{large_spec_report, report, step_6_report, track_t_report},
+    report::{large_spec_report, report, step_6_report, track_t_report, wave_report},
     root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
 use serde_json::{Value, json};
@@ -120,6 +120,43 @@ pub fn large_spec_slots() -> Vec<Value> {
     rotations(LARGE_SPEC_FIXTURE, 8, true)
 }
 
+/// #205's engine waves (#335), unscored, one batch directory each: `wave-1` to `wave-4` (the
+/// cap) run two Falinks agents four times and two Git agents once on the dev fixture, then two
+/// Falinks agents on one small fixture, rotating by wave; `sweep`, the final regression sweep,
+/// runs two Falinks agents once on each small fixture; `confirm` gives a sweep regression's fix
+/// its two confirming dev runs. None for any other name.
+pub fn wave_slots(name: &str) -> Option<Vec<Value>> {
+    let small = &FIXTURES[..5];
+    let dev = |i: usize| (format!("go-tasks-{i}-falinks-2"), "go-tasks", "falinks");
+    let planned: Vec<(String, &str, &str)> = match name {
+        "sweep" => small
+            .iter()
+            .map(|f| (format!("{f}-falinks-2"), *f, "falinks"))
+            .collect(),
+        "confirm" => (1..=2).map(dev).collect(),
+        _ => {
+            let wave: usize = name.strip_prefix("wave-")?.parse().ok()?;
+            if !(1..=4).contains(&wave) {
+                return None;
+            }
+            // Four waves reach go-indep-2; go-indep-4 is in the sweep.
+            let regression = small[wave - 1];
+            let mut planned: Vec<_> = (1..=4).map(dev).collect();
+            planned.push(("go-tasks-5-git-2".into(), "go-tasks", "git"));
+            planned.push((format!("{regression}-falinks-2"), regression, "falinks"));
+            planned
+        }
+    };
+    let slots = planned
+        .into_iter()
+        .enumerate()
+        .map(|(order, (slot, fixture, arm))| {
+            json!({"slot": slot, "pair": name, "fixture": fixture, "arm": arm, "order": order,
+            "scored": false, "team_size": 2})
+        });
+    Some(slots.collect())
+}
+
 /// `count` rotations of one agent, two Git agents and two Falinks agents on `fixture`, the
 /// order shifting by one each rotation.
 fn rotations(fixture: &str, count: usize, scored: bool) -> Vec<Value> {
@@ -231,8 +268,8 @@ fn one_worktree(list: &str) -> Result<()> {
 
 /// `after_pilot` names the completed pilot batch directory; without it this is the pilot,
 /// unless `schedule` names a track-T schedule instead: `track-t` (team sizes) or `step-6`
-/// (three arms), or #205's scored `large-spec`. `fixtures` limits the batch to those fixtures'
-/// slots, so shards can run in parallel.
+/// (three arms), #205's scored `large-spec`, or one of #205's engine waves (`wave_slots`).
+/// `fixtures` limits the batch to those fixtures' slots, so shards can run in parallel.
 pub fn batch(
     config_path: &Path,
     runs: &Path,
@@ -313,7 +350,7 @@ pub fn batch(
         Some("track-t") => track_t_slots(),
         Some("step-6") => step_6_slots(),
         Some("large-spec") => large_spec_slots(),
-        Some(other) => bail!("Unknown schedule {other}"),
+        Some(other) => wave_slots(other).ok_or(format!("Unknown schedule {other}"))?,
     }
     .into_iter()
     .filter(|s| fixtures.contains(&s["fixture"].as_str().unwrap()))
@@ -335,7 +372,7 @@ pub fn batch(
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": schedule.is_some_and(|s| s != "large-spec"), "schedule": schedule,
+    ledger["invocations"].as_array_mut().unwrap().push(json!({"utc": utc_now(), "pilot": pilot, "track_t": matches!(schedule, Some("track-t" | "step-6")), "schedule": schedule,
         "after_pilot": after_pilot, "platform": platform(), "fixtures": fixtures, "config_sha256": config_sha, "configuration": config,
         "commit": commit, "go": go, "worktrees": worktrees}));
     let mut gated = false;
@@ -413,9 +450,11 @@ pub fn batch(
             n => format!("{id}-r{n}"),
         };
         let run_dir = runs.join(&run_id);
-        // Locked before denials are listed, so this run's own lock is denied too.
+        // Locked before denials are listed, so this run's own lock is denied too; likewise the
+        // configurations directory, which a batch's first run would otherwise find undenied.
         let lock = Lock(runs.join(ACTIVE));
         write(&lock.0, &json!({"run_id": run_id, "utc": utc_now()}))?;
+        fs::create_dir_all(runs.join("configs"))?;
         let concurrent_at_start = active_siblings(&runs)?;
         let mut run_config = config.clone();
         // Deny every other run, ledger, configuration and gate output in both arms, and sibling
@@ -436,7 +475,6 @@ pub fn batch(
             denied.push(path.to_string_lossy().into_owned().into());
         }
         run_config["denied_roots"] = denied.into();
-        fs::create_dir_all(runs.join("configs"))?;
         let run_config_path = runs.join("configs").join(format!("{run_id}.json"));
         write(&run_config_path, &run_config)?;
         let arm = slot["arm"].as_str().unwrap();
@@ -555,7 +593,8 @@ pub fn batch(
         Some("track-t") => track_t_report(&results),
         Some("large-spec") => large_spec_report(&results),
         Some("step-6") => step_6_report(&results),
-        Some(other) => bail!("Unknown schedule {other}"),
+        // A wave or the sweep: the slots above refused any other name.
+        Some(_) => wave_report(&results),
         None => report(&results, false),
     };
     write(runs.join("report.json"), &summary)?;
@@ -799,6 +838,67 @@ mod tests {
             orders.dedup();
             assert_eq!(orders, [0, 1, 2], "{name}");
         }
+    }
+
+    /// #205's engine waves (#335): four Falinks runs and one Git run on go-tasks, then one
+    /// Falinks regression run whose fixture rotates through the five small fixtures.
+    #[test]
+    fn each_wave_runs_go_tasks_five_times_and_rotates_its_regression_run() {
+        let slots = wave_slots("wave-2").unwrap();
+        let names: Vec<&str> = slots.iter().map(|s| s["slot"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "go-tasks-1-falinks-2",
+                "go-tasks-2-falinks-2",
+                "go-tasks-3-falinks-2",
+                "go-tasks-4-falinks-2",
+                "go-tasks-5-git-2",
+                "go-page-falinks-2",
+            ]
+        );
+        for (order, slot) in slots.iter().enumerate() {
+            assert_eq!(
+                (
+                    &slot["pair"],
+                    &slot["order"],
+                    &slot["scored"],
+                    &slot["team_size"]
+                ),
+                (&json!("wave-2"), &json!(order), &json!(false), &json!(2))
+            );
+        }
+        let regression = |n: u32| wave_slots(&format!("wave-{n}")).unwrap()[5]["fixture"].clone();
+        assert_eq!(
+            [1, 3, 4].map(regression),
+            ["rust-errors", "go-relationships", "go-indep-2"]
+        );
+        // The cap is four waves; the sweep follows the last engine change.
+        assert!(wave_slots("wave-5").is_none() && wave_slots("wave-0").is_none());
+        let runs = |name: &str| -> Vec<(String, String)> {
+            let slots = wave_slots(name).unwrap();
+            let field = |s: &Value, key: &str| s[key].as_str().unwrap().to_string();
+            slots
+                .iter()
+                .map(|s| (field(s, "fixture"), field(s, "arm")))
+                .collect()
+        };
+        let falinks = |fixtures: &[&str]| -> Vec<(String, String)> {
+            fixtures
+                .iter()
+                .map(|f| (f.to_string(), "falinks".into()))
+                .collect()
+        };
+        let small = [
+            "rust-errors",
+            "go-page",
+            "go-relationships",
+            "go-indep-2",
+            "go-indep-4",
+        ];
+        assert_eq!(runs("sweep"), falinks(&small));
+        // A regression the sweep finds gets a fix and two confirming dev runs.
+        assert_eq!(runs("confirm"), falinks(&["go-tasks", "go-tasks"]));
     }
 
     /// #205: eight scored rotations on go-invoice, each arm first two or three times.
