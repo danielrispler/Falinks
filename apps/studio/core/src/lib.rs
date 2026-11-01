@@ -348,7 +348,7 @@ impl Session {
                 _ => {}
             }
         }
-        if let Some(task) = event.tool_response["backgroundTaskId"].as_str() {
+        if let Some(task) = event.tool_response.background_task_id.as_deref() {
             self.tasks.insert(task.into());
         }
         let listed = event.background_tasks.as_array().into_iter().flatten();
@@ -357,7 +357,7 @@ impl Session {
         match event.hook_event_name.as_str() {
             "PostToolUse"
                 if tool == "Agent"
-                    && let Some(child) = event.tool_response["agentId"].as_str() =>
+                    && let Some(child) = event.tool_response.agent_id.as_deref() =>
             {
                 let parent = event
                     .agent_id
@@ -375,7 +375,7 @@ impl Session {
                     agent.kind = Kind::Worker;
                 }
                 // A foreground spawn's response comes at its end.
-                if event.tool_response["status"] == "completed" {
+                if event.tool_response.status.as_deref() == Some("completed") {
                     agent.end(None, at);
                 }
             }
@@ -710,6 +710,26 @@ pub struct Asker {
     pub since: u64,
 }
 
+/// The four fields of a tool response the core reads (#410, decision 20). The rest, file contents
+/// included, is skipped without building a JSON tree.
+#[derive(Default, Deserialize)]
+struct ToolResponse {
+    #[serde(rename = "backgroundTaskId")]
+    background_task_id: Option<String>,
+    /// On an `Agent` call's `PostToolUse`, the child's id and status.
+    #[serde(rename = "agentId")]
+    agent_id: Option<String>,
+    status: Option<String>,
+    #[serde(default)]
+    answers: Value,
+}
+
+/// A response that is not a JSON object yields none of the four, and keeps its event.
+fn tool_response<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ToolResponse, D::Error> {
+    let raw = <&serde_json::value::RawValue>::deserialize(d)?;
+    Ok(serde_json::from_str(raw.get()).unwrap_or_default())
+}
+
 /// The fields of a hook payload the core reads; the rest of the line is ignored.
 #[derive(Deserialize)]
 struct Event {
@@ -730,9 +750,8 @@ struct Event {
     tool_input: Value,
     #[serde(default)]
     tool_use_id: String,
-    /// On an `Agent` call's `PostToolUse`, the child's `agentId` and status.
-    #[serde(default)]
-    tool_response: Value,
+    #[serde(default, deserialize_with = "tool_response")]
+    tool_response: ToolResponse,
     /// A failed call's error, which for a command that ran holds its exit code and output.
     #[serde(default)]
     error: String,
@@ -1228,7 +1247,7 @@ impl Studio {
                 if !failed
                     && let Some(question) = asked.find(|q| q.tool_use_id == event.tool_use_id)
                 {
-                    question.answer = Answer::Answered(event.tool_response["answers"].clone());
+                    question.answer = Answer::Answered(event.tool_response.answers.clone());
                 }
                 // A denied or interrupted call, or a failed Edit or Write, changed nothing: only a
                 // command that ran and failed has its exit code in its error.
