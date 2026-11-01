@@ -86,8 +86,7 @@ fn a_stop_keeps_its_cards_id_and_the_first_line_of_its_message_until_the_next_pr
     );
 
     // Replayed, the same `Stop` requested no card.
-    let mut replayed = Studio::default();
-    LOG.lines().for_each(|line| replayed.replay(line));
+    let mut replayed = Studio::replayed(LOG.lines());
     assert_eq!(
         stopped(&replayed).map(|s| (s.card, s.requested)),
         Some((card, false))
@@ -195,10 +194,7 @@ fn a_prompt_after_an_interrupt_keeps_the_interrupted_prompts_base() {
 #[test]
 fn after_a_replay_the_shell_fingerprints_the_prompts_still_open() {
     let waiting = |replayed: usize| -> Vec<(String, String)> {
-        let mut studio = Studio::default();
-        LOG.lines()
-            .take(replayed)
-            .for_each(|line| studio.replay(line));
+        let studio = Studio::replayed(LOG.lines().take(replayed));
         let open = studio.waiting_folders();
         open.map(|(id, folder)| (id.into(), folder.into()))
             .collect()

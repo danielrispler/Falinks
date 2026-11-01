@@ -11,11 +11,7 @@ use State::{Ended, Idle, NeedsYou, Running, YourTurn};
 const HOUR: u64 = 60 * 60 * 1000;
 
 fn replay(log: &str) -> Studio {
-    let mut studio = Studio::default();
-    for line in log.lines() {
-        studio.replay(line);
-    }
-    studio
+    Studio::replayed(log.lines())
 }
 
 /// One prompt and a failed command, ending at its `Stop`.

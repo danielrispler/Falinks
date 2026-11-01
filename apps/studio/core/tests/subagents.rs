@@ -10,11 +10,7 @@ use Kind::{Helper, Worker};
 use State::{NeedsYou, Running, YourTurn};
 
 fn replay(log: &str) -> Studio {
-    let mut studio = Studio::default();
-    for line in log.lines() {
-        studio.replay(line);
-    }
-    studio
+    Studio::replayed(log.lines())
 }
 
 /// The checkpoint day of #347, scrubbed (#370).
