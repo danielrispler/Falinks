@@ -13,7 +13,7 @@ use std::{
     process::Command,
     time::SystemTime,
 };
-use studio_core::{Base, Change, Keep};
+use studio_core::{Base, Change, Fingerprint, Keep};
 
 /// A worktree's `HEAD`, and the files `git status` listed, by path from the worktree's root, with
 /// their content: `None` for a file that is gone.
@@ -39,6 +39,19 @@ fn read(path: &Path) -> Option<Content> {
         return Some(Content::Large(meta.len(), meta.modified().ok()));
     }
     fs::read(path).ok().map(Content::Bytes)
+}
+
+/// Takes the fingerprints `looks` asks for, each in its key's own `Fingerprints` in `prints`, and
+/// returns the changes they found by key, as `Studio::apply_with_changes` takes them.
+pub fn fingerprint_changes(
+    looks: Vec<Fingerprint>,
+    prints: &mut HashMap<String, Fingerprints>,
+) -> BTreeMap<String, Change> {
+    let changes = looks.into_iter().filter_map(|look| {
+        let print = prints.entry(look.key.clone()).or_default();
+        Some((look.key, print.look(Path::new(&look.folder), look.keep)?))
+    });
+    changes.collect()
 }
 
 /// Each worktree's latest record, by the worktree's root.

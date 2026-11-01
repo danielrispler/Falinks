@@ -193,14 +193,14 @@ fn a_prompt_after_an_interrupt_keeps_the_interrupted_prompts_base() {
 
 #[test]
 fn after_a_replay_the_shell_fingerprints_the_prompts_still_open() {
-    let waiting = |replayed: usize| -> Vec<(String, String)> {
-        let studio = Studio::replayed(LOG.lines().take(replayed));
-        let open = studio.waiting_folders();
-        open.map(|(id, folder)| (id.into(), folder.into()))
-            .collect()
-    };
+    let waiting = |replayed: usize| Studio::replayed(LOG.lines().take(replayed)).waiting_folders();
 
-    assert_eq!(waiting(7), [(SESSION.into(), WORKTREE.into())]);
+    let open = Fingerprint {
+        key: SESSION.into(),
+        folder: WORKTREE.into(),
+        keep: Keep::Always,
+    };
+    assert_eq!(waiting(7), [open]);
     assert_eq!(waiting(LOG.lines().count()), []);
 }
 
