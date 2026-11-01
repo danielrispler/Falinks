@@ -78,6 +78,8 @@ const SYSTEM: &[&str] = &[
     // status patch when it ends (#236, 2.1.308).
     "background_tasks_changed",
     "task_updated",
+    // A tool call a deny rule blocked; the turn's `permission_denials` also lists it (#335).
+    "permission_denied",
 ];
 
 pub mod arm;
@@ -410,8 +412,13 @@ impl Session {
         }
         if !matches!(subtype, "thinking_tokens" | "hook_started") {
             let mut event = line.clone();
-            // Evidence excludes model reasoning.
-            if let Some(blocks) = event["message"]["content"].as_array_mut() {
+            // Evidence excludes model reasoning. Read-only lookups: a line's `message` may be
+            // text (`permission_denied`), and indexing it mutably would panic the host (#335).
+            if let Some(blocks) = event
+                .get_mut("message")
+                .and_then(|m| m.get_mut("content"))
+                .and_then(Value::as_array_mut)
+            {
                 blocks.retain(|b| {
                     !matches!(b["type"].as_str(), Some("thinking" | "redacted_thinking"))
                 });
