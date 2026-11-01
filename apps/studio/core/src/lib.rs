@@ -935,14 +935,20 @@ impl Studio {
     /// The sessions in a turn and the running subagents, with their folders, by their fingerprints'
     /// keys. After a replay the shell fingerprints them once, so a restart mid-turn leaves the
     /// turn's `Stop` and each subagent's next look a base to compare with.
-    pub fn waiting_folders(&self) -> impl Iterator<Item = (&str, &str)> {
+    pub fn waiting_folders(&self) -> Vec<Fingerprint> {
         let waiting = self.sessions.values().filter(|s| s.in_turn());
         let agents = self.sessions.values().flat_map(|s| &s.agents);
         let running = agents.filter(|a| a.status == "running");
         let running = running.filter_map(|a| Some((a.id.as_str(), a.folder.as_deref()?)));
-        waiting
+        let folders = waiting
             .map(|s| (s.id.as_str(), s.cwd.as_str()))
-            .chain(running)
+            .chain(running);
+        let print = |(key, folder): (&str, &str)| Fingerprint {
+            key: key.into(),
+            folder: folder.into(),
+            keep: Keep::Always,
+        };
+        folders.map(print).collect()
     }
 
     /// Takes one live event log line that the shell took no fingerprint for, and returns what the
