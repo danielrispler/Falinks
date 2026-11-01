@@ -6,7 +6,7 @@
     "calibration/v4.json": "5330fca431e224ed4716c112528902dbbbb8aeb92b849d2389f05656ebc83642",
     "calibration/v6.json": "8d98f199a44d2bc737ef2680db671faef2f8470a0c2e474f927edea2713c027d",
     "code-quality.json": "a288076c6d4a8627ca562e341ccfe25ee21133843b0544642e7133306d29b76b",
-    "config.json": "d4ea90ab410faeeeaf94116badc87ece4b1bad55dd5e87370d6e78c7fb13d139",
+    "config.json": "9817441583e6747ff0c119a7fcffdba1f322d1e613d61e93cb9cb2f7582b7833",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
     "fixtures/go-invoice.json": "1809c06a0161ff87f3250b89249df7738121395b1a6afc426ff095ab1dfd9376",
@@ -32,7 +32,7 @@
     "protected/rust-errors.json": "60cd1bd3dc6b803cd304d35d0a538c8da4f3955727f9b893e82b40b73f5a5029",
     "result-schema.json": "be02f77833ff82b59ae30d6de3b01700742e8d9229e5a86ed23bf8cbd0c4d89a",
     "src/authorship.rs": "bd17ec739a9d62f12365ba15ffd4e2ffd0e1f886bd261aac8de0667800a28192",
-    "src/baseline.rs": "86c1590a570d2f37f82a2b5b4704b9562a165df9d1b2d6d272751aa5d6e4e855",
+    "src/baseline.rs": "f502213dc5e564718b285ac42d13cbbf935ad82f6dbe45f5eba26840b152bbfc",
     "src/batch.rs": "2c01e4d67af64224f0f5849ee8c4d2e5d21a5dee9490f3b117425979e814be80",
     "src/bin/claude-worker.rs": "cce241dd25b33dcc35734a7a3574292b7684bc85174b448d7060ca1d7b933602",
     "src/bin/codex-worker.rs": "5dfab4043b8a568a9e16939af480a4544c063961c903cb2f7ebce1c2d55edccd",
@@ -57,5 +57,5 @@
     "go-tasks": "12f2511ee050e318f13aa99ae0838b96ffd095a5",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 54
+  "version": 55
 }
