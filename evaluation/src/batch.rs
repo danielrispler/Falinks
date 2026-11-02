@@ -3,6 +3,7 @@
 //! subscription exhaustion or near-exhaustion, an infrastructure failure (rerun to add an
 //! identified replacement), or an unsafe outcome (repair, renew gates, start a new batch
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
+use crate::authorship::Authorship;
 use crate::{
     FIXTURES, LARGE_SPEC_FIXTURE, Result, bail, collisions, git, read,
     report::{large_spec_report, report, step_6_report, track_t_report, wave_report},
@@ -625,11 +626,14 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
             }
         }
         result["developments"] = developments(run_dir);
-        result["collisions"] = collisions::collisions(run_dir, &result, &duplicates);
+        // Built once for collisions and timing; a team of one's too, for its changed bytes.
+        let mut authorship = Authorship::read(run_dir, &result);
+        result["collisions"] =
+            collisions::collisions(run_dir, &result, &duplicates, &mut authorship);
         result["discarded_or_rewritten_work"] = collisions::waste(&result["collisions"]);
         // A run without readable transcripts has no model time: missing, never zero.
         result["transcript"] =
-            timing::timing(run_dir, &result["collisions"]).unwrap_or(Value::Null);
+            timing::timing(run_dir, &result["collisions"], &mut authorship).unwrap_or(Value::Null);
         result["worker_requests"] = worker_requests(run_dir);
         // Written by `quality` (#230); a run it has not measured has none.
         result["quality"] = quality["runs"][entry["run_id"].as_str().unwrap_or_default()].clone();

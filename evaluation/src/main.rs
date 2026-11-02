@@ -637,6 +637,18 @@ pub fn check_denied(private: &Path, work: &Path, denied_roots: &[PathBuf]) -> Re
 
 /// The exact bytes of `rev`'s tree, from raw blobs: archive export attributes could change them.
 pub fn blobs(repo: &Path, rev: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+    tree_entries(repo, rev, |id| {
+        git_raw(repo, &["cat-file", "blob", id], None)
+    })
+}
+
+/// `rev`'s tree, each file's bytes read by `blob` from its blob ID: only regular files at
+/// relative paths without `..`, each within the 1 MB bound.
+pub fn tree_entries(
+    repo: &Path,
+    rev: &str,
+    mut blob: impl FnMut(&str) -> Result<Vec<u8>>,
+) -> Result<BTreeMap<String, Vec<u8>>> {
     let tree = git_raw(repo, &["ls-tree", "-rz", "--full-tree", rev], None)?;
     let mut source = BTreeMap::new();
     for entry in tree.split(|b| *b == 0).filter(|e| !e.is_empty()) {
@@ -654,7 +666,7 @@ pub fn blobs(repo: &Path, rev: &str) -> Result<BTreeMap<String, Vec<u8>>> {
         {
             bail!("Candidate contains a non-regular or unsafe path");
         }
-        let data = git_raw(repo, &["cat-file", "blob", fields[2]], None)?;
+        let data = blob(fields[2])?;
         if data.len() > 1_000_000 {
             bail!("Fixture file exceeds 1 MB bound");
         }
@@ -1012,7 +1024,8 @@ fn run() -> Result<i32> {
                 .parent()
                 .and_then(|batch| read(batch.join("duplicates.json")).ok())
                 .unwrap_or(Value::Null);
-            let found = collisions::collisions(run, &result, &classified);
+            let mut authorship = authorship::Authorship::read(run, &result);
+            let found = collisions::collisions(run, &result, &classified, &mut authorship);
             println!("{}", serde_json::to_string_pretty(&found)?);
             Ok(0)
         }
@@ -1020,8 +1033,9 @@ fn run() -> Result<i32> {
             let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
             let result = read(run.join("controller/result.json"))?;
             // Handling cost reads only the collisions' detections, which no classification changes.
-            let found = collisions::collisions(run, &result, &Value::Null);
-            let figures = timing::timing(run, &found)?;
+            let mut authorship = authorship::Authorship::read(run, &result);
+            let found = collisions::collisions(run, &result, &Value::Null, &mut authorship);
+            let figures = timing::timing(run, &found, &mut authorship)?;
             println!("{}", serde_json::to_string_pretty(&figures)?);
             Ok(0)
         }
