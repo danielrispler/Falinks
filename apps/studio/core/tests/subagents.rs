@@ -457,3 +457,81 @@ fn the_selection_names_the_opened_subagent_until_a_session_is_selected() {
     studio.select(RUN_SESSION);
     assert_eq!(studio.selection().expect("a selection").agent, None);
 }
+
+/// Helper `h1`'s step `name` with `tool` in session `s1`'s worktree `/w` at `at`, failed with
+/// `error` when it is a `PostToolUseFailure`.
+fn helper_step(name: &str, tool: &str, at: u64, error: &str) -> String {
+    json!({
+        "session_id": "s1",
+        "hook_event_name": name,
+        "agent_id": "h1",
+        "agent_type": "general-purpose",
+        "cwd": "/w",
+        "tool_name": tool,
+        "tool_input": {"command": "cargo test", "file_path": "/w/lib.rs"},
+        "tool_use_id": "toolu_h1",
+        "error": error,
+        "studio_received_ms": at,
+    })
+    .to_string()
+}
+
+/// Session `s1`, in a turn at `/w` since 0, whose helper `h1` started a Bash step at `at`.
+fn helper_in_turn(at: u64) -> Studio {
+    let prompt = json!({"session_id": "s1", "hook_event_name": "UserPromptSubmit", "cwd": "/w",
+        "prompt": "Run the tests", "studio_received_ms": 0});
+    let mut studio = replay(&prompt.to_string());
+    studio.apply(&helper_step("PreToolUse", "Bash", at, ""));
+    studio
+}
+
+/// A change found in the worktree of fingerprint key `key`.
+fn changed(key: &str) -> BTreeMap<String, Change> {
+    let change = Change {
+        base: Base::default(),
+        diff: "+fn element<'a>\n".into(),
+        head: None,
+    };
+    BTreeMap::from([(key.into(), change)])
+}
+
+/// #434, decision 21: a failed command that ran changed files all the same.
+#[test]
+fn a_helper_whose_failed_command_changed_its_worktree_is_a_worker() {
+    let mut studio = helper_in_turn(1_000);
+    let error = "Exit code 101\nerror: test failed";
+    let failed = helper_step("PostToolUseFailure", "Bash", 2_000, error);
+
+    studio.apply_with_changes(&failed, changed("h1"));
+
+    assert_eq!(agent(&studio, "s1", "h1").kind, Worker);
+}
+
+#[test]
+fn a_helper_whose_edit_failed_stays_a_helper() {
+    let mut studio = helper_in_turn(1_000);
+    let error = "String to replace not found";
+    let failed = helper_step("PostToolUseFailure", "Edit", 2_000, error);
+
+    studio.apply_with_changes(&failed, changed("h1"));
+
+    assert_eq!(agent(&studio, "s1", "h1").kind, Helper);
+}
+
+/// #434, decision 22: the due fallback's look comes beside the helper's own.
+#[test]
+fn a_helper_whose_command_changed_its_worktree_while_the_fallback_was_due_is_a_worker() {
+    let late = 21 * 60 * 1000;
+    let mut studio = helper_in_turn(late);
+    let step = helper_step("PostToolUse", "Bash", late + 1_000, "");
+
+    let looks = studio.fingerprint_folders(&step);
+    let keys: Vec<&str> = looks.iter().map(|look| look.key.as_str()).collect();
+    assert_eq!(keys, ["s1", "h1"]);
+    let mut changes = changed("h1");
+    changes.extend(changed("s1"));
+    let outputs = studio.apply_with_changes(&step, changes);
+
+    assert_eq!(agent(&studio, "s1", "h1").kind, Worker);
+    assert!(outputs.iter().any(|o| matches!(o, Output::Card(_))));
+}
