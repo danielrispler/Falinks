@@ -104,8 +104,9 @@ fn tool<'a>(toolchain: &'a Toolchain, name: &str) -> Result<&'a Pin> {
         .find(|p| p.path.file_name().is_some_and(|n| n == name))
         .ok_or_else(|| format!("toolchain missing pinned {name}").into())
 }
-/// Verify every pin and return identities. A mismatch is a visible failure, never a fallback.
-pub(crate) fn verify(toolchain: &Toolchain) -> Result<Vec<Tool>> {
+/// Check required tool names and every pin's hash, running nothing. The hash is the pinned
+/// identity. A mismatch is a visible failure, never a fallback.
+pub(crate) fn check_pins(toolchain: &Toolchain) -> Result<()> {
     let names: &[&str] = match toolchain.language {
         Language::Rust => &["rust-analyzer", "cargo", "rustc"],
         Language::Go => &["gopls", "go"],
@@ -113,17 +114,24 @@ pub(crate) fn verify(toolchain: &Toolchain) -> Result<Vec<Tool>> {
     for name in names {
         tool(toolchain, name)?;
     }
+    for pin in &toolchain.executables {
+        let actual = sha256_file(&pin.path)?;
+        if actual != pin.sha256 {
+            return fail(format!(
+                "pinned executable changed: {} ({actual})",
+                pin.path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+/// Check every pin, then run each to return identities with versions.
+pub(crate) fn verify(toolchain: &Toolchain) -> Result<Vec<Tool>> {
+    check_pins(toolchain)?;
     toolchain
         .executables
         .iter()
         .map(|pin| {
-            let actual = sha256_file(&pin.path)?;
-            if actual != pin.sha256 {
-                return fail(format!(
-                    "pinned executable changed: {} ({actual})",
-                    pin.path.display()
-                ));
-            }
             let arg = if pin.path.ends_with("go") || pin.path.ends_with("gopls") {
                 "version"
             } else {
@@ -132,7 +140,7 @@ pub(crate) fn verify(toolchain: &Toolchain) -> Result<Vec<Tool>> {
             let out = Command::new(&pin.path).arg(arg).env_clear().output()?;
             Ok(Tool {
                 path: pin.path.clone(),
-                sha256: actual,
+                sha256: pin.sha256.clone(),
                 version: String::from_utf8_lossy(&out.stdout).trim().into(),
             })
         })

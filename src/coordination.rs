@@ -468,14 +468,14 @@ impl Change {
 }
 
 impl Engine {
-    /// Host configuration: verify pins and analyze the current completed revision.
+    /// Host configuration: check pins and analyze the current completed revision.
     /// Not durable; after restart relevance stays conservative until reconfigured.
     pub fn configure_analysis(
         &self,
         toolchains: Vec<analysis::Toolchain>,
     ) -> Result<Vec<Evidence>> {
         for toolchain in &toolchains {
-            analysis::verify(toolchain)?;
+            analysis::check_pins(toolchain)?;
         }
         *self
             .analysis
@@ -506,7 +506,7 @@ impl Engine {
             let evidence: Evidence = match cached {
                 Some(mut evidence) => {
                     // Cached results stay bound to the pins: a replaced binary degrades them.
-                    if let Err(error) = analysis::verify(toolchain) {
+                    if let Err(error) = analysis::check_pins(toolchain) {
                         evidence.errors.push(error.to_string());
                     }
                     evidence
