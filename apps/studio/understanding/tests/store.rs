@@ -509,9 +509,9 @@ fn every_change_bumps_the_revision_and_a_call_that_changes_nothing_leaves_it() {
     let first = card(&request);
     store.add(request, first, 1_761_743_990_000).unwrap();
     bumped(&store, true);
-    store.show("toolu_01A", 1_761_743_995_000).unwrap();
+    store.show(&["toolu_01A"], 1_761_743_995_000).unwrap();
     bumped(&store, true);
-    store.show("toolu_01A", 1_761_743_996_000).unwrap();
+    store.show(&["toolu_01A"], 1_761_743_996_000).unwrap();
     bumped(&store, false);
     store.guess("toolu_01A", 1, 1_761_744_000_000).unwrap();
     bumped(&store, true);
@@ -546,7 +546,9 @@ fn every_change_bumps_the_revision_and_a_call_that_changes_nothing_leaves_it() {
     bumped(&store.lock().unwrap(), true);
     explain_more(&store, &FakeWriter, "toolu_01A", |line| panic!("{line}"));
     bumped(&store.lock().unwrap(), false);
+}
 
+#[test]
 fn quizzes_that_showed_at_once_are_saved_in_one_call() {
     let data = tempfile::tempdir().unwrap();
     let path = data.path().join("cards.json");
