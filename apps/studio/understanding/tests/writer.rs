@@ -388,6 +388,24 @@ fn a_rewrite_whose_newest_prompt_alone_is_over_the_budget_keeps_its_start() {
 }
 
 #[test]
+fn a_rewrite_whose_summaries_fill_the_budget_still_keeps_the_newest_prompts_start() {
+    let folder = Path::new("/h/Library/Application Support/dev.falinks.studio/card-writer");
+    let writer = ClaudeWriter::new(CLAUDE.into(), folder.into());
+    // 2,000 summaries of about 40 bytes each, 80 KiB in all.
+    let summaries: Vec<String> = (0..2_000)
+        .map(|i| format!("summary {i:04} of a long session's card"))
+        .collect();
+
+    let (_, prompt) = writer.rewrite_command(&["Why does this fail?"], &summaries, "");
+
+    assert!(
+        prompt.contains("<prompt>\nWhy does this fail?\n"),
+        "{}",
+        &prompt[..500]
+    );
+}
+
+#[test]
 fn explain_more_runs_the_same_writer_on_the_cards_explanation_and_its_change() {
     let folder = Path::new("/h/Library/Application Support/dev.falinks.studio/card-writer");
     let writer = ClaudeWriter::new(CLAUDE.into(), folder.into());

@@ -231,7 +231,7 @@ function agentRow(session: Session, children: Children, agent: Subagent, depth: 
     text("span", agent.name, "name"),
     state,
     ...done(children, children.get(agent.id)),
-    text("span", details.filter(Boolean).join(" · "), "row-step"),
+    rowLine(details.filter(Boolean).join(" · ")),
   );
   return button;
 }

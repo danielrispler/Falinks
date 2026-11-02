@@ -73,9 +73,9 @@ pub struct Session {
     /// The tool calls whose `PreToolUse` landed and whose `PostToolUse` has not.
     #[serde(skip)]
     running: Vec<Call>,
-    /// Its waits on Daniel, oldest first (#434, decision 24).
+    /// What blocks it on Daniel, so that it needs you, oldest first (#434, decision 24).
     #[serde(skip)]
-    waits: Vec<Wait>,
+    blocks: Vec<Block>,
     /// Its turn's final message asks Daniel something: a block no tool call clears.
     #[serde(skip)]
     asked: bool,
@@ -607,11 +607,11 @@ impl Session {
             }
             _ => {}
         }
-        // A subagent that ended waits on nobody, and its calls never resolve.
+        // A subagent that ended asks Daniel nothing, and its calls never resolve.
         let ended = self.agents.iter().filter(|a| a.ended_at.is_some());
         let ended: BTreeSet<String> = ended.map(|a| a.agent.id.clone()).collect();
         let ended = |agent: &Option<String>| agent.as_ref().is_some_and(|a| ended.contains(a));
-        self.waits.retain(|w| !(w.named && ended(&w.agent)));
+        self.blocks.retain(|w| !(w.named && ended(&w.agent)));
         self.running.retain(|call| !ended(&call.agent));
         self.resolve(|(_, agent)| ended(agent));
     }
@@ -719,8 +719,19 @@ impl Session {
             return false;
         };
         event.agent_id.is_none()
-            && !matches!(name, "SessionStart" | "SessionEnd" | "Notification")
+            && !outside_turns(name)
             && (self.turn.as_ref() != Some(id) || name == "UserPromptSubmit" && !self.in_turn())
+    }
+
+    /// Whether `event` opens a turn: it starts one by its prompt id, or it is a prompt outside one.
+    fn opens_turn(&self, event: &Event) -> bool {
+        self.starts_turn(event) || event.hook_event_name == "UserPromptSubmit" && !self.in_turn()
+    }
+
+    /// Puts it back in a turn, with no stopped line.
+    fn reopen_turn(&mut self) {
+        self.turn_ended = false;
+        self.stopped = None;
     }
 
     /// Whether `event` ends its turn, keyed by a prompt id, without a `Stop` (#434, decision 5): the
@@ -761,7 +772,7 @@ impl Session {
     }
 
     fn needs_you(&self) -> bool {
-        self.asked || !self.waits.is_empty()
+        self.asked || !self.blocks.is_empty()
     }
 
     /// Its workers that failed: they ended with a status other than `completed`, such as `killed`.
@@ -773,13 +784,14 @@ impl Session {
             .collect()
     }
 
-    /// Adds a wait by `agent`, which it `named`, on the running calls it waits on (#434, decisions
-    /// 25 and 26), so that their `PostToolUse` clears it. A named wait takes its agent's latest such
-    /// call. A wait that names no agent takes every such call of the agents still running. With none,
-    /// its call's `PreToolUse` may still land (the hooks are async); otherwise it lasts until its
-    /// turn ends.
-    fn wait(&mut self, tool: String, input: Value, agent: Option<String>, named: bool, at: u64) {
-        let mut wait = Wait {
+    /// Adds a block by `agent` on the running calls it holds (#434, decisions 25 and 26), so that
+    /// their `PostToolUse` clears it. A named block takes its agent's latest such call. A notice or a
+    /// request for input with no agent names none: it takes every such call of the agents still
+    /// running. With none, its call's `PreToolUse` may still land (the hooks are async); otherwise
+    /// it lasts until its turn ends.
+    fn block(&mut self, tool: String, input: Value, agent: Option<String>, at: u64) {
+        let named = agent.is_some() || !matches!(tool.as_str(), "Notification" | "Elicitation");
+        let mut block = Block {
             tool,
             input,
             agent,
@@ -788,7 +800,7 @@ impl Session {
             at,
             noticed: false,
         };
-        let mut calls = self.running.iter().filter(|c| wait.takes(c));
+        let mut calls = self.running.iter().filter(|c| block.takes(c));
         let calls: Vec<&Call> = match named {
             true => calls.next_back().into_iter().collect(),
             false => calls.collect(),
@@ -796,36 +808,43 @@ impl Session {
         let calls = calls
             .into_iter()
             .filter_map(|c| Some((c.id.clone()?, c.agent.clone())));
-        wait.calls = calls.collect();
-        self.waits.push(wait);
+        block.calls = calls.collect();
+        self.blocks.push(block);
     }
 
-    /// Takes the calls that `gone` names off every wait; a wait whose last call went clears.
+    /// Takes the calls that `gone` names off every block; a block whose last call went clears.
     fn resolve(&mut self, gone: impl Fn(&(String, Option<String>)) -> bool) {
-        self.waits.retain_mut(|w| {
+        self.blocks.retain_mut(|w| {
             let had = !w.calls.is_empty();
             w.calls.retain(|c| !gone(c));
             !had || !w.calls.is_empty()
         });
     }
 
-    /// Clears the waits of the session's own agent and those that name no agent (#328, module 3,
+    /// Clears the blocks of the session's own agent and those that name no agent (#328, module 3,
     /// "Needs you": Daniel's `UserPromptSubmit`, not a wake-up; a turn's end; `SessionEnd`). The
-    /// turn's calls end with it, so a call that never reported back takes no later wait. Subagents run
-    /// past their session's turn, so their own waits stay.
+    /// turn's calls end with it, so a call that never reported back takes no later block. Subagents run
+    /// past their session's turn, so their own blocks stay.
     fn unblock(&mut self) {
-        self.waits.retain(|w| w.named && w.agent.is_some());
+        self.blocks.retain(|w| w.named && w.agent.is_some());
         self.running.retain(|c| c.agent.is_some());
         self.asked = false;
     }
 }
 
-/// Tools that wait on Daniel in any permission mode, before any `PermissionRequest`.
+/// Tools that ask Daniel in any permission mode, before any `PermissionRequest`.
 const ASKING_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 
-/// A wait on Daniel (#434, decisions 24 to 26): what asks, and the calls it waits on.
+/// Whether hook event `name` is a start, an end or a notice: one that never starts a turn or
+/// touches a worktree, since in the day log they carry ids no turn ran under.
+fn outside_turns(name: &str) -> bool {
+    matches!(name, "SessionStart" | "SessionEnd" | "Notification")
+}
+
+/// What blocks a session on Daniel, so that it needs you (#434, decisions 24 to 26): what asks,
+/// and the calls it holds.
 #[derive(Clone, Debug, PartialEq)]
-struct Wait {
+struct Block {
     tool: String,
     input: Value,
     /// The agent that asks: a subagent, or `None` for the session's own agent or a notice that names
@@ -833,7 +852,7 @@ struct Wait {
     agent: Option<String>,
     /// Whether the event named its agent. A notice with no agent may be any running agent's.
     named: bool,
-    /// The calls it waits on, by `tool_use_id`, each with its agent; it clears when the last
+    /// The calls it holds, by `tool_use_id`, each with its agent; it clears when the last
     /// resolves.
     calls: Vec<(String, Option<String>)>,
     at: u64,
@@ -841,20 +860,21 @@ struct Wait {
     noticed: bool,
 }
 
-impl Wait {
+impl Block {
     /// Whether it waits on tool call `call`: a permission request on the call it names, of its own
-    /// agent; an MCP server's request for input on an MCP tool; a permission notice on any call.
+    /// agent; an MCP server's request for input on an MCP tool; a permission notice on any call
+    /// but an open spawn, which asks for no permission while its subagent runs.
     fn takes(&self, call: &Call) -> bool {
         let tool = match self.tool.as_str() {
             "Elicitation" => call.tool.starts_with("mcp__"),
-            "Notification" => true,
+            "Notification" => call.tool != "Agent",
             tool => tool == call.tool && self.input == call.input,
         };
         tool && (!self.named || self.agent == call.agent)
     }
 
     /// Who it names: its agent, or with no agent named, the agent of its one call. `None` is the
-    /// session's own agent, or no name when several agents may wait.
+    /// session's own agent, or no name when several agents may ask.
     fn asker(&self) -> Option<String> {
         match &self.calls[..] {
             _ if self.named => self.agent.clone(),
@@ -1045,7 +1065,7 @@ struct Call {
     agent: Option<String>,
 }
 
-/// Who a session that needs Daniel waits on: its oldest wait's asker, a subagent or `None` for the
+/// Who a session that needs Daniel waits for: its oldest block's asker, a subagent or `None` for the
 /// session's own agent, and since when, in Unix milliseconds (#369, decision 21).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Asker {
@@ -1273,9 +1293,7 @@ impl Studio {
     // if a live run shows cards missing such writes.
     fn touches(&self, event: &Event) -> Vec<String> {
         let name = event.hook_event_name.as_str();
-        if event.agent_id.is_some()
-            || matches!(name, "SessionStart" | "SessionEnd" | "Notification")
-        {
+        if event.agent_id.is_some() || outside_turns(name) {
             return Vec::new();
         }
         let tool = event.tool_name.as_deref();
@@ -1379,7 +1397,7 @@ impl Studio {
             let s = session.unwrap_or(&blank);
             let key = &event.session_id;
             let ends = s.ends_turn_early(event) || name == "Stop";
-            let opens = s.starts_turn(event) || name == "UserPromptSubmit" && !s.in_turn();
+            let opens = s.opens_turn(event);
             // A turn's end, and a due fallback, look at every worktree it touched (#434, decision
             // 10).
             let mut closing = s.closing();
@@ -1401,18 +1419,31 @@ impl Studio {
             // turn that starts after the last one ended first cards what subagents changed
             // between them (#434, decision 17).
             if opens || s.in_turn() && name != "Stop" {
-                let backstop =
-                    opens && !s.in_turn() && !s.between_turns(event.studio_received_ms).is_empty();
-                let purpose = if backstop {
-                    Purpose::Card
-                } else {
+                let between = match opens && !s.in_turn() {
+                    true => s.between_turns(event.studio_received_ms),
+                    false => Vec::new(),
+                };
+                let purpose = if between.is_empty() {
                     Purpose::Base
+                } else {
+                    Purpose::Card
                 };
                 let known = |root: &String| {
                     closing.contains(root) && ends || s.touched.contains(root) && !opens
                 };
-                let first = self.touches(event).into_iter().filter(|r| !known(r));
-                looks.extend(first.filter_map(|root| look(key, &root, purpose)));
+                let mut first: Vec<String> = self
+                    .touches(event)
+                    .into_iter()
+                    .filter(|r| !known(r))
+                    .collect();
+                // The worktrees those subagents worked in, also those the turn touches only later.
+                for id in &between {
+                    let root = s.subagent(id).map(|a| a.root.clone()).unwrap_or_default();
+                    if !root.is_empty() && !first.contains(&root) && !known(&root) {
+                        first.push(root);
+                    }
+                }
+                looks.extend(first.iter().filter_map(|root| look(key, root, purpose)));
             }
             return looks;
         };
@@ -1523,6 +1554,7 @@ impl Studio {
         let in_turn = session.in_turn();
         let ends_early = session.ends_turn_early(&event);
         let starts = session.starts_turn(&event);
+        let opens = session.opens_turn(&event);
         let helpers: Vec<String> = session
             .agents
             .iter()
@@ -1556,7 +1588,6 @@ impl Studio {
         let id = Some(event.tool_use_id.clone()).filter(|id| !id.is_empty());
         let at = event.studio_received_ms;
         let name = event.hook_event_name.as_str();
-        let opens = starts || name == "UserPromptSubmit" && !in_turn;
         // The turn this event ends, then the one it starts, with the prompts queued for it.
         if ends_early {
             let change = changes.remove(&session.agent.id);
@@ -1564,8 +1595,7 @@ impl Studio {
         }
         if starts {
             session.turn.clone_from(&event.prompt_id);
-            session.turn_ended = false;
-            session.stopped = None;
+            session.reopen_turn();
             session.woken = false;
             let queued = std::mem::take(&mut session.queued);
             for (index, prompt) in queued.into_iter().enumerate() {
@@ -1667,14 +1697,13 @@ impl Studio {
                         session.returned = None;
                         session.unblock();
                     }
-                    session.turn_ended = false;
-                    session.stopped = None;
+                    session.reopen_turn();
                 }
             }
             "Stop" => {
                 // The order on `Stop`: clear its own blocks first, then ask if the message asks.
                 let output = session.end_turn(changes.remove(&session.agent.id), at);
-                // A subagent's wait outlasts the turn, so it gives no second notice.
+                // A subagent's block outlasts the turn, so it gives no second notice.
                 blocked_before = session.needs_you();
                 session.asked = asks(&event.last_assistant_message);
                 if !session.versioned && !event.transcript_path.is_empty() {
@@ -1694,7 +1723,7 @@ impl Studio {
             "SessionEnd" => {
                 session.unblock();
                 // Its subagents end with it.
-                session.waits.clear();
+                session.blocks.clear();
                 session.running.clear();
                 session.turn_ended = true;
                 session.ended = true;
@@ -1718,21 +1747,6 @@ impl Studio {
                     input: event.tool_input,
                     agent: event.agent_id.clone(),
                 };
-                if ASKING_TOOLS.contains(&call.tool.as_str()) {
-                    session.waits.push(Wait {
-                        tool: call.tool.clone(),
-                        input: call.input.clone(),
-                        agent: call.agent.clone(),
-                        named: true,
-                        calls: call
-                            .id
-                            .iter()
-                            .map(|id| (id.clone(), call.agent.clone()))
-                            .collect(),
-                        at,
-                        noticed: false,
-                    });
-                }
                 if call.tool == "AskUserQuestion" {
                     session.questions.push(Question {
                         tool_use_id: event.tool_use_id.clone(),
@@ -1741,43 +1755,42 @@ impl Studio {
                         answer: Answer::Open,
                     });
                 }
-                // The hooks are async, so a wait on this call may have landed first.
-                // shortcut: a wait whose call ended before the wait landed stays until the turn
+                // The hooks are async, so a block on this call may have landed first.
+                // shortcut: a block whose call ended before the block landed stays until the turn
                 // ends; remember ended calls if auto-denied calls (#322) show it.
                 if let Some(id) = &call.id {
-                    let unbound = session.waits.iter_mut();
+                    let unbound = session.blocks.iter_mut();
                     let unbound = unbound.filter(|w| w.calls.is_empty() && w.takes(&call));
                     unbound.for_each(|w| w.calls.push((id.clone(), call.agent.clone())));
                 }
+                let asks = ASKING_TOOLS.contains(&call.tool.as_str());
+                let (tool, input, agent) =
+                    (call.tool.clone(), call.input.clone(), call.agent.clone());
                 session.running.push(call);
+                if asks {
+                    session.block(tool, input, agent, at);
+                }
             }
             // It has no `tool_use_id`, so it names its call by tool and input. With no agent, it is
             // the session's own agent's.
             "PermissionRequest" if !ASKING_TOOLS.contains(&tool.as_str()) => {
-                session.wait(tool, event.tool_input, event.agent_id, true, at);
+                session.block(tool, event.tool_input, event.agent_id, at);
             }
-            // A permission notice echoes a wait that has not had its notice yet. A sandboxed
-            // command's network request, and a subagent's prompt, fire only the notice.
+            // A permission notice echoes a block, of the agent it names if any, that has not had its
+            // notice yet. A sandboxed command's network request, and a subagent's prompt, fire
+            // only the notice.
             "Notification" if event.notification_type == "permission_prompt" => {
-                let mut waits = session.waits.iter_mut();
-                match waits.find(|w| !w.noticed && w.tool != "Notification") {
-                    Some(wait) => wait.noticed = true,
-                    None => {
-                        let named = event.agent_id.is_some();
-                        session.wait(
-                            "Notification".into(),
-                            Value::Null,
-                            event.agent_id,
-                            named,
-                            at,
-                        );
-                    }
+                let agent = &event.agent_id;
+                let mut blocks = session.blocks.iter_mut();
+                let echoed = |w: &&mut Block| {
+                    !w.noticed && w.tool != "Notification" && (agent.is_none() || w.agent == *agent)
+                };
+                match blocks.find(echoed) {
+                    Some(block) => block.noticed = true,
+                    None => session.block("Notification".into(), Value::Null, event.agent_id, at),
                 }
             }
-            "Elicitation" => {
-                let named = event.agent_id.is_some();
-                session.wait("Elicitation".into(), Value::Null, event.agent_id, named, at);
-            }
+            "Elicitation" => session.block("Elicitation".into(), Value::Null, event.agent_id, at),
             "PostToolUse" | "PostToolUseFailure" => {
                 session.running.retain(|c| c.id != id);
                 session.resolve(|(call, _)| Some(call) == id.as_ref());
@@ -1819,9 +1832,9 @@ impl Studio {
         }
         // An open question whose block cleared with no answer was not answered: its call failed, or
         // its turn or its agent ended first.
-        let waits = &session.waits;
+        let blocks = &session.blocks;
         for question in &mut session.questions {
-            let mut calls = waits.iter().flat_map(|w| &w.calls);
+            let mut calls = blocks.iter().flat_map(|w| &w.calls);
             let open = calls.any(|(id, _)| *id == question.tool_use_id);
             if question.answer == Answer::Open && !open {
                 question.answer = Answer::NotAnswered;
@@ -1836,9 +1849,9 @@ impl Studio {
         } else {
             State::Running
         };
-        session.asker = session.waits.first().map(|wait| Asker {
-            agent: wait.asker(),
-            since: wait.at,
+        session.asker = session.blocks.first().map(|block| Asker {
+            agent: block.asker(),
+            since: block.at,
         });
         if !blocked_before && session.state == State::NeedsYou {
             outputs.push(Output::NeedsYou {

@@ -328,7 +328,7 @@ So Claude Code never waits for them. Two events that fire within a few milliseco
     assert_eq!(after_stop(heading), YourTurn);
 }
 
-// Waits across agents (#434, decisions 24 to 26): the four cases of #434's first version (B4) and
+// Needs you across agents (#434, decisions 24 to 26): the four cases of #434's first version (B4) and
 // the dead call (B3), hand-written in the day log's shapes.
 
 /// Session `s1`'s event `name` at `at`, by subagent `agent` (`None` for its own agent), with `fields`.
@@ -367,9 +367,9 @@ fn request(at: u64, agent: Option<&str>, tool: &str, command: &str) -> String {
     ev("PermissionRequest", at, agent, fields)
 }
 
-/// `s1`'s state and who it waits on, as its row names them, after each of `lines`.
-fn waits(studio: &mut Studio, lines: &[String]) -> Vec<(State, Option<Option<String>>)> {
-    let waits = lines.iter().map(|line| {
+/// `s1`'s state and who blocks it, as its row names them, after each of `lines`.
+fn blocks(studio: &mut Studio, lines: &[String]) -> Vec<(State, Option<Option<String>>)> {
+    let blocks = lines.iter().map(|line| {
         studio.apply(line);
         let session = studio.session("s1").unwrap();
         (
@@ -377,7 +377,7 @@ fn waits(studio: &mut Studio, lines: &[String]) -> Vec<(State, Option<Option<Str
             session.asker.as_ref().map(|a| a.agent.clone()),
         )
     });
-    waits.collect()
+    blocks.collect()
 }
 
 /// `s1` in a turn, with subagent `w1` started.
@@ -406,7 +406,7 @@ fn a_notice_that_could_be_several_agents_names_none_and_clears_when_all_their_ca
     ];
 
     assert_eq!(
-        waits(&mut studio, &lines),
+        blocks(&mut studio, &lines),
         [
             (Running, None),
             (Running, None),
@@ -418,7 +418,7 @@ fn a_notice_that_could_be_several_agents_names_none_and_clears_when_all_their_ca
 }
 
 #[test]
-fn a_second_agents_notice_is_kept_while_another_agent_waits() {
+fn a_second_agents_notice_is_kept_while_another_agent_asks() {
     let mut studio = started();
     let lines = [
         call("PreToolUse", 2, None, "own", "Write", "probe.txt"),
@@ -432,7 +432,7 @@ fn a_second_agents_notice_is_kept_while_another_agent_waits() {
         call("PostToolUse", 8, W1, "w1-test", "Bash", "cargo test"),
     ];
 
-    let states: Vec<State> = waits(&mut studio, &lines)
+    let states: Vec<State> = blocks(&mut studio, &lines)
         .into_iter()
         .map(|w| w.0)
         .collect();
@@ -440,6 +440,64 @@ fn a_second_agents_notice_is_kept_while_another_agent_waits() {
         states,
         [
             Running, NeedsYou, NeedsYou, NeedsYou, NeedsYou, NeedsYou, Running
+        ]
+    );
+}
+
+/// #434, decision 26: the session's open spawn of a foreground subagent waits on no permission.
+#[test]
+fn a_notice_does_not_wait_on_the_open_spawn_of_the_subagent_that_asks() {
+    let mut studio = started();
+    let w1 = Some(Some("w1".to_string()));
+    let lines = [
+        call("PreToolUse", 2, None, "spawn", "Agent", ""),
+        call("PreToolUse", 3, W1, "w1-test", "Bash", "cargo test"),
+        notification(4),
+        call("PostToolUse", 5, W1, "w1-test", "Bash", "cargo test"),
+    ];
+
+    assert_eq!(
+        blocks(&mut studio, &lines),
+        [
+            (Running, None),
+            (Running, None),
+            (NeedsYou, w1),
+            (Running, None),
+        ]
+    );
+}
+
+/// #434, story 29: a notice that names its agent echoes only that agent's request.
+#[test]
+fn a_notice_naming_one_agent_is_not_taken_as_another_agents_echo() {
+    let mut studio = started();
+    let (w1, w2) = (Some(Some("w1".to_string())), Some(Some("w2".to_string())));
+    let named = serde_json::json!({"notification_type": "permission_prompt"});
+    let lines = [
+        call("PreToolUse", 2, W1, "w1-test", "Bash", "cargo test"),
+        call("PreToolUse", 3, Some("w2"), "w2-test", "Bash", "cargo test"),
+        request(4, Some("w2"), "Bash", "cargo test"),
+        ev("Notification", 5, W1, named),
+        call(
+            "PostToolUse",
+            6,
+            Some("w2"),
+            "w2-test",
+            "Bash",
+            "cargo test",
+        ),
+        call("PostToolUse", 7, W1, "w1-test", "Bash", "cargo test"),
+    ];
+
+    assert_eq!(
+        blocks(&mut studio, &lines),
+        [
+            (Running, None),
+            (Running, None),
+            (NeedsYou, w2.clone()),
+            (NeedsYou, w2),
+            (NeedsYou, w1),
+            (Running, None),
         ]
     );
 }
@@ -458,7 +516,7 @@ fn a_permission_request_leaves_another_agents_notice_in_place() {
     ];
 
     assert_eq!(
-        waits(&mut studio, &lines),
+        blocks(&mut studio, &lines),
         [
             (Running, None),
             (NeedsYou, w1.clone()),
@@ -490,7 +548,7 @@ fn a_permission_request_binds_only_to_its_own_agents_call() {
     ];
 
     assert_eq!(
-        waits(&mut studio, &lines),
+        blocks(&mut studio, &lines),
         [
             (Running, None),
             (Running, None),
@@ -524,7 +582,7 @@ fn a_call_that_never_reported_back_holds_no_wait_past_its_sessions_turn() {
     ];
 
     assert_eq!(
-        waits(&mut studio, &lines),
+        blocks(&mut studio, &lines),
         [
             (Running, None),
             (NeedsYou, dead.clone()),

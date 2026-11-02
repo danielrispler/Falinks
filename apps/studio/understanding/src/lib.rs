@@ -604,16 +604,24 @@ impl ClaudeWriter {
             cut => format!(" (the {cut} oldest cut)"),
         };
         let mut kept = prompts[cut..].concat();
-        // The newest prompt alone over the budget is shortened, not dropped (#434, decision 33).
+        // The newest prompt alone over the budget is shortened, not dropped (#434, decision 33),
+        // keeping its start even when the summaries fill the budget.
         if size > MAX_CHANGE
             && let Some(newest) = newest
         {
-            let over = size - MAX_CHANGE;
-            let end = newest.floor_char_boundary(newest.len().saturating_sub(over));
-            kept = format!(
-                "<prompt>\n{}\n[{over} more bytes cut]\n</prompt>\n",
-                &newest[..end]
-            );
+            let keep = newest
+                .len()
+                .saturating_sub(size - MAX_CHANGE)
+                .max(MIN_PROMPT);
+            let end = newest.floor_char_boundary(keep);
+            let over = newest.len() - end;
+            kept = match over {
+                0 => kept,
+                _ => format!(
+                    "<prompt>\n{}\n[{over} more bytes cut]\n</prompt>\n",
+                    &newest[..end]
+                ),
+            };
         }
         self.run(&format!(
             "{REWRITE}\nThe developer's prompts, oldest first{note}:\n{kept}\n\
@@ -750,6 +758,9 @@ const NOT_STRUCTURAL: &str = "structural: none";
 /// The most of a change the writer gets, and of a brief rewrite's input: 64 KiB. The lines that
 /// matter fit, and a huge new file or log costs no more.
 const MAX_CHANGE: usize = 64 << 10;
+
+/// The least of the newest prompt a brief rewrite keeps, past `MAX_CHANGE` if it must: 4 KiB.
+const MIN_PROMPT: usize = 4 << 10;
 
 /// The explanation language, one paragraph in each of the writer's instructions below. A macro, as
 /// `concat!` takes literals and no `const`.

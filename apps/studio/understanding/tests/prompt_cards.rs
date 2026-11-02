@@ -959,3 +959,29 @@ fn a_background_helpers_edits_get_a_card_at_the_next_turns_start_if_it_never_end
 
     the_helpers_card_is_the_sessions(&shell);
 }
+
+/// #434, decision 17: such edits in a worktree that the next turn touches only after its start
+/// still get their card, so that worktree's base never swallows them.
+#[test]
+fn a_background_helpers_edits_in_another_worktree_get_a_card_when_the_next_turn_moves_there() {
+    let mut shell = Shell::new();
+    let repo = shell.repo.clone();
+    let tree = shell.worktree("b");
+    let cd = || json!({"tool_name": "Bash", "tool_input": {"command": "cd b"}, "cwd": tree});
+    shell.take("UserPromptSubmit", json!({ "prompt": "Fix it over there" }));
+    shell.take("PostToolUse", cd());
+    let mut spawn = spawn_child("h1", "Fix", false);
+    spawn["cwd"] = json!(tree);
+    shell.take("PostToolUse", spawn);
+    shell.child("h1", &tree, "SubagentStart", json!({}));
+    shell.take("Stop", json!({ "cwd": tree }));
+    fs::write(tree.join("lib.rs"), "fn a() { b() }\n").unwrap();
+    let edit = json!({"tool_name": "Edit", "tool_input": {"file_path": tree.join("lib.rs")}});
+    shell.child("h1", &tree, "PostToolUse", edit);
+
+    shell.take("UserPromptSubmit", json!({ "prompt": "Next", "cwd": repo }));
+    shell.take("PostToolUse", cd());
+    shell.take("Stop", json!({ "cwd": tree }));
+
+    the_helpers_card_is_the_sessions(&shell);
+}

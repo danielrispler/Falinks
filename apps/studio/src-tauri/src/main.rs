@@ -290,10 +290,15 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                     Output::Card(request) => write(app, writer, &mut queues, request, true),
                     Output::Brief(request) => write(app, writer, &mut queues, request, false),
                     Output::NeedsYou { session_id, agent } => {
-                        tell(app, None, &session_id, agent.as_deref());
+                        tell(app, Notice::NeedsYou, &session_id, agent.as_deref());
                     }
                     Output::Failed { session_id, agent } => {
-                        tell(app, Some("Worker failed"), &session_id, Some(&agent));
+                        tell(
+                            app,
+                            Notice::Titled("Worker failed"),
+                            &session_id,
+                            Some(&agent),
+                        );
                     }
                     Output::Promoted { agent } => {
                         unsaved(app.state::<Cards>().lock().unwrap().promoted(&agent));
@@ -388,7 +393,12 @@ fn write(
         // The list and the notice go out once the card is stored, before a brief rewrite.
         let stored = || {
             sent();
-            tell(&app, Some("New card"), &session.agent.id, agent.as_deref());
+            tell(
+                &app,
+                Notice::Titled("New card"),
+                &session.agent.id,
+                agent.as_deref(),
+            );
         };
         let written = match card {
             true => write_stop(&store, &*writer, request, &session, stored, log),
@@ -408,9 +418,8 @@ fn write(
 }
 
 /// Adds a notice on session `session_id`'s line, naming its subagent `agent`, if any; the read loop
-/// shows it. A `title` of `None` is a "needs you" notice, which shows only if the session still
-/// needs Daniel when it is due. Called without the core's lock held.
-fn tell(app: &AppHandle, title: Option<&str>, session_id: &str, agent: Option<&str>) {
+/// shows it. Called without the core's lock held.
+fn tell(app: &AppHandle, notice: Notice, session_id: &str, agent: Option<&str>) {
     let body = app
         .state::<Mutex<Studio>>()
         .lock()
@@ -418,10 +427,17 @@ fn tell(app: &AppHandle, title: Option<&str>, session_id: &str, agent: Option<&s
         .notice_body(session_id, agent);
     let notices = app.state::<Notices>();
     let mut notices = notices.lock().unwrap();
-    match title {
-        Some(title) => notices.push(title, body, uptime()),
-        None => notices.push_needs_you(session_id, body, uptime()),
+    match notice {
+        Notice::Titled(title) => notices.push(title, body, uptime()),
+        Notice::NeedsYou => notices.push_needs_you(session_id, body, uptime()),
     }
+}
+
+/// What a notice says: that a session needs you, which shows only if it still needs Daniel when
+/// it is due, or its own title.
+enum Notice<'a> {
+    NeedsYou,
+    Titled(&'a str),
 }
 
 /// Time since the app started, a monotonic clock for combining notices (#434, decision 28).
