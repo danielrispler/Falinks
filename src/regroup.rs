@@ -2,12 +2,12 @@
 //! and work-preserving workspace transitions. Signals inform usefulness only; every
 //! transition still passes the engine's own safety checks.
 use crate::analysis::{self, Evidence, Footprint};
-use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, emit, obligations};
+use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, emit, obligations, renew};
 use crate::publication::{self, published};
 use crate::{
     Capture, Client, Engine, Fault, Halt, Interrupted, Layout, Result, VersionedFile, WRITER_LEASE,
-    all, audit, build_tree, connect, ensure_empty, fail, halted, install, meta, meta_value,
-    next_revision, one, record, retain, revision, set_halt, set_meta,
+    all, audit, audit_root, build_tree, connect, ensure_empty, fail, halted, install, meta,
+    meta_value, next_revision, one, record, retain, revision, scalar, set_halt, set_meta,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -201,9 +201,6 @@ const CONTEXT_CHANGED: &str = "task or group context changed; propose again";
 const UNSAFE: &str = "unsafe until publication";
 /// The current-work label of an agent's unpublished drafts.
 const DRAFTS: &str = "drafts";
-pub(crate) fn scalar(db: &Connection, sql: &str) -> Result<u64> {
-    Ok(db.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
-}
 fn mark(db: &Connection) -> Result<Mark> {
     Ok(meta_value(db, "regroup_mark")?.unwrap_or_default())
 }
@@ -1123,7 +1120,7 @@ impl Engine {
             let event = announce(&tx, proposal)?;
             self.commit_moves(&tx, shift, &moves, proposal.target)?;
             for (agent, revision, view) in &views {
-                self.renew_for_view(&tx, *agent, view, *revision, event)?;
+                renew(&tx, *agent, view, *revision, event)?;
             }
             let mark = Mark {
                 event,
@@ -1205,7 +1202,7 @@ impl Engine {
                 )?;
                 self.commit_moves(&tx, shift, &moves, placement)?;
                 for agent in members {
-                    self.renew_for_view(&tx, agent, &view, merged.revision, event)?;
+                    renew(&tx, agent, &view, merged.revision, event)?;
                 }
                 tx.commit()?;
                 Ok(())
@@ -1239,11 +1236,7 @@ impl Engine {
         };
         for change in &shift.moves {
             let root = &layout.roots[change.space];
-            let verified = match &change.before {
-                Some(before) => audit(root, before),
-                None => ensure_empty(root),
-            };
-            if let Err(error) = verified {
+            if let Err(error) = audit_root(root, change.before.as_ref()) {
                 self.save_incident(db, &layout.roots, &error.to_string())?;
                 return Err(error);
             }

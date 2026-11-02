@@ -323,6 +323,10 @@ pub(crate) fn all<T: DeserializeOwned>(
     let rows = stmt.query_map(params, |r| r.get::<_, String>(0))?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
 }
+/// The single integer column of the row `sql` selects.
+pub(crate) fn scalar(db: &Connection, sql: &str) -> Result<u64> {
+    Ok(db.query_row(sql, [], |r| r.get::<_, i64>(0))? as u64)
+}
 /// A JSON meta value, if set.
 pub(crate) fn meta_value<T: DeserializeOwned>(db: &Connection, key: &str) -> Result<Option<T>> {
     one(db, "SELECT value FROM meta WHERE key=?", [key])
@@ -380,10 +384,7 @@ pub(crate) fn revision(db: &Connection, revision: u64) -> Result<Capture> {
 }
 /// Revision numbers are global across workspaces, so each names one occurrence.
 pub(crate) fn next_revision(db: &Connection) -> Result<u64> {
-    let max: i64 = db.query_row("SELECT COALESCE(MAX(id), 0) FROM revisions", [], |r| {
-        r.get(0)
-    })?;
-    Ok(max as u64 + 1)
+    Ok(scalar(db, "SELECT COALESCE(MAX(id), 0) FROM revisions")? + 1)
 }
 pub(crate) fn placement(db: &Connection) -> Result<[usize; 2]> {
     Ok(meta_value(db, "placement")?.unwrap_or_default())
@@ -578,6 +579,13 @@ fn audit(live: &Path, capture: &Capture) -> Result<()> {
     }
     Ok(())
 }
+/// A root holds exactly its revision; `None` is a root without one, which must be empty.
+pub(crate) fn audit_root(root: &Path, revision: Option<&Capture>) -> Result<()> {
+    match revision {
+        Some(revision) => audit(root, revision),
+        None => ensure_empty(root),
+    }
+}
 /// Recovery of an interrupted installation, before any restore: every source path must
 /// match `before` or `after` exactly, so attribution is never guessed. `None` is an empty
 /// root. Returns the paths that reached `after` and must be put back.
@@ -608,15 +616,12 @@ fn audit_interrupted(
     }
     Ok(changed)
 }
-/// Puts audited paths back to `before`; `None` removes them.
-fn restore(root: &Path, before: Option<&Capture>, paths: &[String]) -> Result<()> {
-    for path in paths {
-        match before {
-            Some(before) => install(root, path, &before.files[path].file)?,
-            None => install(root, path, &None)?,
-        }
+/// Puts an audited path back to `before`; `None` removes it.
+fn restore(root: &Path, before: Option<&Capture>, path: &str) -> Result<()> {
+    match before {
+        Some(before) => install(root, path, &before.files[path].file),
+        None => install(root, path, &None),
     }
-    Ok(())
 }
 /// Paths an operation installs: its outputs plus published files an incorporation brought in.
 fn installed(before: &Capture, proposed: &Capture, request: &Request) -> BTreeSet<String> {
@@ -1082,9 +1087,11 @@ impl Engine {
         timing.start(EditStage::LockWait);
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         timing.start(EditStage::Reviews);
+        // Recording reviews creates no request, so this one fetch stays current below.
+        let existing = request_record(&db, client.agent, &request.id)?;
         // Inline reviews stand even if the edit is then refused, as separate reviews would.
         // A known ID already recorded them on its first call.
-        if request_record(&db, client.agent, &request.id)?.is_none() {
+        if existing.is_none() {
             // A known ID is held to its recorded note instead, which may be empty.
             if request.note.trim().is_empty() {
                 return fail("edit note required");
@@ -1105,7 +1112,7 @@ impl Engine {
             )
         };
         let mut record: Record;
-        if let Some(existing) = request_record(&db, client.agent, &request.id)? {
+        if let Some(existing) = existing {
             record = existing;
             if record.request != request {
                 return fail("request ID reused with changed contents");
@@ -1286,21 +1293,12 @@ impl Engine {
             proposed.tree = build_tree(&self.state, &proposed.files, "")?;
             Ok(proposed)
         })();
-        // Synchronized files that the request does not replace are installed too.
-        let installs: BTreeMap<String, Option<File>> = proposal
-            .as_ref()
-            .map(|proposed| {
-                installed(&before, proposed, &request)
-                    .into_iter()
-                    .map(|p| (p.clone(), proposed.files[&p].file.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
         let proposed = match proposal {
             Ok(proposed) => proposed,
             Err(error) => return interrupted(&db, &mut record, error),
         };
-        let changed: BTreeSet<String> = installs.keys().cloned().collect();
+        // Synchronized files that the request does not replace are installed too.
+        let changed = installed(&before, &proposed, &request);
         timing.start(EditStage::Gate);
         let change = match self.gate(&db, client, &before, &proposed, &changed) {
             Ok(Ok(change)) => change,
@@ -1320,8 +1318,8 @@ impl Engine {
             save_record(&db, &record)?;
             observer(Phase::Retained)?;
             timing.start(EditStage::Install);
-            for (path, file) in &installs {
-                install(&live, path, file)?;
+            for path in &changed {
+                install(&live, path, &proposed.files[path].file)?;
                 observer(Phase::Installed(path.clone()))?;
             }
             audit(&live, &proposed)?;
@@ -1361,7 +1359,7 @@ impl Engine {
             if !synced.is_empty() {
                 // Judged on the evidence the gate gathered for the same two captures.
                 let view = change.for_paths(&before, &proposed, &synced);
-                self.renew_for_view(&tx, client.agent, &view, proposed.revision, cause)?;
+                coordination::renew(&tx, client.agent, &view, proposed.revision, cause)?;
             }
             tx.commit()?;
             Ok(())
@@ -1381,10 +1379,7 @@ impl Engine {
     /// Every provisioned root matches its completed revision; an unused root is empty.
     pub(crate) fn audit_all(&self, layout: &Layout) -> Result<()> {
         for (root, completed) in layout.roots.iter().zip(&layout.completed) {
-            match completed {
-                Some(completed) => audit(root, completed)?,
-                None => ensure_empty(root)?,
-            }
+            audit_root(root, completed.as_ref())?;
         }
         Ok(())
     }
@@ -1445,10 +1440,7 @@ impl Engine {
                 if pending.iter().any(|p| p.0 == space) {
                     continue;
                 }
-                match completed {
-                    Some(completed) => audit(root, completed)?,
-                    None => ensure_empty(root)?,
-                }
+                audit_root(root, completed.as_ref())?;
             }
             Ok(restores)
         })();
@@ -1465,7 +1457,7 @@ impl Engine {
         // Phase 2.
         for (space, before, changed) in restores {
             for path in changed {
-                restore(&layout.roots[space], before, std::slice::from_ref(&path))?;
+                restore(&layout.roots[space], before, &path)?;
                 self.fault(Fault::Restored { space, path })?;
             }
         }

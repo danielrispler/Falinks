@@ -2,8 +2,7 @@
 //! checkpoint offers, the durable event stream and voluntary waits.
 use crate::analysis::{self, Evidence, Footprint};
 use crate::publication::{self, RunOutcome};
-use crate::regroup::scalar;
-use crate::{Capture, Client, Engine, Layout, Result, all, connect, fail, one, retain};
+use crate::{Capture, Client, Engine, Layout, Result, all, connect, fail, one, retain, scalar};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -299,19 +298,19 @@ pub(crate) fn obligations(db: &Connection, agent: usize) -> Result<Vec<Obligatio
         [agent as i64],
     )
 }
-/// Renews every scope of `agent` related to `footprint` to require review of `revision`.
+/// Inside the transaction committing `revision`: renews every scope of `agent` related
+/// to `change` to require review of `revision`.
 pub(crate) fn renew(
     tx: &Connection,
     agent: usize,
-    footprint: &Footprint,
-    sides: &[&[Evidence]],
+    change: &Change,
     revision: u64,
     cause: u64,
 ) -> Result<()> {
     for mut obligation in obligations(tx, agent)? {
         if analysis::related(
-            footprint,
-            &analysis::closure(&obligation.scope.relevant(), sides),
+            &change.footprint,
+            &analysis::closure(&obligation.scope.relevant(), &change.sides()),
         ) {
             obligation.required = revision;
             save_obligation(tx, &obligation)?;
@@ -616,14 +615,7 @@ impl Engine {
         )?;
         for agent in (0..2).filter(|a| *a != client.agent && layout.placement[*a] == proposed.space)
         {
-            renew(
-                tx,
-                agent,
-                &change.footprint,
-                &change.sides(),
-                proposed.revision,
-                cause,
-            )?;
+            renew(tx, agent, change, proposed.revision, cause)?;
         }
         Ok(cause)
     }
@@ -643,24 +635,6 @@ impl Engine {
             evidence,
         }
         .for_paths(before, after, paths))
-    }
-    /// Inside the transaction committing `revision`: renew the agent's related scopes.
-    pub(crate) fn renew_for_view(
-        &self,
-        tx: &Connection,
-        agent: usize,
-        change: &Change,
-        revision: u64,
-        cause: u64,
-    ) -> Result<()> {
-        renew(
-            tx,
-            agent,
-            &change.footprint,
-            &change.sides(),
-            revision,
-            cause,
-        )
     }
 
     pub fn register(&self, client: &Client, scope: Scope) -> Result<Obligation> {
@@ -1075,8 +1049,10 @@ impl Engine {
         if matches!(condition, Condition::Message { from, .. } if from == client.agent) {
             return fail("a client cannot wait for its own message");
         }
+        // One connection serves every wakeup; each read sees the latest commit.
+        let db = connect(&self.state)?;
         // Durable evidence of coordination waiting for regrouping recommendations.
-        connect(&self.state)?.execute(
+        db.execute(
             "INSERT INTO waits(agent, condition) VALUES(?,?)",
             params![client.agent as i64, format!("{condition:?}")],
         )?;
@@ -1092,7 +1068,6 @@ impl Engine {
             if cancel.is_some_and(|c| c.flag.load(Ordering::SeqCst)) {
                 return Ok(WaitOutcome::Cancelled);
             }
-            let db = connect(&self.state)?;
             match &condition {
                 Condition::Message { from, after } => {
                     if let Some(seq) = next_event(&db, client.agent, *after, Some(*from))? {

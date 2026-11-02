@@ -22,7 +22,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use support::{PAIR, edit, fails_with, halt, incidents, ledger};
+use support::{PAIR, applied, edit, fails_with, halt, incidents, ledger, two_files};
 use tempfile::TempDir;
 
 const A: &str = "fn a() {}\n";
@@ -160,15 +160,6 @@ fn register(engine: &Engine, client: &Client, id: &str, node: &str) {
         )
         .unwrap();
 }
-/// `client` replaces `path` in its own workspace; the edit reaches the boundary.
-fn nudge(engine: &Engine, client: &Client, path: &str, bytes: &str) {
-    let id = format!("{path}:{bytes}");
-    let current = engine.capture_for(client).unwrap();
-    let outcome = engine
-        .apply(client, edit(&id, &current, path, bytes))
-        .unwrap();
-    assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
-}
 
 /// Bob drafted `b.rs` and proposed a split into the empty second root; Alice agreed. Bob's
 /// agreement is the step that runs the transition. `third` adds an unaffected empty root.
@@ -209,8 +200,7 @@ fn offered() -> TempDir {
         .respond(&bob, PROPOSAL, &proposal.context, Response::Agree)
         .unwrap();
     review(&engine, &alice, "alice");
-    nudge(&engine, &alice, "a.rs", ALICE);
-    let revision = engine.capture_for(&alice).unwrap().revision;
+    let revision = applied(&engine, &alice, &format!("a.rs:{ALICE}"), "a.rs", ALICE).revision;
     engine
         .offer(
             &alice,
@@ -530,7 +520,13 @@ fn transition(fault: &Fault, model: Model) {
         holds(&second, UNSPLIT[1], &case);
         settled(d, [0, 0], UNSPLIT, &case);
     }
-    nudge(&engine, &client(&engine, 1), "b.rs", NUDGE_B);
+    applied(
+        &engine,
+        &client(&engine, 1),
+        &format!("b.rs:{NUDGE_B}"),
+        "b.rs",
+        NUDGE_B,
+    );
     assert!(
         matches!(
             engine.proposal(PROPOSAL).unwrap().unwrap().state,
@@ -620,7 +616,13 @@ fn synchronization(fault: &Fault, model: Model) {
         holds(&second, BEHIND[1], &case);
         settled(d, [0, 1], BEHIND, &case);
     }
-    nudge(&engine, &client(&engine, 0), "a.rs", NUDGE_A);
+    applied(
+        &engine,
+        &client(&engine, 0),
+        &format!("a.rs:{NUDGE_A}"),
+        "a.rs",
+        NUDGE_A,
+    );
     drop(engine);
     holds(&live, SYNCED[0], &case);
     holds(&second, SYNCED[1], &case);
@@ -655,21 +657,6 @@ fn synchronization_stopped_by_process_exit_is_retried_once_at_the_next_boundary(
     }
 }
 
-/// Replaces `a.rs` and `b.rs`, installing `a.rs` first.
-fn two_files(base: &Capture) -> Request {
-    let mut request = edit("two", base, "a.rs", "new a");
-    request
-        .expected
-        .insert("b.rs".into(), base.files["b.rs"].version);
-    request.output.insert(
-        "b.rs".into(),
-        Output::Whole(File {
-            bytes: b"new b".to_vec(),
-            executable: false,
-        }),
-    );
-    request
-}
 /// An edit installed in full and stopped before its commit; the first restart stops after
 /// restoring `a.rs`, the second finishes. The edit needs an explicit retry.
 fn edit_recovery(model: Model) {
@@ -678,7 +665,7 @@ fn edit_recovery(model: Model) {
     let d = dir.path();
     let [live, ..] = roots(d);
     let base = engine.capture().unwrap();
-    let request = two_files(&base);
+    let request = two_files("two", &base);
     let outcome = engine
         .apply_observed(&alice, request.clone(), |phase| {
             if phase == Phase::BeforeCommit {
@@ -762,7 +749,13 @@ fn shift_recovery(fault: &Fault, model: Model) {
     holds(&live, UNSPLIT[0], &case);
     holds(&second, UNSPLIT[1], &case);
     settled(d, [0, 0], UNSPLIT, &case);
-    nudge(&engine, &client(&engine, 1), "b.rs", NUDGE_B);
+    applied(
+        &engine,
+        &client(&engine, 1),
+        &format!("b.rs:{NUDGE_B}"),
+        "b.rs",
+        NUDGE_B,
+    );
     drop(engine);
     holds(&live, SPLIT[0], &case);
     holds(&second, SPLIT[1], &case);
