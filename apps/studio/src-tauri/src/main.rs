@@ -240,6 +240,12 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 }
             }
             read = read_to > read_from;
+            // Dropping a queue's sender closes it: its thread finishes the jobs it holds, then ends.
+            if read {
+                let keys = state.lock().unwrap().live_keys();
+                fingerprints.retain(|key, _| keys.contains(key));
+                queues.retain(|key, _| keys.contains(key));
+            }
         }
         if state.lock().unwrap().tick(millis()) || read {
             let list = sessions(app.state(), app.state());
