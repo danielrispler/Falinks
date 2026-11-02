@@ -52,15 +52,12 @@ type Session = {
   // In the session list only: what its row says while its turn is over, from the card store.
   line?: string | null;
 };
-// A session's or a worker's change since its last card, from its base: HEAD and the files git
-// status listed then. `agent` is the worker whose card it is; `changed_by` holds the files other
-// subagents edited in its worktree, by subagent.
-type Base = { head: string | null; files: string[] };
+// The shell sends a card's request without its diff and base, which the pane never reads. `agent`
+// is the worker whose card it is; `changed_by` holds the files other subagents edited in its
+// worktree, by subagent.
 type CardRequest = {
   session_id: string;
   id: string;
-  base: Base;
-  change: string | null;
   agent: string | null;
   changed_by: Record<string, string[]>;
 };

@@ -499,6 +499,59 @@ fn briefs_survive_a_restart_and_show_with_their_sessions_cards() {
 }
 
 #[test]
+fn every_change_bumps_the_revision_and_a_call_that_changes_nothing_leaves_it() {
+    let data = tempfile::tempdir().unwrap();
+    let path = data.path().join("cards.json");
+    let mut store = CardStore::open(path.clone()).unwrap();
+    let mut last = store.revision();
+    let mut bumped = |store: &CardStore, changed: bool| {
+        assert_eq!(store.revision() > last, changed);
+        last = store.revision();
+    };
+    let request = edit("toolu_01A", "src/lib.rs");
+    let first = card(&request);
+    store.add(request, first, 1_761_743_990_000).unwrap();
+    bumped(&store, true);
+    store.show(&["toolu_01A"], 1_761_743_995_000).unwrap();
+    bumped(&store, true);
+    store.show(&["toolu_01A"], 1_761_743_996_000).unwrap();
+    bumped(&store, false);
+    store.guess("toolu_01A", 1, 1_761_744_000_000).unwrap();
+    bumped(&store, true);
+    store.guess("toolu_01A", 0, 1_761_744_001_000).unwrap();
+    bumped(&store, false);
+    store.key_wrong("toolu_01A").unwrap();
+    bumped(&store, true);
+    store.key_wrong("toolu_01A").unwrap();
+    bumped(&store, false);
+    let good = Rating {
+        level: Level::Good,
+        reasons: vec![],
+    };
+    store.rate("toolu_01A", good).unwrap();
+    bumped(&store, true);
+    store
+        .rate(
+            "toolu_01Z",
+            Rating {
+                level: Level::Poor,
+                reasons: vec![],
+            },
+        )
+        .unwrap();
+    bumped(&store, false);
+    store
+        .set_brief("5b9e3d71-0c2a-4f8e-b6d4-8a1c3e5f7092", "Brief.".into())
+        .unwrap();
+    bumped(&store, true);
+    let store = Mutex::new(store);
+    explain_more(&store, &FakeWriter, "toolu_01A", |line| panic!("{line}"));
+    bumped(&store.lock().unwrap(), true);
+    explain_more(&store, &FakeWriter, "toolu_01A", |line| panic!("{line}"));
+    bumped(&store.lock().unwrap(), false);
+}
+
+#[test]
 fn quizzes_that_showed_at_once_are_saved_in_one_call() {
     let data = tempfile::tempdir().unwrap();
     let path = data.path().join("cards.json");

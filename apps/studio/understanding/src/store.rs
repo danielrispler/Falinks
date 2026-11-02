@@ -123,6 +123,8 @@ pub struct CardStore {
     path: PathBuf,
     cards: Vec<StoredCard>,
     briefs: BTreeMap<String, Brief>,
+    /// Rises on every change, briefs included, so the shell sends the cards only when it moves.
+    revision: u64,
 }
 
 /// The JSON file at `path`, or the default when it is missing. One that does not parse is an
@@ -144,6 +146,7 @@ impl CardStore {
             path,
             cards,
             briefs,
+            revision: 0,
         })
     }
 
@@ -159,6 +162,11 @@ impl CardStore {
             fs::rename(old, aside)?;
         }
         Self::open(log.with_file_name("cards-v2.json"))
+    }
+
+    /// A number that every change to the cards or the briefs raises.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// The cards, oldest first.
@@ -214,6 +222,7 @@ impl CardStore {
         let brief = self.briefs.entry(owner.into()).or_default();
         brief.text = text;
         brief.updates += 1;
+        self.revision += 1;
         write(&self.path.with_file_name("briefs.json"), &self.briefs)
     }
 
@@ -302,7 +311,9 @@ impl CardStore {
         self.cards.iter_mut().find(|kept| kept.request.id == id)
     }
 
-    fn save(&self) -> io::Result<()> {
+    /// Saves the cards after a change, which raises the revision.
+    fn save(&mut self) -> io::Result<()> {
+        self.revision += 1;
         write(&self.path, &self.cards)
     }
 }
