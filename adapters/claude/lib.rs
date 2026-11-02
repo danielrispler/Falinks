@@ -85,6 +85,11 @@ const SYSTEM: &[&str] = &[
 pub mod arm;
 pub mod engine_host;
 
+/// Every refusal reply: `accepted` false, with why.
+pub fn refuse(reason: &str) -> Value {
+    json!({"accepted": false, "reason": reason})
+}
+
 /// The exact probe command must have completed through the real Bash tool, with every
 /// check passing (`falinks_host::probe_controls`).
 pub fn bash_probe_controls(events: &[Value], command: &str) -> Result<Value> {
@@ -184,6 +189,44 @@ impl Launch {
             worker_tools: root.join("worker-tools"),
             protected: ["snapshots", "validation"].map(|n| root.join(n)).to_vec(),
         }
+    }
+    /// One of two agents in run directory `dir`: its own scratch and controller, the shared
+    /// worker tools, and `source`, its live root. Beyond `protected`, the peer's controller and
+    /// every other space stay hidden, so only the agent's own live root is exposed.
+    pub fn pair(
+        dir: &Path,
+        agent: usize,
+        source: PathBuf,
+        tools: Value,
+        mut protected: Vec<PathBuf>,
+    ) -> Self {
+        let mine = dir.join(arm::agent_name(agent));
+        protected.push(dir.join(arm::agent_name(1 - agent)).join("controller"));
+        protected.extend(
+            (0..2)
+                .map(|i| dir.join(format!("space{i}")))
+                .filter(|s| *s != source),
+        );
+        Self {
+            tools,
+            source,
+            scratch: mine.join("scratch"),
+            controller: mine.join("controller"),
+            worker_tools: dir.join("worker-tools"),
+            protected,
+        }
+    }
+    /// Rebinds `session`, saved by `agent`, to this launch's live root, so it can resume there
+    /// after an applied regrouping moved the agent.
+    pub fn relocate(&self, session: &str, agent: &str) -> Result<()> {
+        Boundary::new(
+            &self.controller.join("context.sqlite"),
+            &self.source,
+            "host".into(),
+            // Relocation only: this boundary accepts no tools.
+            Vec::<String>::new(),
+        )?
+        .relocate(session, agent)
     }
     /// `falinks_<operation>` names offered by this launch.
     pub fn operations(&self) -> Vec<String> {
@@ -574,18 +617,18 @@ impl Session {
             Err(error) if hook => {
                 Served::Now(json!({"allow":false,"reason":error.to_string()}), None)
             }
-            Err(error) => Served::Now(json!({"accepted":false,"reason":error.to_string()}), None),
+            Err(error) => Served::Now(refuse(&error.to_string()), None),
         }
     }
     /// Answers a deferred call with its work's result. An error latches the gate, as an engine
     /// error does, and still answers the caller.
     pub fn finish(&mut self, key: u64, work: Result<Value>) -> Value {
         let Some(waiting) = self.waiting.remove(&key) else {
-            return json!({"accepted":false,"reason":"unknown deferred call"});
+            return refuse("unknown deferred call");
         };
         let result = (waiting.finish)(work).unwrap_or_else(|error| {
             self.gate.failed = true;
-            json!({"accepted":false,"reason":error.to_string()})
+            refuse(&error.to_string())
         });
         let mut record = json!({"host_call":waiting.envelope,"result":result});
         self.stamp(&mut record, waiting.received, waiting.started);
@@ -686,7 +729,7 @@ pub fn relay(tool: &Path, controller: &Path) -> Value {
     json!({"command":tool,"args":["mcp",controller]})
 }
 
-pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
+pub fn settings(launch: &Launch, tool: &Path) -> Value {
     let path = |p: &Path| p.to_string_lossy().into_owned();
     let mut deny = [
         "Edit",
@@ -712,7 +755,7 @@ pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
     let shell = json!({"shell":SHELL,"scratch":launch.scratch,"denied":hidden,
         "relay":relay(tool, &launch.controller)});
     let tmp = launch.scratch.join(TMP);
-    Ok(json!({
+    json!({
         "permissions":{"defaultMode":"dontAsk","allow":launch.allowed(),"deny":deny},
         "sandbox":{"enabled":false},
         "hooks":{"PreToolUse":[{"matcher":"mcp__falinks__.*","hooks":[{"type":"command","command":tool,"args":["hook",launch.controller]}]}]},
@@ -720,7 +763,7 @@ pub fn settings(launch: &Launch, tool: &Path) -> Result<Value> {
             "CLAUDE_CODE_SHELL_PREFIX":launch.worker_tools.join("falinks-claude-shell"),
             "CLAUDE_CODE_SHELL":SHELL,"CLAUDE_CODE_TMPDIR":tmp,"TMPDIR":tmp,
             "FALINKS_SHELL":shell.to_string()}
-    }))
+    })
 }
 pub fn launch_args(controller: &Path, session: &str, resume: bool) -> Vec<String> {
     let mut args = [
@@ -819,7 +862,6 @@ pub struct Runtime {
     pub args: Vec<String>,
     pub settings: Value,
     binary: PathBuf,
-    control_host: bool,
     /// Taken by `stop`, which shuts it down on another thread.
     child: Option<Child>,
     shutdown: Option<JoinHandle<()>>,
@@ -859,7 +901,6 @@ impl Runtime {
         agent: &str,
         resume: Option<&str>,
         engine: Engine,
-        control_host: bool,
     ) -> Result<Self> {
         let (binary, _) = verify_binary(binary)?;
         for path in [
@@ -893,7 +934,7 @@ impl Runtime {
         let mut session = Session::new(launch, agent, &id, &token, engine, resume.is_some())?;
         session.runtime = binary.to_string_lossy().into_owned();
         session.gate.record("pin", true)?;
-        let settings = settings(launch, &tool)?;
+        let settings = settings(launch, &tool);
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -955,7 +996,6 @@ impl Runtime {
             args,
             settings,
             binary,
-            control_host,
             child: Some(child),
             shutdown: None,
             ended: false,
@@ -978,7 +1018,6 @@ impl Runtime {
             args: vec![],
             settings: Value::Null,
             binary: PathBuf::new(),
-            control_host: true,
             child: None,
             shutdown: None,
             ended: false,
@@ -1037,26 +1076,20 @@ impl Runtime {
                 observed.map(|()| true)
             }
             Ok(Input::Host(request, reply, received)) => {
-                let blocked = (request["kind"] == "call" && !self.control_host)
-                    .then(|| self.require_supported().err())
-                    .flatten();
-                let (value, notice) = match blocked {
-                    Some(error) => (json!({"accepted":false,"reason":error.to_string()}), None),
-                    None => match self.session.serve(&request, received) {
-                        Served::Now(value, notice) => (value, notice),
-                        Served::Later(key, work) => {
-                            self.replies.insert(key, reply);
-                            let done = self.done.clone();
-                            thread::spawn(move || {
-                                // A panic still answers the caller and latches the gate.
-                                let result =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
-                                        .unwrap_or_else(|_| Err("deferred work panicked".into()));
-                                done.send(Input::Done(key, result))
-                            });
-                            return Ok(true);
-                        }
-                    },
+                let (value, notice) = match self.session.serve(&request, received) {
+                    Served::Now(value, notice) => (value, notice),
+                    Served::Later(key, work) => {
+                        self.replies.insert(key, reply);
+                        let done = self.done.clone();
+                        thread::spawn(move || {
+                            // A panic still answers the caller and latches the gate.
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                                    .unwrap_or_else(|_| Err("deferred work panicked".into()));
+                            done.send(Input::Done(key, result))
+                        });
+                        return Ok(true);
+                    }
                 };
                 // Persist and send before the tool result returns: presentation follows later.
                 if let Some(notice) = notice {

@@ -437,6 +437,24 @@ fn the_enrolled_formatter_runs_as_a_captured_job_attributed_to_its_invoker() {
     );
     let record = f.call(1, "request", json!({"id":"job:fmt"}));
     assert_eq!(record["record"]["agent"], 1, "{record}");
+    // Replies are text without Git IDs (#221): job output as strings, file bytes as
+    // `content`, and no capture `tree` or file `blob`.
+    assert_eq!(
+        (&job["job"]["stdout"], &job["job"]["stderr"]),
+        (&json!(""), &json!(""))
+    );
+    let (before, label) = (
+        &record["record"]["before"],
+        &record["record"]["before"]["files"]["label.go"],
+    );
+    assert!(
+        before.get("tree").is_none() && label.get("blob").is_none(),
+        "{before}"
+    );
+    assert_eq!(
+        label["file"],
+        json!({"content": messy, "executable": false})
+    );
 }
 
 #[test]

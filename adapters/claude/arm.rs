@@ -3,7 +3,11 @@
 //! the shared `falinks-eval oracle` seam on exact captures. Agents reach it through the
 //! `falinks_*` tools; `ack`, `ready` and `check` are evaluation-host tools, the rest map
 //! onto the engine via `EngineHost`.
-use crate::engine_host::{self, EngineHost, Hidden};
+use crate::{
+    blocks,
+    engine_host::{self, EngineHost, Hidden},
+    refuse,
+};
 use falinks::{
     Action, Body, Check, Client, Engine, Language, Outcome, Pin, ProposalState, Toolchain,
 };
@@ -630,7 +634,7 @@ impl Arm {
             .flat_map(|t| t["events"].as_array().into_iter().flatten())
             .filter(|e| {
                 e["type"] == "assistant"
-                    && (e["message"]["content"].as_array().into_iter().flatten()).any(|b| {
+                    && blocks(e).any(|b| {
                         b["type"] == "tool_use"
                             && b["name"]
                                 .as_str()
@@ -944,8 +948,4 @@ impl Oracle {
             "oracle": details["oracle"], "attempt": self.attempt}),
         )
     }
-}
-
-fn refuse(reason: &str) -> Value {
-    json!({"accepted": false, "reason": reason})
 }

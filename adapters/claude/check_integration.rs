@@ -6,12 +6,14 @@ use falinks::{
     Stage, Toolchain,
 };
 use falinks_claude::{
-    Launch, MODEL, REQUIRED, Runtime, VERSION, bash_probe_controls,
+    Launch, MODEL, REQUIRED, Runtime, VERSION,
+    arm::agent_name,
+    bash_probe_controls,
     engine_host::{self, EngineHost},
     go_tools, tool_results, verify_binary,
 };
 use falinks_host::{
-    Boundary, EngineOutcome, Result,
+    EngineOutcome, Result,
     check_binary::{self, Options},
     file_hash, require,
 };
@@ -82,9 +84,6 @@ struct Gate {
     evidence: Value,
 }
 
-fn name(agent: usize) -> String {
-    format!("agent-{agent}")
-}
 fn space(dir: &Path, index: usize) -> PathBuf {
     dir.join(format!("space{index}"))
 }
@@ -138,10 +137,10 @@ impl Gate {
         }
         for agent in 0..2 {
             for part in ["scratch", "controller"] {
-                fs::create_dir_all(dir.join(name(agent)).join(part))?;
+                fs::create_dir_all(dir.join(agent_name(agent)).join(part))?;
             }
             fs::write(
-                dir.join(name(agent)).join("controller/marker.txt"),
+                dir.join(agent_name(agent)).join("controller/marker.txt"),
                 b"marker\n",
             )?;
         }
@@ -209,24 +208,17 @@ impl Gate {
 
     fn launch(&self, agent: usize) -> Result<Launch> {
         let root = self.engine().root(self.client(agent))?.canonicalize()?;
-        let mine = self.dir.join(name(agent));
-        let mut protected = vec![
-            self.dir.join("state"),
-            self.dir.join(name(1 - agent)).join("controller"),
-        ];
-        // Only the agent's own live root is exposed; any other space stays hidden.
-        protected.extend((0..2).map(|i| space(&self.dir, i)).filter(|s| *s != root));
-        let alias = mine.join("scratch/alias");
+        let launch = Launch::pair(
+            &self.dir,
+            agent,
+            root,
+            engine_host::tools(),
+            vec![self.dir.join("state")],
+        );
+        let alias = launch.scratch.join("alias");
         let _ = fs::remove_file(&alias);
-        symlink(root.join("price.go"), &alias)?;
-        Ok(Launch {
-            tools: falinks_claude::engine_host::tools(),
-            source: root,
-            scratch: mine.join("scratch"),
-            controller: mine.join("controller"),
-            worker_tools: self.dir.join("worker-tools"),
-            protected,
-        })
+        symlink(launch.source.join("price.go"), &alias)?;
+        Ok(launch)
     }
     /// Launch or resume a worker against the agent's current workspace.
     fn start(&mut self, agent: usize) -> Result<()> {
@@ -236,20 +228,13 @@ impl Gate {
         let resume = self.workers[agent].session.clone();
         if let Some(session) = &resume {
             // A host-applied regrouping may have moved this agent's workspace.
-            Boundary::new(
-                &launch.controller.join("context.sqlite"),
-                &launch.source,
-                "host".into(),
-                // Relocation only: this boundary accepts no tools.
-                Vec::<String>::new(),
-            )?
-            .relocate(session, &name(agent))?;
+            launch.relocate(session, &agent_name(agent))?;
         }
         let gofmt = self.go.with_file_name("gofmt");
         let host = EngineHost::new(
             engine,
             client.clone(),
-            &name(agent),
+            &agent_name(agent),
             gofmt,
             launch.scratch.clone(),
             Default::default(),
@@ -257,7 +242,7 @@ impl Gate {
         let runtime = Runtime::new(
             &self.binary,
             &launch,
-            &name(agent),
+            &agent_name(agent),
             resume.as_deref(),
             Box::new(move |envelope| {
                 Ok(EngineOutcome {
@@ -266,7 +251,6 @@ impl Gate {
                     ..Default::default()
                 })
             }),
-            true,
         )?;
         let record = json!({"agent":agent,"resume":resume.is_some(),"source":launch.source,
             "protected":launch.protected,"settings":runtime.settings,"args":runtime.args});
@@ -311,7 +295,7 @@ impl Gate {
         let root = self.engine().root(self.client(agent))?;
         Ok(format!(
             "[Falinks host] You are {name} in a Falinks coordination test on throwaway files. Your live workspace is {root} (read it with Read, Grep or Glob). You cannot write it directly: change source only with falinks tools, each taking its request as its whole input. Do exactly the numbered steps below, one tool call at a time, then end your turn with a one-line summary. Host notices are information; act on them only when a step says so.",
-            name = name(agent),
+            name = agent_name(agent),
             root = root.display()
         ))
     }
@@ -438,10 +422,13 @@ impl Gate {
     }
     fn probe(&self, agent: usize) -> Result<String> {
         let root = self.engine().root(self.client(agent))?;
-        let mine = self.dir.join(name(agent));
+        let mine = self.dir.join(agent_name(agent));
         let state = self.dir.join("state/marker.txt");
         let controller = mine.join("controller/marker.txt");
-        let peer = self.dir.join(name(1 - agent)).join("controller/marker.txt");
+        let peer = self
+            .dir
+            .join(agent_name(1 - agent))
+            .join("controller/marker.txt");
         let args = falinks_host::probe_args(
             &self.dir.join("worker-tools/sandbox-probe"),
             &root.join("price.go"),
@@ -1166,7 +1153,7 @@ fn completion_race(gate: &mut Gate) -> Result<()> {
     // to the peer would replay it first.
     let mut deliveries = vec![];
     for (poster, agent) in [(1, 0), (0, 1)] {
-        gate.run(&[(poster, post(&format!("{} is done", name(poster))))])?;
+        gate.run(&[(poster, post(&format!("{} is done", agent_name(poster))))])?;
         let events = gate.undelivered(agent)?;
         let last = events.last().ok_or("no race event")?.clone();
         gate.workers[agent].delivered = last.seq;

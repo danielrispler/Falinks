@@ -8,7 +8,7 @@ use falinks_claude::{
     arm::{self, Answer, Arm, Tools, agent_name, prompt},
     engine_host, go_tools, verify_binary,
 };
-use falinks_host::{Boundary, Deferred, EngineOutcome, Result, file_hash, require};
+use falinks_host::{Deferred, EngineOutcome, Result, file_hash, require};
 use serde_json::{Value, json};
 use std::{
     cell::RefCell,
@@ -166,7 +166,7 @@ impl Worker {
             return (false, 0);
         };
         let events = &runtime.session.events;
-        let new = events[self.scanned.min(events.len())..].to_vec();
+        let new = &events[self.scanned.min(events.len())..];
         self.scanned = events.len();
         let (mut rejected, mut results) = (false, 0);
         for event in new {
@@ -197,7 +197,6 @@ struct Run {
     engine: Arc<Engine>,
     arm: Rc<RefCell<Arm>>,
     workers: [Worker; 2],
-    prompt: [String; 2],
     /// The usage drain window after the clock stops.
     drain: Duration,
     protected: Vec<PathBuf>,
@@ -233,23 +232,13 @@ impl Run {
     fn launch(&self, agent: usize) -> Result<Launch> {
         let client = self.arm.borrow().client(agent).clone();
         let root = self.engine.root(&client)?.canonicalize()?;
-        let mine = self.dir.join(agent_name(agent));
-        let mut protected = self.protected.clone();
-        protected.push(self.dir.join(agent_name(1 - agent)).join("controller"));
-        // Only the agent's own live root is exposed; any other space stays hidden.
-        protected.extend(
-            (0..2)
-                .map(|i| self.dir.join(format!("space{i}")))
-                .filter(|s| *s != root),
-        );
-        Ok(Launch {
-            tools: arm::tools(),
-            source: root,
-            scratch: mine.join("scratch"),
-            controller: mine.join("controller"),
-            worker_tools: self.dir.join("worker-tools"),
-            protected,
-        })
+        Ok(Launch::pair(
+            &self.dir,
+            agent,
+            root,
+            arm::tools(),
+            self.protected.clone(),
+        ))
     }
 
     /// Launch, or resume against the agent's current root after an applied regrouping.
@@ -257,14 +246,7 @@ impl Run {
         let launch = self.launch(agent)?;
         let resume = self.workers[agent].session.clone();
         if let Some(session) = &resume {
-            Boundary::new(
-                &launch.controller.join("context.sqlite"),
-                &launch.source,
-                "host".into(),
-                // Relocation only: this boundary accepts no tools.
-                Vec::<String>::new(),
-            )?
-            .relocate(session, &agent_name(agent))?;
+            launch.relocate(session, &agent_name(agent))?;
         }
         let arm = Rc::clone(&self.arm);
         let mut runtime = Runtime::new(
@@ -295,8 +277,6 @@ impl Run {
                     }
                 })
             }),
-            // Controls were verified by the batch's fresh gate; calls still latch on failure.
-            true,
         )?;
         // `host_call` times share the `events.jsonl` clock.
         runtime.session.clock = self.started;
@@ -800,7 +780,6 @@ fn setup(
         engine,
         arm: Rc::new(RefCell::new(arm)),
         workers: [Worker::new(), Worker::new()],
-        prompt,
         drain: Duration::from_secs_f64(drain),
         protected,
         timeline,
@@ -810,8 +789,7 @@ fn setup(
     run.workers[0].given = first;
     run.workers[1].given = second;
     run.event("initial_recommendation", json!({"proposal": initial}))?;
-    for agent in 0..2 {
-        let text = run.prompt[agent].clone();
+    for (agent, text) in prompt.into_iter().enumerate() {
         run.start(agent, text)?;
     }
     Ok(run)

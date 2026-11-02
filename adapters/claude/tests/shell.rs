@@ -59,8 +59,7 @@ impl Fixture {
         let settings = settings(
             &self.launch,
             &self.launch.worker_tools.join("falinks-claude-tool"),
-        )
-        .unwrap();
+        );
         settings["env"]
             .as_object()
             .unwrap()
@@ -265,7 +264,7 @@ fn go_builds_and_vets_in_scratch() {
 fn settings_turn_claude_codes_sandbox_off_and_wrap_bash_only() {
     let f = fixture();
     let tool = f.launch.worker_tools.join("falinks-claude-tool");
-    let settings = settings(&f.launch, &tool).unwrap();
+    let settings = settings(&f.launch, &tool);
     assert_eq!(settings["sandbox"], serde_json::json!({"enabled": false}));
     let hook = &settings["hooks"]["PreToolUse"][0]["hooks"][0];
     // Exec form: Claude Code does not put the prefix in front of it.

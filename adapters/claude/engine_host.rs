@@ -2,6 +2,7 @@
 //! The boundary has already bound host identity; this maps each operation to the
 //! engine as that agent's opaque `Client`. Agent mistakes are refusals; an identity
 //! mismatch or an engine incident is an error that latches the worker's gate.
+use crate::{arm::FORMS, refuse};
 use falinks::{
     Body, Capture, Checkpoint, Client, Engine, Event, File, Hunk, JobSpec, Mode, Outcome, Output,
     Pending, Request, Review, valid_path,
@@ -213,7 +214,7 @@ impl EngineHost {
     }
     pub fn call(&self, envelope: &Value) -> Result<Value> {
         Ok(match self.call_timed(envelope)? {
-            Timed::Moved => json!({"accepted": false, "reason": MOVED}),
+            Timed::Moved => refuse(MOVED),
             Timed::Answered(result, _) => result,
         })
     }
@@ -244,8 +245,8 @@ impl EngineHost {
             return Err(format!("engine incident: {}", incident.reason).into());
         }
         let result = match outcome {
-            Ok(value) => text(lean(value)),
-            Err(error) => json!({"accepted":false,"reason":error.to_string()}),
+            Ok(value) => lean(value),
+            Err(error) => refuse(&error.to_string()),
         };
         // Concealed first, so a substitute the agent caused survives as the path it wrote; then
         // restored on every call once any request was substituted, since the engine keeps them.
@@ -731,7 +732,7 @@ fn require_review_keys(request: &Value) -> Result<()> {
     Ok(())
 }
 fn parse<T: serde::de::DeserializeOwned>(request: &Value) -> Result<T> {
-    Ok(serde_json::from_value(request.clone())?)
+    Ok(T::deserialize(request)?)
 }
 fn number(request: &Value, name: &str) -> Result<u64> {
     Ok(request[name]
@@ -746,7 +747,7 @@ fn field<'a>(request: &'a Value, name: &str) -> Result<&'a str> {
 /// `{id, expected: {path: version}, output: {path: {content | replace | from, executable?} | null},
 /// note, reviews?}`. A `from` reference is resolved here, so a refused one uses up no request ID.
 fn edit(request: &Value, scratch: &Path) -> Result<Request> {
-    let expected: BTreeMap<String, u64> = serde_json::from_value(request["expected"].clone())?;
+    let expected: BTreeMap<String, u64> = parse(&request["expected"])?;
     let mut output = BTreeMap::new();
     for (path, file) in request["output"]
         .as_object()
@@ -817,8 +818,7 @@ fn text_bytes(value: &Value, what: &str, key: &str) -> Result<Vec<u8>> {
         .as_bytes()
         .to_vec())
 }
-/// The edit output forms; a value takes exactly one.
-const FORMS: [&str; 3] = ["content", "replace", "from"];
+/// Refusal text: an output value takes exactly one of `FORMS`.
 const ONE_FORM: &str = "an output takes exactly one of {content, executable?}, \
     {replace: [{old, new}], executable?} or {from, executable?}";
 /// The largest file a scratch reference may name.
@@ -872,13 +872,15 @@ fn scratch_file(scratch: &Path, path: &str) -> Result<Vec<u8>> {
         .map_err(|_| format!("{path:?} is not valid UTF-8").into())
         .map(String::into_bytes)
 }
-/// Results drop the engine's Git tree and blob IDs, which agents never use (#221). Only
-/// string or null values go, so a file named `tree` or `blob` stays.
 /// An offer's state without its capture: agents already hold the content (#222).
 fn state(checkpoint: &Checkpoint) -> Value {
     json!({"accepted":true,"id":checkpoint.id,"state":checkpoint.state,
         "revision":checkpoint.offer.revision,"scope":checkpoint.offer.scope})
 }
+/// Results drop the engine's Git tree and blob IDs, which agents never use (#221). Only
+/// string or null values go, so a file named `tree` or `blob` stays.
+/// Agents read and write text: engine byte arrays become `content` strings, and `stdout` and
+/// `stderr` arrays text.
 fn lean(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
@@ -887,30 +889,18 @@ fn lean(value: Value) -> Value {
                     !(matches!(key.as_str(), "tree" | "blob")
                         && (value.is_string() || value.is_null()))
                 })
-                .map(|(key, value)| (key, lean(value)))
+                .map(|(key, value)| match (key.as_str(), value) {
+                    ("bytes", bytes @ Value::Array(_)) => ("content".into(), lossy(bytes)),
+                    ("stdout" | "stderr", bytes @ Value::Array(_)) => (key, lossy(bytes)),
+                    (_, value) => (key, lean(value)),
+                })
                 .collect(),
         ),
         Value::Array(items) => Value::Array(items.into_iter().map(lean).collect()),
         other => other,
     }
 }
-/// Agents read and write text: engine byte arrays become `content` strings.
-fn text(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, value)| match (key.as_str(), &value) {
-                    ("bytes", Value::Array(_)) => ("content".into(), lossy(&value)),
-                    ("stdout" | "stderr", Value::Array(_)) => (key, lossy(&value)),
-                    _ => (key, text(value)),
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.into_iter().map(text).collect()),
-        other => other,
-    }
-}
-fn lossy(bytes: &Value) -> Value {
-    let bytes: Vec<u8> = serde_json::from_value(bytes.clone()).unwrap_or_default();
+fn lossy(bytes: Value) -> Value {
+    let bytes: Vec<u8> = serde_json::from_value(bytes).unwrap_or_default();
     json!(String::from_utf8_lossy(&bytes))
 }

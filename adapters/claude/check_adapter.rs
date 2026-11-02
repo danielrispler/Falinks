@@ -172,7 +172,7 @@ fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result
     evidence["root"] = json!(root);
     let launch = Launch::fixture(&root);
     let host = Rc::new(RefCell::new(ControlledHost::new(&root)?));
-    let mut runtime = Runtime::new(&binary, &launch, AGENT, None, engine(&host), true)?;
+    let mut runtime = Runtime::new(&binary, &launch, AGENT, None, engine(&host))?;
     let session = runtime.session.session().to_owned();
     evidence["settings"] = runtime.settings.clone();
     evidence["launch"] = json!(runtime.args);
@@ -283,7 +283,6 @@ fn run(binary: &Path, probe: &Path, tool: &Path, evidence: &mut Value) -> Result
         AGENT,
         Some(&session),
         engine(&resumed_host),
-        true,
     )?;
     let result = (|| -> Result<()> {
         let revision = hash(b"engine_updated\n");
