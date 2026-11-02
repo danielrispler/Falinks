@@ -36,6 +36,8 @@ pub struct Session {
     pub agent: Agent,
     /// The folder the session works in, from its latest event.
     pub cwd: String,
+    /// The last segment of `cwd`, or the whole `cwd` when that segment is empty.
+    pub folder_name: String,
     pub state: State,
     /// The checks that ran, oldest first: pass or fail lines in the session's timeline (#369,
     /// decision 14).
@@ -161,8 +163,9 @@ pub struct Subagent {
     pub agent: Agent,
     pub parent: Parent,
     pub kind: Kind,
-    /// Its spawn's description and its type, such as `Explore`.
-    pub description: Option<String>,
+    /// Its name: its spawn's description, else the first 5 characters of its id. Its type, such as
+    /// `Explore`.
+    pub name: String,
     pub agent_type: Option<String>,
     /// `running`, then how it ended: its wake-up's `<status>`, such as `completed` or `killed`, or
     /// `completed` when only its `SubagentStop`, its spawn's response or its session's `Stop` says it
@@ -349,6 +352,7 @@ impl Session {
             None => {
                 self.agents.push(Subagent {
                     agent: Agent::new(id, at),
+                    name: short(id, 5).into(),
                     status: Status::Running,
                     ..Subagent::default()
                 });
@@ -413,7 +417,9 @@ impl Session {
                 let input = &event.tool_input;
                 let agent = self.agent(child, at);
                 agent.parent = parent;
-                agent.description = input["description"].as_str().map(Into::into);
+                if let Some(description) = input["description"].as_str() {
+                    agent.name = description.into();
+                }
                 agent.prompt = input["prompt"].as_str().unwrap_or_default().into();
                 if agent.agent_type.is_none() {
                     agent.agent_type = input["subagent_type"].as_str().map(Into::into);
@@ -1131,6 +1137,8 @@ impl Studio {
         let own = event.agent_id.is_none();
         if own && !event.cwd.is_empty() {
             session.cwd.clone_from(&event.cwd);
+            let last = event.cwd.rsplit('/').next().unwrap_or_default();
+            session.folder_name = if last.is_empty() { &event.cwd } else { last }.into();
         }
         let failed = session.failed_workers().into_iter();
         let mut outputs: Vec<Output> = failed
@@ -1478,14 +1486,14 @@ impl Studio {
     }
 
     /// The body of a notice on session `id`'s line: its folder and short id, as its row shows them,
-    /// and the subagent `agent` it names, by its spawn's description, else its short id.
+    /// and the subagent `agent` it names, by its name.
     pub fn notice_body(&self, id: &str, agent: Option<&str>) -> String {
         let session = self.session(id);
-        let folder = session.and_then(|s| s.cwd.rsplit('/').next());
+        let folder = session.map(|s| s.folder_name.as_str());
         let mut body = format!("{} {}", folder.unwrap_or_default(), short(id, 8));
         if let Some(agent) = agent {
             let child = session.and_then(|s| s.subagent(agent));
-            let name = child.and_then(|a| a.description.as_deref());
+            let name = child.map(|a| a.name.as_str());
             body = format!("{body} · {}", name.unwrap_or(short(agent, 5)));
         }
         body
