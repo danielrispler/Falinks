@@ -161,6 +161,10 @@ pub(crate) fn published(db: &Connection) -> Result<u64> {
         .ok_or("missing published pointer")?
         .parse()?)
 }
+/// The published revision's capture.
+pub(crate) fn published_capture(db: &Connection) -> Result<Capture> {
+    revision(db, published(db)?)
+}
 fn required(db: &Connection) -> Result<BTreeSet<usize>> {
     Ok(meta_value(db, "required")?.unwrap_or_default())
 }
@@ -385,7 +389,7 @@ impl Engine {
         )?
         .into_iter()
         .collect();
-        let base = revision(&tx, published(&tx)?)?;
+        let base = published_capture(&tx)?;
         for revision_id in offered {
             queue(&tx, &revision(&tx, revision_id)?, &base, true)?;
         }
@@ -397,7 +401,7 @@ impl Engine {
     /// Coverage status of a completed revision against the current published base.
     pub fn candidate(&self, revision: u64) -> Result<Candidate> {
         let db = connect(&self.state)?;
-        let base = crate::revision(&db, published(&db)?)?;
+        let base = published_capture(&db)?;
         candidate(&db, &crate::revision(&db, revision)?, &base)
     }
     /// Durable lookup, including after a lost response or an uncertain commit.
@@ -423,7 +427,7 @@ impl Engine {
         if capture.space != self.layout()?.of(client.agent) {
             return fail("feedback must name a revision of the client's workspace");
         }
-        let base = crate::revision(&db, published(&db)?)?;
+        let base = published_capture(&db)?;
         let (members, contributions) = coverage(&db, &capture, &base)?;
         let created = Run {
             id,
@@ -637,7 +641,8 @@ impl Engine {
         capture: &Capture,
     ) -> Result<std::result::Result<(), String>> {
         let binding = &run.binding;
-        let base = revision(db, published(db)?)?;
+        debug_assert_eq!(capture.revision, binding.revision);
+        let base = published_capture(db)?;
         if base.revision != binding.base {
             return Ok(Err(if !ahead(capture, &base) {
                 "a newer publication was accepted and is never overwritten".into()

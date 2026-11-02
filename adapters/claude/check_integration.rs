@@ -7,7 +7,7 @@ use falinks::{
 };
 use falinks_claude::{
     Launch, MODEL, REQUIRED, Runtime, VERSION,
-    arm::agent_name,
+    arm::{agent_name, space_name},
     bash_probe_controls,
     engine_host::{self, EngineHost},
     go_tools, tool_results, verify_binary,
@@ -84,9 +84,6 @@ struct Gate {
     evidence: Value,
 }
 
-fn space(dir: &Path, index: usize) -> PathBuf {
-    dir.join(format!("space{index}"))
-}
 fn json_string(value: &impl serde::Serialize) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
@@ -100,7 +97,7 @@ impl Gate {
     }
     fn open(dir: &Path, go: &Path, gopls: &Path) -> Result<(Engine, [Client; 2])> {
         let enrolled: Vec<&str> = FILES.iter().map(|(p, _)| *p).collect();
-        let engine = Engine::open(&space(dir, 0), &dir.join("state"), &enrolled)?;
+        let engine = Engine::open(&dir.join(space_name(0)), &dir.join("state"), &enrolled)?;
         engine.configure_analysis(vec![Toolchain {
             language: Language::Go,
             executables: vec![Pin::from_path(gopls)?, Pin::from_path(go)?],
@@ -146,7 +143,7 @@ impl Gate {
         }
         for (path, bytes) in FILES {
             if let Some(bytes) = bytes {
-                fs::write(space(&dir, 0).join(path), bytes)?;
+                fs::write(dir.join(space_name(0)).join(path), bytes)?;
             }
         }
         fs::copy(probe, dir.join("worker-tools/sandbox-probe"))?;
@@ -648,7 +645,7 @@ fn split(gate: &mut Gate) -> Result<()> {
         edit_step("discount-redraft", "price.go", DISCOUNT_REDRAFT, "VERSION")
     );
     gate.run(&[(0, steps)])?;
-    gate.engine().add_workspace(&space(&gate.dir, 1))?;
+    gate.engine().add_workspace(&gate.dir.join(space_name(1)))?;
     let proposal = gate.engine().reconsider()?;
     require(
         proposal.action == Action::Split,
@@ -1198,7 +1195,7 @@ fn unknown_change(gate: &mut Gate) -> Result<()> {
         )?;
     }
     let injected = "package gate\n\n// UNEXPECTED_HOST_WRITE\n";
-    fs::write(space(&gate.dir, 0).join("label.go"), injected)?;
+    fs::write(gate.dir.join(space_name(0)).join("label.go"), injected)?;
     let current = gate.version("label.go")?;
     gate.run(&[(
         0,
@@ -1233,7 +1230,7 @@ fn unknown_change(gate: &mut Gate) -> Result<()> {
             .insert("unknown_change".into(), true);
     }
     require(
-        fs::read_to_string(space(&gate.dir, 0).join("label.go"))? == injected,
+        fs::read_to_string(gate.dir.join(space_name(0)).join("label.go"))? == injected,
         "unknown change evidence was overwritten",
     )?;
     gate.evidence["phases"]["after_halt"] = json!({"feedback":format!("{:?}", feedback.map(|r| r.id)),

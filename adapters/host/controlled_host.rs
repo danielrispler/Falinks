@@ -148,18 +148,16 @@ impl ControlledHost {
                 if let Some((event, expected, _)) = rows
                     .iter()
                     .find(|(event, _, _)| request["event"].as_str() == Some(event))
+                    && request["reviewed_hash"] == *expected
+                    && *expected == revision
+                    && let Some(status) = review_status(&request["action"])
                 {
-                    let status = review_status(&request["action"]);
-                    accepted = request["reviewed_hash"] == *expected
-                        && *expected == revision
-                        && status.is_some();
-                    if let (true, Some(status)) = (accepted, status) {
-                        reason = status;
-                        self.db.execute(
-                            "UPDATE obligations SET status=? WHERE event=?",
-                            params![reason, event],
-                        )?;
-                    }
+                    accepted = true;
+                    reason = status;
+                    self.db.execute(
+                        "UPDATE obligations SET status=? WHERE event=?",
+                        params![reason, event],
+                    )?;
                 }
             }
             Some("offer") => {

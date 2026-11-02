@@ -204,7 +204,7 @@ impl Launch {
         protected.push(dir.join(arm::agent_name(1 - agent)).join("controller"));
         protected.extend(
             (0..2)
-                .map(|i| dir.join(format!("space{i}")))
+                .map(|i| dir.join(arm::space_name(i)))
                 .filter(|s| *s != source),
         );
         Self {

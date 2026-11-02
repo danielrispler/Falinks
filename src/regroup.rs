@@ -3,7 +3,7 @@
 //! transition still passes the engine's own safety checks.
 use crate::analysis::{self, Evidence, Footprint};
 use crate::coordination::{Body, Decision, Kind, Message, Review, Scope, emit, obligations, renew};
-use crate::publication::{self, published};
+use crate::publication::{self, published_capture};
 use crate::{
     Capture, Client, Engine, Fault, Halt, Interrupted, Layout, Result, VersionedFile, WRITER_LEASE,
     all, audit, audit_root, build_tree, connect, ensure_empty, fail, halted, install, meta,
@@ -523,7 +523,7 @@ impl Engine {
                 .uncertain
                 .push("compiler analysis not configured".into());
         }
-        let published = revision(db, published(db)?)?;
+        let published = published_capture(db)?;
         let before = self.evidence_in(db, &published)?;
         let mut evidence = Vec::new();
         let mut drafts: [Footprint; 2] = Default::default();
@@ -928,7 +928,7 @@ impl Engine {
         if let Some(run) = publication::publishing(db)? {
             return blocked(format!("publication run {} in progress", run.id));
         }
-        let published = revision(db, published(db)?)?;
+        let published = published_capture(db)?;
         for space in proposal.from {
             if !layout
                 .current(space)?
@@ -1139,7 +1139,7 @@ impl Engine {
 
     /// Brings each occupied workspace up to the published state when its own drafts allow.
     fn synchronize(&self, db: &Connection) -> Result<bool> {
-        let published = revision(db, published(db)?)?;
+        let published = published_capture(db)?;
         let mut changed = false;
         let occupied: BTreeSet<usize> = self.layout()?.placement.into_iter().collect();
         for space in &occupied {
