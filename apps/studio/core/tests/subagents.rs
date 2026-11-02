@@ -25,8 +25,8 @@ fn the_days_subagents_are_5_workers_7_helpers_and_1_unattached_agent() {
     let mut tree: Vec<(&str, &str, Kind, Parent)> = studio
         .sessions()
         .into_iter()
-        .flat_map(|s| s.agents.iter().map(|a| (&s.id[..8], a)))
-        .map(|(session, a)| (session, &a.id[..5], a.kind, a.parent.clone()))
+        .flat_map(|s| s.agents.iter().map(|a| (&s.agent.id[..8], a)))
+        .map(|(session, a)| (session, &a.agent.id[..5], a.kind, a.parent.clone()))
         .collect();
     tree.sort();
 
@@ -66,7 +66,7 @@ fn agent<'a>(studio: &'a Studio, session: &str, id: &str) -> &'a Subagent {
     session
         .agents
         .iter()
-        .find(|a| a.id == id)
+        .find(|a| a.agent.id == id)
         .expect("the agent")
 }
 
@@ -107,7 +107,7 @@ fn the_runs_worker_completes_with_its_last_message_and_its_killed_helper_stays_v
         ),
         ("killed", Some(1_793_471_842_241), None)
     );
-    assert_eq!(helper.started_at, 1_793_471_818_599);
+    assert_eq!(helper.agent.started_at, 1_793_471_818_599);
     // The pane draws it as failed from the core's flag, not from its status.
     assert!(helper.failed());
     assert!(
@@ -192,7 +192,14 @@ fn a_subagent_of_a_subagent_sits_under_it() {
     let tree: Vec<(&str, &Parent, Option<&str>, &Status)> = session
         .agents
         .iter()
-        .map(|a| (a.id.as_str(), &a.parent, a.agent_type.as_deref(), &a.status))
+        .map(|a| {
+            (
+                a.agent.id.as_str(),
+                &a.parent,
+                a.agent_type.as_deref(),
+                &a.status,
+            )
+        })
         .collect();
     let worker = Parent::Agent(TREE_WORKER.into());
     assert_eq!(
@@ -349,7 +356,7 @@ fn a_childs_steps_are_its_own_not_its_sessions() {
         tool: "ToolSearch".into(),
         detail: Some("…".into()),
     };
-    assert_eq!(session.last_step.as_ref(), Some(&own));
+    assert_eq!(session.agent.last_step.as_ref(), Some(&own));
     assert_eq!(
         session.cwd,
         "/private/var/folders/fx/plr3nrp54xbfybl8_00tqm5r0000gn/T/tmp.61uRkuHpH8"
@@ -359,7 +366,7 @@ fn a_childs_steps_are_its_own_not_its_sessions() {
         detail: Some("hello.txt".into()),
     };
     assert_eq!(
-        agent(&studio, RUN_SESSION, RUN_WORKER).last_step,
+        agent(&studio, RUN_SESSION, RUN_WORKER).agent.last_step,
         Some(write)
     );
 }
@@ -367,7 +374,10 @@ fn a_childs_steps_are_its_own_not_its_sessions() {
 #[test]
 fn the_wire_keeps_each_subagents_status_failed_and_faded() {
     let wire = |studio: &Studio, id: &str| {
-        let session = studio.sessions().into_iter().find(|s| s.id == RUN_SESSION);
+        let session = studio
+            .sessions()
+            .into_iter()
+            .find(|s| s.agent.id == RUN_SESSION);
         let json = serde_json::to_value(session.unwrap()).unwrap();
         let agents = json["agents"].as_array().unwrap().clone();
         let agent = agents.into_iter().find(|a| a["id"] == id).unwrap();
@@ -411,7 +421,7 @@ fn a_session_and_its_subagents_are_live_until_it_ends_and_again_once_it_resumes(
         .unwrap()
         .agents
         .iter()
-        .map(|a| a.id.clone())
+        .map(|a| a.agent.id.clone())
         .collect();
     assert_eq!(expected.len(), 2);
     expected.push(session.into());
@@ -436,7 +446,7 @@ fn the_selection_names_the_opened_subagent_until_a_session_is_selected() {
     studio.open(RUN_WORKER);
     let selection = studio.selection().expect("a selection");
     assert_eq!(
-        (selection.session.id.as_str(), selection.agent),
+        (selection.session.agent.id.as_str(), selection.agent),
         (RUN_SESSION, Some(RUN_WORKER))
     );
     assert_eq!(

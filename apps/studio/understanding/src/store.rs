@@ -5,7 +5,7 @@
 use crate::Card;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -102,9 +102,55 @@ pub struct Brief {
 pub struct SessionCards {
     pub brief: Option<String>,
     /// The cards added in the last 30 minutes.
+    #[serde(serialize_with = "without_diffs")]
     pub recent: Vec<StoredCard>,
     /// The cards added before, or before the store kept the time.
+    #[serde(serialize_with = "without_diffs")]
     pub older: Vec<StoredCard>,
+}
+
+/// A stored card as the pane reads it: its request without the diff and base, which the pane never
+/// reads.
+#[derive(Serialize)]
+struct ShownCard<'a> {
+    request: ShownRequest<'a>,
+    card: &'a Card,
+    added_at: Option<u64>,
+    shown_at: Option<u64>,
+    guess: &'a Option<Guess>,
+    key_wrong: bool,
+    more: &'a Option<String>,
+    rating: &'a Option<Rating>,
+}
+
+#[derive(Serialize)]
+struct ShownRequest<'a> {
+    session_id: &'a str,
+    id: &'a str,
+    prompt: Option<u64>,
+    agent: &'a Option<String>,
+    changed_by: &'a BTreeMap<String, BTreeSet<String>>,
+    workers: &'a [String],
+}
+
+fn without_diffs<S: serde::Serializer>(cards: &[StoredCard], s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(cards.iter().map(|kept| ShownCard {
+        request: ShownRequest {
+            session_id: &kept.request.session_id,
+            id: &kept.request.id,
+            prompt: kept.request.prompt,
+            agent: &kept.request.agent,
+            changed_by: &kept.request.changed_by,
+            workers: &kept.request.workers,
+        },
+        card: &kept.card,
+        added_at: kept.added_at,
+        shown_at: kept.shown_at,
+        guess: &kept.guess,
+        key_wrong: kept.key_wrong,
+        more: &kept.more,
+        rating: &kept.rating,
+    }))
 }
 
 /// The last 30 minutes (#369, decision 18).
@@ -197,7 +243,7 @@ impl CardStore {
     /// Daniel, who asks and for how long; once its turn is over, the stopped line; after a wake-up
     /// with no step since, which worker returned; else its last step, else "No step yet".
     pub fn line(&self, session: &Session, now: u64) -> String {
-        let step = match &session.last_step {
+        let step = match &session.agent.last_step {
             Some(Step {
                 tool,
                 detail: Some(detail),
@@ -214,13 +260,7 @@ impl CardStore {
             };
             let who = match &asker.agent {
                 None => step,
-                Some(id) => {
-                    let agent = session.agents.iter().find(|a| a.agent.id == *id);
-                    format!(
-                        "{} asks",
-                        agent.map_or(id.get(..5).unwrap_or(id), |a| &a.name)
-                    )
-                }
+                Some(id) => format!("{} asks", session.agent_name(id)),
             };
             return format!("{who} · {waited}");
         }
@@ -239,7 +279,9 @@ impl CardStore {
             .iter()
             .find(|kept| kept.request.id == stopped.card);
         let summary = card.map(|kept| kept.card.summary.clone());
-        let brief = self.brief(&session.id).and_then(|b| b.text.lines().last());
+        let brief = self
+            .brief(&session.agent.id)
+            .and_then(|b| b.text.lines().last());
         let pending = stopped.requested.then(|| stopped.message.clone()).flatten();
         let latest = pending.or(brief.map(Into::into));
         summary

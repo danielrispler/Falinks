@@ -82,7 +82,7 @@ type Change = (Option<State>, State, String);
 
 fn states(studio: &Studio) -> HashMap<String, State> {
     let sessions = studio.sessions().into_iter();
-    sessions.map(|s| (s.id.clone(), s.state)).collect()
+    sessions.map(|s| (s.agent.id.clone(), s.state)).collect()
 }
 
 /// Every change of state in `DAY`, when its lines arrive live and the shell ticks before each line
@@ -163,7 +163,7 @@ fn at_midnight_the_days_8_sessions_are_5_ended_2_at_your_turn_and_1_idle() {
     let states: Vec<(&str, State)> = studio
         .sessions()
         .into_iter()
-        .map(|s| (&s.id[..8], s.state))
+        .map(|s| (&s.agent.id[..8], s.state))
         .collect();
 
     // In list order: the groups by state, the newest session first in each.
@@ -194,7 +194,7 @@ fn the_list_shows_needs_you_first_then_running_then_ended() {
     let list: Vec<(&str, State)> = studio
         .sessions()
         .into_iter()
-        .map(|s| (&s.id[..8], s.state))
+        .map(|s| (&s.agent.id[..8], s.state))
         .collect();
 
     // The ended session started between the other two.
@@ -222,7 +222,7 @@ fn the_selection_holds_all_day_while_its_session_changes_group_and_others_are_pr
         groups.insert(studio.selected().map(|s| s.state));
     }
 
-    assert_eq!(studio.selected().map(|s| s.id.as_str()), Some(first));
+    assert_eq!(studio.selected().map(|s| s.agent.id.as_str()), Some(first));
     assert_eq!(
         groups,
         BTreeSet::from([NeedsYou, Running, YourTurn, Ended].map(Some))

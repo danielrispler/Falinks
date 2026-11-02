@@ -73,25 +73,15 @@ fn selection(studio: &Studio) -> serde_json::Value {
 /// The brief and cards of the selected session, or of the worker of it Daniel opened, split at the
 /// latest tick, without each card's diff and base, which the pane never reads.
 #[tauri::command]
-fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> serde_json::Value {
+fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> SessionCards {
     let (viewed, now) = {
         let studio = studio.lock().unwrap();
         (studio.viewed().map(String::from), studio.now())
     };
-    let shown = match viewed {
+    match viewed {
         Some(owner) => cards.lock().unwrap().session_cards(&owner, now),
         None => SessionCards::default(),
-    };
-    let mut shown = serde_json::to_value(shown).expect("cards serialize");
-    for group in ["recent", "older"] {
-        for kept in shown[group].as_array_mut().into_iter().flatten() {
-            if let Some(request) = kept["request"].as_object_mut() {
-                request.remove("change");
-                request.remove("base");
-            }
-        }
     }
-    shown
 }
 
 /// What the read loop last sent the window, so it sends each again only when it changes.
@@ -100,9 +90,15 @@ struct Sent {
     list: Option<serde_json::Value>,
     selected: Option<serde_json::Value>,
     badge: Option<usize>,
-    /// The viewed owner, the store's revision and the minute the cards were built for; the minute
-    /// moves a card past 30 minutes, up to one minute late.
-    cards: Option<(Option<String>, u64, u64)>,
+    cards: Option<CardsKey>,
+}
+
+/// What the cards were built for; the minute moves a card past 30 minutes, up to one minute late.
+#[derive(PartialEq)]
+struct CardsKey {
+    viewed: Option<String>,
+    revision: u64,
+    minute: u64,
 }
 
 impl Sent {
@@ -135,11 +131,11 @@ impl Sent {
             let studio = app.state::<Mutex<Studio>>();
             let studio = studio.lock().unwrap();
             let revision = app.state::<Cards>().lock().unwrap().revision();
-            (
-                studio.viewed().map(String::from),
+            CardsKey {
+                viewed: studio.viewed().map(String::from),
                 revision,
-                studio.now() / 60_000,
-            )
+                minute: studio.now() / 60_000,
+            }
         };
         if self.cards.as_ref() != Some(&key) {
             let _ = app.emit("cards", cards(app.state(), app.state()));
@@ -379,7 +375,7 @@ fn write(
             let _ = app.emit("sessions", sessions(app.state(), app.state()));
         }
         if written && card {
-            tell(&app, "New card", &session.id, agent.as_deref());
+            tell(&app, "New card", &session.agent.id, agent.as_deref());
         }
     };
     let queue = queues.entry(id).or_insert_with(|| {
