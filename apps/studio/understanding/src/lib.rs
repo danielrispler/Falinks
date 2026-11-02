@@ -170,7 +170,7 @@ pub fn write_stop(
         let brief = store.brief(&owner).cloned().unwrap_or_default();
         (earlier, brief, workers(&store, &request, session))
     };
-    if request.change.is_empty() {
+    if request.change.is_none() {
         let Some(workers) = workers else {
             log(format!(
                 "no card on {}: its workers' cards are not in the store",
@@ -178,7 +178,7 @@ pub fn write_stop(
             ));
             return false;
         };
-        request.change = workers;
+        request.change = Some(workers);
     }
     let Some((card, updated)) = write_card(writer, &request, &earlier, &brief.text, &mut log)
     else {
@@ -436,7 +436,7 @@ pub struct FakeWriter;
 impl CardWriter for FakeWriter {
     fn reply(&self, request: &CardRequest, _: &[String], _: &str) -> Result<String, String> {
         let paths: Vec<&str> = request
-            .change
+            .diff()
             .lines()
             .filter_map(|line| line.strip_prefix("+++ b/"))
             .collect();
@@ -451,7 +451,7 @@ impl CardWriter for FakeWriter {
             "summary": format!("שינוי לדוגמה ב־{named}"),
             "explanation": "כרטיס לדוגמה של הכותב המזויף, שלא קורא את הקוד. השינוי עצמו למטה.",
             "paths": paths,
-            "code": request.change,
+            "code": request.diff(),
             "architecture": architecture,
             "brief": format!("תקציר לדוגמה של הכותב המזויף.\nהשינוי האחרון נגע ב־{named}."),
             "why_it_matters": "כאן יופיע למה השינוי חשוב, עם קוד בתוך הטקסט כמו `if a <= b {`.",
@@ -535,7 +535,7 @@ impl ClaudeWriter {
             "{PROMPT}\nThe summaries of this prompt's earlier cards, oldest first:\n{earlier}\n\
              The brief so far:\n{brief}\n"
         );
-        self.claude(&head, &request.change)
+        self.claude(&head, request.diff())
     }
 
     /// The `claude -p` run that rewrites a session's brief from Daniel's `prompts`, its card
@@ -582,7 +582,7 @@ impl ClaudeWriter {
     /// The `claude -p` run for "explain more" on `card`, which the writer reads with its change.
     pub fn more_command(&self, request: &CardRequest, card: &Card) -> Command {
         let head = format!("{MORE}\nThe card's explanation:\n{}\n", card.explanation);
-        self.claude(&head, &request.change)
+        self.claude(&head, request.diff())
     }
 
     /// The `claude -p` run on `head`, then `change`, cut at `MAX_CHANGE`.

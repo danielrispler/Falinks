@@ -60,7 +60,7 @@ type CardRequest = {
   session_id: string;
   id: string;
   base: Base;
-  change: string;
+  change: string | null;
   agent: string | null;
   changed_by: Record<string, string[]>;
 };

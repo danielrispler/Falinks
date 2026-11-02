@@ -480,7 +480,7 @@ impl Session {
         };
         let since = std::mem::take(self.since(owner));
         self.since(owner).at = at;
-        let (base, change) = change.map_or_default(|c| (c.base, c.diff));
+        let (base, change) = change.map_or_default(|c| (c.base, Some(c.diff)));
         CardRequest {
             session_id: self.id.clone(),
             id: card_id(owner.unwrap_or(&self.id), at),
@@ -616,9 +616,11 @@ pub struct CardRequest {
     /// was written at.
     pub id: String,
     pub base: Base,
-    /// The diff of each file that changed since the base, commits included. Empty on a card built
-    /// from `workers`' cards.
-    pub change: String,
+    /// The diff of each file that changed since the base, commits included. The core gives none on
+    /// a card built from `workers`' cards; the understanding layer fills it with their text before
+    /// it asks the writer and stores the card.
+    #[serde(default)]
+    pub change: Option<String>,
     /// When the hook received the prompt of Daniel's that the card belongs to: its session's latest
     /// prompt that is not a wake-up; for a worker's card, when the worker started. `None` in cards
     /// stored before #377.
@@ -636,6 +638,11 @@ pub struct CardRequest {
 }
 
 impl CardRequest {
+    /// The change the writer reads: the diff, or the workers' text; empty when there is none.
+    pub fn diff(&self) -> &str {
+        self.change.as_deref().unwrap_or_default()
+    }
+
     /// Whose card it is, and whose brief it updates: its worker's id, else its session's.
     pub fn owner(&self) -> &str {
         self.agent.as_deref().unwrap_or(&self.session_id)
