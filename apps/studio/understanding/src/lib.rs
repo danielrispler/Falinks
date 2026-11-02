@@ -255,7 +255,7 @@ fn workers(store: &CardStore, request: &CardRequest, session: &Session) -> Optio
         let of = cards.iter().filter(|kept| kept.request.owner() == agent.id);
         let summaries: Vec<&str> = of.map(|kept| kept.card.summary.as_str()).collect();
         let running = agent.status == Status::Running && agent.kind == Kind::Worker;
-        let name = agent.description.as_deref().unwrap_or(&agent.id);
+        let name = &agent.name;
         let did = match &summaries[..] {
             [] if running => "no card yet".into(),
             [] => return None,
