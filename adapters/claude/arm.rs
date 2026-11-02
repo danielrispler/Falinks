@@ -63,6 +63,10 @@ const LETTERS: [&str; 2] = ["A", "B"];
 pub fn agent_name(agent: usize) -> String {
     format!("agent-{agent}")
 }
+/// The run-directory name of live workspace `index`; 0 is the primary root.
+pub fn space_name(index: usize) -> String {
+    format!("space{index}")
+}
 
 /// The output forms an edit request uses, in `FORMS` order.
 pub fn forms(request: &Value) -> Vec<&'static str> {

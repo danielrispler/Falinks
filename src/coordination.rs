@@ -812,7 +812,7 @@ impl Engine {
                 return fail("offer ID reused with changed contents");
             }
             // A repeat reports coverage as of the repeat; the first call queued any run.
-            let base = crate::revision(&db, publication::published(&db)?)?;
+            let base = publication::published_capture(&db)?;
             let coverage = publication::queue(&db, &existing.capture, &base, false)?;
             return Ok(Offered {
                 checkpoint: existing,
@@ -841,7 +841,7 @@ impl Engine {
             ));
         }
         retain(&self.state, &capture)?;
-        let base = crate::revision(&db, publication::published(&db)?)?;
+        let base = publication::published_capture(&db)?;
         let (members, contributions) = publication::coverage(&db, &capture, &base)?;
         let reviews = obligations
             .into_iter()

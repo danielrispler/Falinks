@@ -1026,7 +1026,7 @@ impl Engine {
     }
     pub fn published(&self) -> Result<Capture> {
         let db = connect(&self.state)?;
-        revision(&db, publication::published(&db)?)
+        publication::published_capture(&db)
     }
     pub fn history(&self) -> Result<Vec<Record>> {
         records(&connect(&self.state)?)

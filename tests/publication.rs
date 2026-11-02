@@ -62,7 +62,8 @@ fn passing() -> Vec<Check> {
         })
         .into()
 }
-fn applied(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
+/// Like `support::applied`, but reads the primary workspace (`capture`), not `capture_for`.
+fn applied_primary(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
     let current = engine.capture().unwrap();
     let outcome = engine
         .apply(client, edit(id, &current, path, bytes))
@@ -86,14 +87,14 @@ fn members(agents: &[usize]) -> BTreeSet<usize> {
 }
 /// Alice changes `a` to 2; Bob's `b` now needs it. Neither compiles alone as a pair of drafts.
 fn team_candidate(engine: &Engine, alice: &Client, bob: &Client) -> Capture {
-    applied(
+    applied_primary(
         engine,
         alice,
         "a",
         "a.rs",
         "pub fn a() -> i32 {\n    2\n}\n",
     );
-    applied(
+    applied_primary(
         engine,
         bob,
         "b",
@@ -149,7 +150,7 @@ fn complete_offer_coverage_runs_checks_and_publishes_only_the_exact_candidate() 
     assert_eq!(bobs.checkpoint.base, 0);
     assert_eq!(bobs.checkpoint.members, members(&[0, 1]));
     // Live drafting continues, including broken code, after the offers.
-    applied(&engine, &alice, "draft", "a.rs", "pub fn a( unfinished");
+    applied_primary(&engine, &alice, "draft", "a.rs", "pub fn a( unfinished");
     let run = engine.validate().unwrap().expect("coverage queued a run");
     assert_eq!(run.binding.tree, candidate.tree);
     assert_eq!(run.binding.base, 0);
@@ -209,7 +210,7 @@ fn coverage_counts_overwritten_authors_and_required_members_but_not_notified_pee
             },
         )
         .unwrap();
-    let solo = applied(
+    let solo = applied_primary(
         &engine,
         &alice,
         "a",
@@ -234,14 +235,14 @@ fn coverage_counts_overwritten_authors_and_required_members_but_not_notified_pee
             },
         )
         .unwrap();
-    applied(
+    applied_primary(
         &engine,
         &bob,
         "bob-a",
         "a.rs",
         "pub fn a() -> i32 {\n    3\n}\n",
     );
-    let overwritten = applied(
+    let overwritten = applied_primary(
         &engine,
         &alice,
         "a-again",
@@ -266,7 +267,7 @@ fn coverage_counts_overwritten_authors_and_required_members_but_not_notified_pee
     // An explicitly required member must offer even without included work.
     let (_dir, engine, alice, bob) = fixture();
     engine.require_members(members(&[1])).unwrap();
-    let solo = applied(
+    let solo = applied_primary(
         &engine,
         &alice,
         "a",
@@ -288,7 +289,7 @@ fn coverage_counts_overwritten_authors_and_required_members_but_not_notified_pee
 fn feedback_and_failed_checks_preserve_drafts_candidates_and_published_state() {
     let (dir, engine, alice, bob) = fixture();
     // Unfinished team code: Bob relies on `a` returning 2 before Alice has changed it.
-    let unfinished = applied(
+    let unfinished = applied_primary(
         &engine,
         &bob,
         "b",
@@ -324,7 +325,7 @@ fn feedback_and_failed_checks_preserve_drafts_candidates_and_published_state() {
     engine
         .offer(&bob, offer("bob", unfinished.revision))
         .unwrap();
-    applied(
+    applied_primary(
         &engine,
         &bob,
         "draft",
@@ -465,14 +466,14 @@ fn an_offer_is_superseded_or_withdrawn_by_the_id_its_reply_gave() {
 fn base_advances_return_candidates_and_newer_publications_are_never_overwritten() {
     let (_dir, engine, alice, bob) = fixture();
     engine.configure_checks(passing()).unwrap();
-    let first = applied(
+    let first = applied_primary(
         &engine,
         &alice,
         "a",
         "a.rs",
         "pub fn a() -> i32 {\n    2\n}\n",
     );
-    let team = applied(
+    let team = applied_primary(
         &engine,
         &bob,
         "b",
@@ -485,10 +486,10 @@ fn base_advances_return_candidates_and_newer_publications_are_never_overwritten(
     engine.offer(&alice, offer("team", team.revision)).unwrap();
     engine.offer(&bob, offer("team", team.revision)).unwrap();
     let accepted = engine.validate().unwrap().unwrap();
-    assert!(matches!(
-        accepted.outcome,
-        Some(RunOutcome::Published { .. })
-    ));
+    assert!(
+        matches!(accepted.outcome, Some(RunOutcome::Published { .. })),
+        "{accepted:?}"
+    );
     assert_eq!(engine.published().unwrap(), first);
     let returned = engine.validate().unwrap().unwrap();
     assert!(
@@ -513,14 +514,14 @@ fn base_advances_return_candidates_and_newer_publications_are_never_overwritten(
     // A run for older work queued behind a newer publication can never move the pointer back.
     let (_dir, engine, alice, bob) = fixture();
     engine.configure_checks(passing()).unwrap();
-    let first = applied(
+    let first = applied_primary(
         &engine,
         &alice,
         "a",
         "a.rs",
         "pub fn a() -> i32 {\n    2\n}\n",
     );
-    let team = applied(
+    let team = applied_primary(
         &engine,
         &bob,
         "b",
@@ -660,7 +661,7 @@ fn publication_crash_boundaries_accept_all_or_none_and_recover_committed_outcome
             .offer(&bob, offer("bob", candidate.revision))
             .unwrap();
         let id = engine.runs().unwrap()[0].id.clone();
-        applied(&engine, &alice, "draft", "a.rs", "pub fn a( unfinished");
+        applied_primary(&engine, &alice, "draft", "a.rs", "pub fn a( unfinished");
         drop(engine);
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", "publication_crash_worker"])
@@ -826,7 +827,7 @@ fn missing_published_evidence_stops_restart_without_replacing_drafts() {
         .offer(&bob, offer("bob", candidate.revision))
         .unwrap();
     engine.validate().unwrap();
-    applied(&engine, &bob, "draft", "b.rs", "draft");
+    applied_primary(&engine, &bob, "draft", "b.rs", "draft");
     drop(engine);
     let blob = candidate.files["a.rs"].blob.clone().unwrap();
     fs::remove_file(
@@ -844,14 +845,14 @@ fn missing_published_evidence_stops_restart_without_replacing_drafts() {
 fn a_failing_check_on_a_two_member_candidate_accepts_neither_member() {
     let (_dir, engine, alice, bob) = fixture();
     let initial = engine.published().unwrap();
-    applied(
+    applied_primary(
         &engine,
         &alice,
         "a",
         "a.rs",
         "pub fn a() -> i32 {\n    3\n}\n",
     );
-    let candidate = applied(
+    let candidate = applied_primary(
         &engine,
         &bob,
         "b",
