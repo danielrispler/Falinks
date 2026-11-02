@@ -259,14 +259,15 @@ fn each_card_records_when_it_was_added_when_its_quiz_showed_and_when_it_was_gues
     let data = tempfile::tempdir().unwrap();
     let path = data.path().join("cards.json");
     let mut store = two_cards(&path);
-    store.show("toolu_01A", 1_761_744_000_000).unwrap();
-    // The pane draws it again after a restart; the first time stays.
-    store.show("toolu_01A", 1_761_744_050_000).unwrap();
+    store.show(&["toolu_01A"], 1_761_744_000_000).unwrap();
     store.guess("toolu_01A", 0, 1_761_744_004_000).unwrap();
     // A card guessed before its quiz time was kept gets none, so a guess never comes
     // before its quiz.
     store.guess("toolu_01B", 0, 1_761_744_060_000).unwrap();
-    store.show("toolu_01B", 1_761_744_070_000).unwrap();
+    // The pane draws both again in one call, after a restart; the first time stays.
+    store
+        .show(&["toolu_01A", "toolu_01B"], 1_761_744_070_000)
+        .unwrap();
 
     let reopened = CardStore::open(path).unwrap();
 
@@ -492,4 +493,19 @@ fn briefs_survive_a_restart_and_show_with_their_sessions_cards() {
     let shown = reopened.session_cards(session, 1_761_743_990_000);
     assert_eq!(shown.brief.as_deref(), Some(brief));
     assert_eq!(reopened.session_cards("none", 0).brief, None);
+}
+
+#[test]
+fn quizzes_that_showed_at_once_are_saved_in_one_call() {
+    let data = tempfile::tempdir().unwrap();
+    let path = data.path().join("cards.json");
+    let mut store = two_cards(&path);
+    store
+        .show(&["toolu_01A", "toolu_01B"], 1_761_744_000_000)
+        .unwrap();
+
+    let reopened = CardStore::open(path).unwrap();
+
+    let shown: Vec<_> = reopened.cards().iter().map(|kept| kept.shown_at).collect();
+    assert_eq!(shown, [Some(1_761_744_000_000), Some(1_761_744_000_000)]);
 }
