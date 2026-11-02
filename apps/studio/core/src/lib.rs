@@ -73,6 +73,9 @@ pub struct Session {
     pub questions: Vec<Question>,
     /// Its latest `Stop`, until its next prompt (#369, decision 19).
     pub stopped: Option<Stopped>,
+    /// When its latest `Stop` was received, which took its workers' cards since its last card.
+    #[serde(skip)]
+    stopped_at: u64,
     /// Whether its turn was opened by a wake-up and has had no prompt of Daniel's since.
     #[serde(skip)]
     woken: bool,
@@ -178,7 +181,7 @@ pub struct Subagent {
     pub ended_at: Option<u64>,
     /// The first line of its last message, from its `SubagentStop`.
     pub result: Option<String>,
-    /// Daniel opened its line.
+    /// Daniel opened its line after it failed (#434, decision 39).
     pub opened: bool,
     /// The folder of its first event that has one: its worktree, or its parent's folder.
     #[serde(skip)]
@@ -641,12 +644,27 @@ pub enum Output {
     },
     /// Worker `agent` of a session, at any depth, newly failed. A failed helper raises none.
     Failed { session_id: String, agent: String },
+    /// Helper `agent` became a worker, which the card store keeps, since a replay takes no
+    /// fingerprint to see its command's change (#434, decision 37).
+    Promoted { agent: String },
     /// A prompt named a known task id in markup the studio does not know: drift in Claude Code's
     /// wake-ups, for stderr (#369, decision 7).
     Unrecognised { session_id: String, task_id: String },
     /// A session's first `Stop`: read Claude Code's version from its transcript, and nothing else
     /// (#369, decision 9).
     Version { transcript_path: String },
+}
+
+/// What the live app learned that the event log does not hold, which the card store keeps as it
+/// happens and the core applies after the replay (#434, decision 37).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveFacts {
+    /// The helpers promoted to workers (`Output::Promoted`).
+    #[serde(default)]
+    pub promoted: BTreeSet<String>,
+    /// The failed lines Daniel opened (`Studio::open`).
+    #[serde(default)]
+    pub opened: BTreeSet<String>,
 }
 
 /// A session's change since its last card (#369, decision 10), with what the card writer needs: the
@@ -1115,6 +1133,12 @@ impl Studio {
         // The hooks are async, so the latest event can land before an earlier one.
         session.agent.last_event_at = session.agent.last_event_at.max(event.studio_received_ms);
         let failed_before = session.failed_workers();
+        let helpers: Vec<String> = session
+            .agents
+            .iter()
+            .filter(|a| a.kind == Kind::Helper)
+            .map(|a| a.agent.id.clone())
+            .collect();
         let its_own = |id: &String| changes.contains_key(id);
         session.track_agents(&event, event.agent_id.as_ref().is_some_and(its_own));
         // A child's events still keep its session from going idle, but its folder and steps are its
@@ -1133,6 +1157,9 @@ impl Studio {
                 agent,
             })
             .collect();
+        let worker = |id: &String| session.subagent(id).is_some_and(|a| a.kind == Kind::Worker);
+        let promoted = helpers.into_iter().filter(worker);
+        outputs.extend(promoted.map(|agent| Output::Promoted { agent }));
         let mut blocked_before = session.needs_you();
         let tool = event.tool_name.unwrap_or_default();
         let id = Some(event.tool_use_id.clone()).filter(|id| !id.is_empty());
@@ -1222,6 +1249,7 @@ impl Studio {
                 // The order on `Stop`: clear its own blocks first, then ask if the message asks.
                 session.unblock();
                 session.turn_ended = true;
+                session.stopped_at = at;
                 // A subagent's wait outlasts the turn, so it gives no second notice.
                 blocked_before = session.needs_you();
                 session.asked = asks(&event.last_assistant_message);
@@ -1398,6 +1426,40 @@ impl Studio {
         self.apply(line);
     }
 
+    /// Applies, after the replay, what the live app learned before a restart (#434, decisions 37 and
+    /// 38): the card store's live-only `facts`, and its `cards`' requests.
+    pub fn restore(&mut self, facts: &LiveFacts, cards: &[CardRequest]) {
+        let agents = self.sessions.values_mut().flat_map(|s| &mut s.agents);
+        for agent in agents {
+            if facts.promoted.contains(&agent.agent.id) {
+                agent.kind = Kind::Worker;
+            }
+            agent.opened |= facts.opened.contains(&agent.agent.id);
+        }
+        for session in self.sessions.values_mut() {
+            let id = session.agent.id.clone();
+            let ours: Vec<(&CardRequest, u64)> = cards
+                .iter()
+                .filter(|r| r.session_id == id)
+                .map(|r| (r, card_time(&r.id)))
+                .collect();
+            // Its own last card, or else its last `Stop`, took the worker cards before it.
+            let own = ours.iter().filter(|(r, _)| r.agent.is_none());
+            let taken = own.map(|(_, at)| *at).fold(session.stopped_at, u64::max);
+            for (request, at) in ours {
+                let owner = request.owner();
+                // Each owner's fallback counts from its newest card.
+                if owner == id || session.subagent(owner).is_some() {
+                    let since = &mut session.record_mut(owner).since;
+                    since.at = since.at.max(at);
+                }
+                if request.agent.is_some() && at > taken {
+                    session.agent.since.cards.push(request.id.clone());
+                }
+            }
+        }
+    }
+
     /// The shell's clock, in Unix milliseconds, on each pass of its read loop, the first right after
     /// the replay. Rules that fire with no event use it. Returns whether a session changed state.
     pub fn tick(&mut self, now: u64) -> bool {
@@ -1446,13 +1508,17 @@ impl Studio {
     }
 
     /// Daniel opened subagent `id`'s line, so its view shows, with its own cards and brief, and a
-    /// failed helper folds into its parent's line.
-    pub fn open(&mut self, id: &str) {
+    /// failed helper folds into its parent's line. Returns whether the opening counts, which the
+    /// card store records: only a line whose agent had already failed (#434, decision 39).
+    pub fn open(&mut self, id: &str) -> bool {
         self.viewed = Some(id.into());
         let agents = self.sessions.values_mut().flat_map(|s| &mut s.agents);
-        for agent in agents.filter(|a| a.agent.id == id) {
+        let mut opened = false;
+        for agent in agents.filter(|a| a.agent.id == id && a.failed()) {
             agent.opened = true;
+            opened = true;
         }
+        opened
     }
 
     /// The session Daniel selected, which the session view shows; `None` until his first click.
@@ -1492,6 +1558,12 @@ impl Studio {
 /// The id of `owner`'s card written at `at`, a worker's or else a session's (`CardRequest::id`).
 fn card_id(owner: &str, at: u64) -> String {
     format!("{owner}@{at}")
+}
+
+/// When the hook received the event card `id` was written at (`card_id`); 0 for an id of another form.
+fn card_time(id: &str) -> u64 {
+    let at = id.rsplit_once('@').and_then(|(_, at)| at.parse().ok());
+    at.unwrap_or_default()
 }
 
 /// The first `n` characters of an id.

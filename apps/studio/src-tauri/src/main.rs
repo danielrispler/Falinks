@@ -52,11 +52,14 @@ fn select(id: String, studio: State<Mutex<Studio>>) -> serde_json::Value {
     selection(&studio)
 }
 
-/// Daniel opened subagent `agent_id`'s line; returns the selection, which names it.
+/// Daniel opened subagent `agent_id`'s line; returns the selection, which names it. The card store
+/// keeps the opening of a failed line, so it stays faded after a restart.
 #[tauri::command]
-fn open(agent_id: String, studio: State<Mutex<Studio>>) -> serde_json::Value {
+fn open(agent_id: String, studio: State<Mutex<Studio>>, cards: State<Cards>) -> serde_json::Value {
     let mut studio = studio.lock().unwrap();
-    studio.open(&agent_id);
+    if studio.open(&agent_id) {
+        unsaved(cards.lock().unwrap().opened(&agent_id));
+    }
     selection(&studio)
 }
 
@@ -273,6 +276,9 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
             // replay get their base now, and their `Stop` has something to compare with. The list
             // goes first, so Daniel sees it while `git` runs.
             if !live {
+                let mut studio = state.lock().unwrap();
+                app.state::<Cards>().lock().unwrap().restore(&mut studio);
+                drop(studio);
                 state.lock().unwrap().tick(millis());
                 sent.list(app);
                 let waiting = state.lock().unwrap().waiting_folders();
@@ -287,6 +293,9 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                     }
                     Output::Failed { session_id, agent } => {
                         tell(app, "Worker failed", &session_id, Some(&agent));
+                    }
+                    Output::Promoted { agent } => {
+                        unsaved(app.state::<Cards>().lock().unwrap().promoted(&agent));
                     }
                     Output::Unrecognised {
                         session_id,

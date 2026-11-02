@@ -120,6 +120,27 @@ fn the_runs_worker_completes_with_its_last_message_and_its_killed_helper_stays_v
     assert!(agent(&studio, RUN_SESSION, RUN_HELPER).faded());
 }
 
+/// #434, decision 39: opening a running subagent's line records nothing, so a helper opened while it
+/// ran and then killed stays on its parent's line as failed.
+#[test]
+fn a_helper_opened_while_running_and_then_killed_stays_visible_and_failed() {
+    let lines: Vec<&str> = RUN.lines().collect();
+    // Up to the wake-up that reports the helper killed (line 25).
+    let mut studio = replay(&lines[..24].join("\n"));
+    assert!(
+        !studio.open(RUN_HELPER),
+        "a running line's opening counts for nothing"
+    );
+
+    for line in &lines[24..] {
+        studio.replay(line);
+    }
+
+    let helper = agent(&studio, RUN_SESSION, RUN_HELPER);
+    assert!(helper.failed() && !helper.opened && !helper.faded());
+    assert!(studio.open(RUN_HELPER), "a failed line's opening counts");
+}
+
 #[test]
 fn a_helper_that_succeeds_fades_and_a_worker_keeps_its_row() {
     let studio = replay(DAY);

@@ -95,6 +95,8 @@ struct Shell {
     repo: PathBuf,
     /// When the hook received the latest event, one millisecond apart.
     at: u64,
+    /// The event log so far, which a restart replays.
+    log: Vec<String>,
     _dirs: [tempfile::TempDir; 2],
 }
 
@@ -114,6 +116,7 @@ impl Shell {
             store: Mutex::new(CardStore::open(data.path().join("cards.json")).unwrap()),
             repo,
             at: 1_793_400_000_000,
+            log: Vec::new(),
             _dirs: [code, data],
         }
     }
@@ -131,7 +134,13 @@ impl Shell {
         let looks = self.studio.fingerprint_folders(&line);
         let changes = fingerprint_changes(looks, &mut self.fingerprints);
         let outputs = self.studio.apply_with_changes(&line, changes);
-        let requested = |output: &Output| matches!(output, Output::Card(_) | Output::Brief(_));
+        self.log.push(line);
+        let requested = |output: &Output| {
+            matches!(
+                output,
+                Output::Card(_) | Output::Brief(_) | Output::Promoted { .. }
+            )
+        };
         outputs.into_iter().filter(requested).collect()
     }
 
@@ -143,6 +152,7 @@ impl Shell {
             Output::Card(request) => {
                 assert!(write_stop(&self.store, &self.writer, request, session, log))
             }
+            Output::Promoted { agent } => self.store.lock().unwrap().promoted(&agent).unwrap(),
             Output::Brief(request) => {
                 assert!(write_brief(
                     &self.store,
@@ -154,6 +164,17 @@ impl Shell {
             }
             _ => {}
         }
+    }
+
+    /// The app restarts as the shell starts: the store read from disk, the log replayed, the store's
+    /// facts and cards applied, and the turns and subagents still open fingerprinted.
+    fn restart(&mut self) {
+        let path = self._dirs[1].path().join("cards.json");
+        self.store = Mutex::new(CardStore::open(path).unwrap());
+        self.studio = Studio::replayed(&self.log);
+        self.store.lock().unwrap().restore(&mut self.studio);
+        self.fingerprints = HashMap::new();
+        fingerprint_changes(self.studio.waiting_folders(), &mut self.fingerprints);
     }
 
     /// Takes event `name`, with `fields` added, and writes the cards and briefs it asks for.
@@ -656,4 +677,36 @@ fn a_rows_line_is_who_needs_you_then_the_stopped_line_then_who_returned_then_the
     // Once the turn is over: the stopped line.
     shell.event("Stop", json!({ "last_assistant_message": "Done." }));
     assert_eq!(shell.line(), "Done.");
+}
+
+/// #434, decisions 37 and 38: after a restart the shell's join still knows the helper promoted live
+/// and the worker cards its session collected, from the store on disk.
+#[test]
+fn after_a_restart_a_promoted_helper_is_a_worker_and_the_stop_writes_its_card_from_the_workers() {
+    let mut shell = Shell::new();
+    let repo = shell.repo.clone();
+    shell.take("UserPromptSubmit", json!({ "prompt": "Implement #378" }));
+    worker_writes_and_ends(&mut shell);
+    shell.take("PostToolUse", spawn_child("h1", "Format", false));
+    shell.child("h1", &repo, "SubagentStart", json!({}));
+    shell.child("h1", &repo, "PreToolUse", bash("cargo fmt"));
+    fs::write(repo.join("lib.rs"), "fn a() {}\n\n").unwrap();
+    shell.child("h1", &repo, "PostToolUse", bash("cargo fmt"));
+    // Its change is undone, so the session's own worktree ends where its turn began.
+    git(&repo, &["checkout", "-q", "lib.rs"]);
+
+    shell.restart();
+    let kind = |shell: &Shell| shell.studio.session("s1").unwrap().agents[1].kind;
+    assert_eq!(kind(&shell), Kind::Worker);
+    shell.take("Stop", json!({}));
+
+    let store = shell.store.lock().unwrap();
+    let requests: Vec<&CardRequest> = store.cards().iter().map(|kept| &kept.request).collect();
+    let [worker, own] = requests[..] else {
+        panic!("a worker's card and its parent's: {requests:?}");
+    };
+    assert_eq!(
+        (own.agent.as_deref(), &own.workers[..]),
+        (None, std::slice::from_ref(&worker.id))
+    );
 }
