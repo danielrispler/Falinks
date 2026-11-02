@@ -404,16 +404,16 @@
     "scope": "#205's research (its resolution, \"Budget (B1)\"): engine waves, pilots, smoke runs and the scored batch. It never draws on the setup budget above or on track T's. Each session charges run wall time (including the usage drain) and harness preparation, with complete-only usage; implementation is recorded but not charged, as in track T. Hard stop: stop and ask before exceeding cap_seconds; re-estimated after the smoke runs, when git-1 is dropped first if the batch at n = 8 does not fit.",
     "cap_seconds": 43200,
     "totals": {
-      "implementation_seconds": 81850,
-      "run_seconds": 6110,
-      "preparation_seconds": 46,
-      "charged_seconds": 6156,
+      "implementation_seconds": 84524,
+      "run_seconds": 9091,
+      "preparation_seconds": 55,
+      "charged_seconds": 9146,
       "complete_usage": {
-        "runs": 14,
-        "input_tokens": 1728,
-        "output_tokens": 425032,
-        "cache_read_input_tokens": 34701139,
-        "cache_creation_input_tokens": 1727564
+        "runs": 18,
+        "input_tokens": 2224,
+        "output_tokens": 559344,
+        "cache_read_input_tokens": 45370199,
+        "cache_creation_input_tokens": 2305536
       }
     },
     "sessions": [
@@ -606,6 +606,44 @@
         },
         "measurement": "Continues the session above, from its entry to this one. preparation_seconds is measured: 7 s from the start of Daniel's command to the start of the batch (21:56:14-21:56:21Z: checking out 0ae715a in /private/tmp/f335 and rebuilding; the configuration was reused). run_seconds is measured: wave 3's batch, 1,747 s (21:56:21-22:25:28Z), the gate and six runs. Usage is from the three complete runs (go-tasks-3-falinks-2, go-tasks-5-git-2, go-relationships-falinks-2), one usage per message.id from the archived sessions (cache_creation_input_tokens sums the 1-hour and 5-minute writes); go-tasks-1, -2 and -4-falinks-2 are partial (#355 A3: a relocation stopped a turn before its result) and the gate is excluded. implementation_seconds is the rest: opening PR #401 and posting the wave-2 log, waiting for the run, the wave-3 analysis, Daniel's answer on the Git-arm fix, and the fix with its test and the v54 -> v55 freeze; it is not charged.",
         "work": "#335 wave 3 at 0ae715a (manifest v54): six runs, all successful (local-evidence/2026-11-01-wave-3-335). No new engine defect class. Git-arm instruction defect fixed on its own branch: check takes the resolved merge commit by an unambiguous short ID; v54 -> v55 freeze."
+      },
+      {
+        "issue": 335,
+        "start_utc": "2026-11-01T22:33:44Z",
+        "stop_utc": "2026-11-01T23:02:06Z",
+        "measured_seconds": 1702,
+        "implementation_seconds": 967,
+        "run_seconds": 726,
+        "preparation_seconds": 9,
+        "charged_seconds": 735,
+        "complete_usage": {
+          "runs": 1,
+          "input_tokens": 124,
+          "output_tokens": 33822,
+          "cache_read_input_tokens": 2609960,
+          "cache_creation_input_tokens": 131431
+        },
+        "measurement": "Continues the session above, from its entry to the session's last message before an overnight break. preparation_seconds is measured: 9 s from the start of Daniel's command to the start of the batch (22:48:46-22:48:55Z: checking out 73e436e in /private/tmp/f335 and rebuilding; the configuration was reused). run_seconds is measured: wave 4's first invocation, 726 s (22:48:55-23:01:01Z), the gate and go-tasks-1-falinks-2; the batch then paused because the five-hour usage window reached 96% (exit 3). Usage is from that one complete run, one usage per message.id from the archived sessions (cache_creation_input_tokens sums the 1-hour and 5-minute writes); the gate is excluded. implementation_seconds is the rest: opening PR #426, the wave-3 log, waiting for the run, and reading run 1 and the pause; it is not charged.",
+        "work": "#335 wave 4, invocation 1 at 73e436e (manifest v55): go-tasks-1-falinks-2 successful, then a pause at 96% of the five-hour usage window (local-evidence/2026-11-01-wave-4-335)."
+      },
+      {
+        "issue": 335,
+        "start_utc": "2026-11-02T09:08:47Z",
+        "stop_utc": "2026-11-02T10:14:49Z",
+        "measured_seconds": 3962,
+        "implementation_seconds": 1707,
+        "run_seconds": 2255,
+        "preparation_seconds": 0,
+        "charged_seconds": 2255,
+        "complete_usage": {
+          "runs": 3,
+          "input_tokens": 372,
+          "output_tokens": 100490,
+          "cache_read_input_tokens": 8059100,
+          "cache_creation_input_tokens": 446541
+        },
+        "measurement": "Starts at Daniel's resume command after the overnight break (23:02:06Z-09:08:47Z, not recorded). preparation_seconds is measured: 0 s (09:08:47Z, the checkout and builds were already current). run_seconds is measured: wave 4's second invocation, 2,255 s (09:08:47-09:46:22Z), the five remaining runs. Usage is from the three complete runs among them (go-tasks-2-falinks-2, go-tasks-4-falinks-2, go-tasks-5-git-2), counted as above; go-tasks-3-falinks-2 and go-indep-2-falinks-2 are partial (#355 A3). implementation_seconds is the rest: the wave-4 analysis and log and moving the evidence into local-evidence; it is not charged.",
+        "work": "#335 wave 4, invocation 2 at 73e436e (manifest v55): five runs, all successful (local-evidence/2026-11-01-wave-4-335). No new class of engine defect; waves 3 and 4 give 8 clean dev runs on engine v54, and the waves stop at the cap."
       }
     ]
   }
