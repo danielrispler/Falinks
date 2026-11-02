@@ -117,6 +117,18 @@ fn config(base: &Path, worker_script: &str, worker_command: Value, runtime: &str
     path
 }
 
+/// A `batch` command for `config` into `runs`, with a clean checkout under `base`.
+fn batch(base: &Path, config: &Path, runs: &Path) -> Command {
+    let mut command = Command::new(CLI);
+    command
+        .args(["batch", "--config"])
+        .arg(config)
+        .arg("--runs")
+        .arg(runs)
+        .env("FALINKS_FAKE_CHECKOUT", checkout(base));
+    command
+}
+
 fn baseline(fixture: &str, config: &Path, run: &Path) -> Output {
     cli([
         OsStr::new("baseline"),
@@ -589,30 +601,20 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
         SCRIPTED,
     );
     let runs = tmp.path().join("runs");
-    let batch = |outcome: &str| {
-        Command::new(CLI)
-            .args(["batch", "--config"])
-            .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
-            .arg(&config_path)
-            .arg("--runs")
-            .arg(&runs)
+    let run_batch = |outcome: &str| {
+        batch(tmp.path(), &config_path, &runs)
             .env("FALINKS_FAKE_OUTCOME", outcome)
             .output()
             .unwrap()
     };
-    let paused = batch("infrastructure_failure");
+    let paused = run_batch("infrastructure_failure");
     assert_eq!(paused.status.code(), Some(3), "{}", text(&paused));
     let ledger = read(runs.join("batch.json"));
     assert_eq!(ledger["runs"][0]["outcome"], "success");
     assert_eq!(ledger["runs"][1]["outcome"], "infrastructure_failure");
     assert_eq!(ledger["pauses"].as_array().unwrap().len(), 1);
     assert_eq!(ledger["invocations"][0]["verification"]["passed"], true);
-    let early = Command::new(CLI)
-        .args(["batch", "--config"])
-        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
-        .arg(&config_path)
-        .arg("--runs")
-        .arg(tmp.path().join("scored"))
+    let early = batch(tmp.path(), &config_path, &tmp.path().join("scored"))
         .arg("--after-pilot")
         .arg(&runs)
         .output()
@@ -623,7 +625,7 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
         text(&early)
     );
 
-    let finished = batch("success");
+    let finished = run_batch("success");
     assert!(finished.status.success(), "{}", text(&finished));
     let ledger = read(runs.join("batch.json"));
     let replacement = &ledger["runs"][2];
@@ -640,7 +642,7 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
     assert_eq!(ledger["invocations"][1]["verification"]["passed"], true);
 
     // A finished batch runs no slot: neither a gate nor a verification.
-    let idle = batch("success");
+    let idle = run_batch("success");
     assert!(idle.status.success(), "{}", text(&idle));
     let ledger = read(runs.join("batch.json"));
     assert_eq!(ledger["invocations"].as_array().unwrap().len(), 3);
@@ -652,19 +654,12 @@ fn batch_gates_pauses_on_infrastructure_failure_and_records_the_replacement() {
 fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
     let tmp = tmp("falinks-gate-test-");
     let mut config = read(config(tmp.path(), SCRIPTED, json!(["{worker}"]), SCRIPTED));
-    let mut batch = |name: &str, gate: Value| {
+    let mut gated = |name: &str, gate: Value| {
         config["gate_command"] = gate;
         let path = tmp.path().join(format!("{name}.json"));
         fs::write(&path, config.to_string()).unwrap();
         let runs = tmp.path().join(name);
-        let output = Command::new(CLI)
-            .args(["batch", "--config"])
-            .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
-            .arg(&path)
-            .arg("--runs")
-            .arg(&runs)
-            .output()
-            .unwrap();
+        let output = batch(tmp.path(), &path, &runs).output().unwrap();
         assert_eq!(output.status.code(), Some(3), "{}", text(&output));
         let ledger = read(runs.join("batch.json"));
         assert!(ledger["runs"].as_array().unwrap().is_empty());
@@ -674,7 +669,7 @@ fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
         (text(&output), ledger["gates"][0].clone())
     };
     let missing = tmp.path().join("check-integration");
-    let (message, gate) = batch("missing", json!([missing, "--binary", SCRIPTED]));
+    let (message, gate) = gated("missing", json!([missing, "--binary", SCRIPTED]));
     assert!(message.contains("gate could not start"), "{message}");
     assert!(
         message.contains(&missing.display().to_string()),
@@ -682,7 +677,7 @@ fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
     );
     assert_eq!(gate["started"], false);
 
-    let (message, gate) = batch("failed", json!(["/usr/bin/false", SCRIPTED]));
+    let (message, gate) = gated("failed", json!(["/usr/bin/false", SCRIPTED]));
     assert!(message.contains("gate scenario failed"), "{message}");
     assert_eq!(gate["started"], true);
     assert_eq!(gate["passed"], false);
@@ -716,12 +711,7 @@ fn fixture_shard_runs_only_its_slots_denies_siblings_and_records_concurrency() {
     )
     .unwrap();
     let shard = base.join("shard-relationships");
-    let result = Command::new(CLI)
-        .args(["batch", "--config"])
-        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
-        .arg(&config_path)
-        .arg("--runs")
-        .arg(&shard)
+    let result = batch(tmp.path(), &config_path, &shard)
         .arg("--after-pilot")
         .arg(&pilot)
         .args(["--fixtures", "go-relationships"])
@@ -1650,13 +1640,7 @@ fn nested_agents_invalidate_the_run_are_counted_and_stop_the_batch() {
     ] {
         // Apart from the runtime: a batch denies its runs directory's siblings to every run.
         let runs = tmp.path().join("batches").join(format!("runs-{arm}"));
-        let mut command = Command::new(CLI);
-        command
-            .args(["batch", "--config"])
-            .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
-            .arg(config)
-            .arg("--runs")
-            .arg(&runs);
+        let mut command = batch(tmp.path(), config, &runs);
         if let Some(nested) = nested {
             command.env("FALINKS_FAKE_NESTED", nested);
         }
@@ -1699,19 +1683,8 @@ fn track_t_batch_runs_both_team_sizes_with_run_isolation() {
         SCRIPTED,
     );
     let runs = tmp.path().join("runs");
-    let output = Command::new(CLI)
-        .args([
-            "batch",
-            "--schedule",
-            "track-t",
-            "--fixtures",
-            "go-relationships",
-            "--config",
-        ])
-        .arg(&config)
-        .arg("--runs")
-        .arg(&runs)
-        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
+    let output = batch(tmp.path(), &config, &runs)
+        .args(["--schedule", "track-t", "--fixtures", "go-relationships"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", text(&output));
@@ -1774,19 +1747,8 @@ fn wave_batch_runs_its_regression_slot_and_writes_the_wave_report() {
         SCRIPTED,
     );
     let runs = tmp.path().join("wave-3");
-    let output = Command::new(CLI)
-        .args([
-            "batch",
-            "--schedule",
-            "wave-3",
-            "--fixtures",
-            "go-relationships",
-            "--config",
-        ])
-        .arg(&config)
-        .arg("--runs")
-        .arg(&runs)
-        .env("FALINKS_FAKE_CHECKOUT", checkout(tmp.path()))
+    let output = batch(tmp.path(), &config, &runs)
+        .args(["--schedule", "wave-3", "--fixtures", "go-relationships"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", text(&output));

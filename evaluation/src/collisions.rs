@@ -33,7 +33,8 @@
 //! written line counts once per run.
 use crate::authorship::{self, Authorship, Blame, Line, agent_name, applied, lines, matches, text};
 use crate::{
-    Result, bail, command, fixture, git, git_env, jsonl, read, sha256, strings, timing::unix,
+    Result, bail, command, fixture, git, git_env, jsonl, read, sha256, strings,
+    timing::{self, unix},
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1155,16 +1156,7 @@ impl<'a> Repo<'a> {
                 };
                 let blocks = event["message"]["content"].as_array().into_iter().flatten();
                 for block in blocks.filter(|b| b["type"] == "tool_result") {
-                    let text = match block["content"].as_str() {
-                        Some(text) => text.to_string(),
-                        None => block["content"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|b| b["text"].as_str())
-                            .collect(),
-                    };
-                    let files = conflict_files(&text);
+                    let files = conflict_files(&timing::text(block));
                     let elapsed = unix(stamp).map(|t| t - start).unwrap_or(0.0);
                     if let (false, Some(k)) = (files.is_empty(), key(self.at(elapsed))) {
                         let entry = keyed.entry(k).or_default();

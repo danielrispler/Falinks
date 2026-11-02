@@ -45,7 +45,7 @@ pub const MUTATIONS: &[&str] = &["edit", "retry", "incorporate", "apply_job"];
 /// Mutations that take output forms.
 pub const EDITS: [&str; 3] = ["edit", "retry", "incorporate"];
 /// Output forms of `EDITS` (#193 decision 1); a deletion has none. `evaluation/src/timing.rs`
-/// and `report.rs` copy this and `EDIT_COUNTS`; `tests/arm.rs` checks they agree.
+/// copies this, and `report.rs` copies `EDIT_COUNTS`; `tests/arm.rs` checks they agree.
 pub const FORMS: [&str; 3] = ["content", "replace", "from"];
 /// Counted per form: the ledger's outcomes, then calls refused before they reached the ledger
 /// (a malformed request or, for `from`, a scratch reference the host refused) and resends.
