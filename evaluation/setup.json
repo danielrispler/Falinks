@@ -404,16 +404,16 @@
     "scope": "#205's research (its resolution, \"Budget (B1)\"): engine waves, pilots, smoke runs and the scored batch. It never draws on the setup budget above or on track T's. Each session charges run wall time (including the usage drain) and harness preparation, with complete-only usage; implementation is recorded but not charged, as in track T. Hard stop: stop and ask before exceeding cap_seconds; re-estimated after the smoke runs, when git-1 is dropped first if the batch at n = 8 does not fit.",
     "cap_seconds": 43200,
     "totals": {
-      "implementation_seconds": 84524,
-      "run_seconds": 9091,
+      "implementation_seconds": 84962,
+      "run_seconds": 10351,
       "preparation_seconds": 55,
-      "charged_seconds": 9146,
+      "charged_seconds": 10406,
       "complete_usage": {
-        "runs": 18,
-        "input_tokens": 2224,
-        "output_tokens": 559344,
-        "cache_read_input_tokens": 45370199,
-        "cache_creation_input_tokens": 2305536
+        "runs": 21,
+        "input_tokens": 2458,
+        "output_tokens": 596362,
+        "cache_read_input_tokens": 47602779,
+        "cache_creation_input_tokens": 2435260
       }
     },
     "sessions": [
@@ -644,6 +644,25 @@
         },
         "measurement": "Starts at Daniel's resume command after the overnight break (23:02:06Z-09:08:47Z, not recorded). preparation_seconds is measured: 0 s (09:08:47Z, the checkout and builds were already current). run_seconds is measured: wave 4's second invocation, 2,255 s (09:08:47-09:46:22Z), the five remaining runs. Usage is from the three complete runs among them (go-tasks-2-falinks-2, go-tasks-4-falinks-2, go-tasks-5-git-2), counted as above; go-tasks-3-falinks-2 and go-indep-2-falinks-2 are partial (#355 A3). implementation_seconds is the rest: the wave-4 analysis and log and moving the evidence into local-evidence; it is not charged.",
         "work": "#335 wave 4, invocation 2 at 73e436e (manifest v55): five runs, all successful (local-evidence/2026-11-01-wave-4-335). No new class of engine defect; waves 3 and 4 give 8 clean dev runs on engine v54, and the waves stop at the cap."
+      },
+      {
+        "issue": 335,
+        "start_utc": "2026-11-02T10:14:49Z",
+        "stop_utc": "2026-11-02T10:43:07Z",
+        "measured_seconds": 1698,
+        "implementation_seconds": 438,
+        "run_seconds": 1260,
+        "preparation_seconds": 0,
+        "charged_seconds": 1260,
+        "complete_usage": {
+          "runs": 3,
+          "input_tokens": 234,
+          "output_tokens": 37018,
+          "cache_read_input_tokens": 2232580,
+          "cache_creation_input_tokens": 129724
+        },
+        "measurement": "Continues the session above, from its entry to this one. preparation_seconds is measured: 0 s (10:16:31Z; the clone was already at 73e436e and built). run_seconds is measured: the final regression sweep, 1,260 s (10:16:31-10:37:31Z), the gate and five runs. Usage is from the three complete runs (rust-errors, go-page and go-relationships-falinks-2), one usage per message.id from the archived sessions (cache_creation_input_tokens sums the 1-hour and 5-minute writes); go-indep-2 and go-indep-4-falinks-2 are partial (#355 A3) and the gate is excluded. implementation_seconds is the rest: waiting for the sweep, its analysis, moving the evidence into local-evidence and the closing comment; it is not charged.",
+        "work": "#335's final regression sweep at 73e436e (manifest v55): five runs, all successful, no regression (local-evidence/2026-11-02-sweep-335). The waves end with 8 clean dev runs on engine v54; the pilots' protocol version is manifest v55."
       }
     ]
   }
