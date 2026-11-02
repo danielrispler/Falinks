@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, HashMap},
+    time::Duration,
 };
 
 #[derive(Default)]
@@ -152,7 +153,8 @@ pub struct Question {
 pub enum Answer {
     /// Asked, with no result yet.
     Open,
-    /// Daniel's choice for each question, keyed by its text: the `PostToolUse`'s `answers`.
+    /// Daniel's choice for each question, keyed by its text: the `PostToolUse`'s `answers`, kept only
+    /// when it is an object of strings (#434, decision 42).
     Answered(Value),
     /// Its call failed or was interrupted, or its turn or its agent ended first.
     NotAnswered,
@@ -1352,7 +1354,15 @@ impl Studio {
                 if !failed
                     && let Some(question) = asked.find(|q| q.tool_use_id == event.tool_use_id)
                 {
-                    question.answer = Answer::Answered(event.tool_response.answers.clone());
+                    // Only an object of strings is kept, so the pane can read it (#434, decision 42).
+                    let answers = &event.tool_response.answers;
+                    let strings = answers
+                        .as_object()
+                        .is_some_and(|a| a.values().all(Value::is_string));
+                    question.answer = match strings {
+                        true => Answer::Answered(answers.clone()),
+                        false => Answer::NotAnswered,
+                    };
                 }
                 // A denied or interrupted call, or a failed Edit or Write, changed nothing: only a
                 // command that ran and failed has its exit code in its error.
@@ -1519,36 +1529,68 @@ fn short(id: &str, n: usize) -> &str {
 }
 
 /// 3 seconds, a starting guess for "a few seconds" (#369, decision 22 and Further Notes).
-const COMBINE_MS: u64 = 3_000;
+const COMBINE: Duration = Duration::from_secs(3);
 
-/// The notices the shell has not shown yet, each with its title and body. Those that come within
-/// `COMBINE_MS` of the first show as one notification, so a burst never floods Daniel and no notice
-/// waits longer than that.
+/// A notice not shown yet: its title and body, and for "needs you" the session it is about.
+struct Pending {
+    title: String,
+    body: String,
+    needs_you: Option<String>,
+}
+
+/// The notices the shell has not shown yet. Those that come within `COMBINE` of the first show as
+/// one notification, so a burst never floods Daniel and no notice waits longer than that. Times are
+/// on a monotonic clock, time since the app started, so a clock change never holds them back
+/// (#434, decision 28).
 #[derive(Default)]
 pub struct Notifications {
-    pending: Vec<(String, String)>,
-    first_at: u64,
+    pending: Vec<Pending>,
+    first_at: Duration,
 }
 
 impl Notifications {
-    pub fn push(&mut self, title: &str, body: String, now: u64) {
+    pub fn push(&mut self, title: &str, body: String, now: Duration) {
+        self.queue(title, body, None, now);
+    }
+
+    /// A "needs you" notice on session `session_id`, which shows only if the session still needs
+    /// Daniel when it is due (#434, decision 27).
+    pub fn push_needs_you(&mut self, session_id: &str, body: String, now: Duration) {
+        self.queue("Needs you", body, Some(session_id.into()), now);
+    }
+
+    fn queue(&mut self, title: &str, body: String, needs_you: Option<String>, now: Duration) {
         if self.pending.is_empty() {
             self.first_at = now;
         }
-        self.pending.push((title.into(), body));
+        let title = title.into();
+        self.pending.push(Pending {
+            title,
+            body,
+            needs_you,
+        });
     }
 
-    /// The notification due at `now`, as its title and body: the pending notices, once `COMBINE_MS`
-    /// has passed since the first. Only then is `focused` asked, and a focused window drops them,
-    /// since Daniel sees the list.
-    pub fn due(&mut self, now: u64, focused: impl FnOnce() -> bool) -> Option<(String, String)> {
-        if self.pending.is_empty() || now < self.first_at + COMBINE_MS {
+    /// The notification due at `now`, as its title and body: the pending notices, once `COMBINE`
+    /// has passed since the first, less the "needs you" ones whose session `needs_you` says no
+    /// longer needs Daniel. Only then is `focused` asked, and a focused window drops them, since
+    /// Daniel sees the list.
+    pub fn due(
+        &mut self,
+        now: Duration,
+        focused: impl FnOnce() -> bool,
+        needs_you: impl Fn(&str) -> bool,
+    ) -> Option<(String, String)> {
+        if self.pending.is_empty() || now < self.first_at + COMBINE {
             return None;
         }
-        let pending = std::mem::take(&mut self.pending);
-        if focused() {
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.retain(|p| p.needs_you.as_deref().is_none_or(&needs_you));
+        if pending.is_empty() || focused() {
             return None;
         }
+        let pending: Vec<(String, String)> =
+            pending.into_iter().map(|p| (p.title, p.body)).collect();
         Some(match &pending[..] {
             [one] => one.clone(),
             many => {
