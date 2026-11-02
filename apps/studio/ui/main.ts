@@ -116,11 +116,11 @@ const element = (id: string) => document.getElementById(id)!;
 
 const folder = (session: Session) => session.cwd.split("/").pop() || session.cwd;
 
-// The session list, as the shell last sent it, and the row Daniel clicked last: a session's, or a
-// subagent's, whose view then shows its own line and questions.
+// The session list and the selection, as the shell last sent them. The selection is the core's: the
+// session Daniel selected and the subagent of it he opened, whose view then shows its own line.
+type Selection = { session: Session; agent: string | null };
 let listed: Session[] = [];
-let selectedId: string | null = null;
-let viewedAgent: string | null = null;
+let selection: Selection | null = null;
 // The collapsed groups Daniel opened, which stay open when the list is drawn again.
 const collapsed: SessionState[] = ["idle", "ended"];
 const opened = new Set<SessionState>();
@@ -199,7 +199,7 @@ function rowText(session: Session): string {
 
 // One line: the folder, the session's short id, its state and what it is doing.
 function row(session: Session, children: Children): HTMLElement {
-  const pressed = session.id === selectedId && viewedAgent === null;
+  const pressed = session.id === selection?.session.id && selection.agent === null;
   const button = pressable(document.createElement("button"), pressed, () => select(session.id));
   button.className = "row";
   const state = text("span", stateLabels[session.state], "row-state");
@@ -218,7 +218,7 @@ function row(session: Session, children: Children): HTMLElement {
 // last step; a helper its task, type, status, duration and result. A failed child stands out until
 // Daniel opens it.
 function agentRow(session: Session, children: Children, agent: Subagent, depth: number): HTMLElement {
-  const button = pressable(document.createElement("button"), agent.id === viewedAgent, () =>
+  const button = pressable(document.createElement("button"), agent.id === selection?.agent, () =>
     select(session.id, agent.id),
   );
   button.className = `row ${agent.kind}`;
@@ -285,29 +285,26 @@ function showSessions(sessions: Session[]) {
 
 // Only Daniel's click changes the selected session, and the subagent of it whose view shows, if any:
 // its own line, questions, brief and cards. Opening a subagent's line also fades a failed helper.
+// The core asks for it, and the pane draws the selection the core returns.
 async function select(id: string, agent: string | null = null) {
-  selectedId = id;
-  viewedAgent = agent;
-  showSessions(listed);
-  await window.__TAURI__.core.invoke("select", { id });
+  let selected = await window.__TAURI__.core.invoke<Selection>("select", { id });
   if (agent !== null) {
-    await window.__TAURI__.core.invoke("open", { agentId: agent });
-    showSessions(await window.__TAURI__.core.invoke<Session[]>("sessions"));
+    selected = await window.__TAURI__.core.invoke<Selection>("open", { agentId: agent });
+    listed = await window.__TAURI__.core.invoke<Session[]>("sessions");
   }
-  show(await window.__TAURI__.core.invoke<Session | null>("selected"));
+  show(selected);
   await refreshCards();
 }
 
-function show(session: Session | null) {
-  element("empty").hidden = session !== null;
-  element("view").hidden = session === null;
-  if ((session?.id ?? null) !== selectedId) {
-    selectedId = session?.id ?? null;
-    showSessions(listed);
-  }
-  if (session === null) return;
+function show(selected: Selection | null) {
+  selection = selected;
+  showSessions(listed);
+  element("empty").hidden = selected !== null;
+  element("view").hidden = selected === null;
+  if (selected === null) return;
+  const session = selected.session;
   // A subagent's view shows its own line, questions, brief and cards; the checks are its session's.
-  const agent = session.agents.find((a) => a.id === viewedAgent) ?? null;
+  const agent = session.agents.find((a) => a.id === selected.agent) ?? null;
   const [label, state] = agent === null ? [stateLabels[session.state], session.state] : agentState(session, agent);
   const step = (agent ?? session).last_step;
   element("view").toggleAttribute("data-agent", agent !== null);
@@ -609,8 +606,8 @@ function showCards({ brief, recent, older }: SessionCards) {
 
 window.__TAURI__.event.listen<Session[]>("sessions", (event) => showSessions(event.payload));
 window.__TAURI__.core.invoke<Session[]>("sessions").then(showSessions);
-window.__TAURI__.event.listen<Session | null>("selected", (event) => show(event.payload));
-window.__TAURI__.core.invoke<Session | null>("selected").then(show);
+window.__TAURI__.event.listen<Selection | null>("selected", (event) => show(event.payload));
+window.__TAURI__.core.invoke<Selection | null>("selected").then(show);
 window.__TAURI__.event.listen<SessionCards>("cards", (event) => showCards(event.payload));
 // Claude Code's version changed: re-record the subagent fixture.
 window.__TAURI__.event.listen<string>("notice", (event) => {

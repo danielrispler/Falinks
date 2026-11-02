@@ -21,6 +21,14 @@ pub struct Studio {
     now: u64,
 }
 
+/// What the session view shows: the session Daniel selected, and the subagent of it he opened since,
+/// if any. The pane draws the pressed row and the view from it, and keeps no selection of its own.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct Selection<'a> {
+    pub session: &'a Session,
+    pub agent: Option<&'a str>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Session {
     pub id: String,
@@ -1385,6 +1393,15 @@ impl Studio {
     /// The session Daniel selected, which the session view shows; `None` until his first click.
     pub fn selected(&self) -> Option<&Session> {
         self.session(self.selected.as_deref()?)
+    }
+
+    /// The selected session and the subagent of it Daniel opened; `None` until his first click.
+    pub fn selection(&self) -> Option<Selection<'_>> {
+        let session = self.selected()?;
+        Some(Selection {
+            session,
+            agent: self.viewed.as_deref(),
+        })
     }
 
     /// Whose cards and brief the session view shows: the subagent Daniel opened since he selected

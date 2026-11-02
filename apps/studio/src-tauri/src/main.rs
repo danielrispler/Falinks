@@ -47,22 +47,30 @@ fn sessions(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<Row> {
     list.into_iter().map(row).collect()
 }
 
-/// Daniel clicked session `id`'s row.
+/// Daniel clicked session `id`'s row; returns the selection, which no longer names a subagent.
 #[tauri::command]
-fn select(id: String, studio: State<Mutex<Studio>>) {
-    studio.lock().unwrap().select(&id);
+fn select(id: String, studio: State<Mutex<Studio>>) -> serde_json::Value {
+    let mut studio = studio.lock().unwrap();
+    studio.select(&id);
+    selection(&studio)
 }
 
-/// Daniel opened subagent `agent_id`'s line.
+/// Daniel opened subagent `agent_id`'s line; returns the selection, which names it.
 #[tauri::command]
-fn open(agent_id: String, studio: State<Mutex<Studio>>) {
-    studio.lock().unwrap().open(&agent_id);
+fn open(agent_id: String, studio: State<Mutex<Studio>>) -> serde_json::Value {
+    let mut studio = studio.lock().unwrap();
+    studio.open(&agent_id);
+    selection(&studio)
 }
 
-/// The session Daniel selected, or `None` before his first click.
+/// The session Daniel selected and the subagent of it he opened, or `null` before his first click.
 #[tauri::command]
-fn selected(studio: State<Mutex<Studio>>) -> Option<Session> {
-    studio.lock().unwrap().selected().cloned()
+fn selected(studio: State<Mutex<Studio>>) -> serde_json::Value {
+    selection(&studio.lock().unwrap())
+}
+
+fn selection(studio: &Studio) -> serde_json::Value {
+    serde_json::to_value(studio.selection()).expect("selection serializes")
 }
 
 /// The brief and cards of the selected session, or of the worker of it Daniel opened, split at the
@@ -117,7 +125,7 @@ impl Sent {
             let _ = app.emit("sessions", &list);
             self.list = Some(list);
         }
-        let selected = serde_json::to_value(selected(app.state())).expect("session serializes");
+        let selected = selected(app.state());
         if self.selected.as_ref() != Some(&selected) {
             let _ = app.emit("selected", &selected);
             self.selected = Some(selected);
