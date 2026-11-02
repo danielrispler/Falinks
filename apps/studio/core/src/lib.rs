@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, HashMap},
+    time::Duration,
 };
 
 #[derive(Default)]
@@ -73,6 +74,9 @@ pub struct Session {
     pub questions: Vec<Question>,
     /// Its latest `Stop`, until its next prompt (#369, decision 19).
     pub stopped: Option<Stopped>,
+    /// When its latest `Stop` was received, which took its workers' cards since its last card.
+    #[serde(skip)]
+    stopped_at: u64,
     /// Whether its turn was opened by a wake-up and has had no prompt of Daniel's since.
     #[serde(skip)]
     woken: bool,
@@ -152,7 +156,8 @@ pub struct Question {
 pub enum Answer {
     /// Asked, with no result yet.
     Open,
-    /// Daniel's choice for each question, keyed by its text: the `PostToolUse`'s `answers`.
+    /// Daniel's choice for each question, keyed by its text: the `PostToolUse`'s `answers`, kept only
+    /// when it is an object of strings (#434, decision 42).
     Answered(Value),
     /// Its call failed or was interrupted, or its turn or its agent ended first.
     NotAnswered,
@@ -178,7 +183,7 @@ pub struct Subagent {
     pub ended_at: Option<u64>,
     /// The first line of its last message, from its `SubagentStop`.
     pub result: Option<String>,
-    /// Daniel opened its line.
+    /// Daniel opened its line after it failed (#434, decision 39).
     pub opened: bool,
     /// The folder of its first event that has one: its worktree, or its parent's folder.
     #[serde(skip)]
@@ -359,8 +364,14 @@ impl Session {
                 agent.folder = Some(event.cwd.clone());
                 agent.agent.since.at = at;
             }
-            // A changed file promotes a helper at that step.
-            let changed = matches!(tool, "Edit" | "Write") || (tool == "Bash" && worktree_changed);
+            // A changed file promotes a helper at that step: an `Edit` or `Write` that succeeded, or
+            // a command that changed its worktree and either succeeded or ran and failed (#434,
+            // decision 21).
+            let ran =
+                event.hook_event_name == "PostToolUse" || event.error.starts_with("Exit code");
+            let changed = matches!(tool, "Edit" | "Write")
+                && event.hook_event_name == "PostToolUse"
+                || tool == "Bash" && worktree_changed && ran;
             match event.hook_event_name.as_str() {
                 // A step after its end means its parent continued it (`SendMessage`).
                 "PreToolUse" => {
@@ -371,7 +382,7 @@ impl Session {
                     agent.status = Status::Running;
                     agent.ended_at = None;
                 }
-                "PostToolUse" if changed => agent.kind = Kind::Worker,
+                "PostToolUse" | "PostToolUseFailure" if changed => agent.kind = Kind::Worker,
                 "SubagentStop" => {
                     let message = event.last_assistant_message.lines().next();
                     agent.result = message.map(Into::into);
@@ -641,12 +652,27 @@ pub enum Output {
     },
     /// Worker `agent` of a session, at any depth, newly failed. A failed helper raises none.
     Failed { session_id: String, agent: String },
+    /// Helper `agent` became a worker, which the card store keeps, since a replay takes no
+    /// fingerprint to see its command's change (#434, decision 37).
+    Promoted { agent: String },
     /// A prompt named a known task id in markup the studio does not know: drift in Claude Code's
     /// wake-ups, for stderr (#369, decision 7).
     Unrecognised { session_id: String, task_id: String },
     /// A session's first `Stop`: read Claude Code's version from its transcript, and nothing else
     /// (#369, decision 9).
     Version { transcript_path: String },
+}
+
+/// What the live app learned that the event log does not hold, which the card store keeps as it
+/// happens and the core applies after the replay (#434, decision 37).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveFacts {
+    /// The helpers promoted to workers (`Output::Promoted`).
+    #[serde(default)]
+    pub promoted: BTreeSet<String>,
+    /// The failed lines Daniel opened (`Studio::open`).
+    #[serde(default)]
+    pub opened: BTreeSet<String>,
 }
 
 /// A session's change since its last card (#369, decision 10), with what the card writer needs: the
@@ -979,7 +1005,7 @@ impl Studio {
     /// with cards it reports on that no other signal ended, since a killed worker has no
     /// `SubagentStop` (#369, decision 8).
     fn looks(&self, event: &Event) -> Vec<Fingerprint> {
-        let mut looks: Vec<Fingerprint> = self.look(event).into_iter().collect();
+        let mut looks = self.look(event);
         let session = self.sessions.get(&event.session_id);
         if event.hook_event_name == "UserPromptSubmit"
             && let Some(session) = session
@@ -1006,8 +1032,9 @@ impl Studio {
     /// since the base is the card's. A subagent's: its first event's, its base; a helper's before and
     /// after each Bash step, for a change across it that makes it a worker; a worker's after each
     /// Bash step, for a commit; and a worker's end. On a step 20 minutes after the last card of the
-    /// worktree it is in, that worktree's, for the fallback card; a session's only in a turn.
-    fn look(&self, event: &Event) -> Option<Fingerprint> {
+    /// worktree it is in, that worktree's, for the fallback card; a session's only in a turn. A
+    /// helper's look after its Bash step comes beside such a fallback's.
+    fn look(&self, event: &Event) -> Vec<Fingerprint> {
         let name = event.hook_event_name.as_str();
         let step = matches!(name, "PostToolUse" | "PostToolUseFailure");
         let due = |since: &Since| step && event.studio_received_ms >= since.at + FALLBACK_MS;
@@ -1027,40 +1054,52 @@ impl Studio {
                 "UserPromptSubmit" if !session.is_some_and(Session::in_turn) => Purpose::Base,
                 "Stop" => Purpose::TurnEnd,
                 _ if session.is_some_and(session_due) => Purpose::Fallback,
-                _ => return None,
+                _ => return Vec::new(),
             };
-            return look(&event.session_id, &event.cwd, purpose);
+            return look(&event.session_id, &event.cwd, purpose)
+                .into_iter()
+                .collect();
         };
-        let session = session?;
+        let Some(session) = session else {
+            return Vec::new();
+        };
         let agent = session.subagent(id);
         let Some(folder) = agent.and_then(|a| a.folder.as_deref()) else {
-            return look(id, &event.cwd, Purpose::Base);
+            return look(id, &event.cwd, Purpose::Base).into_iter().collect();
         };
         let worker = |a: &Subagent| a.kind == Kind::Worker;
         let bash = event.tool_name.as_deref() == Some("Bash");
         // A helper's base right before its command, so only a change across it promotes it.
+        // shortcut: the hooks are async, so a command that ends before the shell reads its
+        // `PreToolUse` line is absorbed into this base and never promotes its helper; make the
+        // hook synchronous if a live run shows missed promotions matter (#434, decision 23).
         if bash && name == "PreToolUse" && agent.is_some_and(|a| !worker(a)) {
-            return look(id, folder, Purpose::Base);
+            return look(id, folder, Purpose::Base).into_iter().collect();
         }
         let bash = step && bash;
         let owner = session.owner(id, folder);
         let since = &session.record(&owner).since;
-        match session.subagent(&owner) {
+        let fallback = match session.subagent(&owner) {
             Some(own) if &own.agent.id == id => match worker(own) {
                 true if name == "SubagentStop" => look(id, folder, Purpose::Card),
                 true if due(since) => look(id, folder, Purpose::Fallback),
                 _ => look(id, folder, Purpose::Commit).filter(|_| bash),
             },
             // It works in the worktree of a worker above it, or of its session.
-            Some(above) if worker(above) && due(since) => {
-                look(&above.agent.id, above.folder.as_deref()?, Purpose::Fallback)
-            }
+            Some(above) if worker(above) && due(since) => above
+                .folder
+                .as_deref()
+                .and_then(|above_folder| look(&above.agent.id, above_folder, Purpose::Fallback)),
             None if session_due(session) => {
                 look(&session.agent.id, &session.cwd, Purpose::Fallback)
             }
-            _ => look(id, folder, Purpose::Commit)
-                .filter(|_| bash && agent.is_some_and(|a| !worker(a))),
-        }
+            _ => None,
+        };
+        // A due fallback's look comes beside a helper's own (#434, decision 22).
+        let helper =
+            look(id, folder, Purpose::Commit).filter(|_| bash && agent.is_some_and(|a| !worker(a)));
+        let helper = helper.filter(|h| fallback.as_ref().is_none_or(|f| f.key != h.key));
+        fallback.into_iter().chain(helper).collect()
     }
 
     /// The sessions in a turn and the running subagents, with their folders, by their fingerprints'
@@ -1115,6 +1154,12 @@ impl Studio {
         // The hooks are async, so the latest event can land before an earlier one.
         session.agent.last_event_at = session.agent.last_event_at.max(event.studio_received_ms);
         let failed_before = session.failed_workers();
+        let helpers: Vec<String> = session
+            .agents
+            .iter()
+            .filter(|a| a.kind == Kind::Helper)
+            .map(|a| a.agent.id.clone())
+            .collect();
         let its_own = |id: &String| changes.contains_key(id);
         session.track_agents(&event, event.agent_id.as_ref().is_some_and(its_own));
         // A child's events still keep its session from going idle, but its folder and steps are its
@@ -1133,6 +1178,9 @@ impl Studio {
                 agent,
             })
             .collect();
+        let worker = |id: &String| session.subagent(id).is_some_and(|a| a.kind == Kind::Worker);
+        let promoted = helpers.into_iter().filter(worker);
+        outputs.extend(promoted.map(|agent| Output::Promoted { agent }));
         let mut blocked_before = session.needs_you();
         let tool = event.tool_name.unwrap_or_default();
         let id = Some(event.tool_use_id.clone()).filter(|id| !id.is_empty());
@@ -1222,6 +1270,7 @@ impl Studio {
                 // The order on `Stop`: clear its own blocks first, then ask if the message asks.
                 session.unblock();
                 session.turn_ended = true;
+                session.stopped_at = at;
                 // A subagent's wait outlasts the turn, so it gives no second notice.
                 blocked_before = session.needs_you();
                 session.asked = asks(&event.last_assistant_message);
@@ -1333,7 +1382,15 @@ impl Studio {
                 if !failed
                     && let Some(question) = asked.find(|q| q.tool_use_id == event.tool_use_id)
                 {
-                    question.answer = Answer::Answered(event.tool_response.answers.clone());
+                    // Only an object of strings is kept, so the pane can read it (#434, decision 42).
+                    let answers = &event.tool_response.answers;
+                    let strings = answers
+                        .as_object()
+                        .is_some_and(|a| a.values().all(Value::is_string));
+                    question.answer = match strings {
+                        true => Answer::Answered(answers.clone()),
+                        false => Answer::NotAnswered,
+                    };
                 }
                 // A denied or interrupted call, or a failed Edit or Write, changed nothing: only a
                 // command that ran and failed has its exit code in its error.
@@ -1398,6 +1455,40 @@ impl Studio {
         self.apply(line);
     }
 
+    /// Applies, after the replay, what the live app learned before a restart (#434, decisions 37 and
+    /// 38): the card store's live-only `facts`, and its `cards`' requests.
+    pub fn restore(&mut self, facts: &LiveFacts, cards: &[CardRequest]) {
+        let agents = self.sessions.values_mut().flat_map(|s| &mut s.agents);
+        for agent in agents {
+            if facts.promoted.contains(&agent.agent.id) {
+                agent.kind = Kind::Worker;
+            }
+            agent.opened |= facts.opened.contains(&agent.agent.id);
+        }
+        for session in self.sessions.values_mut() {
+            let id = session.agent.id.clone();
+            let ours: Vec<(&CardRequest, u64)> = cards
+                .iter()
+                .filter(|r| r.session_id == id)
+                .map(|r| (r, card_time(&r.id)))
+                .collect();
+            // Its own last card, or else its last `Stop`, took the worker cards before it.
+            let own = ours.iter().filter(|(r, _)| r.agent.is_none());
+            let taken = own.map(|(_, at)| *at).fold(session.stopped_at, u64::max);
+            for (request, at) in ours {
+                let owner = request.owner();
+                // Each owner's fallback counts from its newest card.
+                if owner == id || session.subagent(owner).is_some() {
+                    let since = &mut session.record_mut(owner).since;
+                    since.at = since.at.max(at);
+                }
+                if request.agent.is_some() && at > taken {
+                    session.agent.since.cards.push(request.id.clone());
+                }
+            }
+        }
+    }
+
     /// The shell's clock, in Unix milliseconds, on each pass of its read loop, the first right after
     /// the replay. Rules that fire with no event use it. Returns whether a session changed state.
     pub fn tick(&mut self, now: u64) -> bool {
@@ -1446,13 +1537,17 @@ impl Studio {
     }
 
     /// Daniel opened subagent `id`'s line, so its view shows, with its own cards and brief, and a
-    /// failed helper folds into its parent's line.
-    pub fn open(&mut self, id: &str) {
+    /// failed helper folds into its parent's line. Returns whether the opening counts, which the
+    /// card store records: only a line whose agent had already failed (#434, decision 39).
+    pub fn open(&mut self, id: &str) -> bool {
         self.viewed = Some(id.into());
         let agents = self.sessions.values_mut().flat_map(|s| &mut s.agents);
-        for agent in agents.filter(|a| a.agent.id == id) {
+        let mut opened = false;
+        for agent in agents.filter(|a| a.agent.id == id && a.failed()) {
             agent.opened = true;
+            opened = true;
         }
+        opened
     }
 
     /// The session Daniel selected, which the session view shows; `None` until his first click.
@@ -1494,42 +1589,80 @@ fn card_id(owner: &str, at: u64) -> String {
     format!("{owner}@{at}")
 }
 
+/// When the hook received the event card `id` was written at (`card_id`); 0 for an id of another form.
+fn card_time(id: &str) -> u64 {
+    let at = id.rsplit_once('@').and_then(|(_, at)| at.parse().ok());
+    at.unwrap_or_default()
+}
+
 /// The first `n` characters of an id.
 fn short(id: &str, n: usize) -> &str {
     id.get(..n).unwrap_or(id)
 }
 
 /// 3 seconds, a starting guess for "a few seconds" (#369, decision 22 and Further Notes).
-const COMBINE_MS: u64 = 3_000;
+const COMBINE: Duration = Duration::from_secs(3);
 
-/// The notices the shell has not shown yet, each with its title and body. Those that come within
-/// `COMBINE_MS` of the first show as one notification, so a burst never floods Daniel and no notice
-/// waits longer than that.
+/// A notice not shown yet: its title and body, and for "needs you" the session it is about.
+struct Pending {
+    title: String,
+    body: String,
+    needs_you: Option<String>,
+}
+
+/// The notices the shell has not shown yet. Those that come within `COMBINE` of the first show as
+/// one notification, so a burst never floods Daniel and no notice waits longer than that. Times are
+/// on a monotonic clock, time since the app started, so a clock change never holds them back
+/// (#434, decision 28).
 #[derive(Default)]
 pub struct Notifications {
-    pending: Vec<(String, String)>,
-    first_at: u64,
+    pending: Vec<Pending>,
+    first_at: Duration,
 }
 
 impl Notifications {
-    pub fn push(&mut self, title: &str, body: String, now: u64) {
+    pub fn push(&mut self, title: &str, body: String, now: Duration) {
+        self.queue(title, body, None, now);
+    }
+
+    /// A "needs you" notice on session `session_id`, which shows only if the session still needs
+    /// Daniel when it is due (#434, decision 27).
+    pub fn push_needs_you(&mut self, session_id: &str, body: String, now: Duration) {
+        self.queue("Needs you", body, Some(session_id.into()), now);
+    }
+
+    fn queue(&mut self, title: &str, body: String, needs_you: Option<String>, now: Duration) {
         if self.pending.is_empty() {
             self.first_at = now;
         }
-        self.pending.push((title.into(), body));
+        let title = title.into();
+        self.pending.push(Pending {
+            title,
+            body,
+            needs_you,
+        });
     }
 
-    /// The notification due at `now`, as its title and body: the pending notices, once `COMBINE_MS`
-    /// has passed since the first. Only then is `focused` asked, and a focused window drops them,
-    /// since Daniel sees the list.
-    pub fn due(&mut self, now: u64, focused: impl FnOnce() -> bool) -> Option<(String, String)> {
-        if self.pending.is_empty() || now < self.first_at + COMBINE_MS {
+    /// The notification due at `now`, as its title and body: the pending notices, once `COMBINE`
+    /// has passed since the first, less the "needs you" ones whose session `needs_you` says no
+    /// longer needs Daniel. Only then is `focused` asked, and a focused window drops them, since
+    /// Daniel sees the list.
+    pub fn due(
+        &mut self,
+        now: Duration,
+        focused: impl FnOnce() -> bool,
+        needs_you: impl Fn(&str) -> bool,
+    ) -> Option<(String, String)> {
+        if self.pending.is_empty() || now < self.first_at + COMBINE {
             return None;
         }
-        let pending = std::mem::take(&mut self.pending);
-        if focused() {
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.retain(|p| p.needs_you.as_deref().is_none_or(&needs_you));
+        if pending.is_empty() || focused() {
             return None;
         }
+        let pending: Vec<(String, String)> =
+            pending.into_iter().map(|p| (p.title, p.body)).collect();
         Some(match &pending[..] {
             [one] => one.clone(),
             many => {

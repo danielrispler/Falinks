@@ -2,7 +2,7 @@
 //! his flags, his ratings and the longer explanations he asked for survive a restart.
 
 use std::{cell::Cell, sync::Mutex};
-use studio_core::{Base, CardRequest, Change, Output, Studio};
+use studio_core::{Base, CardRequest, Change, LiveFacts, Output, Studio};
 use studio_understanding::{
     Card, CardStore, CardWriter, FakeWriter, Guess, Level, Rating, Reason, StoredCard,
     explain_more, write_card,
@@ -607,4 +607,26 @@ fn the_payload_without_diffs() {
         payload["older"][0]["card"],
         serde_json::to_value(&card).unwrap()
     );
+}
+
+/// #434, decision 37: the helpers promoted live and the failed lines Daniel opened survive a
+/// restart, and a store from before they were kept opens with none.
+#[test]
+fn the_live_only_facts_survive_a_restart_and_an_older_store_opens_with_none() {
+    let data = tempfile::tempdir().unwrap();
+    let path = data.path().join("cards.json");
+    let mut store = two_cards(&path);
+    assert_eq!(store.facts(), &LiveFacts::default());
+
+    store.promoted("a551b").unwrap();
+    store.opened("a551b").unwrap();
+    store.opened("add0c").unwrap();
+
+    let reopened = CardStore::open(path).unwrap();
+    let facts = LiveFacts {
+        promoted: ["a551b".to_string()].into(),
+        opened: ["a551b".to_string(), "add0c".to_string()].into(),
+    };
+    assert_eq!(reopened.facts(), &facts);
+    assert_eq!(reopened.cards(), store.cards());
 }
