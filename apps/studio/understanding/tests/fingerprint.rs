@@ -3,7 +3,7 @@
 //! `retention_checks_every_blob_of_a_snapshot`).
 
 use std::{fs, path::Path, process::Command};
-use studio_core::{Base, Keep};
+use studio_core::{Base, Purpose};
 use studio_understanding::Fingerprints;
 
 /// Runs `git` in `repo`, away from Daniel's own git config, and returns its output.
@@ -157,16 +157,16 @@ fn two_worktrees_each_give_their_own_change() {
 /// #369, decision 11: a worker's step looks for a commit. The change it sees stays in the next one
 /// until `HEAD` moves, so a step that only edits does not eat the commit's card.
 #[test]
-fn a_look_on_commit_keeps_its_record_only_when_head_moved() {
+fn a_commit_check_keeps_its_record_only_when_head_moved() {
     let (dir, mut prints) = repo();
     let start = git(dir.path(), &["rev-parse", "HEAD"]);
     fs::write(dir.path().join("lib.rs"), "fn b() {}\n").unwrap();
 
-    let edited = prints.look(dir.path(), Keep::OnCommit).expect("a change");
+    let edited = prints.look(dir.path(), Purpose::Commit).expect("a change");
     assert_eq!(edited.head.as_deref(), Some(start.as_str()));
 
     git(dir.path(), &["commit", "-qam", "Rename a to b"]);
-    let committed = prints.look(dir.path(), Keep::OnCommit).expect("a change");
+    let committed = prints.look(dir.path(), Purpose::Commit).expect("a change");
 
     let renamed = "--- a/lib.rs\n+++ b/lib.rs\n@@ -1 +1 @@\n-fn a() {}\n+fn b() {}\n";
     assert_eq!(committed.diff, renamed);
@@ -175,7 +175,7 @@ fn a_look_on_commit_keeps_its_record_only_when_head_moved() {
         committed.head,
         Some(git(dir.path(), &["rev-parse", "HEAD"]))
     );
-    assert_eq!(prints.look(dir.path(), Keep::OnCommit), None);
+    assert_eq!(prints.look(dir.path(), Purpose::Commit), None);
 }
 
 #[test]

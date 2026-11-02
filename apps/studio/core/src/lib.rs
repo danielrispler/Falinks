@@ -712,7 +712,7 @@ impl CardRequest {
 pub struct Fingerprint {
     pub key: String,
     pub folder: String,
-    pub keep: Keep,
+    pub purpose: Purpose,
 }
 
 /// A check that ran, shown as a pass or fail line.
@@ -745,13 +745,23 @@ pub struct Change {
     pub head: Option<String>,
 }
 
-/// When a fingerprint becomes the base of the next change.
+/// What a fingerprint is for (#410, decision 23). Its record becomes the next change's base for
+/// every purpose but `Commit`, which keeps it only when `HEAD` moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Keep {
-    Always,
-    /// Only when `HEAD` moved: a worker's step looks for a commit, and the change it saw otherwise
-    /// stays for the card at its next commit, its end or its fallback (#369, decision 11).
-    OnCommit,
+pub enum Purpose {
+    /// A base, whose change is never a card: a session's prompt, a subagent's first folder, a
+    /// helper's look before its command, and the start-up bases.
+    Base,
+    /// After a worker's or a helper's command: a card only when `HEAD` moved; the change it saw
+    /// otherwise stays for the card at its next commit, its end or its fallback.
+    Commit,
+    /// A card when the worktree changed, such as a worker's end.
+    Card,
+    /// 20 minutes or more after the worktree's last card or its last quiet fallback: a card when
+    /// it changed, else a new 20-minute wait (#369, decision 11, as #410 changes it).
+    Fallback,
+    /// A session's `Stop`, whose change, or else its workers' cards, makes its card or brief.
+    TurnEnd,
 }
 
 /// One tool call: its `tool_use_id`, and its tool and input, which are all `PermissionRequest`
@@ -997,7 +1007,7 @@ impl Studio {
                     Some(Fingerprint {
                         key: id.into(),
                         folder: a.folder.clone()?,
-                        keep: Keep::Always,
+                        purpose: Purpose::Card,
                     })
                 }));
             }
@@ -1019,47 +1029,51 @@ impl Studio {
         let session = self.sessions.get(&event.session_id);
         // A session's own fallback is on a prompt's steps only, not between its turns.
         let session_due = |s: &Session| s.in_turn() && due(&s.since);
-        let look = |key: &str, folder: &str, keep| {
+        let look = |key: &str, folder: &str, purpose| {
             let look = Fingerprint {
                 key: key.into(),
                 folder: folder.into(),
-                keep,
+                purpose,
             };
             (!folder.is_empty()).then_some(look)
         };
         let Some(id) = &event.agent_id else {
-            let at = match name {
-                "UserPromptSubmit" => !session.is_some_and(Session::in_turn),
-                "Stop" => true,
-                _ => session.is_some_and(session_due),
+            let purpose = match name {
+                "UserPromptSubmit" if !session.is_some_and(Session::in_turn) => Purpose::Base,
+                "Stop" => Purpose::TurnEnd,
+                _ if session.is_some_and(session_due) => Purpose::Fallback,
+                _ => return None,
             };
-            return look(&event.session_id, &event.cwd, Keep::Always).filter(|_| at);
+            return look(&event.session_id, &event.cwd, purpose);
         };
         let session = session?;
         let agent = session.subagent(id);
         let Some(folder) = agent.and_then(|a| a.folder.as_deref()) else {
-            return look(id, &event.cwd, Keep::Always);
+            return look(id, &event.cwd, Purpose::Base);
         };
         let worker = |a: &Subagent| a.kind == Kind::Worker;
         let bash = event.tool_name.as_deref() == Some("Bash");
         // A helper's base right before its command, so only a change across it promotes it.
         if bash && name == "PreToolUse" && agent.is_some_and(|a| !worker(a)) {
-            return look(id, folder, Keep::Always);
+            return look(id, folder, Purpose::Base);
         }
         let bash = step && bash;
         let owner = session.owner(id, folder);
         let since = &session.record(&owner).since;
         match session.subagent(&owner) {
-            Some(own) if &own.id == id && worker(own) && (name == "SubagentStop" || due(since)) => {
-                look(id, folder, Keep::Always)
+            Some(own) if &own.id == id && worker(own) && name == "SubagentStop" => {
+                look(id, folder, Purpose::Card)
             }
-            Some(own) if &own.id == id => look(id, folder, Keep::OnCommit).filter(|_| bash),
+            Some(own) if &own.id == id && worker(own) && due(since) => {
+                look(id, folder, Purpose::Fallback)
+            }
+            Some(own) if &own.id == id => look(id, folder, Purpose::Commit).filter(|_| bash),
             // It works in the worktree of a worker above it, or of its session.
             Some(above) if worker(above) && due(since) => {
-                look(&above.id, above.folder.as_deref()?, Keep::Always)
+                look(&above.id, above.folder.as_deref()?, Purpose::Fallback)
             }
-            None if session_due(session) => look(&session.id, &session.cwd, Keep::Always),
-            _ => look(id, folder, Keep::OnCommit)
+            None if session_due(session) => look(&session.id, &session.cwd, Purpose::Fallback),
+            _ => look(id, folder, Purpose::Commit)
                 .filter(|_| bash && agent.is_some_and(|a| !worker(a))),
         }
     }
@@ -1078,7 +1092,7 @@ impl Studio {
         let print = |(key, folder): (&str, &str)| Fingerprint {
             key: key.into(),
             folder: folder.into(),
-            keep: Keep::Always,
+            purpose: Purpose::Base,
         };
         folders.map(print).collect()
     }
@@ -1159,12 +1173,16 @@ impl Studio {
         // after 20 minutes: when its worktree changed since its last card (#369, decision 11). The
         // session's own look at a prompt is its base, and at `Stop` its card's change, below.
         for look in &looks {
-            if look.key == session.id && matches!(name, "UserPromptSubmit" | "Stop") {
-                continue;
-            }
-            let found = changes.remove(&look.key);
-            let Some(found) = found.filter(|c| look.keep == Keep::Always || c.head != c.base.head)
-            else {
+            let found = match look.purpose {
+                Purpose::Base | Purpose::TurnEnd => continue,
+                Purpose::Commit => changes.remove(&look.key).filter(|c| c.head != c.base.head),
+                Purpose::Card | Purpose::Fallback => changes.remove(&look.key),
+            };
+            let Some(found) = found else {
+                // A quiet fallback restarts its worktree's 20-minute wait.
+                if look.purpose == Purpose::Fallback {
+                    session.record_mut(&look.key).since.at = at;
+                }
                 continue;
             };
             let worker = look.key != session.id;
@@ -1183,7 +1201,10 @@ impl Studio {
                 let wake_up = !sender.is_daniels();
                 session.woken = wake_up && (session.woken || !session.in_turn());
                 // A base for the prompt: what Daniel changed himself before it is no one's.
-                if looks.iter().any(|look| look.key == session.id) {
+                if looks
+                    .iter()
+                    .any(|look| look.purpose == Purpose::Base && look.key == session.id)
+                {
                     session.since.at = at;
                     session.since.by.clear();
                 }

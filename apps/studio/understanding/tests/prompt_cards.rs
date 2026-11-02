@@ -387,6 +387,31 @@ fn after_25_minutes_of_uncommitted_change_the_next_step_gets_a_card_and_one_with
     assert_eq!(shell.writer.cards.borrow().len(), 2);
 }
 
+/// #410, decision 23: a fallback look that finds no change restarts the 20-minute wait, so a quiet
+/// worktree gets one look, not one per step, and a later change waits for the next fallback.
+#[test]
+fn a_quiet_worktrees_fallback_look_restarts_its_wait_so_a_later_change_waits_20_minutes_from_it() {
+    let mut shell = Shell::new();
+    shell.take("UserPromptSubmit", json!({ "prompt": "Implement #378" }));
+    shell.take("PostToolUse", spawn_child("w1", "Implement #378", true));
+    let one = shell.worktree("w1");
+    shell.child("w1", &one, "SubagentStart", json!({}));
+    let read = json!({"tool_name": "Read", "tool_input": {"file_path": "lib.rs"}});
+
+    shell.at += 25 * MINUTE;
+    shell.child("w1", &one, "PostToolUse", read.clone());
+    fs::write(one.join("a.rs"), "fn a1() {}\n").unwrap();
+    shell.at += MINUTE;
+    shell.child("w1", &one, "PostToolUse", read.clone());
+    shell.at += 18 * MINUTE;
+    shell.child("w1", &one, "PostToolUse", read.clone());
+    assert_eq!(shell.cards(), []);
+    shell.at += MINUTE;
+    shell.child("w1", &one, "PostToolUse", read);
+
+    assert_eq!(shell.cards(), [(Some("w1".to_string()), summary("a.rs"))]);
+}
+
 /// #369, decision 11: the fallback is on a step of a worker or of a prompt; after the session's
 /// `Stop` there is no prompt, so Daniel's own edit is no one's card.
 #[test]
