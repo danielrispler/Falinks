@@ -17,7 +17,9 @@ fn edit(id: &str, path: &str) -> CardRequest {
             head: Some("5f0c1e2d9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d".into()),
             files: vec!["README.md".into()],
         },
-        change: format!("--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+new\n"),
+        change: Some(format!(
+            "--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+new\n"
+        )),
         prompt: None,
         ..CardRequest::default()
     }
@@ -313,6 +315,7 @@ fn a_store_from_before_quizzes_opens_with_cards_that_ask_nothing() {
         (kept.card.explanation.as_str(), &kept.card.quiz),
         ("כי.", &None)
     );
+    assert_eq!(kept.request.diff(), "-old\n+new\n");
     assert_eq!(kept.guess, None);
 }
 

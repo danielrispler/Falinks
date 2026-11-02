@@ -13,8 +13,8 @@ use std::{
 };
 use studio_core::{CardRequest, Kind, Output, Studio};
 use studio_understanding::{
-    Card, CardStore, CardWriter, FakeWriter, Fingerprints, fingerprint_changes, write_brief,
-    write_stop,
+    Card, CardStore, CardWriter, FakeWriter, Fingerprints, explain_more, fingerprint_changes,
+    write_brief, write_stop,
 };
 
 /// What a rewrite read: the prompts, the summaries and the diffstat.
@@ -27,6 +27,8 @@ struct Recording {
     cards: RefCell<Vec<(Vec<String>, String)>>,
     rewrites: RefCell<Vec<Rewrite>>,
     updates: RefCell<Vec<(String, String)>>,
+    /// The change each "explain more" read.
+    mores: RefCell<Vec<String>>,
 }
 
 impl CardWriter for Recording {
@@ -41,6 +43,7 @@ impl CardWriter for Recording {
     }
 
     fn more(&self, request: &CardRequest, card: &Card) -> Result<String, String> {
+        self.mores.borrow_mut().push(request.diff().into());
         FakeWriter.more(request, card)
     }
 
@@ -309,7 +312,7 @@ fn a_parent_that_changed_nothing_itself_gets_one_card_from_its_workers_summaries
     };
     assert_eq!(own.agent, None);
     assert_eq!(own.workers, std::slice::from_ref(&worker.id));
-    let read = &own.change;
+    let read = own.diff().to_owned();
     assert!(
         read.contains(&format!(
             "- `Implement #378` (completed): {}\n",
@@ -318,6 +321,11 @@ fn a_parent_that_changed_nothing_itself_gets_one_card_from_its_workers_summaries
         "{read}"
     );
     assert!(!read.contains("+++"), "{read}");
+    let id = own.id.clone();
+    drop(store);
+    // "Explain more" reads the workers' text the stored card keeps.
+    explain_more(&shell.store, &shell.writer, &id, |line| panic!("{line}")).unwrap();
+    assert_eq!(*shell.writer.mores.borrow(), [read]);
 }
 
 #[test]

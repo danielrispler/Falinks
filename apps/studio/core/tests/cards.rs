@@ -53,7 +53,7 @@ fn a_prompt_whose_worktree_changed_gets_one_card_on_the_whole_change_at_its_stop
             session_id: SESSION.into(),
             id: format!("{SESSION}@1793265021380"),
             base: found().base,
-            change: found().diff,
+            change: Some(found().diff),
             prompt: Some(1793265000140),
             agent: None,
             changed_by: Default::default(),
@@ -259,7 +259,7 @@ fn the_runs_worker_gets_a_card_at_its_commit_and_its_end_and_its_session_one_fro
     );
     let cards: Vec<(&str, Option<&str>, bool, &[String])> = requests
         .iter()
-        .map(|r| (&*r.id, r.agent.as_deref(), r.change.is_empty(), &*r.workers))
+        .map(|r| (&*r.id, r.agent.as_deref(), r.change.is_none(), &*r.workers))
         .collect();
     let commit = format!("{RUN_WORKER}@1793471824831");
     let end = format!("{RUN_WORKER}@1793471826289");
