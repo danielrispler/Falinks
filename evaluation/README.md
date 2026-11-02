@@ -89,8 +89,9 @@ not a replacement for the pinned app-server adapter's capability tests.
 
 Both agents can request checks. The host ordinarily merges A and B in the
 integration worktree. If Git reports a conflict, agents may resolve it there,
-commit the ordinary merge and request `check` with `resolved` naming that exact
-commit. Both shared tips must be ancestors. A successful resolved candidate is
+commit the ordinary merge and request `check` with `resolved` naming that
+commit by its full or an unambiguous short ID, never a ref name; the host checks
+the exact commit it names. Both shared tips must be ancestors. A successful resolved candidate is
 retained for final checks unless a new draft is shared. Final readiness names
 only each agent's last shared tip, without a Falinks ledger, review gate or
 checkpoint-offer protocol. The host retains the selected candidate in private

@@ -428,6 +428,40 @@ fn withdrawal_during_passing_checks_blocks_and_supersession_transfers_nothing() 
 }
 
 #[test]
+fn an_offer_is_superseded_or_withdrawn_by_the_id_its_reply_gave() {
+    let (_dir, engine, alice, bob) = fixture();
+    let candidate = team_candidate(&engine, &alice, &bob);
+    let first = engine
+        .offer(&alice, offer("first", candidate.revision))
+        .unwrap()
+        .checkpoint;
+    assert_eq!(first.id, "0/first");
+    let second = engine
+        .offer(&alice, superseding("second", candidate.revision, &first.id))
+        .unwrap()
+        .checkpoint;
+    assert!(matches!(
+        engine.checkpoint("0/first").unwrap().unwrap().state,
+        Availability::Superseded { .. }
+    ));
+    engine.withdraw(&alice, &second.id).unwrap();
+    assert_eq!(
+        engine.checkpoint("0/second").unwrap().unwrap().state,
+        Availability::Withdrawn
+    );
+    // Another agent's offer stays out of reach.
+    let bobs = engine
+        .offer(&bob, offer("bob", candidate.revision))
+        .unwrap()
+        .checkpoint;
+    assert!(engine.withdraw(&alice, &bobs.id).is_err());
+    assert_eq!(
+        engine.checkpoint("1/bob").unwrap().unwrap().state,
+        Availability::Available
+    );
+}
+
+#[test]
 fn base_advances_return_candidates_and_newer_publications_are_never_overwritten() {
     let (_dir, engine, alice, bob) = fixture();
     engine.configure_checks(passing()).unwrap();
