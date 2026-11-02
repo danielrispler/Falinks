@@ -233,6 +233,35 @@ fn unknown_directories_modes_and_root_aliases_stop_the_host() -> falinks_host::R
 }
 
 #[test]
+fn controlled_review_needs_a_known_action_and_the_current_revision() -> falinks_host::Result<()> {
+    use falinks_host::controlled_host::ControlledHost;
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().canonicalize()?;
+    std::fs::create_dir_all(root.join("source"))?;
+    std::fs::create_dir(root.join("controller"))?;
+    std::fs::write(root.join("source/source.txt"), b"original\n")?;
+    let mut host = ControlledHost::new(&root)?;
+    let revision = host.event("E1", "review E1")?.context["revision"].clone();
+    let mut review = |hash: &serde_json::Value, action: &str| {
+        let envelope = json!({"operation":"review","request":{"event":"E1","reviewed_hash":hash,"action":action}});
+        host.execute(&envelope).map(|outcome| outcome.result)
+    };
+    let refused = json!({"accepted":false,"reason":"pending reconsideration or stale revision"});
+    assert_eq!(review(&revision, "acknowledge")?, refused);
+    assert_eq!(review(&json!("stale"), "defer")?, refused);
+    assert_eq!(
+        review(&revision, "defer")?,
+        json!({"accepted":true,"reason":"deferred"})
+    );
+    assert_eq!(
+        review(&revision, "drop")?,
+        json!({"accepted":true,"reason":"reconsidered"})
+    );
+    assert_eq!(review(&revision, "keep")?, refused, "E1 is reconsidered");
+    Ok(())
+}
+
+#[test]
 fn relocation_rebinds_only_an_existing_thread_for_resume() -> falinks_host::Result<()> {
     let dir = tempfile::tempdir()?;
     let (first, second) = (dir.path().join("first"), dir.path().join("second"));

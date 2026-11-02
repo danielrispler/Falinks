@@ -1,6 +1,6 @@
 //! Windows host: AppContainer restricts files and network, a Job Object owns the
 //! process tree. Any setup failure returns Err before CreateProcessW: no plain fallback.
-use crate::{Fixture, Launch, Loopback, Result, Scenario, wait_until};
+use crate::{Fixture, Launch, Loopback, Result, Scenario, child_report, wait_until};
 use serde_json::{Value, json};
 use std::{
     env,
@@ -573,9 +573,7 @@ pub fn cleanup(fixture: &Fixture) {
     let name = wide(OsStr::new(&profile_name(fixture)));
     // SAFETY: name is NUL-terminated; a missing profile is ignored.
     unsafe { DeleteAppContainerProfile(name.as_ptr()) };
-    let text = fs::read_to_string(fixture.output.join("child.json")).unwrap_or_default();
-    let pid = serde_json::from_str::<Value>(&text)
-        .ok()
+    let pid = child_report(fixture)
         .and_then(|child| child["descendant"].as_str().map(String::from))
         .and_then(|d| d.split("pid ").nth(1).and_then(|p| p.parse::<u32>().ok()));
     if let Some(pid) = pid {

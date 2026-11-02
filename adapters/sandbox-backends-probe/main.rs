@@ -6,7 +6,6 @@
 use serde_json::{Value, json};
 use std::{
     env, fs,
-    io::Read,
     net::TcpListener,
     path::{Path, PathBuf},
     process,
@@ -154,6 +153,12 @@ pub struct Launch {
     pub extra: Value,
 }
 
+/// The child's `child.json` report, if it ran and wrote one.
+pub fn child_report(fixture: &Fixture) -> Option<Value> {
+    let text = fs::read_to_string(fixture.output.join("child.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// Heartbeat written by the detached descendant; changes only while it lives.
 /// Works across PID namespaces, where the recorded pid is meaningless to the host.
 pub fn descendant_alive(output: &Path) -> Option<bool> {
@@ -171,13 +176,8 @@ fn record(
     loopback: &Loopback,
     launch: Launch,
 ) -> Value {
-    let child = fs::read_to_string(fixture.output.join("child.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    let mut stderr = String::new();
-    if let Ok(mut file) = fs::File::open(fixture.evidence.join("stderr")) {
-        let _ = file.read_to_string(&mut stderr);
-    }
+    let child = child_report(fixture);
+    let mut stderr = fs::read_to_string(fixture.evidence.join("stderr")).unwrap_or_default();
     stderr.truncate(2000);
     let mut stdout = fs::read_to_string(fixture.evidence.join("stdout")).unwrap_or_default();
     stdout.truncate(2000);

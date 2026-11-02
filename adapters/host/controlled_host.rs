@@ -1,4 +1,4 @@
-use crate::{EngineOutcome, Notice, Result, file_hash, hash, require};
+use crate::{EngineOutcome, Notice, Result, file_hash, hash, require, review_status};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use std::{
@@ -79,16 +79,12 @@ impl ControlledHost {
         })
     }
     pub fn integrity(&self) -> Result<()> {
-        let expected: String =
+        let state = |key: &str| -> rusqlite::Result<String> {
             self.db
-                .query_row("SELECT value FROM state WHERE key='inventory'", [], |r| {
-                    r.get(0)
-                })?;
-        let stopped: String =
-            self.db
-                .query_row("SELECT value FROM state WHERE key='stopped'", [], |r| {
-                    r.get(0)
-                })?;
+                .query_row("SELECT value FROM state WHERE key=?", [key], |r| r.get(0))
+        };
+        let expected = state("inventory")?;
+        let stopped = state("stopped")?;
         if stopped != "false" || !inventory(&self.source).is_ok_and(|value| value == expected) {
             self.db
                 .execute("UPDATE state SET value='true' WHERE key='stopped'", [])?;
@@ -153,16 +149,12 @@ impl ControlledHost {
                     .iter()
                     .find(|(event, _, _)| request["event"].as_str() == Some(event))
                 {
+                    let status = review_status(&request["action"]);
                     accepted = request["reviewed_hash"] == *expected
                         && *expected == revision
-                        && ["defer", "keep", "revise", "drop"]
-                            .contains(&request["action"].as_str().unwrap_or(""));
-                    if accepted {
-                        reason = if request["action"] == "defer" {
-                            "deferred"
-                        } else {
-                            "reconsidered"
-                        };
+                        && status.is_some();
+                    if let (true, Some(status)) = (accepted, status) {
+                        reason = status;
                         self.db.execute(
                             "UPDATE obligations SET status=? WHERE event=?",
                             params![reason, event],
