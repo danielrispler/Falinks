@@ -814,7 +814,7 @@ impl Engine {
                     && p.action == action
                     && p.target == target
                     && p.context == context
-                    && material(&p.signals) == material(&signals)
+                    && material(action, &p.signals) == material(action, &signals)
             }) {
                 return Ok(previous.clone());
             }
@@ -1413,7 +1413,9 @@ fn owners(scope: &[String], footprint: &mut Footprint) {
     }
 }
 
-/// Evidence that changes a recommendation's meaning; counts only matter as presence.
+/// Evidence that changes a recommendation's meaning; counts only matter as presence. A pending
+/// offer and uncertainty hold a split or a keep but are no evidence for joining, so a join
+/// ignores them (#335).
 type Material = (
     Vec<String>,
     Vec<String>,
@@ -1425,17 +1427,22 @@ type Material = (
     bool,
     bool,
 );
-fn material(signals: &Signals) -> Material {
+fn material(action: Action, signals: &Signals) -> Material {
+    let join = action == Action::Join;
     (
         signals.compiler.clone(),
         signals.overlap.clone(),
         signals.revised.clone(),
         signals.redeclared.clone(),
         signals.behind.clone(),
-        signals.pending.clone(),
+        if join {
+            Vec::new()
+        } else {
+            signals.pending.clone()
+        },
         signals.retries > 0,
         signals.failing,
-        signals.uncertain.is_empty(),
+        join || signals.uncertain.is_empty(),
     )
 }
 

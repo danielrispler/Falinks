@@ -1124,6 +1124,41 @@ fn after_a_split_only_a_new_declaration_joins() {
     assert_eq!(join.signals.redeclared, vec!["0:left".to_string()]);
 }
 
+/// #335 wave 1: a declined join returns as itself when only uncertainty or a pending offer
+/// changed, since neither is evidence for joining (run 3's `regroup:15`, `16` and `18`).
+#[test]
+fn a_declined_join_is_not_proposed_again_after_a_review_or_a_new_offer() {
+    let (dir, engine, alice, bob) = fixture();
+    independent(&engine, &alice, &bob);
+    let left = |depends: &[&str]| {
+        declare(
+            &engine,
+            &alice,
+            "left",
+            "left task",
+            &["siblings.go#Left"],
+            depends,
+        );
+    };
+    left(&["callee.go#Callee"]);
+    engine.add_workspace(&dir.path().join("second")).unwrap();
+    let split = engine.reconsider().unwrap();
+    assert_eq!(split.action, Action::Split, "{}", split.reasoning);
+    agree(&engine, &alice, &split);
+    agree(&engine, &bob, &split);
+    left(&["callee.go#Callee", "siblings.go#Right"]);
+    let join = engine.reconsider().unwrap();
+    assert_eq!(join.action, Action::Join, "{}", join.reasoning);
+    decline(&engine, &bob, &join);
+
+    settle(&engine, &alice, "left", Decision::Keep);
+    assert_eq!(engine.reconsider().unwrap().id, join.id);
+    offer(&engine, &alice, "left-offer");
+    let again = engine.reconsider().unwrap();
+    assert_eq!(again.id, join.id, "{}", again.reasoning);
+    assert!(matches!(again.state, ProposalState::Declined { .. }));
+}
+
 #[test]
 fn engine_keeps_are_silent_but_recommend_returns_them() {
     let (_dir, engine, alice, bob) = paired();
