@@ -395,3 +395,34 @@ fn the_wire_keeps_each_subagents_status_failed_and_faded() {
         (json!("killed"), json!(true), json!(true))
     );
 }
+
+/// Decision 18 of #410: a session's live keys last until its `SessionEnd`, and come back when it
+/// starts again.
+#[test]
+fn a_session_and_its_subagents_are_live_until_it_ends_and_again_once_it_resumes() {
+    let lines: Vec<&str> = include_str!("fixtures/subagent-run.jsonl")
+        .lines()
+        .collect();
+    let (last, before) = lines.split_last().unwrap();
+    let session = "40e8e6ef-9b2f-4467-9b55-87c2d053b616";
+    let mut studio = Studio::replayed(before);
+    let mut expected: Vec<String> = studio
+        .session(session)
+        .unwrap()
+        .agents
+        .iter()
+        .map(|a| a.id.clone())
+        .collect();
+    assert_eq!(expected.len(), 2);
+    expected.push(session.into());
+    expected.sort();
+    let mut live: Vec<String> = studio.live_keys().into_iter().collect();
+    live.sort();
+    assert_eq!(live, expected);
+
+    studio.replay(last);
+    assert!(studio.live_keys().is_empty());
+
+    studio.replay(&lines[0].replace("\"source\":\"startup\"", "\"source\":\"resume\""));
+    assert!(studio.live_keys().contains(session));
+}
