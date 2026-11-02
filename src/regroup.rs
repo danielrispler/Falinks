@@ -1009,7 +1009,7 @@ impl Engine {
                     .included
                     .difference(&published.included)
                     .copied()
-                    .filter(|op| record(db, *op).is_ok_and(|r| r.agent == 1))
+                    .filter(|op| crate::author(db, *op).is_ok_and(|agent| agent == 1))
                     .collect();
                 let mut created = published.clone();
                 created.space = target;

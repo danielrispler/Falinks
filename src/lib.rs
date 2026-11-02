@@ -353,6 +353,15 @@ fn record(db: &Connection, operation: u64) -> Result<Record> {
     )?
     .ok_or("unknown operation")?)
 }
+/// The agent of an operation, read without decoding the rest of its record.
+fn author(db: &Connection, operation: u64) -> Result<usize> {
+    Ok(one(
+        db,
+        "SELECT json_quote(json_extract(body, '$.agent')) FROM requests WHERE id=?",
+        [operation as i64],
+    )?
+    .ok_or("unknown operation")?)
+}
 /// The record of a client's request ID, if it was ever submitted.
 fn request_record(db: &Connection, agent: usize, id: &str) -> Result<Option<Record>> {
     one(

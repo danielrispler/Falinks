@@ -833,20 +833,20 @@ impl Engine {
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
         // Inline reviews stand even if the offer is then refused, as separate reviews would.
         // A known ID already recorded them on its first call.
-        if checkpoint(&db, &id)?.is_none() {
-            self.record_reviews(&db, client, &offer.reviews)?;
-        }
         if let Some(existing) = checkpoint(&db, &id)? {
             if existing.offer != offer {
                 return fail("offer ID reused with changed contents");
             }
             // A repeat reports coverage as of the repeat; the first call queued any run.
-            let coverage = publication::queue(&db, existing.offer.revision, false)?;
+            let base = crate::revision(&db, publication::published(&db)?)?;
+            let coverage = publication::queue(&db, &existing.capture, &base, false)?;
             return Ok(Offered {
                 checkpoint: existing,
                 coverage,
             });
         }
+        // Recording reviews creates no checkpoint, and its result is the agent's obligations.
+        let obligations = self.record_reviews(&db, client, &offer.reviews)?;
         let capture =
             captured(&db, offer.revision, None)?.ok_or("offer must name a captured revision")?;
         // Its own workspace, or a retained candidate whose group it belonged to.
@@ -856,10 +856,10 @@ impl Engine {
             return fail("offer must name a revision of the client's workspace or group");
         }
         // Even an older revision: deferred relevant changes cannot authorize any offer.
-        let pending: Vec<_> = obligations(&db, client.agent)?
-            .into_iter()
-            .filter(Obligation::pending)
-            .map(|o| o.scope.id)
+        let pending: Vec<_> = obligations
+            .iter()
+            .filter(|o| o.pending())
+            .map(|o| o.scope.id.clone())
             .collect();
         if !pending.is_empty() {
             return fail(format!(
@@ -867,9 +867,9 @@ impl Engine {
             ));
         }
         retain(&self.state, &capture)?;
-        let base = publication::published(&db)?;
-        let (members, contributions) = publication::coverage(&db, offer.revision, base)?;
-        let reviews = obligations(&db, client.agent)?
+        let base = crate::revision(&db, publication::published(&db)?)?;
+        let (members, contributions) = publication::coverage(&db, &capture, &base)?;
+        let reviews = obligations
             .into_iter()
             .map(|o| (o.scope.id, o.reviewed))
             .collect();
@@ -899,7 +899,7 @@ impl Engine {
             capture,
             offer: offer.clone(),
             state: Availability::Available,
-            base,
+            base: base.revision,
             members,
             contributions,
             reviews,
@@ -920,7 +920,7 @@ impl Engine {
             }),
         )?;
         // Complete coverage queues the combined checks in the same commit.
-        let coverage = publication::queue(&tx, offer.revision, true)?;
+        let coverage = publication::queue(&tx, &created.capture, &base, true)?;
         tx.commit()?;
         drop(db);
         self.signal.notify();

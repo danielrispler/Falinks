@@ -4,8 +4,8 @@ use crate::coordination::{
     Availability, Body, captured, checkpoint, emit, obligations, save_checkpoint,
 };
 use crate::{
-    Capture, Client, Engine, Result, all, audit, connect, contain, fail, halted, install, meta,
-    meta_value, nonce, object, one, read_file, record, retain, revision, set_meta,
+    Capture, Client, Engine, Result, all, audit, author, connect, contain, fail, halted, install,
+    meta, meta_value, nonce, object, one, read_file, retain, revision, set_meta,
 };
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -164,22 +164,19 @@ pub(crate) fn published(db: &Connection) -> Result<u64> {
 fn required(db: &Connection) -> Result<BTreeSet<usize>> {
     Ok(meta_value(db, "required")?.unwrap_or_default())
 }
-/// `revision` contains everything `base` does and adds unpublished work.
-pub(crate) fn ahead(db: &Connection, revision_id: u64, base: u64) -> Result<bool> {
-    let (candidate, base) = (revision(db, revision_id)?, revision(db, base)?);
-    Ok(candidate.included.is_superset(&base.included) && candidate.included != base.included)
+/// `candidate` contains everything `base` does and adds unpublished work.
+pub(crate) fn ahead(candidate: &Capture, base: &Capture) -> bool {
+    candidate.included.is_superset(&base.included) && candidate.included != base.included
 }
 
-/// Required offerers and included operations for `revision` over `base`. Every author of
+/// Required offerers and included operations for `candidate` over `base`. Every author of
 /// an included operation the base lacks counts, even when later edits overwrote it.
 /// Host-required members count when they were in the candidate's group at its creation.
 pub(crate) fn coverage(
     db: &Connection,
-    revision_id: u64,
-    base: u64,
+    candidate: &Capture,
+    base: &Capture,
 ) -> Result<(BTreeSet<usize>, Vec<u64>)> {
-    let candidate = revision(db, revision_id)?;
-    let base = revision(db, base)?;
     let mut members: BTreeSet<usize> = required(db)?
         .intersection(&candidate.group)
         .copied()
@@ -190,14 +187,13 @@ pub(crate) fn coverage(
         .copied()
         .collect();
     for operation in &contributions {
-        members.insert(record(db, *operation)?.agent);
+        members.insert(author(db, *operation)?);
     }
     Ok((members, contributions))
 }
-fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
-    let base = published(db)?;
-    let tree = revision(db, revision_id)?.tree;
-    let (members, contributions) = coverage(db, revision_id, base)?;
+/// Coverage of `capture` against `base`, the published revision.
+fn candidate(db: &Connection, capture: &Capture, base: &Capture) -> Result<Candidate> {
+    let (members, contributions) = coverage(db, capture, base)?;
     // Readiness never transfers: only an offer bound to this exact candidate counts.
     // Members and contributions compare as compact serde JSON, ordered as stored.
     let checkpoints: BTreeMap<usize, String> = all::<(usize, String)>(
@@ -208,8 +204,8 @@ fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
          AND json_extract(body, '$.members')=json(?3)
          AND json_extract(body, '$.contributions')=json(?4) ORDER BY rowid",
         params![
-            revision_id as i64,
-            base as i64,
+            capture.revision as i64,
+            base.revision as i64,
             serde_json::to_string(&members)?,
             serde_json::to_string(&contributions)?
         ],
@@ -223,9 +219,9 @@ fn candidate(db: &Connection, revision_id: u64) -> Result<Candidate> {
         .collect();
     Ok(Candidate {
         binding: Binding {
-            revision: revision_id,
-            tree,
-            base,
+            revision: capture.revision,
+            tree: capture.tree.clone(),
+            base: base.revision,
             members,
             contributions,
             checkpoints,
@@ -251,12 +247,17 @@ pub struct Coverage {
 }
 /// Queues the publication run for a completely covered unpublished candidate, or
 /// reports why none was queued. With `write` false it only reports.
-pub(crate) fn queue(db: &Connection, revision: u64, write: bool) -> Result<Coverage> {
-    let candidate = candidate(db, revision)?;
+pub(crate) fn queue(
+    db: &Connection,
+    capture: &Capture,
+    base: &Capture,
+    write: bool,
+) -> Result<Coverage> {
+    let candidate = candidate(db, capture, base)?;
     let binding = candidate.binding;
     let reason = if !candidate.missing.is_empty() {
         Some(Unqueued::MissingMembers)
-    } else if !ahead(db, revision, binding.base)? {
+    } else if !ahead(capture, base) {
         Some(Unqueued::NotAheadOfBase)
     } else if binding.members.is_empty() {
         Some(Unqueued::NoMembers)
@@ -272,7 +273,12 @@ pub(crate) fn queue(db: &Connection, revision: u64, write: bool) -> Result<Cover
         return Ok(coverage);
     }
     let ids: Vec<_> = binding.checkpoints.values().cloned().collect();
-    let id = format!("publish:{revision}:{}:{}", binding.base, ids.join(","));
+    let id = format!(
+        "publish:{}:{}:{}",
+        binding.revision,
+        binding.base,
+        ids.join(",")
+    );
     if run(db, &id)?.is_none() {
         save_run(
             db,
@@ -379,8 +385,9 @@ impl Engine {
         )?
         .into_iter()
         .collect();
-        for revision in offered {
-            queue(&tx, revision, true)?;
+        let base = revision(&tx, published(&tx)?)?;
+        for revision_id in offered {
+            queue(&tx, &revision(&tx, revision_id)?, &base, true)?;
         }
         tx.commit()?;
         drop(db);
@@ -389,7 +396,9 @@ impl Engine {
     }
     /// Coverage status of a completed revision against the current published base.
     pub fn candidate(&self, revision: u64) -> Result<Candidate> {
-        candidate(&connect(&self.state)?, revision)
+        let db = connect(&self.state)?;
+        let base = crate::revision(&db, published(&db)?)?;
+        candidate(&db, &crate::revision(&db, revision)?, &base)
     }
     /// Durable lookup, including after a lost response or an uncertain commit.
     pub fn run(&self, id: &str) -> Result<Option<Run>> {
@@ -414,8 +423,8 @@ impl Engine {
         if capture.space != self.layout()?.of(client.agent) {
             return fail("feedback must name a revision of the client's workspace");
         }
-        let base = published(&db)?;
-        let (members, contributions) = coverage(&db, revision, base)?;
+        let base = crate::revision(&db, published(&db)?)?;
+        let (members, contributions) = coverage(&db, &capture, &base)?;
         let created = Run {
             id,
             kind: RunKind::Feedback {
@@ -424,7 +433,7 @@ impl Engine {
             binding: Binding {
                 revision,
                 tree: capture.tree,
-                base,
+                base: base.revision,
                 members,
                 contributions,
                 checkpoints: BTreeMap::new(),
@@ -536,7 +545,7 @@ impl Engine {
         let candidate = revision(&connect(&self.state)?, run.binding.revision)?;
         if run.kind == RunKind::Publication {
             let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-            if let Err(reason) = self.recheck(&db, run, checks)? {
+            if let Err(reason) = self.recheck(&db, run, checks, &candidate)? {
                 return Ok(RunOutcome::Blocked { reason });
             }
         }
@@ -625,17 +634,18 @@ impl Engine {
         db: &Connection,
         run: &Run,
         checks: &[Check],
+        capture: &Capture,
     ) -> Result<std::result::Result<(), String>> {
         let binding = &run.binding;
-        let base = published(db)?;
-        if base != binding.base {
-            return Ok(Err(if !ahead(db, binding.revision, base)? {
+        let base = revision(db, published(db)?)?;
+        if base.revision != binding.base {
+            return Ok(Err(if !ahead(capture, &base) {
                 "a newer publication was accepted and is never overwritten".into()
             } else {
                 "published base advanced; reconsider and offer against the new base".into()
             }));
         }
-        let current = candidate(db, binding.revision)?;
+        let current = candidate(db, capture, &base)?;
         if !current.missing.is_empty() || current.binding != *binding {
             return Ok(Err(format!(
                 "offer coverage or bindings changed; missing offers from {:?}",
@@ -669,7 +679,7 @@ impl Engine {
     ) -> Result<RunOutcome> {
         observer(Stage::BeforeAccept)?;
         let db = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        if let Err(reason) = self.recheck(&db, run, checks)? {
+        if let Err(reason) = self.recheck(&db, run, checks, candidate)? {
             return Ok(RunOutcome::Blocked { reason });
         }
         let layout = self.layout()?;
