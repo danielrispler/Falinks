@@ -565,7 +565,7 @@ const unshown = new Set<string>();
 
 function markShown() {
   if (document.visibilityState !== "visible") return;
-  for (const id of unshown) window.__TAURI__.core.invoke("shown", { id });
+  if (unshown.size) window.__TAURI__.core.invoke("shown", { ids: [...unshown] });
   unshown.clear();
 }
 

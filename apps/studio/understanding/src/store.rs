@@ -241,18 +241,21 @@ impl CardStore {
         self.save()
     }
 
-    /// Marks the quiz of card `id` shown at `at`, in Unix milliseconds, and saves the store. A card
-    /// keeps its first time, and one guessed before gets none, so a guess never comes before its
-    /// quiz.
-    pub fn show(&mut self, id: &str, at: u64) -> io::Result<()> {
-        if let Some(kept) = self.card_mut(id)
-            && kept.shown_at.is_none()
-            && kept.guess.is_none()
-        {
-            kept.shown_at = Some(at);
-            return self.save();
+    /// Marks the quizzes of cards `ids` shown at `at`, in Unix milliseconds, and saves the store
+    /// once if any changed. A card keeps its first time, and one guessed before gets none, so a
+    /// guess never comes before its quiz.
+    pub fn show(&mut self, ids: &[impl AsRef<str>], at: u64) -> io::Result<()> {
+        let mut changed = false;
+        for id in ids {
+            if let Some(kept) = self.card_mut(id.as_ref())
+                && kept.shown_at.is_none()
+                && kept.guess.is_none()
+            {
+                kept.shown_at = Some(at);
+                changed = true;
+            }
         }
-        Ok(())
+        if changed { self.save() } else { Ok(()) }
     }
 
     /// Records Daniel's tap on option `option` of card `id`'s quiz at `at`, in Unix milliseconds,
