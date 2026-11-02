@@ -426,3 +426,24 @@ fn a_session_and_its_subagents_are_live_until_it_ends_and_again_once_it_resumes(
     studio.replay(&lines[0].replace("\"source\":\"startup\"", "\"source\":\"resume\""));
     assert!(studio.live_keys().contains(session));
 }
+
+#[test]
+fn the_selection_names_the_opened_subagent_until_a_session_is_selected() {
+    let mut studio = replay(RUN);
+    assert!(studio.selection().is_none());
+
+    studio.select(RUN_SESSION);
+    studio.open(RUN_WORKER);
+    let selection = studio.selection().expect("a selection");
+    assert_eq!(
+        (selection.session.id.as_str(), selection.agent),
+        (RUN_SESSION, Some(RUN_WORKER))
+    );
+    assert_eq!(
+        serde_json::to_value(&selection).unwrap()["agent"],
+        json!(RUN_WORKER)
+    );
+
+    studio.select(RUN_SESSION);
+    assert_eq!(studio.selection().expect("a selection").agent, None);
+}
