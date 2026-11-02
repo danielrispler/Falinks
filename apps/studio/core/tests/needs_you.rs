@@ -328,6 +328,213 @@ So Claude Code never waits for them. Two events that fire within a few milliseco
     assert_eq!(after_stop(heading), YourTurn);
 }
 
+// Waits across agents (#434, decisions 24 to 26): the four cases of #434's first version (B4) and
+// the dead call (B3), hand-written in the day log's shapes.
+
+/// Session `s1`'s event `name` at `at`, by subagent `agent` (`None` for its own agent), with `fields`.
+fn ev(name: &str, at: u64, agent: Option<&str>, fields: serde_json::Value) -> String {
+    let mut event = serde_json::json!({
+        "session_id": "s1",
+        "hook_event_name": name,
+        "cwd": "/w",
+        "prompt_id": "p1",
+        "studio_received_ms": at,
+    });
+    if let Some(agent) = agent {
+        event["agent_id"] = agent.into();
+    }
+    let fields = fields.as_object().unwrap().clone();
+    event.as_object_mut().unwrap().extend(fields);
+    event.to_string()
+}
+
+/// A call `id` of `tool` with `command`, by `agent`: its `name` event at `at`.
+fn call(name: &str, at: u64, agent: Option<&str>, id: &str, tool: &str, command: &str) -> String {
+    let fields = serde_json::json!({"tool_name": tool, "tool_use_id": id,
+        "tool_input": {"command": command}});
+    ev(name, at, agent, fields)
+}
+
+/// A permission notice, which names no agent.
+fn notification(at: u64) -> String {
+    let fields = serde_json::json!({"notification_type": "permission_prompt"});
+    ev("Notification", at, None, fields)
+}
+
+/// The permission request of `agent` for `tool` with `command`.
+fn request(at: u64, agent: Option<&str>, tool: &str, command: &str) -> String {
+    let fields = serde_json::json!({"tool_name": tool, "tool_input": {"command": command}});
+    ev("PermissionRequest", at, agent, fields)
+}
+
+/// `s1`'s state and who it waits on, as its row names them, after each of `lines`.
+fn waits(studio: &mut Studio, lines: &[String]) -> Vec<(State, Option<Option<String>>)> {
+    let waits = lines.iter().map(|line| {
+        studio.apply(line);
+        let session = studio.session("s1").unwrap();
+        (
+            session.state,
+            session.asker.as_ref().map(|a| a.agent.clone()),
+        )
+    });
+    waits.collect()
+}
+
+/// `s1` in a turn, with subagent `w1` started.
+fn started() -> Studio {
+    let mut studio = Studio::default();
+    studio.apply(&ev(
+        "UserPromptSubmit",
+        1,
+        None,
+        serde_json::json!({"prompt": "Go"}),
+    ));
+    studio
+}
+
+const W1: Option<&str> = Some("w1");
+
+#[test]
+fn a_notice_that_could_be_several_agents_names_none_and_clears_when_all_their_calls_resolve() {
+    let mut studio = started();
+    let lines = [
+        call("PreToolUse", 2, None, "own", "Bash", "cargo fetch"),
+        call("PreToolUse", 3, W1, "w1-test", "Bash", "cargo test"),
+        notification(4),
+        call("PostToolUse", 5, W1, "w1-test", "Bash", "cargo test"),
+        call("PostToolUse", 6, None, "own", "Bash", "cargo fetch"),
+    ];
+
+    assert_eq!(
+        waits(&mut studio, &lines),
+        [
+            (Running, None),
+            (Running, None),
+            (NeedsYou, Some(None)),
+            (NeedsYou, Some(None)),
+            (Running, None),
+        ]
+    );
+}
+
+#[test]
+fn a_second_agents_notice_is_kept_while_another_agent_waits() {
+    let mut studio = started();
+    let lines = [
+        call("PreToolUse", 2, None, "own", "Write", "probe.txt"),
+        request(3, None, "Write", "probe.txt"),
+        // The request's own notice.
+        notification(4),
+        call("PreToolUse", 5, W1, "w1-test", "Bash", "cargo test"),
+        // `w1`'s prompt, which fires only a notice.
+        notification(6),
+        call("PostToolUse", 7, None, "own", "Write", "probe.txt"),
+        call("PostToolUse", 8, W1, "w1-test", "Bash", "cargo test"),
+    ];
+
+    let states: Vec<State> = waits(&mut studio, &lines)
+        .into_iter()
+        .map(|w| w.0)
+        .collect();
+    assert_eq!(
+        states,
+        [
+            Running, NeedsYou, NeedsYou, NeedsYou, NeedsYou, NeedsYou, Running
+        ]
+    );
+}
+
+#[test]
+fn a_permission_request_leaves_another_agents_notice_in_place() {
+    let mut studio = started();
+    let w1 = Some(Some("w1".to_string()));
+    let lines = [
+        call("PreToolUse", 2, W1, "w1-test", "Bash", "cargo test"),
+        notification(3),
+        call("PreToolUse", 4, None, "own", "Write", "probe.txt"),
+        request(5, None, "Write", "probe.txt"),
+        call("PostToolUse", 6, None, "own", "Write", "probe.txt"),
+        call("PostToolUse", 7, W1, "w1-test", "Bash", "cargo test"),
+    ];
+
+    assert_eq!(
+        waits(&mut studio, &lines),
+        [
+            (Running, None),
+            (NeedsYou, w1.clone()),
+            (NeedsYou, w1.clone()),
+            (NeedsYou, w1.clone()),
+            (NeedsYou, w1),
+            (Running, None),
+        ]
+    );
+}
+
+#[test]
+fn a_permission_request_binds_only_to_its_own_agents_call() {
+    let mut studio = started();
+    let w1 = Some(Some("w1".to_string()));
+    let lines = [
+        call("PreToolUse", 2, W1, "w1-test", "Bash", "cargo test"),
+        call("PreToolUse", 3, Some("w2"), "w2-test", "Bash", "cargo test"),
+        request(4, W1, "Bash", "cargo test"),
+        call(
+            "PostToolUse",
+            5,
+            Some("w2"),
+            "w2-test",
+            "Bash",
+            "cargo test",
+        ),
+        call("PostToolUse", 6, W1, "w1-test", "Bash", "cargo test"),
+    ];
+
+    assert_eq!(
+        waits(&mut studio, &lines),
+        [
+            (Running, None),
+            (Running, None),
+            (NeedsYou, w1.clone()),
+            (NeedsYou, w1),
+            (Running, None),
+        ]
+    );
+}
+
+#[test]
+fn a_call_that_never_reported_back_holds_no_wait_past_its_sessions_turn() {
+    let mut studio = started();
+    let dead = Some(Some("d1".to_string()));
+    let stop = |at| {
+        ev(
+            "Stop",
+            at,
+            None,
+            serde_json::json!({"last_assistant_message": "Done."}),
+        )
+    };
+    let lines = [
+        // Subagent `d1`'s command, which never reports back, as `a4376`'s in the day log.
+        call("PreToolUse", 2, Some("d1"), "d1-ls", "Bash", "ls"),
+        // A sandboxed command's network notice, which lands before its own `PreToolUse`.
+        notification(3),
+        call("PreToolUse", 4, None, "own", "Bash", "cargo fetch"),
+        call("PostToolUse", 5, None, "own", "Bash", "cargo fetch"),
+        stop(6),
+    ];
+
+    assert_eq!(
+        waits(&mut studio, &lines),
+        [
+            (Running, None),
+            (NeedsYou, dead.clone()),
+            (NeedsYou, dead.clone()),
+            (NeedsYou, dead),
+            (YourTurn, None),
+        ]
+    );
+}
+
 #[test]
 fn a_question_on_a_line_that_opens_with_an_issue_number_needs_you() {
     let message = "#341 is done and its PR is green. Should I open the next ticket?";

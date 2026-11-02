@@ -5,7 +5,8 @@
 use serde_json::json;
 use std::collections::BTreeMap;
 use studio_core::{
-    Asker, Base, Change, Kind, Output, Parent, State, Status, Step, Studio, Subagent,
+    Asker, Base, Change, Fingerprint, Kind, Output, Parent, Purpose, State, Status, Step, Studio,
+    Subagent,
 };
 
 use Kind::{Helper, Worker};
@@ -456,4 +457,181 @@ fn the_selection_names_the_opened_subagent_until_a_session_is_selected() {
 
     studio.select(RUN_SESSION);
     assert_eq!(studio.selection().expect("a selection").agent, None);
+}
+
+/// Session `s1`'s event `name` at `at`, in prompt `prompt`'s turn, with `fields` added.
+fn ev(name: &str, at: u64, prompt: &str, fields: serde_json::Value) -> String {
+    let mut event = json!({
+        "session_id": "s1",
+        "hook_event_name": name,
+        "cwd": "/w",
+        "prompt_id": prompt,
+        "studio_received_ms": at,
+    });
+    let fields = fields.as_object().unwrap().clone();
+    event.as_object_mut().unwrap().extend(fields);
+    event.to_string()
+}
+
+/// The `PreToolUse` of a spawn by `caller`, `None` for the session's own agent.
+fn spawn(at: u64, call: &str, caller: Option<&str>) -> String {
+    let mut fields = json!({"tool_name": "Agent", "tool_use_id": call, "tool_input": {}});
+    if let Some(caller) = caller {
+        fields["agent_id"] = caller.into();
+    }
+    ev("PreToolUse", at, "p1", fields)
+}
+
+/// A step of subagent `agent` in `cwd`: a Bash `PreToolUse`.
+fn step(at: u64, agent: &str, cwd: &str) -> String {
+    let fields = json!({"agent_id": agent, "cwd": cwd, "tool_name": "Bash",
+        "tool_use_id": format!("{agent}-{at}"), "tool_input": {"command": "sleep 60"}});
+    ev("PreToolUse", at, "p1", fields)
+}
+
+/// A background spawn's response by `caller`, which names its child at once.
+fn launched(
+    at: u64,
+    call: &str,
+    caller: Option<&str>,
+    child: &str,
+    input: serde_json::Value,
+) -> String {
+    let mut fields = json!({"tool_name": "Agent", "tool_use_id": call, "tool_input": input,
+        "tool_response": {"agentId": child, "status": "async_launched"}});
+    if let Some(caller) = caller {
+        fields["agent_id"] = caller.into();
+    }
+    ev("PostToolUse", at, "p1", fields)
+}
+
+/// Subagent `id` of `s1`: its status and when it ended.
+fn status(studio: &Studio, id: &str) -> (String, Option<u64>) {
+    let agent = agent(studio, "s1", id);
+    (agent.status.to_string(), agent.ended_at)
+}
+
+#[test]
+fn a_foreground_subagent_whose_spawn_is_interrupted_ends_as_interrupted() {
+    let mut studio = Studio::default();
+    studio.apply(&ev(
+        "UserPromptSubmit",
+        1,
+        "p1",
+        json!({"prompt": "Review it"}),
+    ));
+    studio.apply(&spawn(2, "t1", None));
+    studio.apply(&step(3, "c1", "/w"));
+
+    let failure = json!({"tool_name": "Agent", "tool_use_id": "t1", "tool_input": {},
+        "error": "Interrupted by user", "is_interrupt": true});
+    studio.apply(&ev("PostToolUseFailure", 4, "p1", failure));
+
+    assert_eq!(status(&studio, "c1"), ("interrupted".into(), Some(4)));
+}
+
+#[test]
+fn a_turn_that_ends_without_its_stop_ends_its_foreground_subagents_not_its_background_ones() {
+    let mut studio = Studio::default();
+    studio.apply(&ev("UserPromptSubmit", 1, "p1", json!({"prompt": "Do it"})));
+    studio.apply(&spawn(2, "t1", None));
+    studio.apply(&launched(3, "t1", None, "w1", json!({})));
+    studio.apply(&step(4, "w1", "/w"));
+    studio.apply(&spawn(5, "t2", None));
+    studio.apply(&step(6, "c1", "/w"));
+
+    // Esc, then the next prompt under a new prompt id.
+    studio.apply(&ev(
+        "UserPromptSubmit",
+        10,
+        "p2",
+        json!({"prompt": "Stop that"}),
+    ));
+
+    assert_eq!(status(&studio, "c1"), ("interrupted".into(), Some(10)));
+    assert_eq!(status(&studio, "w1"), ("running".into(), None));
+}
+
+#[test]
+fn a_sessions_subagents_end_at_its_session_end() {
+    let studio = replay(DAY);
+
+    // `a4376` has one Bash step and no known spawn; its session ends at line 816.
+    let session = studio
+        .sessions()
+        .into_iter()
+        .find(|s| s.agent.id.starts_with("5d7f69ab"))
+        .unwrap();
+    let orphan = session
+        .agents
+        .iter()
+        .find(|a| a.agent.id.starts_with("a4376"));
+    assert!(orphan.unwrap().ended_at.is_some());
+    assert!(session.agents.iter().all(|a| a.ended_at.is_some()));
+}
+
+#[test]
+fn a_killed_subagents_running_descendants_end_with_it() {
+    let mut studio = Studio::default();
+    studio.apply(&ev("UserPromptSubmit", 1, "p1", json!({"prompt": "Do it"})));
+    studio.apply(&launched(2, "t1", None, "w1", json!({})));
+    studio.apply(&step(3, "w1", "/w"));
+    studio.apply(&launched(4, "t2", Some("w1"), "c1", json!({})));
+    studio.apply(&step(5, "c1", "/w"));
+    // A foreground child of the child, which no spawn response has named yet.
+    studio.apply(&spawn(6, "t3", Some("c1")));
+    studio.apply(&step(7, "g1", "/w"));
+    studio.apply(&ev(
+        "Stop",
+        8,
+        "p1",
+        json!({"background_tasks": [{"id": "w1"}]}),
+    ));
+
+    let killed =
+        "<task-notification><task-id>w1</task-id><status>killed</status></task-notification>";
+    studio.apply(&ev(
+        "UserPromptSubmit",
+        9,
+        "p2",
+        json!({ "prompt": killed }),
+    ));
+
+    assert_eq!(status(&studio, "c1"), ("killed".into(), Some(9)));
+    assert_eq!(status(&studio, "g1"), ("killed".into(), Some(9)));
+}
+
+#[test]
+fn a_killed_worker_that_its_sessions_stop_ended_first_still_gets_its_end_look() {
+    let mut studio = Studio::default();
+    studio.apply(&ev("UserPromptSubmit", 1, "p1", json!({"prompt": "Do it"})));
+    let worktree = json!({"isolation": "worktree"});
+    studio.apply(&launched(2, "t1", None, "w1", worktree));
+    studio.apply(&step(3, "w1", "/w/.claude/worktrees/w1"));
+
+    // The `Stop` no longer lists it, and its "killed" wake-up comes later.
+    let stop = ev("Stop", 8, "p1", json!({"background_tasks": []}));
+    let looks = studio.fingerprint_folders(&stop);
+
+    let end = Fingerprint {
+        key: "w1".into(),
+        folder: "/w/.claude/worktrees/w1".into(),
+        purpose: Purpose::Card,
+    };
+    assert!(looks.contains(&end), "{looks:?}");
+}
+
+#[test]
+fn a_subagents_result_is_the_first_non_blank_line_of_its_last_message() {
+    let mut studio = Studio::default();
+    studio.apply(&step(1, "c1", "/w"));
+
+    let message = "\n   \n  Found 3 callers.\nDetails";
+    let stop = json!({"agent_id": "c1", "last_assistant_message": message});
+    studio.apply(&ev("SubagentStop", 2, "p1", stop));
+
+    assert_eq!(
+        agent(&studio, "s1", "c1").result.as_deref(),
+        Some("Found 3 callers.")
+    );
 }
