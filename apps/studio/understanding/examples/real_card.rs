@@ -140,7 +140,7 @@ fn request(change: &str, at: u64) -> CardRequest {
         session_id: "real-card".into(),
         id: format!("real-card@{at}"),
         base: Base::default(),
-        change: change.into(),
+        change: Some(change.into()),
         prompt: Some(at),
         ..CardRequest::default()
     }
