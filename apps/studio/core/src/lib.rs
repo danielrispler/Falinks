@@ -1341,6 +1341,15 @@ impl Studio {
         changed
     }
 
+    /// The keys of the sessions that have not ended and of their subagents: the shell drops the
+    /// fingerprint records and writer queues of every other key (#410, decision 18).
+    pub fn live_keys(&self) -> std::collections::HashSet<String> {
+        let live = self.sessions.values().filter(|s| !s.ended);
+        live.flat_map(|s| std::iter::once(&s.id).chain(s.agents.iter().map(|a| &a.id)))
+            .cloned()
+            .collect()
+    }
+
     /// The latest tick, in Unix milliseconds.
     pub fn now(&self) -> u64 {
         self.now

@@ -79,26 +79,28 @@ fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> SessionCards {
     }
 }
 
-/// The pane drew the quiz of card `id` in a visible window.
-#[tauri::command]
-fn shown(id: String, cards: State<Cards>) {
-    unsaved(cards.lock().unwrap().show(&id, millis()));
+// The four store commands run off the main thread, since saving the store fsyncs.
+
+/// The pane drew the quizzes of cards `ids` in a visible window.
+#[tauri::command(async)]
+fn shown(ids: Vec<String>, cards: State<Cards>) {
+    unsaved(cards.lock().unwrap().show(&ids, millis()));
 }
 
 /// Daniel tapped option `option` of card `id`'s quiz.
-#[tauri::command]
+#[tauri::command(async)]
 fn guess(id: String, option: usize, cards: State<Cards>) {
     unsaved(cards.lock().unwrap().guess(&id, option, millis()));
 }
 
 /// Daniel flagged that the key of card `id`'s quiz is wrong.
-#[tauri::command]
+#[tauri::command(async)]
 fn key_wrong(id: String, cards: State<Cards>) {
     unsaved(cards.lock().unwrap().key_wrong(&id));
 }
 
 /// Daniel rated card `id`'s explanation.
-#[tauri::command]
+#[tauri::command(async)]
 fn rate(id: String, rating: Rating, cards: State<Cards>) {
     unsaved(cards.lock().unwrap().rate(&id, rating));
 }
@@ -240,6 +242,12 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 }
             }
             read = read_to > read_from;
+            // Dropping a queue's sender closes it: its thread finishes the jobs it holds, then ends.
+            if read {
+                let keys = state.lock().unwrap().live_keys();
+                fingerprints.retain(|key, _| keys.contains(key));
+                queues.retain(|key, _| keys.contains(key));
+            }
         }
         if state.lock().unwrap().tick(millis()) || read {
             let list = sessions(app.state(), app.state());
