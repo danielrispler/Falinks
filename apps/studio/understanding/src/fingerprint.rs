@@ -13,7 +13,7 @@ use std::{
     process::Command,
     time::SystemTime,
 };
-use studio_core::{Base, Change, Fingerprint, Keep};
+use studio_core::{Base, Change, Fingerprint, Purpose};
 
 /// A worktree's `HEAD`, and the files `git status` listed, by path from the worktree's root, with
 /// their content: `None` for a file that is gone.
@@ -49,7 +49,7 @@ pub fn fingerprint_changes(
 ) -> BTreeMap<String, Change> {
     let changes = looks.into_iter().filter_map(|look| {
         let print = prints.entry(look.key.clone()).or_default();
-        Some((look.key, print.look(Path::new(&look.folder), look.keep)?))
+        Some((look.key, print.look(Path::new(&look.folder), look.purpose)?))
     });
     changes.collect()
 }
@@ -67,11 +67,12 @@ impl Fingerprints {
     /// which is the change's base. `None` when nothing changed, when this is the worktree's first
     /// record, or when `folder` is in no git worktree.
     pub fn take(&mut self, folder: &Path) -> Option<Change> {
-        self.look(folder, Keep::Always)
+        self.look(folder, Purpose::Base)
     }
 
-    /// Like `take`, but the record becomes the next change's base only as `keep` says.
-    pub fn look(&mut self, folder: &Path, keep: Keep) -> Option<Change> {
+    /// Like `take`, for a look with `purpose`: the record becomes the next change's base unless
+    /// it is a commit check and `HEAD` stayed.
+    pub fn look(&mut self, folder: &Path, purpose: Purpose) -> Option<Change> {
         let root = match self.roots.get(folder) {
             Some(root) => root.clone(),
             None => {
@@ -100,7 +101,7 @@ impl Fingerprints {
             .collect();
         let record = Record { head, files };
         let previous = self.records.get(&root);
-        if keep == Keep::OnCommit && previous.is_some_and(|p| p.head == record.head) {
+        if purpose == Purpose::Commit && previous.is_some_and(|p| p.head == record.head) {
             return change(&root, previous?, &record);
         }
         let previous = self.records.insert(root.clone(), record)?;
