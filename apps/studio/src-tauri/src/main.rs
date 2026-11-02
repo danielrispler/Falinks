@@ -32,16 +32,13 @@ type Notices = Mutex<Notifications>;
 /// The session list, in its order.
 #[tauri::command]
 fn sessions(studio: State<Mutex<Studio>>, cards: State<Cards>) -> Vec<Row> {
-    let list: Vec<Session> = studio
-        .lock()
-        .unwrap()
-        .sessions()
-        .into_iter()
-        .cloned()
-        .collect();
+    let studio = studio.lock().unwrap();
+    let now = studio.now();
+    let list: Vec<Session> = studio.sessions().into_iter().cloned().collect();
+    drop(studio);
     let cards = cards.lock().unwrap();
     let row = |session: Session| Row {
-        line: cards.line(&session),
+        line: cards.line(&session, now),
         session,
     };
     list.into_iter().map(row).collect()

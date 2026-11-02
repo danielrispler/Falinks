@@ -76,6 +76,9 @@ pub struct Session {
     /// Whether its turn was opened by a wake-up and has had no prompt of Daniel's since.
     #[serde(skip)]
     woken: bool,
+    /// "worker <name> returned", from its latest wake-up until its own next step or Daniel's next
+    /// prompt (#410, decision 27).
+    pub returned: Option<String>,
 }
 
 /// What happened in a worktree since the last card on it: a session's own, or a subagent's that
@@ -1210,7 +1213,11 @@ impl Studio {
                 }
                 match &sender {
                     // The row says which worker returned until the session's next step.
-                    Sender::WakeUp(_) => session.last_step = None,
+                    Sender::WakeUp(task_id) => {
+                        let name = session.agents.iter().find(|a| a.agent.id == *task_id);
+                        let name = name.map_or(short(task_id, 5), |a| &a.name);
+                        session.returned = Some(format!("worker {name} returned"));
+                    }
                     Sender::Unrecognised(task_id) => outputs.push(Output::Unrecognised {
                         session_id: event.session_id.clone(),
                         task_id: task_id.clone(),
@@ -1224,6 +1231,7 @@ impl Studio {
                 });
                 // Daniel's prompt answers what asked him; a wake-up is not his, so it answers nothing.
                 if !wake_up {
+                    session.returned = None;
                     session.unblock();
                 }
                 session.turn_ended = false;
@@ -1283,6 +1291,7 @@ impl Studio {
             }
             "PreToolUse" => {
                 if own {
+                    session.returned = None;
                     session.last_step = Some(Step {
                         tool: tool.clone(),
                         detail: step_detail(&event.tool_input, &event.cwd),

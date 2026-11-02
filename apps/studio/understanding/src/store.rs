@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
-use studio_core::{CardRequest, Session};
+use studio_core::{CardRequest, Session, Step};
 
 /// A card in the store, with the change it explains and its base, and its record: when it was added,
 /// when its quiz showed, Daniel's guess, his flag on the key, his rating and the longer explanation he
@@ -80,12 +80,12 @@ pub struct Guess {
     pub at: u64,
 }
 
-/// A session list row: the session, and what its row says while its turn is over (`CardStore::line`).
+/// A session list row: the session, and what its row says (`CardStore::line`).
 #[derive(Clone, Debug, Serialize)]
 pub struct Row {
     #[serde(flatten)]
     pub session: Session,
-    pub line: Option<String>,
+    pub line: String,
 }
 
 /// A session's or a worker's rolling brief (#369, decision 16).
@@ -193,10 +193,46 @@ impl CardStore {
         }
     }
 
+    /// What `session`'s row says at `now`, in Unix milliseconds (#410, decision 27): while it needs
+    /// Daniel, who asks and for how long; once its turn is over, the stopped line; after a wake-up
+    /// with no step since, which worker returned; else its last step, else "No step yet".
+    pub fn line(&self, session: &Session, now: u64) -> String {
+        let step = match &session.last_step {
+            Some(Step {
+                tool,
+                detail: Some(detail),
+            }) => format!("{tool} {detail}"),
+            Some(step) => step.tool.clone(),
+            None => "No step yet".into(),
+        };
+        if let Some(asker) = &session.asker {
+            let minutes = now.saturating_sub(asker.since) / 60_000;
+            let waited = if minutes < 60 {
+                format!("{minutes}m")
+            } else {
+                format!("{}h", minutes / 60)
+            };
+            let who = match &asker.agent {
+                None => step,
+                Some(id) => {
+                    let agent = session.agents.iter().find(|a| a.agent.id == *id);
+                    format!(
+                        "{} asks",
+                        agent.map_or(id.get(..5).unwrap_or(id), |a| &a.name)
+                    )
+                }
+            };
+            return format!("{who} · {waited}");
+        }
+        self.stopped_line(session)
+            .or_else(|| session.returned.clone())
+            .unwrap_or(step)
+    }
+
     /// What `session`'s row says while its turn is over (#369, decision 19): the summary of the card
     /// on its `Stop`; the first line of the agent's last message until that card arrives; the brief's
     /// latest line when the `Stop` requested no card. `None` in a turn.
-    pub fn line(&self, session: &Session) -> Option<String> {
+    fn stopped_line(&self, session: &Session) -> Option<String> {
         let stopped = session.stopped.as_ref()?;
         let card = self
             .cards

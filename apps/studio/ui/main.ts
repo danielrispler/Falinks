@@ -50,8 +50,10 @@ type Session = {
   asker: Asker | null;
   prompts: Prompt[];
   questions: Question[];
-  // In the session list only: what its row says while its turn is over, from the card store.
-  line?: string | null;
+  // "worker <name> returned", after a wake-up until its next step or Daniel's next prompt.
+  returned: string | null;
+  // In the session list only: what its row says, built by the card store.
+  line?: string;
 };
 // The shell sends a card's request without its diff and base, which the pane never reads. `agent`
 // is the worker whose card it is; `changed_by` holds the files other subagents edited in its
@@ -176,26 +178,6 @@ function done(children: Subagent[] = []): HTMLElement[] {
   return faded ? [text("span", `${faded} done`, "id")] : [];
 }
 
-// "worker Implement #355 relocation returned", while the latest prompt is a wake-up and the session
-// has taken no step since; null otherwise.
-function returned(session: Session): string | null {
-  const sender = session.prompts[session.prompts.length - 1]?.sender;
-  if (session.last_step !== null || typeof sender !== "object" || !("wake_up" in sender)) return null;
-  const agent = session.agents.find((agent) => agent.id === sender.wake_up);
-  return `worker ${agent?.name ?? sender.wake_up.slice(0, 5)} returned`;
-}
-
-// What the session's line says: once its turn is over, its card's summary, the agent's first line or
-// the brief's latest line; in a turn, its last tool step or which worker returned; while it needs
-// Daniel, who asks and for how long, such as "a1191 · Implement #355 asks · 3m".
-function rowText(session: Session): string {
-  const wait = session.asker;
-  if (wait === null) return session.line ?? returned(session) ?? stepText(session.last_step);
-  if (wait.agent === null) return `${stepText(session.last_step)} · ${age(wait.since)}`;
-  const asker = session.agents.find((agent) => agent.id === wait.agent);
-  return `${wait.agent.slice(0, 5)} · ${asker?.name ?? ""} asks · ${age(wait.since)}`;
-}
-
 // One line: the folder, the session's short id, its state and what it is doing.
 function row(session: Session, children: Children): HTMLElement {
   const pressed = session.id === selection?.session.id && selection.agent === null;
@@ -208,7 +190,7 @@ function row(session: Session, children: Children): HTMLElement {
     text("span", session.id.slice(0, 8), "id"),
     state,
     ...done(children.get("session")),
-    text("span", rowText(session), "row-step"),
+    text("span", session.line ?? "", "row-step"),
   );
   return button;
 }
@@ -313,7 +295,7 @@ function show(selected: Selection | null) {
       : agent.name;
   element("state").textContent = label;
   element("state").dataset.state = state;
-  element("tool").textContent = step?.tool ?? (agent === null ? returned(session) : null) ?? "No step yet";
+  element("tool").textContent = step?.tool ?? (agent === null ? session.returned : null) ?? "No step yet";
   element("detail").textContent = step?.detail ?? "";
   showQuestions(session.questions.filter((question) => question.agent === (agent?.id ?? null)));
   showChecks(session.checks);
