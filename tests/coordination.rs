@@ -351,6 +351,30 @@ fn changed_pins_and_unknown_input_universes_fail_closed() {
 }
 
 #[test]
+fn replaced_pinned_binary_degrades_cached_evidence() {
+    // Pins keep their path, so a symlink lets the binary behind a pin change.
+    let tools = tempfile::tempdir().unwrap();
+    let link = tools.path().join("gopls");
+    let mut toolchain = go_toolchain();
+    std::os::unix::fs::symlink(&toolchain.executables[0].path, &link).unwrap();
+    toolchain.executables[0] = pin(link.clone());
+    let (_dir, engine, _, _) = fixture(GO);
+    let evidence = engine.configure_analysis(vec![toolchain.clone()]).unwrap();
+    assert!(evidence[0].errors.is_empty(), "{:?}", evidence[0].errors);
+
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&toolchain.executables[1].path, &link).unwrap();
+    let capture = engine.capture().unwrap();
+    let errors = &engine.evidence(&capture).unwrap()[0].errors;
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("pinned executable changed")),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn deferred_relevant_edit_blocks_stale_and_unreviewed_writes_until_reassessment() {
     let (_dir, engine, alice, bob) = fixture(PAIR);
     engine.register(&alice, scope("a", &["a.rs"])).unwrap();
