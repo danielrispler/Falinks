@@ -2,7 +2,8 @@
 //! and then execs the child, as an in-process Rust backend would; `bwrap` is the external
 //! binary candidate. The host keeps the engine's process-group launch and kill path.
 use crate::{
-    Fixture, Launch, Loopback, Result, Scenario, child_args, descendant_alive, wait_until,
+    Fixture, Launch, Loopback, Result, Scenario, child_args, child_report, descendant_alive,
+    wait_until,
 };
 use landlock::{
     ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr,
@@ -260,8 +261,7 @@ pub fn launch(
 
 /// Pid reported by the child, valid only when it ran in the host PID namespace.
 fn descendant_pid(fixture: &Fixture) -> Option<i32> {
-    let text = fs::read_to_string(fixture.output.join("child.json")).ok()?;
-    let child: Value = serde_json::from_str(&text).ok()?;
+    let child = child_report(fixture)?;
     let pid = child["descendant"]
         .as_str()?
         .strip_prefix("setsid pid ")?

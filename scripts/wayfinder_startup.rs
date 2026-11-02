@@ -23,17 +23,7 @@ pub fn open_tickets(pages: &Value) -> Result<Vec<Value>> {
             let blockers = ticket["issue_dependencies_summary"]["blocked_by"]
                 .as_u64()
                 .ok_or_else(|| format!("Unknown blockers: {title}"))?;
-            let assignees = ticket["assignees"]
-                .as_array()
-                .ok_or("missing ticket assignees")?
-                .iter()
-                .map(|person| {
-                    person["login"]
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or("missing assignee login")
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let assignees = logins(&ticket["assignees"])?;
             rows.push(json!({"number":ticket["number"],"title":title,"url":ticket["html_url"],"assignees":assignees,"blocked_by":blockers,"frontier":blockers==0 && assignees.is_empty()}));
         }
     }
@@ -143,6 +133,30 @@ pub fn open_blockers(pages: &Value) -> Result<Vec<u64>> {
     }
     Ok(numbers)
 }
+/// The login of each person in an `assignees` array.
+fn logins(assignees: &Value) -> Result<Vec<&str>> {
+    Ok(assignees
+        .as_array()
+        .ok_or("missing assignees")?
+        .iter()
+        .map(|person| person["login"].as_str().ok_or("missing assignee login"))
+        .collect::<std::result::Result<_, _>>()?)
+}
+/// Path and branch of each live worktree in `git worktree list --porcelain`. A prunable
+/// worktree's directory is gone, so it is skipped: it cannot be reused or removed.
+fn live_worktrees(porcelain: &str) -> impl Iterator<Item = (&str, &str)> {
+    porcelain.split("\n\n").filter_map(|stanza| {
+        let field = |key: &str| stanza.lines().find_map(|line| line.strip_prefix(key));
+        match (
+            field("worktree "),
+            field("branch refs/heads/"),
+            field("prunable"),
+        ) {
+            (Some(path), Some(branch), None) => Some((path, branch)),
+            _ => None,
+        }
+    })
+}
 #[derive(Debug, PartialEq)]
 pub enum Workspace {
     /// A worktree already has the ticket branch checked out; use it as is.
@@ -181,12 +195,7 @@ pub fn claim_plan(
         .join("-")
         .to_ascii_lowercase();
     require(issue["state"] == "OPEN", &format!("#{number} is closed"))?;
-    let assignees = issue["assignees"]
-        .as_array()
-        .ok_or("missing issue assignees")?
-        .iter()
-        .map(|person| person["login"].as_str().ok_or("missing assignee login"))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let assignees = logins(&issue["assignees"])?;
     let others = assignees
         .iter()
         .filter(|login| **login != caller)
@@ -207,22 +216,13 @@ pub fn claim_plan(
     let prefix = format!("issue-{number}-");
     let ours = |name: &str| name.starts_with(&prefix);
     let assign = assignees.is_empty();
-    for stanza in worktrees.split("\n\n") {
-        let field = |key: &str| stanza.lines().find_map(|line| line.strip_prefix(key));
-        // A prunable worktree's directory is gone, so it cannot be reused.
-        if let (Some(path), Some(branch), None) = (
-            field("worktree "),
-            field("branch refs/heads/"),
-            field("prunable"),
-        ) && ours(branch)
-        {
-            return Ok(ClaimPlan {
-                assign,
-                branch: branch.into(),
-                path: path.into(),
-                workspace: Workspace::Reuse,
-            });
-        }
+    if let Some((path, branch)) = live_worktrees(worktrees).find(|(_, branch)| ours(branch)) {
+        return Ok(ClaimPlan {
+            assign,
+            branch: branch.into(),
+            path: path.into(),
+            workspace: Workspace::Reuse,
+        });
     }
     let names = branches.lines().map(str::trim);
     let local = names.clone().find(|name| ours(name));
@@ -282,20 +282,12 @@ pub fn done_plan(
         &format!("{branch}: no merged PR ends at {head}; it has unmerged work or its PR is open"),
     )?;
     let mut worktree = None;
-    for stanza in worktrees.split("\n\n") {
-        let field = |key: &str| stanza.lines().find_map(|line| line.strip_prefix(key));
-        if let (Some(path), Some(name), None) = (
-            field("worktree "),
-            field("branch refs/heads/"),
-            field("prunable"),
-        ) && name == *branch
-        {
-            require(
-                !cwd.starts_with(path),
-                &format!("run --done from outside {path}"),
-            )?;
-            worktree = Some(path.to_owned());
-        }
+    for (path, _) in live_worktrees(worktrees).filter(|(_, name)| name == branch) {
+        require(
+            !cwd.starts_with(path),
+            &format!("run --done from outside {path}"),
+        )?;
+        worktree = Some(path.to_owned());
     }
     Ok(DonePlan {
         branch: (*branch).to_owned(),

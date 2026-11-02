@@ -457,20 +457,24 @@ impl Boundary {
         let request = &envelope["request"];
         if envelope["operation"] == "review"
             && result["accepted"] == true
-            && ["defer", "keep", "revise", "drop"]
-                .contains(&request["action"].as_str().unwrap_or(""))
+            && let Some(status) = review_status(&request["action"])
         {
-            let status = if request["action"] == "defer" {
-                "deferred"
-            } else {
-                "reconsidered"
-            };
             self.db.execute(
                 "UPDATE context SET status=? WHERE thread=? AND event=?",
                 params![status, self.thread, request["event"].as_str()],
             )?;
         }
         Ok(())
+    }
+}
+
+/// The context status an accepted review leaves: `defer` defers the event; `keep`, `revise`
+/// and `drop` reconsider it. Any other action is unknown.
+pub fn review_status(action: &Value) -> Option<&'static str> {
+    match action.as_str()? {
+        "defer" => Some("deferred"),
+        "keep" | "revise" | "drop" => Some("reconsidered"),
+        _ => None,
     }
 }
 
@@ -522,16 +526,20 @@ pub fn command_output(
         });
     }
     drop(send);
+    let group = -(child.id() as i32);
+    let kill_group = || {
+        // SAFETY: only the separately created group belonging to this child is killed.
+        unsafe {
+            libc::kill(group, libc::SIGKILL);
+        }
+    };
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
         }
         if Instant::now() >= deadline {
-            // SAFETY: only the separately created group belonging to this child is killed.
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
+            kill_group();
             let _ = child.wait();
             return Err("controlled command deadline exceeded".into());
         }
@@ -547,10 +555,7 @@ pub fn command_output(
         let (is_stdout, bytes) = match receive.recv_timeout(wait) {
             Ok(result) => result,
             Err(error) => {
-                // SAFETY: kill only descendants in this command's dedicated process group.
-                unsafe {
-                    libc::kill(-(child.id() as i32), libc::SIGKILL);
-                }
+                kill_group();
                 return Err(error.into());
             }
         };
