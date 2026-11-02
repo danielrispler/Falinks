@@ -9,7 +9,9 @@ use std::{
     path::Path,
     time::Duration,
 };
-use support::{GO, edit, fail_commits, fails_with, go_toolchain, halt, incidents, snapshot};
+use support::{
+    GO, applied, edit, fail_commits, fails_with, go_toolchain, halt, incidents, snapshot,
+};
 use tempfile::TempDir;
 
 const LEFT: &str = "package probe\n\nfunc Left() int {\n\treturn 2\n}\n\nfunc Right() int {\n\treturn Callee()\n}\n";
@@ -68,14 +70,6 @@ fn independent(engine: &Engine, alice: &Client, bob: &Client) {
     register(engine, bob, "callee", "callee task", &["callee.go#Callee"]);
     applied(engine, alice, "left", "siblings.go", LEFT);
     applied(engine, bob, "callee", "callee.go", CALLEE);
-}
-fn applied(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
-    let current = engine.capture_for(client).unwrap();
-    let outcome = engine
-        .apply(client, edit(id, &current, path, bytes))
-        .unwrap();
-    assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
-    engine.capture_for(client).unwrap()
 }
 fn agree(engine: &Engine, client: &Client, proposal: &RegroupingProposal) -> RegroupingProposal {
     engine

@@ -78,6 +78,31 @@ pub fn edit(id: &str, capture: &Capture, path: &str, bytes: &str) -> Request {
         reviews: Vec::new(),
     }
 }
+/// `client` replaces `path` in its own workspace; the edit must apply. Returns the new capture.
+pub fn applied(engine: &Engine, client: &Client, id: &str, path: &str, bytes: &str) -> Capture {
+    let current = engine.capture_for(client).unwrap();
+    let outcome = engine
+        .apply(client, edit(id, &current, path, bytes))
+        .unwrap();
+    assert!(matches!(outcome, Outcome::Applied { .. }), "{outcome:?}");
+    engine.capture_for(client).unwrap()
+}
+/// Replaces `a.rs` with `new a` and `b.rs` with `new b`, installing `a.rs` first. Both
+/// expect the version `base` saw.
+pub fn two_files(id: &str, base: &Capture) -> Request {
+    let mut request = edit(id, base, "a.rs", "new a");
+    request
+        .expected
+        .insert("b.rs".into(), base.files["b.rs"].version);
+    request.output.insert(
+        "b.rs".into(),
+        Output::Whole(File {
+            bytes: b"new b".to_vec(),
+            executable: false,
+        }),
+    );
+    request
+}
 
 /// The engine's shared analysis caches under a fixture root, one per configured Go toolchain.
 pub fn analysis_caches(root: &Path) -> Vec<PathBuf> {

@@ -4,6 +4,7 @@ use falinks::*;
 use std::fs;
 use support::{
     PAIR, edit, fail_commits, fails_with, fixture, halt, incidents, ledger, open, reopen, snapshot,
+    two_files,
 };
 
 #[test]
@@ -762,19 +763,6 @@ fn open_worker() {
     println!("{error}");
 }
 
-/// Replaces `a.rs` with `new a` and `b.rs` with `new b`, installing `a.rs` first.
-fn two_files(id: &str, base: &Capture) -> Request {
-    let mut request = edit(id, base, "a.rs", "new a");
-    request.expected.insert("b.rs".into(), 0);
-    request.output.insert(
-        "b.rs".into(),
-        Output::Whole(File {
-            bytes: b"new b".to_vec(),
-            executable: false,
-        }),
-    );
-    request
-}
 /// Runs `crash_worker` over a fixture root; the process exits at `phase`.
 fn crash(root: &std::path::Path, phase: &str) {
     let status = std::process::Command::new(std::env::current_exe().unwrap())
