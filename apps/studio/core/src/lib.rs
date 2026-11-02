@@ -20,6 +20,33 @@ pub struct Studio {
     viewed: Option<String>,
     /// The shell's latest tick, in Unix milliseconds.
     now: u64,
+    roots: Roots,
+}
+
+type FindRoot = dyn Fn(&str) -> Option<String> + Send;
+
+/// Each folder's worktree root (#434, decision 11), found once per folder by the shell's lookup. With
+/// none found, a folder is its own root.
+#[derive(Default)]
+struct Roots {
+    find: Option<Box<FindRoot>>,
+    known: std::cell::RefCell<HashMap<String, String>>,
+}
+
+impl Roots {
+    fn of(&self, folder: &str) -> String {
+        if folder.is_empty() {
+            return String::new();
+        }
+        let mut known = self.known.borrow_mut();
+        if let Some(root) = known.get(folder) {
+            return root.clone();
+        }
+        let found = self.find.as_ref().and_then(|find| find(folder));
+        let root = found.unwrap_or_else(|| folder.into());
+        known.insert(folder.into(), root.clone());
+        root
+    }
 }
 
 /// What the session view shows: the session Daniel selected, and the subagent of it he opened since,
@@ -88,6 +115,10 @@ pub struct Session {
     /// (#434, decision 4).
     #[serde(skip)]
     queued: Vec<Prompt>,
+    /// The worktree roots its latest turn touched, each with its base from the first touch (#434,
+    /// decision 9).
+    #[serde(skip)]
+    touched: BTreeSet<String>,
     /// "worker <name> returned", from its latest wake-up until its own next step or Daniel's next
     /// prompt (#410, decision 27).
     pub returned: Option<String>,
@@ -196,6 +227,12 @@ pub struct Subagent {
     /// The folder of its first event that has one: its worktree, or its parent's folder.
     #[serde(skip)]
     pub folder: Option<String>,
+    /// Its folder's worktree root, and the owner key of the cards on its changes there, decided at
+    /// its first folder and never again (#434, decision 11).
+    #[serde(skip)]
+    root: String,
+    #[serde(skip)]
+    owner: String,
     /// What its spawn asked it to do, which its brief's rewrite reads; the pane never shows it.
     #[serde(skip)]
     pub prompt: String,
@@ -448,7 +485,7 @@ impl Session {
 
     /// Updates the subagent tree with one event. A spawn's response names its child (`agentId`),
     /// and every child event names its agent (`agent_id`).
-    fn track_agents(&mut self, event: &Event, worktree_changed: bool) {
+    fn track_agents(&mut self, event: &Event, worktree_changed: bool, roots: &Roots) {
         let at = event.studio_received_ms;
         let tool = event.tool_name.as_deref().unwrap_or_default();
         for (id, status, at) in self.ends(event) {
@@ -470,15 +507,28 @@ impl Session {
                 let spawn = call.and_then(|c| Some((c.id.clone()?, c.agent.clone())));
                 self.agent(id, at).spawn = spawn;
             }
+            // Its owner, at its first folder: itself in a worktree other than its parent's, else its
+            // parent's owner.
+            let first = self.subagent(id).is_some_and(|a| a.folder.is_none());
+            let root = roots.of(&event.cwd);
+            let owner = match self.subagent(id).and_then(|a| self.spawner(a)) {
+                Some(parent) => self
+                    .subagent(parent)
+                    .filter(|p| !p.owner.is_empty() && p.root == root)
+                    .map(|p| p.owner.clone()),
+                None => (roots.of(&self.cwd) == root).then(|| self.agent.id.clone()),
+            };
             let agent = self.agent(id, at);
             agent.agent.last_event_at = agent.agent.last_event_at.max(at);
             if agent.agent_type.is_none() {
                 agent.agent_type.clone_from(&event.agent_type);
             }
             // Its first folder is its first base (`Studio::look`).
-            if agent.folder.is_none() && !event.cwd.is_empty() {
+            if first && !event.cwd.is_empty() {
                 agent.folder = Some(event.cwd.clone());
                 agent.agent.since.at = at;
+                agent.owner = owner.unwrap_or_else(|| id.clone());
+                agent.root = root;
             }
             // A changed file promotes a helper at that step: an `Edit` or `Write` that succeeded, or
             // a command that changed its worktree and either succeeded or ran and failed (#434,
@@ -585,28 +635,34 @@ impl Session {
         unrecognised.map_or(Sender::Daniel, Sender::Unrecognised)
     }
 
-    /// The owner key of the cards that cover subagent `id`'s changes in `folder`: `id` itself when its
-    /// parent works in another folder, else its parent's, up to the session's own agent's id.
-    fn owner(&self, id: &str, folder: &str) -> String {
-        let find = |id: &str| self.subagent(id);
-        match find(id).map(|a| &a.parent) {
-            Some(Parent::Agent(parent)) => {
-                if find(parent).and_then(|a| a.folder.as_deref()) != Some(folder) {
-                    return id.into();
-                }
-                self.owner(parent, folder)
-            }
-            _ if folder != self.cwd => id.into(),
-            _ => self.agent.id.clone(),
-        }
+    /// Whether subagent `id` gets cards of its own: a worker in a worktree of its own.
+    fn has_cards(&self, id: &str) -> bool {
+        self.subagent(id)
+            .is_some_and(|a| a.kind == Kind::Worker && a.owner == id)
     }
 
-    /// Whether subagent `id` gets cards of its own: a worker in a folder of its own.
-    fn has_cards(&self, id: &str) -> bool {
-        self.subagent(id).is_some_and(|a| {
-            let folder = a.folder.as_deref().unwrap_or_default();
-            a.kind == Kind::Worker && self.owner(id, folder) == id
-        })
+    /// Whether worktree `root` is a running worker's with cards of its own, which the session's
+    /// cards leave out (#434, decision 10).
+    fn workers_own(&self, root: &str) -> bool {
+        let running = self.agents.iter().filter(|a| a.ended_at.is_none());
+        running
+            .filter(|a| a.root == root)
+            .any(|a| self.has_cards(&a.agent.id))
+    }
+
+    /// The worktrees its turn touched, but those of running workers with cards.
+    fn closing(&self) -> Vec<String> {
+        let touched = self.touched.iter().filter(|root| !self.workers_own(root));
+        touched.cloned().collect()
+    }
+
+    /// Its subagents in its own worktree that ran since its last card and its turn's end: the
+    /// between-turn card's tags (#434, decisions 16 and 17).
+    fn between_turns(&self, at: u64) -> Vec<String> {
+        let after = self.agent.since.at.max(self.stopped_at);
+        let own = self.agents.iter().filter(|a| a.owner == self.agent.id);
+        let ran = own.filter(|a| a.agent.last_event_at > after || a.ended_at == Some(at));
+        ran.map(|a| a.agent.id.clone()).collect()
     }
 
     /// The agent record of owner key `key`: subagent `key`'s, or else the session's own.
@@ -962,13 +1018,14 @@ pub struct Change {
 /// every purpose but `Commit`, which keeps it only when `HEAD` moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
-    /// A base, whose change is never a card: a session's prompt, a subagent's first folder, a
-    /// helper's look before its command, and the start-up bases.
+    /// A base, whose change is never a card: a turn's first touch of a worktree, a subagent's first
+    /// folder, a helper's look before its command, and the start-up bases.
     Base,
     /// After a worker's or a helper's command: a card only when `HEAD` moved; the change it saw
     /// otherwise stays for the card at its next commit, its end or its fallback.
     Commit,
-    /// A card when the worktree changed, such as a worker's end.
+    /// A card when the worktree changed, such as a worker's end, or a session's change between its
+    /// turns (#434, decisions 16 and 17).
     Card,
     /// 20 minutes or more after the worktree's last card or its last quiet fallback: a card when
     /// it changed, else a new 20-minute wait (#369, decision 11, as #410 changes it).
@@ -1196,6 +1253,52 @@ fn exit_code_counts(command: &str) -> bool {
 }
 
 impl Studio {
+    /// A studio that finds a folder's worktree root with `find` (#434, decision 11), such as the
+    /// shell's `git` lookup. `Studio::default` takes each folder as its own root.
+    pub fn with_roots(find: impl Fn(&str) -> Option<String> + Send + 'static) -> Self {
+        let roots = Roots {
+            find: Some(Box::new(find)),
+            ..Roots::default()
+        };
+        Studio {
+            roots,
+            ..Studio::default()
+        }
+    }
+
+    /// The worktree roots that `event` of a session's own agent touches (#434, decision 9): its
+    /// folder's, and an `Edit` or `Write` path's, but those of its running workers with cards. A
+    /// start, an end or a notice touches none.
+    // shortcut: a Bash write through a path, without a `cd`, is not seen; parse commands for paths
+    // if a live run shows cards missing such writes.
+    fn touches(&self, event: &Event) -> Vec<String> {
+        let name = event.hook_event_name.as_str();
+        if event.agent_id.is_some()
+            || matches!(name, "SessionStart" | "SessionEnd" | "Notification")
+        {
+            return Vec::new();
+        }
+        let tool = event.tool_name.as_deref();
+        let path = event.tool_input["file_path"].as_str();
+        let path = path.filter(|p| p.starts_with('/') && matches!(tool, Some("Edit" | "Write")));
+        let folder = path.and_then(|p| std::path::Path::new(p).parent()?.to_str());
+        // With no lookup, a path under the event's folder is in its worktree.
+        let below = |f: &&str| f.starts_with(&format!("{}/", event.cwd));
+        let folder = folder.filter(|f| self.roots.find.is_some() || !below(f));
+        let session = self.sessions.get(&event.session_id);
+        let mut roots: Vec<String> = Vec::new();
+        for folder in [Some(event.cwd.as_str()), folder].into_iter().flatten() {
+            let root = self.roots.of(folder);
+            if !root.is_empty()
+                && !roots.contains(&root)
+                && !session.is_some_and(|s| s.workers_own(&root))
+            {
+                roots.push(root);
+            }
+        }
+        roots
+    }
+
     /// The worktrees the shell fingerprints before it applies this live line (#328, module 5), each
     /// with its own key: none, one, or at a wake-up also its workers' ends (#369, decisions 6, 8, 10
     /// and 11).
@@ -1212,7 +1315,25 @@ impl Studio {
             return looks;
         };
         for (id, ..) in session.ends(event) {
-            let folder = session.subagent(&id).and_then(|a| a.folder.clone());
+            let Some(agent) = session.subagent(&id) else {
+                continue;
+            };
+            // One in its session's worktree, outside a turn, ends with the session's card (#434,
+            // decision 16).
+            let key = &session.agent.id;
+            if agent.owner == *key && !session.in_turn() {
+                let folder = agent.root.clone();
+                let seen = |l: &Fingerprint| l.key == *key && l.folder == folder;
+                if !looks.iter().any(seen) {
+                    let purpose = Purpose::Card;
+                    looks.push(Fingerprint {
+                        key: key.clone(),
+                        folder,
+                        purpose,
+                    });
+                }
+            }
+            let folder = agent.folder.clone();
             let Some(folder) = folder.filter(|_| session.has_cards(&id)) else {
                 continue;
             };
@@ -1228,15 +1349,16 @@ impl Studio {
         looks
     }
 
-    /// The fingerprint before `event`. A session's own: at a prompt that opens a turn, the prompt's
-    /// base, so what Daniel changed himself since the last card does not count; a prompt inside a
-    /// turn still open takes none, since it is queued or a wake-up can land mid-turn. At a turn's end,
-    /// its `Stop` or the next turn's first event (#434, decision 5), the change since the base is the
-    /// card's, and the end's record is the next turn's base. A subagent's: its first event's, its base; a helper's before and
-    /// after each Bash step, for a change across it that makes it a worker; a worker's after each
-    /// Bash step, for a commit; and a worker's end. On a step 20 minutes after the last card of the
-    /// worktree it is in, that worktree's, for the fallback card; a session's only in a turn. A
-    /// helper's look after its Bash step comes beside such a fallback's.
+    /// The fingerprints before `event`. A session's own, one per worktree (#434, decisions 8 to
+    /// 10): at a turn's first touch of a worktree, its base, so what Daniel changed himself before
+    /// does not count; at a turn's end, its `Stop` or the next turn's first event (#434, decision 5),
+    /// every worktree it touched, whose change since its base is the card's, and whose record is
+    /// the next turn's base. A turn that starts after the last one ended first cards what its
+    /// subagents changed between them (decision 17). A subagent's: its first event's, its base; a
+    /// helper's before and after each Bash step, for a change across it that makes it a worker; a
+    /// worker's after each Bash step, for a commit; and a worker's end. On a step 20 minutes after
+    /// the last card of the worktree it is in, that worktree's, for the fallback card; a session's
+    /// only in a turn. A helper's look after its Bash step comes beside such a fallback's.
     fn look(&self, event: &Event) -> Vec<Fingerprint> {
         let name = event.hook_event_name.as_str();
         let step = matches!(name, "PostToolUse" | "PostToolUseFailure");
@@ -1253,16 +1375,46 @@ impl Studio {
             (!folder.is_empty()).then_some(look)
         };
         let Some(id) = &event.agent_id else {
-            let purpose = match name {
-                _ if session.is_some_and(|s| s.ends_turn_early(event)) => Purpose::TurnEnd,
-                "UserPromptSubmit" if !session.is_some_and(Session::in_turn) => Purpose::Base,
-                "Stop" => Purpose::TurnEnd,
-                _ if session.is_some_and(session_due) => Purpose::Fallback,
-                _ => return Vec::new(),
+            let blank = Session::default();
+            let s = session.unwrap_or(&blank);
+            let key = &event.session_id;
+            let ends = s.ends_turn_early(event) || name == "Stop";
+            let opens = s.starts_turn(event) || name == "UserPromptSubmit" && !s.in_turn();
+            // A turn's end, and a due fallback, look at every worktree it touched (#434, decision
+            // 10).
+            let mut closing = s.closing();
+            // A turn seen only from its end, such as one the log starts in, ends where it ends.
+            if closing.is_empty() && ends {
+                closing = vec![self.roots.of(&event.cwd)];
+            }
+            let purpose = match ends {
+                true => Some(Purpose::TurnEnd),
+                false => session
+                    .is_some_and(session_due)
+                    .then_some(Purpose::Fallback),
             };
-            return look(&event.session_id, &event.cwd, purpose)
+            let mut looks: Vec<Fingerprint> = purpose
                 .into_iter()
+                .flat_map(|purpose| closing.iter().filter_map(move |r| look(key, r, purpose)))
                 .collect();
+            // Each worktree a turn touches first gets its base, which a turn's end just took. A
+            // turn that starts after the last one ended first cards what subagents changed
+            // between them (#434, decision 17).
+            if opens || s.in_turn() && name != "Stop" {
+                let backstop =
+                    opens && !s.in_turn() && !s.between_turns(event.studio_received_ms).is_empty();
+                let purpose = if backstop {
+                    Purpose::Card
+                } else {
+                    Purpose::Base
+                };
+                let known = |root: &String| {
+                    closing.contains(root) && ends || s.touched.contains(root) && !opens
+                };
+                let first = self.touches(event).into_iter().filter(|r| !known(r));
+                looks.extend(first.filter_map(|root| look(key, &root, purpose)));
+            }
+            return looks;
         };
         let Some(session) = session else {
             return Vec::new();
@@ -1281,27 +1433,35 @@ impl Studio {
             return look(id, folder, Purpose::Base).into_iter().collect();
         }
         let bash = step && bash;
-        let owner = session.owner(id, folder);
-        let since = &session.record(&owner).since;
-        let fallback = match session.subagent(&owner) {
+        let owner = agent.map_or_default(|a| a.owner.as_str());
+        let since = &session.record(owner).since;
+        let fallback: Vec<Fingerprint> = match session.subagent(owner) {
             Some(own) if &own.agent.id == id => match worker(own) {
                 true if due(since) => look(id, folder, Purpose::Fallback),
                 _ => look(id, folder, Purpose::Commit).filter(|_| bash),
-            },
+            }
+            .into_iter()
+            .collect(),
             // It works in the worktree of a worker above it, or of its session.
             Some(above) if worker(above) && due(since) => above
                 .folder
                 .as_deref()
-                .and_then(|above_folder| look(&above.agent.id, above_folder, Purpose::Fallback)),
+                .and_then(|above_folder| look(&above.agent.id, above_folder, Purpose::Fallback))
+                .into_iter()
+                .collect(),
             None if session_due(session) => {
-                look(&session.agent.id, &session.cwd, Purpose::Fallback)
+                let closing = session.closing().into_iter();
+                let key = &session.agent.id;
+                closing
+                    .filter_map(|root| look(key, &root, Purpose::Fallback))
+                    .collect()
             }
-            _ => None,
+            _ => Vec::new(),
         };
         // A due fallback's look comes beside a helper's own (#434, decision 22).
         let helper =
             look(id, folder, Purpose::Commit).filter(|_| bash && agent.is_some_and(|a| !worker(a)));
-        let helper = helper.filter(|h| fallback.as_ref().is_none_or(|f| f.key != h.key));
+        let helper = helper.filter(|h| fallback.iter().all(|f| f.key != h.key));
         fallback.into_iter().chain(helper).collect()
     }
 
@@ -1313,9 +1473,10 @@ impl Studio {
         let agents = self.sessions.values().flat_map(|s| &s.agents);
         let running = agents.filter(|a| a.status == Status::Running);
         let running = running.filter_map(|a| Some((a.agent.id.as_str(), a.folder.as_deref()?)));
-        let folders = waiting
-            .map(|s| (s.agent.id.as_str(), s.cwd.as_str()))
-            .chain(running);
+        // Every worktree a turn touched gets its base.
+        let touched =
+            waiting.flat_map(|s| s.touched.iter().map(|r| (s.agent.id.as_str(), r.as_str())));
+        let folders = touched.chain(running);
         let print = |(key, folder): (&str, &str)| Fingerprint {
             key: key.into(),
             folder: folder.into(),
@@ -1343,6 +1504,8 @@ impl Studio {
             return Vec::new();
         };
         let looks = self.looks(&event);
+        let touches = self.touches(&event);
+        let roots = &self.roots;
         let session = self
             .sessions
             .entry(event.session_id.clone())
@@ -1367,7 +1530,8 @@ impl Studio {
             .map(|a| a.agent.id.clone())
             .collect();
         let its_own = |id: &String| changes.contains_key(id);
-        session.track_agents(&event, event.agent_id.as_ref().is_some_and(its_own));
+        let changed = event.agent_id.as_ref().is_some_and(its_own);
+        session.track_agents(&event, changed, roots);
         // A child's events still keep its session from going idle, but its folder and steps are its
         // own.
         let own = event.agent_id.is_none();
@@ -1392,6 +1556,7 @@ impl Studio {
         let id = Some(event.tool_use_id.clone()).filter(|id| !id.is_empty());
         let at = event.studio_received_ms;
         let name = event.hook_event_name.as_str();
+        let opens = starts || name == "UserPromptSubmit" && !in_turn;
         // The turn this event ends, then the one it starts, with the prompts queued for it.
         if ends_early {
             let change = changes.remove(&session.agent.id);
@@ -1407,20 +1572,25 @@ impl Studio {
                 session.take_prompt(prompt, index == 0);
             }
         }
+        if opens {
+            session.touched.clear();
+        }
         // Who changed what (#369, story 20): a subagent's edit in a worktree whose cards are another's.
         if let Some(agent) = &event.agent_id
             && name == "PostToolUse"
             && matches!(tool.as_str(), "Edit" | "Write")
             && let Some(path) = event.tool_input["file_path"].as_str()
         {
-            let folder = session.subagent(agent);
-            let folder = folder.and_then(|a| a.folder.clone()).unwrap_or_default();
-            let owner = session.owner(agent, &folder);
-            if owner != *agent {
+            let (owner, root) = session
+                .subagent(agent)
+                .map_or_default(|a| (a.owner.clone(), a.root.clone()));
+            // Only a path inside the owner's worktree (#434, decision 15).
+            let inside = path.strip_prefix(&root).and_then(|p| p.strip_prefix('/'));
+            if owner != *agent
+                && let Some(inside) = inside.filter(|_| !root.is_empty())
+            {
                 let by = &mut session.record_mut(&owner).since.by;
-                by.entry(agent.clone())
-                    .or_default()
-                    .insert(relative(path, &folder).into());
+                by.entry(agent.clone()).or_default().insert(inside.into());
             }
         }
         // A worker's card at its commit, seen after its Bash step, or at its end, and any worktree's
@@ -1440,6 +1610,13 @@ impl Studio {
                 continue;
             };
             let worker = look.key != session.agent.id;
+            // A session's card between turns is tagged with the subagents that ran then (#434,
+            // decisions 16 and 17).
+            if !worker && look.purpose == Purpose::Card {
+                for agent in session.between_turns(at) {
+                    session.agent.since.by.entry(agent).or_default();
+                }
+            }
             if !worker || session.has_cards(&look.key) {
                 let request = session.card(&look.key, Some(found), at);
                 if worker {
@@ -1448,19 +1625,20 @@ impl Studio {
                 outputs.push(Output::Card(request));
             }
         }
+        // A base for the turn: what Daniel changed himself before it is no one's.
+        if opens
+            && looks
+                .iter()
+                .any(|look| look.purpose == Purpose::Base && look.key == session.agent.id)
+        {
+            session.agent.since.at = at;
+            session.agent.since.by.clear();
+        }
         match name {
             // A prompt opens a wait, also after an interrupt, which fires no `Stop`.
             "UserPromptSubmit" => {
                 let sender = session.sender(&event.prompt);
                 let wake_up = !sender.is_daniels();
-                // A base for the prompt: what Daniel changed himself before it is no one's.
-                if looks
-                    .iter()
-                    .any(|look| look.purpose == Purpose::Base && look.key == session.agent.id)
-                {
-                    session.agent.since.at = at;
-                    session.agent.since.by.clear();
-                }
                 match &sender {
                     // The row says which worker returned until the session's next step.
                     Sender::WakeUp(task_id) => {
@@ -1634,6 +1812,10 @@ impl Studio {
                 }
             }
             _ => {}
+        }
+        // The worktrees its turn touched, each with its base from `looks` (#434, decision 9).
+        if session.in_turn() {
+            session.touched.extend(touches);
         }
         // An open question whose block cleared with no answer was not answered: its call failed, or
         // its turn or its agent ended first.

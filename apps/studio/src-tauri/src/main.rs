@@ -18,7 +18,7 @@ use std::{
 use studio_core::{CardRequest, Notifications, Output, Session, State::NeedsYou, Studio};
 use studio_understanding::{
     CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, Rating, Row, SessionCards,
-    Versions, fingerprint_changes, millis, write_brief, write_stop,
+    Versions, fingerprint_changes, millis, worktree_root, write_brief, write_stop,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -197,7 +197,7 @@ fn main() {
     let log = studio_hook::event_log(&std::env::home_dir().expect("a home directory"));
     // The store sits beside the log, in the studio's data directory.
     let store = CardStore::open_beside(&log).expect("read the card store");
-    let studio = Studio::default();
+    let studio = Studio::with_roots(worktree_root);
     let writer: Writer = match std::env::var("STUDIO_CARD_WRITER").as_deref() {
         Ok("fake") => Arc::new(FakeWriter),
         _ => Arc::new(ClaudeWriter::beside(&log).expect("create the card writer's folder")),

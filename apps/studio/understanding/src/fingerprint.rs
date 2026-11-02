@@ -45,16 +45,38 @@ fn read(path: &Path) -> Option<Content> {
 }
 
 /// Takes the fingerprints `looks` asks for, each in its key's own `Fingerprints` in `prints`, and
-/// returns the changes they found by key, as `Studio::apply_with_changes` takes them.
+/// returns the changes they found by key, as `Studio::apply_with_changes` takes them. A key's
+/// changes in several worktrees join into one, with the first one's base (#434, decision 10); a
+/// base's change is no one's, so it is left out.
 pub fn fingerprint_changes(
     looks: Vec<Fingerprint>,
     prints: &mut HashMap<String, Fingerprints>,
 ) -> BTreeMap<String, Change> {
-    let changes = looks.into_iter().filter_map(|look| {
+    let mut changes = BTreeMap::<String, Change>::new();
+    for look in looks {
         let print = prints.entry(look.key.clone()).or_default();
-        Some((look.key, print.look(Path::new(&look.folder), look.purpose)?))
-    });
-    changes.collect()
+        let found = print.look(Path::new(&look.folder), look.purpose);
+        let Some(found) = found.filter(|_| look.purpose != Purpose::Base) else {
+            continue;
+        };
+        match changes.get_mut(&look.key) {
+            Some(joined) => joined.diff += &found.diff,
+            None => _ = changes.insert(look.key, found),
+        }
+    }
+    changes
+}
+
+/// The root of the git worktree that holds `folder`, spelled as `folder` is, or `None` when it is
+/// in none. A folder that does not exist yet, such as a new file's, is looked up from its nearest
+/// existing parent.
+pub fn worktree_root(folder: &str) -> Option<String> {
+    let existing = Path::new(folder).ancestors().find(|p| p.is_dir())?;
+    let prefix = git(existing, &["rev-parse", "--show-prefix"])?;
+    let prefix = String::from_utf8(prefix).ok()?;
+    let existing = existing.to_str()?.trim_end_matches('/');
+    let root = existing.strip_suffix(prefix.trim_end().trim_end_matches('/'))?;
+    Some(root.trim_end_matches('/').to_owned()).filter(|root| !root.is_empty())
 }
 
 /// Each worktree's latest record, by the worktree's root.

@@ -14,7 +14,7 @@ use std::{
 use studio_core::{CardRequest, Kind, Output, Studio};
 use studio_understanding::{
     Card, CardStore, CardWriter, FakeWriter, Fingerprints, explain_more, fingerprint_changes,
-    write_brief, write_stop,
+    worktree_root, write_brief, write_stop,
 };
 
 /// What a rewrite read: the prompts, the summaries and the diffstat.
@@ -122,7 +122,7 @@ impl Shell {
         git(&repo, &["add", "."]);
         git(&repo, &["commit", "-qm", "Start"]);
         Shell {
-            studio: Studio::default(),
+            studio: Studio::with_roots(worktree_root),
             fingerprints: HashMap::new(),
             writer: Recording::default(),
             store: Mutex::new(CardStore::open(data.path().join("cards.json")).unwrap()),
@@ -185,7 +185,8 @@ impl Shell {
     fn restart(&mut self) {
         let path = self._dirs[1].path().join("cards.json");
         self.store = Mutex::new(CardStore::open(path).unwrap());
-        self.studio = Studio::replayed(&self.log);
+        self.studio = Studio::with_roots(worktree_root);
+        self.log.iter().for_each(|line| self.studio.replay(line));
         self.store.lock().unwrap().restore(&mut self.studio);
         self.fingerprints = HashMap::new();
         fingerprint_changes(self.studio.waiting_folders(), &mut self.fingerprints);
@@ -766,4 +767,195 @@ fn after_a_restart_a_promoted_helper_is_a_worker_and_the_stop_writes_its_card_fr
         (own.agent.as_deref(), &own.workers[..]),
         (None, std::slice::from_ref(&worker.id))
     );
+}
+
+/// The session's own cards, each as the diff it asked the writer about.
+fn own_changes(shell: &Shell) -> Vec<String> {
+    let store = shell.store.lock().unwrap();
+    let own = store
+        .cards()
+        .iter()
+        .filter(|kept| kept.request.agent.is_none());
+    own.map(|kept| kept.request.diff().to_string()).collect()
+}
+
+/// #434, decisions 8 to 10: a base per worktree at the turn's first touch, and one joined card.
+#[test]
+fn a_turn_that_starts_in_one_worktree_and_stops_in_another_gets_one_card_with_both_changes() {
+    let mut shell = Shell::new();
+    let other = shell.worktree("other");
+    // Changes before the turn are no one's.
+    fs::write(shell.repo.join("notes.txt"), "mine\n").unwrap();
+    fs::write(other.join("notes.txt"), "mine\n").unwrap();
+
+    shell.take("UserPromptSubmit", json!({ "prompt": "Fix both" }));
+    fs::write(shell.repo.join("a.rs"), "fn a1() {}\n").unwrap();
+    let cd = json!({"tool_name": "Bash", "tool_input": {"command": "cd ../other"}, "cwd": other});
+    shell.take("PostToolUse", cd);
+    fs::write(other.join("b.rs"), "fn b1() {}\n").unwrap();
+    shell.take("Stop", json!({ "cwd": other }));
+
+    let [change] = &own_changes(&shell)[..] else {
+        panic!("one card: {:?}", own_changes(&shell));
+    };
+    assert!(
+        change.contains("+++ b/a.rs") && change.contains("+++ b/b.rs"),
+        "{change}"
+    );
+    assert!(!change.contains("notes.txt"), "{change}");
+}
+
+/// #434, decision 9: an `Edit` path in another worktree touches it, with no `cd`.
+#[test]
+fn an_edit_into_another_worktree_without_a_cd_puts_its_change_on_the_card() {
+    let mut shell = Shell::new();
+    let other = shell.worktree("other");
+    shell.take(
+        "UserPromptSubmit",
+        json!({ "prompt": "Fix the other tree" }),
+    );
+    let path = other.join("lib.rs");
+    let edit = json!({"tool_name": "Edit", "tool_input": {"file_path": path}});
+    shell.take("PreToolUse", edit.clone());
+    fs::write(&path, "fn c() {}\n").unwrap();
+    shell.take("PostToolUse", edit);
+    shell.take("Stop", json!({}));
+
+    let [change] = &own_changes(&shell)[..] else {
+        panic!("one card: {:?}", own_changes(&shell));
+    };
+    assert!(change.contains("+fn c() {}"), "{change}");
+}
+
+/// #434, decision 10: a worktree whose worker has its own cards is left out of the session's.
+#[test]
+fn a_worktree_workers_change_is_on_its_own_cards_only_while_the_session_sits_in_its_worktree() {
+    let mut shell = Shell::new();
+    shell.take("UserPromptSubmit", json!({ "prompt": "Start #378" }));
+    shell.take("PostToolUse", spawn_child("w1", "Implement #378", true));
+    let tree = shell.worktree("w1");
+    shell.child("w1", &tree, "SubagentStart", json!({}));
+    shell.take("Stop", json!({}));
+
+    shell.take(
+        "UserPromptSubmit",
+        json!({ "prompt": "Watch it", "cwd": tree }),
+    );
+    fs::write(tree.join("a.rs"), "fn a1() {}\n").unwrap();
+    shell.child("w1", &tree, "SubagentStop", json!({}));
+    shell.take("Stop", json!({ "cwd": tree }));
+
+    let worker = shell
+        .cards()
+        .into_iter()
+        .filter(|(agent, _)| agent.is_some());
+    assert_eq!(
+        worker.collect::<Vec<_>>(),
+        [(Some("w1".to_string()), summary("a.rs"))]
+    );
+    // The session's own card, if any, is built from its worker's card, not from the diff.
+    let own = own_changes(&shell);
+    assert!(own.iter().all(|c| !c.contains("+++ b/a.rs")), "{own:?}");
+}
+
+/// #434, decision 11: ownership is decided once, by worktree root, at the subagent's first event.
+#[test]
+fn a_helper_in_the_sessions_folder_keeps_the_session_as_its_owner_after_the_session_cds_into_sub() {
+    let mut shell = Shell::new();
+    let repo = shell.repo.clone();
+    fs::create_dir(repo.join("sub")).unwrap();
+    shell.take("UserPromptSubmit", json!({ "prompt": "Review and fix" }));
+    shell.take("PostToolUse", spawn_child("h1", "Review", false));
+    shell.child("h1", &repo, "SubagentStart", json!({}));
+    let sub = repo.join("sub");
+    let cd = json!({"tool_name": "Bash", "tool_input": {"command": "cd sub"}, "cwd": sub});
+    shell.take("PostToolUse", cd);
+    fs::write(repo.join("lib.rs"), "fn a() { b() }\n").unwrap();
+    let edit = json!({"tool_name": "Edit", "tool_input": {"file_path": repo.join("lib.rs")}});
+    shell.child("h1", &repo, "PostToolUse", edit);
+    shell.take("Stop", json!({ "cwd": sub }));
+
+    let store = shell.store.lock().unwrap();
+    let [card] = store.cards() else {
+        panic!("one card: {:?}", store.cards());
+    };
+    assert_eq!(card.request.agent, None);
+    let tagged = BTreeMap::from([("h1".to_string(), BTreeSet::from(["lib.rs".to_string()]))]);
+    assert_eq!(card.request.changed_by, tagged);
+}
+
+/// #434, decision 15: "who changed what" keeps only paths inside the owner's folder.
+#[test]
+fn a_write_outside_the_owners_folder_is_not_in_who_changed_what() {
+    let mut shell = Shell::new();
+    let repo = shell.repo.clone();
+    let scratch = tempfile::tempdir().unwrap();
+    shell.take("UserPromptSubmit", json!({ "prompt": "Review and fix" }));
+    shell.take("PostToolUse", spawn_child("h1", "Review", false));
+    shell.child("h1", &repo, "SubagentStart", json!({}));
+    fs::write(repo.join("lib.rs"), "fn a() { b() }\n").unwrap();
+    for path in [repo.join("lib.rs"), scratch.path().join("note.md")] {
+        let write = json!({"tool_name": "Write", "tool_input": {"file_path": path}});
+        shell.child("h1", &repo, "PostToolUse", write);
+    }
+    shell.take("Stop", json!({}));
+
+    let store = shell.store.lock().unwrap();
+    let [card] = store.cards() else {
+        panic!("one card: {:?}", store.cards());
+    };
+    let tagged = BTreeMap::from([("h1".to_string(), BTreeSet::from(["lib.rs".to_string()]))]);
+    assert_eq!(card.request.changed_by, tagged);
+}
+
+/// A background helper in the session's worktree, spawned in a turn that then stops, edits
+/// `lib.rs`.
+fn background_helper_edits_after_the_stop(shell: &mut Shell) {
+    let repo = shell.repo.clone();
+    shell.take(
+        "UserPromptSubmit",
+        json!({ "prompt": "Fix it in the background" }),
+    );
+    shell.take("PostToolUse", spawn_child("h1", "Fix", false));
+    shell.child("h1", &repo, "SubagentStart", json!({}));
+    shell.take("Stop", json!({}));
+    fs::write(repo.join("lib.rs"), "fn a() { b() }\n").unwrap();
+    let edit = json!({"tool_name": "Edit", "tool_input": {"file_path": repo.join("lib.rs")}});
+    shell.child("h1", &repo, "PostToolUse", edit);
+}
+
+/// The one card in the store: the session's, on the helper's edit, tagged with it.
+fn the_helpers_card_is_the_sessions(shell: &Shell) {
+    let store = shell.store.lock().unwrap();
+    let [card] = store.cards() else {
+        panic!("one card: {:?}", store.cards());
+    };
+    assert_eq!(card.request.agent, None);
+    assert!(card.request.changed_by.contains_key("h1"));
+    assert!(card.request.diff().contains("+fn a() { b() }"));
+}
+
+/// #434, decision 16: a subagent's end outside a turn writes the session's card, tagged with it.
+#[test]
+fn a_background_helpers_edits_after_the_stop_get_a_card_tagged_with_it_when_it_ends() {
+    let mut shell = Shell::new();
+    background_helper_edits_after_the_stop(&mut shell);
+    assert_eq!(shell.cards(), []);
+
+    let repo = shell.repo.clone();
+    shell.child("h1", &repo, "SubagentStop", json!({}));
+
+    the_helpers_card_is_the_sessions(&shell);
+}
+
+/// #434, decision 17: the next turn's start cards what is still uncarded, before its base.
+#[test]
+fn a_background_helpers_edits_get_a_card_at_the_next_turns_start_if_it_never_ends() {
+    let mut shell = Shell::new();
+    background_helper_edits_after_the_stop(&mut shell);
+
+    shell.take("UserPromptSubmit", json!({ "prompt": "Next" }));
+    shell.take("Stop", json!({}));
+
+    the_helpers_card_is_the_sessions(&shell);
 }

@@ -20,7 +20,7 @@ mod fingerprint;
 mod store;
 mod week;
 pub use drift::{Drift, Versions, drift};
-pub use fingerprint::{Fingerprints, fingerprint_changes};
+pub use fingerprint::{Fingerprints, fingerprint_changes, worktree_root};
 pub use store::{
     Brief, CardStore, Guess, Level, Rating, Reason, Row, SessionCards, StoredCard, millis,
 };
