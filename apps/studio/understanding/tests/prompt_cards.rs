@@ -29,6 +29,10 @@ struct Recording {
     updates: RefCell<Vec<(String, String)>>,
     /// The change each "explain more" read.
     mores: RefCell<Vec<String>>,
+    /// The subagents whose cards get an empty summary.
+    blank: RefCell<Vec<String>>,
+    /// Each "New card" notice the shell sent and each rewrite, in turn.
+    sent: RefCell<Vec<&'static str>>,
 }
 
 impl CardWriter for Recording {
@@ -39,7 +43,14 @@ impl CardWriter for Recording {
         brief: &str,
     ) -> Result<String, String> {
         self.cards.borrow_mut().push((earlier.into(), brief.into()));
-        FakeWriter.reply(request, earlier, brief)
+        let reply = FakeWriter.reply(request, earlier, brief)?;
+        let agent = request.agent.as_ref();
+        if !self.blank.borrow().iter().any(|a| agent == Some(a)) {
+            return Ok(reply);
+        }
+        let mut card: Value = serde_json::from_str(&reply).unwrap();
+        card["summary"] = "".into();
+        Ok(card.to_string())
     }
 
     fn more(&self, request: &CardRequest, card: &Card) -> Result<String, String> {
@@ -53,6 +64,7 @@ impl CardWriter for Recording {
         summaries: &[String],
         diffstat: &str,
     ) -> Result<String, String> {
+        self.sent.borrow_mut().push("rewrite");
         let read = prompts.iter().map(|p| p.to_string()).collect();
         self.rewrites
             .borrow_mut()
@@ -95,6 +107,8 @@ struct Shell {
     repo: PathBuf,
     /// When the hook received the latest event, one millisecond apart.
     at: u64,
+    /// The event log so far, which a restart replays.
+    log: Vec<String>,
     _dirs: [tempfile::TempDir; 2],
 }
 
@@ -114,6 +128,7 @@ impl Shell {
             store: Mutex::new(CardStore::open(data.path().join("cards.json")).unwrap()),
             repo,
             at: 1_793_400_000_000,
+            log: Vec::new(),
             _dirs: [code, data],
         }
     }
@@ -131,7 +146,13 @@ impl Shell {
         let looks = self.studio.fingerprint_folders(&line);
         let changes = fingerprint_changes(looks, &mut self.fingerprints);
         let outputs = self.studio.apply_with_changes(&line, changes);
-        let requested = |output: &Output| matches!(output, Output::Card(_) | Output::Brief(_));
+        self.log.push(line);
+        let requested = |output: &Output| {
+            matches!(
+                output,
+                Output::Card(_) | Output::Brief(_) | Output::Promoted { .. }
+            )
+        };
         outputs.into_iter().filter(requested).collect()
     }
 
@@ -141,8 +162,11 @@ impl Shell {
         let log = |line| panic!("{line}");
         match output {
             Output::Card(request) => {
-                assert!(write_stop(&self.store, &self.writer, request, session, log))
+                let notice = || self.writer.sent.borrow_mut().push("notice");
+                let written = write_stop(&self.store, &self.writer, request, session, notice, log);
+                assert!(written)
             }
+            Output::Promoted { agent } => self.store.lock().unwrap().promoted(&agent).unwrap(),
             Output::Brief(request) => {
                 assert!(write_brief(
                     &self.store,
@@ -154,6 +178,17 @@ impl Shell {
             }
             _ => {}
         }
+    }
+
+    /// The app restarts as the shell starts: the store read from disk, the log replayed, the store's
+    /// facts and cards applied, and the turns and subagents still open fingerprinted.
+    fn restart(&mut self) {
+        let path = self._dirs[1].path().join("cards.json");
+        self.store = Mutex::new(CardStore::open(path).unwrap());
+        self.studio = Studio::replayed(&self.log);
+        self.store.lock().unwrap().restore(&mut self.studio);
+        self.fingerprints = HashMap::new();
+        fingerprint_changes(self.studio.waiting_folders(), &mut self.fingerprints);
     }
 
     /// Takes event `name`, with `fields` added, and writes the cards and briefs it asks for.
@@ -331,6 +366,30 @@ fn a_parent_that_changed_nothing_itself_gets_one_card_from_its_workers_summaries
     // "Explain more" reads the workers' text the stored card keeps.
     explain_more(&shell.store, &shell.writer, &id, |line| panic!("{line}")).unwrap();
     assert_eq!(*shell.writer.mores.borrow(), [read]);
+}
+
+#[test]
+fn a_worker_card_with_an_empty_summary_is_left_out_of_its_parents_input() {
+    let mut shell = Shell::new();
+    shell.writer.blank.borrow_mut().push("w2".into());
+    shell.take(
+        "UserPromptSubmit",
+        json!({ "prompt": "Implement #378 and #379" }),
+    );
+    worker_writes_and_ends(&mut shell);
+    shell.take("PostToolUse", spawn_child("w2", "Implement #379", true));
+    let tree = shell.worktree("w2");
+    shell.child("w2", &tree, "SubagentStart", json!({}));
+    fs::write(tree.join("b.rs"), "fn b1() {}\n").unwrap();
+    shell.child("w2", &tree, "SubagentStop", json!({}));
+    shell.take("Stop", json!({}));
+
+    let store = shell.store.lock().unwrap();
+    let parent = &store.cards().last().unwrap().request;
+    assert_eq!(parent.workers.len(), 2, "{parent:?}");
+    let read = parent.diff();
+    assert!(read.contains("`Implement #378`"), "{read}");
+    assert!(!read.contains("`Implement #379`"), "{read}");
 }
 
 #[test]
@@ -588,6 +647,25 @@ fn the_5th_update_rewrites_the_brief_from_daniels_prompts_the_summaries_and_the_
 }
 
 #[test]
+fn the_new_card_notice_goes_out_before_the_rewrite_starts() {
+    let mut shell = Shell::new();
+    for (prompt, path) in [
+        ("Add a", "a.rs"),
+        ("Add b", "b.rs"),
+        ("Add c", "c.rs"),
+        ("Add d", "d.rs"),
+        ("Add e", "e.rs"),
+    ] {
+        shell.prompt(prompt, path);
+    }
+
+    assert_eq!(
+        *shell.writer.sent.borrow(),
+        ["notice", "notice", "notice", "notice", "notice", "rewrite"]
+    );
+}
+
+#[test]
 fn a_stopped_row_shows_the_agents_first_line_then_the_cards_summary_then_the_briefs_last_line() {
     let mut shell = Shell::new();
     shell.take("UserPromptSubmit", json!({ "prompt": "Rename a" }));
@@ -656,4 +734,36 @@ fn a_rows_line_is_who_needs_you_then_the_stopped_line_then_who_returned_then_the
     // Once the turn is over: the stopped line.
     shell.event("Stop", json!({ "last_assistant_message": "Done." }));
     assert_eq!(shell.line(), "Done.");
+}
+
+/// #434, decisions 37 and 38: after a restart the shell's join still knows the helper promoted live
+/// and the worker cards its session collected, from the store on disk.
+#[test]
+fn after_a_restart_a_promoted_helper_is_a_worker_and_the_stop_writes_its_card_from_the_workers() {
+    let mut shell = Shell::new();
+    let repo = shell.repo.clone();
+    shell.take("UserPromptSubmit", json!({ "prompt": "Implement #378" }));
+    worker_writes_and_ends(&mut shell);
+    shell.take("PostToolUse", spawn_child("h1", "Format", false));
+    shell.child("h1", &repo, "SubagentStart", json!({}));
+    shell.child("h1", &repo, "PreToolUse", bash("cargo fmt"));
+    fs::write(repo.join("lib.rs"), "fn a() {}\n\n").unwrap();
+    shell.child("h1", &repo, "PostToolUse", bash("cargo fmt"));
+    // Its change is undone, so the session's own worktree ends where its turn began.
+    git(&repo, &["checkout", "-q", "lib.rs"]);
+
+    shell.restart();
+    let kind = |shell: &Shell| shell.studio.session("s1").unwrap().agents[1].kind;
+    assert_eq!(kind(&shell), Kind::Worker);
+    shell.take("Stop", json!({}));
+
+    let store = shell.store.lock().unwrap();
+    let requests: Vec<&CardRequest> = store.cards().iter().map(|kept| &kept.request).collect();
+    let [worker, own] = requests[..] else {
+        panic!("a worker's card and its parent's: {requests:?}");
+    };
+    assert_eq!(
+        (own.agent.as_deref(), &own.workers[..]),
+        (None, std::slice::from_ref(&worker.id))
+    );
 }
