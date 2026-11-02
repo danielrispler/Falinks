@@ -56,7 +56,7 @@
 //!   The **edit gate** is the tool time of accepted source writes, with its mean per accepted
 //!   write. Both are transcript-side, so parallel calls make them approximate too; host and
 //!   edit-gate instrumentation (#178's I-2) is not read.
-use crate::authorship::{self, Origin, agent_name, lines, matches};
+use crate::authorship::{Authorship, Origin, agent_name, lines, matches};
 use crate::collisions::HANDLED;
 use crate::{Result, bail, fixture, jsonl, read};
 use serde_json::{Map, Value, json};
@@ -906,27 +906,25 @@ fn agent(
 ///   `controller/history.json`.
 /// - A Git agent's last version is its last shared commit (`controller/events.jsonl`) in
 ///   `agents/repo`; work it never shared counts nothing.
-fn changed(run: &Path, arm: &str, files: &Map<String, Value>) -> Result<BTreeMap<String, usize>> {
-    let (blame, last) = if arm == "git" {
-        let shares = authorship::shares(run)?;
-        let mut repo = authorship::Repo::new(run, &shares, files)?;
-        let mut last = BTreeMap::new();
-        let last_shares: BTreeMap<String, String> = shares
-            .into_iter()
-            .map(|(agent, share, _)| (agent, share))
-            .collect();
-        for (agent, share) in last_shares {
-            for (path, text) in repo.tree(&share)? {
-                last.insert((agent.clone(), path.clone()), text.clone());
+fn changed(
+    authorship: &mut Authorship,
+    files: &Map<String, Value>,
+) -> Result<BTreeMap<String, usize>> {
+    let (blame, last) = match authorship {
+        Authorship::Git { shares, repo } => {
+            let mut last = BTreeMap::new();
+            let last_shares: BTreeMap<&String, &String> = shares
+                .iter()
+                .map(|(agent, share, _)| (agent, share))
+                .collect();
+            for (agent, share) in last_shares {
+                for (path, text) in repo.tree(share)? {
+                    last.insert((agent.clone(), path.clone()), text.clone());
+                }
             }
+            (&repo.blame, last)
         }
-        (repo.blame, last)
-    } else {
-        let history = read(run.join("controller/history.json"))?;
-        let records = history
-            .as_array()
-            .ok_or("history.json must list operations")?;
-        authorship::falinks(records, files)
+        Authorship::Falinks { blame, last, .. } => (&*blame, last.clone()),
     };
     let mut changed = BTreeMap::new();
     for ((agent, path), text) in last {
@@ -948,8 +946,13 @@ fn changed(run: &Path, arm: &str, files: &Map<String, Value>) -> Result<BTreeMap
 }
 
 /// Per-agent timing for one run directory of either arm, with the handling cost of the run's
-/// `collisions` (`collisions::collisions`; unavailable leaves it missing).
-pub fn timing(run: &Path, collisions: &Value) -> Result<Value> {
+/// `collisions` (`collisions::collisions`; unavailable leaves it missing), and changed bytes
+/// from the run's `authorship`.
+pub fn timing(
+    run: &Path,
+    collisions: &Value,
+    authorship: &mut Result<Authorship>,
+) -> Result<Value> {
     let result = read(run.join("controller/result.json"))?;
     let arm = result["arm"].as_str().unwrap_or_default();
     let agents: Vec<(String, Vec<Value>)> = match arm {
@@ -996,7 +999,10 @@ pub fn timing(run: &Path, collisions: &Value) -> Result<Value> {
         .cloned()
         .unwrap_or_default();
     // Unreadable records leave changed bytes missing, never zero.
-    let changed = changed(run, arm, &files).ok();
+    let changed = authorship
+        .as_mut()
+        .ok()
+        .and_then(|authorship| changed(authorship, &files).ok());
     // Each agent's collision signals; `collisions` keys Git's by seconds after `start_unix`.
     let origin = timing["start_unix"].as_f64().unwrap_or(0.0);
     let readable = matches!(

@@ -14,7 +14,7 @@
 //!   its parents. A commit on the first-parent line of an agent's shares is that agent's, the
 //!   earliest sharer first; the initial commit is initial; a merge, or any other commit,
 //!   introduces no one's lines.
-use crate::{Result, blobs, git, jsonl};
+use crate::{Result, bail, fixture, git, git_raw, jsonl, read, tree_entries};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -212,6 +212,8 @@ pub struct Repo {
     /// The agent whose first-parent share line holds each commit, the earliest sharer first.
     owners: BTreeMap<String, String>,
     trees: BTreeMap<String, BTreeMap<String, String>>,
+    /// Each blob read, by its ID: a file unchanged across commits is read once.
+    blobs: BTreeMap<String, Vec<u8>>,
     pub blame: Blame,
 }
 
@@ -233,6 +235,7 @@ impl Repo {
             dir: dir.to_path_buf(),
             owners,
             trees: BTreeMap::new(),
+            blobs: BTreeMap::new(),
             blame: Blame::new(files),
         };
         // Share by share, in order, so a text shared earlier keeps its authorship.
@@ -261,7 +264,14 @@ impl Repo {
                 (1, Some(agent)) => Origin::Agent(agent.clone(), order),
                 _ => Origin::Nobody,
             };
-            let tree: BTreeMap<String, String> = blobs(&self.dir, commit)?
+            let (dir, blobs) = (&self.dir, &mut self.blobs);
+            let blob = |id: &str| {
+                if !blobs.contains_key(id) {
+                    blobs.insert(id.into(), git_raw(dir, &["cat-file", "blob", id], None)?);
+                }
+                Ok(blobs[id].clone())
+            };
+            let tree: BTreeMap<String, String> = tree_entries(dir, commit, blob)?
                 .into_iter()
                 .map(|(path, bytes)| (path, String::from_utf8_lossy(&bytes).into_owned()))
                 .collect();
@@ -289,6 +299,56 @@ impl Repo {
         let lines = self.blame.lines(path, &text).to_vec();
         Ok((text, lines))
     }
+}
+
+/// A run's line authorship, built once and lent to `collisions` and `timing`.
+pub enum Authorship {
+    /// The history's records, their authorship and each agent's last version of every path.
+    Falinks {
+        records: Vec<Value>,
+        blame: Blame,
+        last: BTreeMap<(String, String), String>,
+    },
+    /// The run's shares and its traced repository.
+    Git {
+        shares: Vec<(String, String, Option<f64>)>,
+        repo: Repo,
+    },
+}
+
+impl Authorship {
+    /// The authorship of `result`'s run, over its fixture's initial files.
+    pub fn read(run: &Path, result: &Value) -> Result<Self> {
+        let files = initial_files(result);
+        match result["arm"].as_str() {
+            Some("falinks") => {
+                let Value::Array(records) = read(run.join("controller/history.json"))? else {
+                    bail!("history.json must list operations");
+                };
+                let (blame, last) = falinks(&records, &files);
+                Ok(Authorship::Falinks {
+                    records,
+                    blame,
+                    last,
+                })
+            }
+            Some("git") => {
+                let shares = shares(run)?;
+                let repo = Repo::new(run, &shares, &files)?;
+                Ok(Authorship::Git { shares, repo })
+            }
+            other => bail!("unknown arm {other:?}"),
+        }
+    }
+}
+
+/// The fixture's initial files, the initial lines; none when it is unknown.
+fn initial_files(result: &Value) -> Map<String, Value> {
+    let fixture = fixture(result["fixture"].as_str().unwrap_or_default());
+    fixture
+        .ok()
+        .and_then(|f| f["files"].as_object().cloned())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

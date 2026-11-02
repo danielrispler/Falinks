@@ -31,7 +31,7 @@
 //! Each collision lists its files and where each agent detected it, for #337's handling cost.
 //! Lines are credited by `authorship`, the model `timing`'s changed bytes use, and each
 //! written line counts once per run.
-use crate::authorship::{self, Blame, Line, agent_name, applied, lines, matches, text};
+use crate::authorship::{self, Authorship, Blame, Line, agent_name, applied, lines, matches, text};
 use crate::{
     Result, bail, command, fixture, git, git_env, jsonl, read, sha256, strings, timing::unix,
 };
@@ -57,15 +57,6 @@ const SOURCE: &str = "collisions (#334): falinks-eval collisions RUN_DIR";
 fn dropped(old: &[&str], new: &[&str]) -> Vec<usize> {
     let kept: BTreeSet<usize> = matches(old, new).into_iter().flatten().collect();
     (0..old.len()).filter(|i| !kept.contains(i)).collect()
-}
-
-/// The fixture's initial files, `authorship`'s initial lines; none when it is unknown.
-fn initial_files(result: &Value) -> Map<String, Value> {
-    let fixture = fixture(result["fixture"].as_str().unwrap_or_default());
-    fixture
-        .ok()
-        .and_then(|f| f["files"].as_object().cloned())
-        .unwrap_or_default()
 }
 
 /// Lines of `lines[start..=end]` as one text, without the last line ending.
@@ -115,17 +106,27 @@ fn collision(
 }
 
 /// A run's collisions, their waste and the duplicate-work candidates still unclassified, given
-/// `classified`, the batch's `duplicates.json` (or null). A team of one has none (`n/a`); a run
-/// whose records cannot be read is `unavailable`, never zero.
-pub fn collisions(run: &Path, result: &Value, classified: &Value) -> Value {
+/// `classified`, the batch's `duplicates.json` (or null), and the run's `authorship`. A team of
+/// one has none (`n/a`); a run whose records cannot be read is `unavailable`, never zero.
+pub fn collisions(
+    run: &Path,
+    result: &Value,
+    classified: &Value,
+    authorship: &mut Result<Authorship>,
+) -> Value {
     if result["team_size"].as_u64() == Some(1) {
         return json!({"status": "n/a", "reason": "a team of one has no peer"});
     }
-    measure(run, result, classified)
+    measure(run, result, classified, authorship)
         .unwrap_or_else(|e| json!({"status": "unavailable", "reason": e.to_string()}))
 }
 
-fn measure(run: &Path, result: &Value, classified: &Value) -> Result<Value> {
+fn measure(
+    run: &Path,
+    result: &Value,
+    classified: &Value,
+    authorship: &mut Result<Authorship>,
+) -> Result<Value> {
     let verdicts: BTreeMap<&str, bool> = classified["pairs"]
         .as_array()
         .into_iter()
@@ -135,7 +136,7 @@ fn measure(run: &Path, result: &Value, classified: &Value) -> Result<Value> {
     let requirements = requirements(result);
     let (mut events, premature, candidates, unclassified) = match result["arm"].as_str() {
         Some("falinks") => {
-            let ledger = Ledger::read(run, result)?;
+            let ledger = Ledger::read(authorship)?;
             let mut used = BTreeSet::new();
             let (mut events, premature) = ledger.collisions(result, &mut used);
             let functions = ledger.functions(result);
@@ -146,7 +147,7 @@ fn measure(run: &Path, result: &Value, classified: &Value) -> Result<Value> {
             (events, premature, pairs.len(), unclassified)
         }
         Some("git") => {
-            let mut repo = Repo::read(run, result)?;
+            let mut repo = Repo::read(run, result, authorship)?;
             let (mut events, premature) = repo.collisions(run, result)?;
             let functions = repo.functions(result)?;
             let pairs = pairs(&functions, &requirements, result);
@@ -211,9 +212,10 @@ pub fn candidates(run: &Path, result: &Value) -> Result<Vec<Value>> {
     if result["team_size"].as_u64() == Some(1) {
         return Ok(vec![]);
     }
+    let mut authorship = Authorship::read(run, result);
     let functions = match result["arm"].as_str() {
-        Some("falinks") => Ledger::read(run, result)?.functions(result),
-        Some("git") => Repo::read(run, result)?.functions(result)?,
+        Some("falinks") => Ledger::read(&authorship)?.functions(result),
+        Some("git") => Repo::read(run, result, &mut authorship)?.functions(result)?,
         other => bail!("unknown arm {other:?}"),
     };
     let pairs = pairs(&functions, &requirements(result), result);
@@ -572,28 +574,29 @@ fn count(used: &mut Used, path: &str, line: &Line, waste: &mut BTreeMap<String, 
 }
 
 /// A Falinks run's history with each file version's text, and its line authorship.
-#[derive(Default)]
-struct Ledger {
+struct Ledger<'a> {
     records: Vec<Value>,
     texts: BTreeMap<(String, u64), String>,
-    blame: Blame,
+    blame: &'a Blame,
     /// The agent and operation that wrote each file version.
     writer: BTreeMap<(String, u64), (usize, u64)>,
     removed: BTreeMap<u64, Vec<Removal>>,
     revisions: BTreeMap<u64, Value>,
 }
 
-impl Ledger {
-    fn read(run: &Path, result: &Value) -> Result<Self> {
-        let history = read(run.join("controller/history.json"))?;
-        let records = history
-            .as_array()
-            .ok_or("history.json must list operations")?;
-        let (blame, _) = authorship::falinks(records, &initial_files(result));
+impl<'a> Ledger<'a> {
+    fn read(authorship: &'a Result<Authorship>) -> Result<Self> {
+        let authorship = authorship.as_ref().map_err(|e| e.to_string())?;
+        let Authorship::Falinks { records, blame, .. } = authorship else {
+            bail!("the authorship is not a Falinks run's");
+        };
         let mut ledger = Ledger {
             records: records.clone(),
+            texts: BTreeMap::new(),
             blame,
-            ..Default::default()
+            writer: BTreeMap::new(),
+            removed: BTreeMap::new(),
+            revisions: BTreeMap::new(),
         };
         ledger.records.sort_by_key(|r| r["operation"].as_u64());
         for record in &ledger.records {
@@ -993,23 +996,26 @@ fn conflict_files(text: &str) -> BTreeSet<String> {
 type Conflict = (BTreeSet<String>, Vec<Value>, Vec<String>);
 
 /// A Git run's agent repository, its shares and each commit's line authors.
-struct Repo {
+struct Repo<'a> {
     dir: std::path::PathBuf,
     /// Per agent, its shares in order: commit and elapsed seconds.
     shares: BTreeMap<String, Vec<(String, f64)>>,
     initial: String,
-    lines: authorship::Repo,
+    lines: &'a mut authorship::Repo,
     ancestors: BTreeMap<(String, String), bool>,
     used: Used,
 }
 
-impl Repo {
-    fn read(run: &Path, result: &Value) -> Result<Self> {
+impl<'a> Repo<'a> {
+    fn read(run: &Path, result: &Value, authorship: &'a mut Result<Authorship>) -> Result<Self> {
         let initial = result["initial_snapshot"]
             .as_str()
             .ok_or("the run records no initial_snapshot")?
             .into();
-        let list = authorship::shares(run)?;
+        let authorship = authorship.as_mut().map_err(|e| e.to_string())?;
+        let Authorship::Git { shares: list, repo } = authorship else {
+            bail!("the authorship is not a Git run's");
+        };
         let mut shares: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
         // A share without a recorded time traces authorship but is never placed in time.
         for (agent, commit, at) in list.iter().filter_map(|(a, c, t)| Some((a, c, (*t)?))) {
@@ -1022,7 +1028,7 @@ impl Repo {
             dir: run.join("agents/repo"),
             shares,
             initial,
-            lines: authorship::Repo::new(run, &list, &initial_files(result))?,
+            lines: repo,
             ancestors: BTreeMap::new(),
             used: BTreeSet::new(),
         })
@@ -1454,6 +1460,11 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `collisions` over the run's own authorship, as the standalone command builds it.
+    fn measured(run: &Path, result: &Value, classified: &Value) -> Value {
+        collisions(run, result, classified, &mut Authorship::read(run, result))
+    }
+
     fn file(text: &str) -> Value {
         json!({"bytes": text.as_bytes(), "executable": false})
     }
@@ -1544,7 +1555,7 @@ mod tests {
             ),
         ]);
         let (dir, result) = falinks_run(history, json!([]));
-        let found = collisions(dir.path(), &result, &Value::Null);
+        let found = measured(dir.path(), &result, &Value::Null);
         assert_eq!(found["status"], "complete", "{found}");
         assert_eq!(
             found["events"],
@@ -1592,7 +1603,7 @@ mod tests {
             .map(|(n, passed, r)| json!({"number": n, "passed": passed, "revision": r, "requested_by": by, "conflict": null}))
             .collect();
         let (dir, result) = falinks_run(history, json!(attempts));
-        collisions(dir.path(), &result, &Value::Null)
+        measured(dir.path(), &result, &Value::Null)
     }
 
     #[test]
@@ -1723,7 +1734,7 @@ mod tests {
             let result = json!({"run_id": "g", "arm": "git", "team_size": 2,
                 "initial_snapshot": self.initial, "final_snapshot": last,
                 "timing": {"start_unix": 1000.0}, "validation_attempts": attempts});
-            collisions(self.dir.path(), &result, &Value::Null)
+            measured(self.dir.path(), &result, &Value::Null)
         }
     }
 
@@ -1908,7 +1919,7 @@ mod tests {
             ]
         );
         let yes = classified(run.dir.path(), &result, true);
-        let found = collisions(run.dir.path(), &result, &yes);
+        let found = measured(run.dir.path(), &result, &yes);
         assert_eq!(found["status"], "complete");
         assert_eq!(
             found["events"],
@@ -1917,7 +1928,7 @@ mod tests {
         );
         assert_eq!(waste(&found)["lines"], 4);
         let no = classified(run.dir.path(), &result, false);
-        let found = collisions(run.dir.path(), &result, &no);
+        let found = measured(run.dir.path(), &result, &no);
         assert_eq!(
             (found["status"].clone(), found["lines"].clone()),
             (json!("complete"), json!(0))
@@ -2041,7 +2052,7 @@ mod tests {
             {"number": 2, "passed": true, "revision": 4, "requested_by": "agent-1"}]);
         let (dir, result) = falinks_run(history, checks);
         assert_eq!(
-            collisions(dir.path(), &result, &Value::Null)["events"],
+            measured(dir.path(), &result, &Value::Null)["events"],
             json!([{"class": "line_conflict", "files": ["h.go"], "lines": 1, "waste": {"agent-1": 1},
                 "detected": [{"agent": "agent-1", "signal": "incorporate", "operation": 3, "request_id": "r3"}]},
                 {"class": "rework", "files": ["h.go"], "lines": 1, "waste": {"agent-0": 1},
@@ -2053,14 +2064,14 @@ mod tests {
     #[test]
     fn a_team_of_one_has_no_collisions_and_no_waste() {
         let result = json!({"arm": "git", "team_size": 1});
-        let found = collisions(Path::new("/nonexistent"), &result, &Value::Null);
+        let found = measured(Path::new("/nonexistent"), &result, &Value::Null);
         assert_eq!(found["status"], "n/a");
         assert_eq!(waste(&found)["status"], "n/a");
         assert_eq!(
             candidates(Path::new("/nonexistent"), &result).unwrap(),
             Vec::<Value>::new()
         );
-        let missing = collisions(
+        let missing = measured(
             Path::new("/nonexistent"),
             &json!({"arm": "git", "team_size": 2}),
             &Value::Null,
@@ -2112,7 +2123,7 @@ mod tests {
             .map(|s| &s["state"])
             .collect();
         assert_eq!(states, ["discarded", "final"]);
-        let found = collisions(dir.path(), &result, &classified(dir.path(), &result, true));
+        let found = measured(dir.path(), &result, &classified(dir.path(), &result, true));
         assert_eq!(
             found["events"],
             json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4, "waste": {"agent-0": 4},
