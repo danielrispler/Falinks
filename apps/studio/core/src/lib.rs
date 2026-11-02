@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, HashMap},
+    time::Duration,
 };
 
 #[derive(Default)]
@@ -155,7 +156,8 @@ pub struct Question {
 pub enum Answer {
     /// Asked, with no result yet.
     Open,
-    /// Daniel's choice for each question, keyed by its text: the `PostToolUse`'s `answers`.
+    /// Daniel's choice for each question, keyed by its text: the `PostToolUse`'s `answers`, kept only
+    /// when it is an object of strings (#434, decision 42).
     Answered(Value),
     /// Its call failed or was interrupted, or its turn or its agent ended first.
     NotAnswered,
@@ -362,8 +364,14 @@ impl Session {
                 agent.folder = Some(event.cwd.clone());
                 agent.agent.since.at = at;
             }
-            // A changed file promotes a helper at that step.
-            let changed = matches!(tool, "Edit" | "Write") || (tool == "Bash" && worktree_changed);
+            // A changed file promotes a helper at that step: an `Edit` or `Write` that succeeded, or
+            // a command that changed its worktree and either succeeded or ran and failed (#434,
+            // decision 21).
+            let ran =
+                event.hook_event_name == "PostToolUse" || event.error.starts_with("Exit code");
+            let changed = matches!(tool, "Edit" | "Write")
+                && event.hook_event_name == "PostToolUse"
+                || tool == "Bash" && worktree_changed && ran;
             match event.hook_event_name.as_str() {
                 // A step after its end means its parent continued it (`SendMessage`).
                 "PreToolUse" => {
@@ -374,7 +382,7 @@ impl Session {
                     agent.status = Status::Running;
                     agent.ended_at = None;
                 }
-                "PostToolUse" if changed => agent.kind = Kind::Worker,
+                "PostToolUse" | "PostToolUseFailure" if changed => agent.kind = Kind::Worker,
                 "SubagentStop" => {
                     let message = event.last_assistant_message.lines().next();
                     agent.result = message.map(Into::into);
@@ -997,7 +1005,7 @@ impl Studio {
     /// with cards it reports on that no other signal ended, since a killed worker has no
     /// `SubagentStop` (#369, decision 8).
     fn looks(&self, event: &Event) -> Vec<Fingerprint> {
-        let mut looks: Vec<Fingerprint> = self.look(event).into_iter().collect();
+        let mut looks = self.look(event);
         let session = self.sessions.get(&event.session_id);
         if event.hook_event_name == "UserPromptSubmit"
             && let Some(session) = session
@@ -1024,8 +1032,9 @@ impl Studio {
     /// since the base is the card's. A subagent's: its first event's, its base; a helper's before and
     /// after each Bash step, for a change across it that makes it a worker; a worker's after each
     /// Bash step, for a commit; and a worker's end. On a step 20 minutes after the last card of the
-    /// worktree it is in, that worktree's, for the fallback card; a session's only in a turn.
-    fn look(&self, event: &Event) -> Option<Fingerprint> {
+    /// worktree it is in, that worktree's, for the fallback card; a session's only in a turn. A
+    /// helper's look after its Bash step comes beside such a fallback's.
+    fn look(&self, event: &Event) -> Vec<Fingerprint> {
         let name = event.hook_event_name.as_str();
         let step = matches!(name, "PostToolUse" | "PostToolUseFailure");
         let due = |since: &Since| step && event.studio_received_ms >= since.at + FALLBACK_MS;
@@ -1045,40 +1054,52 @@ impl Studio {
                 "UserPromptSubmit" if !session.is_some_and(Session::in_turn) => Purpose::Base,
                 "Stop" => Purpose::TurnEnd,
                 _ if session.is_some_and(session_due) => Purpose::Fallback,
-                _ => return None,
+                _ => return Vec::new(),
             };
-            return look(&event.session_id, &event.cwd, purpose);
+            return look(&event.session_id, &event.cwd, purpose)
+                .into_iter()
+                .collect();
         };
-        let session = session?;
+        let Some(session) = session else {
+            return Vec::new();
+        };
         let agent = session.subagent(id);
         let Some(folder) = agent.and_then(|a| a.folder.as_deref()) else {
-            return look(id, &event.cwd, Purpose::Base);
+            return look(id, &event.cwd, Purpose::Base).into_iter().collect();
         };
         let worker = |a: &Subagent| a.kind == Kind::Worker;
         let bash = event.tool_name.as_deref() == Some("Bash");
         // A helper's base right before its command, so only a change across it promotes it.
+        // shortcut: the hooks are async, so a command that ends before the shell reads its
+        // `PreToolUse` line is absorbed into this base and never promotes its helper; make the
+        // hook synchronous if a live run shows missed promotions matter (#434, decision 23).
         if bash && name == "PreToolUse" && agent.is_some_and(|a| !worker(a)) {
-            return look(id, folder, Purpose::Base);
+            return look(id, folder, Purpose::Base).into_iter().collect();
         }
         let bash = step && bash;
         let owner = session.owner(id, folder);
         let since = &session.record(&owner).since;
-        match session.subagent(&owner) {
+        let fallback = match session.subagent(&owner) {
             Some(own) if &own.agent.id == id => match worker(own) {
                 true if name == "SubagentStop" => look(id, folder, Purpose::Card),
                 true if due(since) => look(id, folder, Purpose::Fallback),
                 _ => look(id, folder, Purpose::Commit).filter(|_| bash),
             },
             // It works in the worktree of a worker above it, or of its session.
-            Some(above) if worker(above) && due(since) => {
-                look(&above.agent.id, above.folder.as_deref()?, Purpose::Fallback)
-            }
+            Some(above) if worker(above) && due(since) => above
+                .folder
+                .as_deref()
+                .and_then(|above_folder| look(&above.agent.id, above_folder, Purpose::Fallback)),
             None if session_due(session) => {
                 look(&session.agent.id, &session.cwd, Purpose::Fallback)
             }
-            _ => look(id, folder, Purpose::Commit)
-                .filter(|_| bash && agent.is_some_and(|a| !worker(a))),
-        }
+            _ => None,
+        };
+        // A due fallback's look comes beside a helper's own (#434, decision 22).
+        let helper =
+            look(id, folder, Purpose::Commit).filter(|_| bash && agent.is_some_and(|a| !worker(a)));
+        let helper = helper.filter(|h| fallback.as_ref().is_none_or(|f| f.key != h.key));
+        fallback.into_iter().chain(helper).collect()
     }
 
     /// The sessions in a turn and the running subagents, with their folders, by their fingerprints'
@@ -1361,7 +1382,15 @@ impl Studio {
                 if !failed
                     && let Some(question) = asked.find(|q| q.tool_use_id == event.tool_use_id)
                 {
-                    question.answer = Answer::Answered(event.tool_response.answers.clone());
+                    // Only an object of strings is kept, so the pane can read it (#434, decision 42).
+                    let answers = &event.tool_response.answers;
+                    let strings = answers
+                        .as_object()
+                        .is_some_and(|a| a.values().all(Value::is_string));
+                    question.answer = match strings {
+                        true => Answer::Answered(answers.clone()),
+                        false => Answer::NotAnswered,
+                    };
                 }
                 // A denied or interrupted call, or a failed Edit or Write, changed nothing: only a
                 // command that ran and failed has its exit code in its error.
@@ -1572,36 +1601,68 @@ fn short(id: &str, n: usize) -> &str {
 }
 
 /// 3 seconds, a starting guess for "a few seconds" (#369, decision 22 and Further Notes).
-const COMBINE_MS: u64 = 3_000;
+const COMBINE: Duration = Duration::from_secs(3);
 
-/// The notices the shell has not shown yet, each with its title and body. Those that come within
-/// `COMBINE_MS` of the first show as one notification, so a burst never floods Daniel and no notice
-/// waits longer than that.
+/// A notice not shown yet: its title and body, and for "needs you" the session it is about.
+struct Pending {
+    title: String,
+    body: String,
+    needs_you: Option<String>,
+}
+
+/// The notices the shell has not shown yet. Those that come within `COMBINE` of the first show as
+/// one notification, so a burst never floods Daniel and no notice waits longer than that. Times are
+/// on a monotonic clock, time since the app started, so a clock change never holds them back
+/// (#434, decision 28).
 #[derive(Default)]
 pub struct Notifications {
-    pending: Vec<(String, String)>,
-    first_at: u64,
+    pending: Vec<Pending>,
+    first_at: Duration,
 }
 
 impl Notifications {
-    pub fn push(&mut self, title: &str, body: String, now: u64) {
+    pub fn push(&mut self, title: &str, body: String, now: Duration) {
+        self.queue(title, body, None, now);
+    }
+
+    /// A "needs you" notice on session `session_id`, which shows only if the session still needs
+    /// Daniel when it is due (#434, decision 27).
+    pub fn push_needs_you(&mut self, session_id: &str, body: String, now: Duration) {
+        self.queue("Needs you", body, Some(session_id.into()), now);
+    }
+
+    fn queue(&mut self, title: &str, body: String, needs_you: Option<String>, now: Duration) {
         if self.pending.is_empty() {
             self.first_at = now;
         }
-        self.pending.push((title.into(), body));
+        let title = title.into();
+        self.pending.push(Pending {
+            title,
+            body,
+            needs_you,
+        });
     }
 
-    /// The notification due at `now`, as its title and body: the pending notices, once `COMBINE_MS`
-    /// has passed since the first. Only then is `focused` asked, and a focused window drops them,
-    /// since Daniel sees the list.
-    pub fn due(&mut self, now: u64, focused: impl FnOnce() -> bool) -> Option<(String, String)> {
-        if self.pending.is_empty() || now < self.first_at + COMBINE_MS {
+    /// The notification due at `now`, as its title and body: the pending notices, once `COMBINE`
+    /// has passed since the first, less the "needs you" ones whose session `needs_you` says no
+    /// longer needs Daniel. Only then is `focused` asked, and a focused window drops them, since
+    /// Daniel sees the list.
+    pub fn due(
+        &mut self,
+        now: Duration,
+        focused: impl FnOnce() -> bool,
+        needs_you: impl Fn(&str) -> bool,
+    ) -> Option<(String, String)> {
+        if self.pending.is_empty() || now < self.first_at + COMBINE {
             return None;
         }
-        let pending = std::mem::take(&mut self.pending);
-        if focused() {
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.retain(|p| p.needs_you.as_deref().is_none_or(&needs_you));
+        if pending.is_empty() || focused() {
             return None;
         }
+        let pending: Vec<(String, String)> =
+            pending.into_iter().map(|p| (p.title, p.body)).collect();
         Some(match &pending[..] {
             [one] => one.clone(),
             many => {
