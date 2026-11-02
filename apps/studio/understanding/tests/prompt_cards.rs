@@ -208,10 +208,15 @@ impl Shell {
             .unwrap_or_default()
     }
 
-    /// What the session's row says while its turn is over.
-    fn line(&self) -> Option<String> {
+    /// What the session's row says now.
+    fn line(&self) -> String {
+        self.line_at(self.at)
+    }
+
+    /// What the session's row says at `now`.
+    fn line_at(&self, now: u64) -> String {
         let session = self.studio.session("s1").unwrap();
-        self.store.lock().unwrap().line(session)
+        self.store.lock().unwrap().line(session, now)
     }
 }
 
@@ -348,7 +353,7 @@ fn a_wake_up_turn_that_changed_nothing_itself_updates_the_brief_and_writes_no_ca
     assert!(workers.contains(&summary("a.rs")), "{workers}");
     let updated = "העובדים חזרו, והסשן עצמו לא שינה דבר.";
     assert_eq!(shell.brief(), updated);
-    assert_eq!(shell.line().as_deref(), Some(updated));
+    assert_eq!(shell.line(), updated);
 }
 
 const MINUTE: u64 = 60 * 1000;
@@ -587,20 +592,68 @@ fn a_stopped_row_shows_the_agents_first_line_then_the_cards_summary_then_the_bri
     let mut shell = Shell::new();
     shell.take("UserPromptSubmit", json!({ "prompt": "Rename a" }));
     fs::write(shell.repo.join("lib.rs"), "fn b() {}\n").unwrap();
-    assert_eq!(shell.line(), None);
+    assert_eq!(shell.line(), "No step yet");
 
     let message = "\nRenamed `a` to `b`.\n\nThe tests pass.";
     let outputs = shell.event("Stop", json!({ "last_assistant_message": message }));
-    assert_eq!(shell.line().as_deref(), Some("Renamed `a` to `b`."));
+    assert_eq!(shell.line(), "Renamed `a` to `b`.");
 
     shell.write(outputs.into_iter().next().unwrap());
-    assert_eq!(shell.line().as_deref(), Some("שינוי לדוגמה ב־`lib.rs`"));
+    assert_eq!(shell.line(), "שינוי לדוגמה ב־`lib.rs`");
 
     // A turn that changed nothing gets no card: the row shows the brief's latest line.
     shell.take("UserPromptSubmit", json!({ "prompt": "Anything left?" }));
     shell.take("Stop", json!({ "last_assistant_message": "Nothing left." }));
-    assert_eq!(
-        shell.line().as_deref(),
-        Some("השינוי האחרון נגע ב־`lib.rs`.")
+    assert_eq!(shell.line(), "השינוי האחרון נגע ב־`lib.rs`.");
+}
+
+#[test]
+fn a_rows_line_is_who_needs_you_then_the_stopped_line_then_who_returned_then_the_last_step() {
+    let mut shell = Shell::new();
+    shell.take("UserPromptSubmit", json!({ "prompt": "Implement #378" }));
+    assert_eq!(shell.line(), "No step yet");
+    shell.take(
+        "PreToolUse",
+        json!({"tool_name": "Bash", "tool_use_id": "t1",
+        "tool_input": {"command": "cargo test"}}),
     );
+    assert_eq!(shell.line(), "Bash cargo test");
+
+    // The session's own agent asks: its last step and how long it has waited.
+    let ask = json!({"tool_name": "AskUserQuestion", "tool_use_id": "t2", "tool_input": {}});
+    shell.take("PreToolUse", ask.clone());
+    let line = shell.line_at(shell.at + 3 * MINUTE);
+    assert!(
+        line.starts_with("AskUserQuestion") && line.ends_with(" · 3m"),
+        "{line}"
+    );
+    shell.take("PostToolUse", ask);
+
+    // A subagent asks: its name, "asks", and how long it has waited.
+    shell.take("PostToolUse", spawn_child("w1", "Implement #378", false));
+    let ask = json!({"tool_name": "AskUserQuestion", "tool_use_id": "t3", "tool_input": {}});
+    let repo = shell.repo.clone();
+    shell.child("w1", &repo, "PreToolUse", ask.clone());
+    assert_eq!(
+        shell.line_at(shell.at + 2 * MINUTE),
+        "Implement #378 asks · 2m"
+    );
+    shell.child("w1", &repo, "PostToolUse", ask);
+    shell.child("w1", &repo, "SubagentStop", json!({}));
+
+    // A wake-up with no step since: the worker that returned.
+    let wake_up =
+        "<task-notification><task-id>w1</task-id><status>completed</status></task-notification>";
+    shell.take("UserPromptSubmit", json!({ "prompt": wake_up }));
+    assert_eq!(shell.line(), "worker Implement #378 returned");
+    shell.take(
+        "PreToolUse",
+        json!({"tool_name": "Bash", "tool_use_id": "t4",
+        "tool_input": {"command": "git log"}}),
+    );
+    assert_eq!(shell.line(), "Bash git log");
+
+    // Once the turn is over: the stopped line.
+    shell.event("Stop", json!({ "last_assistant_message": "Done." }));
+    assert_eq!(shell.line(), "Done.");
 }
