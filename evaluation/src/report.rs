@@ -6,6 +6,7 @@ use crate::significance::{LEVEL, fisher, power, rank_p, wins};
 use crate::{
     FIXTURES, LARGE_SPEC_FIXTURE, SCORED_FIXTURES,
     batch::replaceable,
+    timing::FORMS,
     tokens::{CLASSES, usd},
 };
 use serde_json::{Value, json};
@@ -25,10 +26,9 @@ const METRICS: [&str; 9] = [
     "failed_checks_before_pass",
     "safety_incidents",
 ];
-/// Falinks output forms with the counts `adapters/claude/arm.rs` records per form (its
-/// `tests/arm.rs` checks these copies agree), and the refusal recovery `timing` reads from the
+/// The counts `adapters/claude/arm.rs` records per Falinks output form (`timing::FORMS`; its
+/// `tests/arm.rs` checks this copy agrees), and the refusal recovery `timing` reads from the
 /// transcripts.
-const FORMS: [&str; 3] = ["content", "replace", "from"];
 const EDIT_COUNTS: [&str; 7] = [
     "accepted",
     "stale",
@@ -226,6 +226,32 @@ fn stats(values: &[Option<f64>]) -> Value {
     json!({"values": values, "median": median(present.clone()),
         "range": low.zip(high).map(|(low, high)| [low, high]),
         "n": present.len(), "missing": values.len() - present.len()})
+}
+
+/// `f` of each run (a repetition slot or a run), None for an empty slot or a run that lacks it.
+fn per_run<'a, R: Copy + Into<Option<&'a Value>>>(
+    runs: &[R],
+    f: impl Fn(&Value) -> Option<f64>,
+) -> Vec<Option<f64>> {
+    runs.iter().map(|&r| r.into().and_then(&f)).collect()
+}
+
+/// `stats` of `f` over each run.
+fn figure<'a, R: Copy + Into<Option<&'a Value>>>(
+    runs: &[R],
+    f: impl Fn(&Value) -> Option<f64>,
+) -> Value {
+    stats(&per_run(runs, f))
+}
+
+fn succeeded(run: &Value) -> bool {
+    run["outcome"] == "success"
+}
+
+/// How many of the runs (repetition slots or runs) succeeded.
+fn successes<'a, R: Copy + Into<Option<&'a Value>>>(runs: &[R]) -> u64 {
+    let runs = runs.iter().filter_map(|&r| r.into());
+    runs.filter(|r| succeeded(r)).count() as u64
 }
 
 /// Every repetition's value, or None when one lacks it or there are none.
@@ -486,11 +512,12 @@ fn judge_cells(
 /// metric and, until replaced, it is named in `gaps`. Without `show_code`,
 /// `reverted_peer_text` gives a line count in place of the lines (#228 decision 28).
 pub fn report(runs: &[Value], show_code: bool) -> Value {
-    let replaced: Vec<&Value> = runs.iter().filter_map(|r| r.get("replaces")).collect();
-    let current: Vec<&Value> = runs
-        .iter()
-        .filter(|r| r["scored"] == true && !replaced.contains(&&r["run_id"]))
+    let (replaced, current) = unreplaced(runs);
+    let current: Vec<&Value> = current
+        .into_iter()
+        .filter(|r| r["scored"] == true)
         .collect();
+    let scored: Vec<&Value> = runs.iter().filter(|r| r["scored"] == true).collect();
     let elapsed = |r: &Value| r["timing"]["elapsed_seconds"].as_f64();
     // A run overlapped another if it saw one active at its start or stop, or one saw it: a
     // run entirely inside another sees it at start without being seen.
@@ -505,37 +532,15 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
     let mut successes = BTreeMap::from([("git", 0), ("falinks", 0)]);
     let mut gaps = Vec::new();
     for fixture in SCORED_FIXTURES {
-        let mut pairs: BTreeMap<&str, BTreeMap<&str, &Value>> = BTreeMap::new();
-        for run in current.iter().filter(|r| r["fixture"] == fixture) {
-            let (Some(pair), Some(arm)) = (run["pair"].as_str(), run["arm"].as_str()) else {
-                continue;
-            };
-            pairs.entry(pair).or_default().insert(arm, run);
-        }
-        // Each repetition's run per arm: None when it is absent or interrupted.
-        let slots: BTreeMap<&str, Vec<Option<&Value>>> = ARMS
-            .map(|arm| {
-                let slots = pairs
-                    .values()
-                    .map(|arms| arms.get(arm).copied().filter(|r| !replaceable(r)));
-                (arm, slots.collect())
-            })
-            .into();
-        let succeeded = |r: &Option<&Value>| r.is_some_and(|r| r["outcome"] == "success");
-        let arm_successes: BTreeMap<&str, u64> = ARMS
-            .map(|arm| {
-                (
-                    arm,
-                    slots[arm].iter().filter(|r| succeeded(r)).count() as u64,
-                )
-            })
-            .into();
-        let (mut complete, mut times) = (0, BTreeMap::<&str, Vec<f64>>::new());
+        let pairs = grouped(&current, fixture, arm_of);
+        let slots = slots(&pairs, &ARMS);
+        let arm_successes = success_counts(&slots);
+        let complete = complete_repetitions(&slots);
+        let mut times = BTreeMap::<&str, Vec<f64>>::new();
         for (git, falinks) in slots["git"].iter().zip(&slots["falinks"]) {
-            complete += usize::from(git.is_some() && falinks.is_some());
             if let (Some(g), Some(f)) = (
-                git.filter(|_| succeeded(git)),
-                falinks.filter(|_| succeeded(falinks)),
+                git.filter(|r| succeeded(r)),
+                falinks.filter(|r| succeeded(r)),
             ) {
                 times.entry("git").or_default().extend(elapsed(g));
                 times.entry("falinks").or_default().extend(elapsed(f));
@@ -555,42 +560,21 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
             .chain(CLASSES.iter().map(|c| format!("tokens_{c}")));
         let mut metrics = serde_json::Map::new();
         for metric in names {
-            let values = |arm: &str| -> Vec<Option<f64>> {
-                slots[arm]
-                    .iter()
-                    .map(|r| r.and_then(|r| value(r, &metric)))
-                    .collect()
-            };
-            let (git, falinks) = (values("git"), values("falinks"));
+            let [git, falinks] = ARMS.map(|arm| per_run(&slots[arm], |r| value(r, &metric)));
             metrics.insert(
                 metric.clone(),
                 json!({"git": stats(&git), "falinks": stats(&falinks), "label": label(&git, &falinks)}),
             );
         }
-        let scored = |arm: &str| -> Vec<&Value> {
-            runs.iter()
-                .filter(|r| r["scored"] == true && r["fixture"] == fixture && r["arm"] == arm)
-                .collect()
-        };
-        let mut costs: serde_json::Map<String, Value> = ARMS
-            .iter()
-            .map(|arm| (arm.to_string(), cost(&scored(arm), arm_successes[arm])))
-            .collect();
+        let mut costs = costs(&scored, fixture, arm_of, &arm_successes);
         let falinks_runs = &slots["falinks"];
-        let per_run = |f: &dyn Fn(&Value) -> Option<f64>| -> Value {
-            stats(
-                &falinks_runs
-                    .iter()
-                    .map(|r| r.and_then(f))
-                    .collect::<Vec<_>>(),
-            )
-        };
         // Falinks only: the Git arm has no `sandbox_instructions` (#206 decision 5).
         let key = "sandbox_excluded_cost_usd";
+        let falinks_scored = keyed(&scored, fixture, arm_of, "falinks");
         let (missing, dollars, per_success) =
-            cost_line(&scored("falinks"), arm_successes["falinks"], key);
+            cost_line(&falinks_scored, arm_successes["falinks"], key);
         costs["falinks"]["sandbox_excluded"] = json!({"label": SANDBOX_LABEL,
-            "per_run": per_run(&|r| r["tokens"][key].as_f64()), "missing": missing,
+            "per_run": figure(falinks_runs, |r| r["tokens"][key].as_f64()), "missing": missing,
             "cost_usd": usd(dollars), "cost_per_success_usd": per_success});
         // A run with a transcript and no refusal of an op counts 0 for it.
         let key_refusals = |r: &Value| r["transcript"]["request_key_refusals"].as_object().cloned();
@@ -601,9 +585,9 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
             .flat_map(|refusals| refusals.into_iter().map(|(op, _)| op))
             .collect();
         let refusals = json!({
-            "total": per_run(&|r| key_refusals(r).map(|m| m.values().filter_map(Value::as_f64).sum())),
+            "total": figure(falinks_runs, |r| key_refusals(r).map(|m| m.values().filter_map(Value::as_f64).sum())),
             "ops": ops.iter().map(|op| {
-                let count = per_run(&|r| key_refusals(r).map(|m| m.get(op).and_then(Value::as_f64).unwrap_or(0.0)));
+                let count = figure(falinks_runs, |r| key_refusals(r).map(|m| m.get(op).and_then(Value::as_f64).unwrap_or(0.0)));
                 (op.clone(), count)
             }).collect::<serde_json::Map<_, _>>(),
         });
@@ -614,13 +598,14 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
                 for count in EDIT_COUNTS {
                     entry.insert(
                         count.into(),
-                        per_run(&|r| r["edits"]["forms"][form][count].as_f64()),
+                        figure(falinks_runs, |r| r["edits"]["forms"][form][count].as_f64()),
                     );
                 }
                 for key in RECOVERY {
-                    let figure =
-                        per_run(&|r| r["transcript"]["refusal_recovery"][form][key].as_f64());
-                    entry.insert(format!("recovery_{key}"), figure);
+                    let recovery = figure(falinks_runs, |r| {
+                        r["transcript"]["refusal_recovery"][form][key].as_f64()
+                    });
+                    entry.insert(format!("recovery_{key}"), recovery);
                 }
                 let reasons: Vec<Value> = falinks_runs
                     .iter()
@@ -681,27 +666,12 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
             }),
         );
     }
-    for run in current.iter().filter(|r| replaceable(r)) {
-        // As `replaceable` reads it: no outcome is an infrastructure failure.
-        let outcome = run["outcome"].as_str().unwrap_or("infrastructure_failure");
-        let id = run["run_id"].as_str().unwrap_or_default();
-        gaps.push(format!("unreplaced interruption {id}: {outcome}"));
-    }
-    for run in runs.iter().filter(|r| r["outcome"] == "run_invalid") {
-        let id = run["run_id"].as_str().unwrap_or_default();
-        gaps.push(format!("invalid run {id}: nested agent"));
-    }
+    gaps.extend(run_gaps(runs, &current));
     let unsafe_runs: Vec<&Value> = runs
         .iter()
         .filter(|r| r["outcome"] == "safety_failure")
         .map(|r| &r["run_id"])
         .collect();
-    // Runs a nested agent made invalid (#178 C7), per arm.
-    let nested = |arm: &str| {
-        runs.iter()
-            .filter(|r| r["arm"] == arm && !r["nested_agent"].is_null())
-            .count()
-    };
     let transitions: u64 = current
         .iter()
         .filter(|r| r["arm"] == "falinks" && !replaceable(r))
@@ -719,7 +689,7 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         "successes": successes,
         "gaps": gaps,
         "safety_failures": unsafe_runs,
-        "nested_agent_hits": {"git": nested("git"), "falinks": nested("falinks")},
+        "nested_agent_hits": nested_hits(runs, &ARMS, arm_of),
         // Runs a control failure in a stopping runtime made invalid (#355 A4).
         "control_failure_runs": runs.iter().filter(|r| !r["control_failure"].is_null()).count(),
         "falinks_transitions": transitions,
@@ -744,9 +714,6 @@ const SENTENCES: [&str; 3] = [
 /// class and premature checks, with the waste's evidence label when both `git` and `falinks`
 /// are given. An arm of teams of one has no peer, so it prints `n/a`.
 pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
-    let per_run = |runs: &[Option<&Value>],
-                   f: &dyn Fn(&Value) -> Option<f64>|
-     -> Vec<Option<f64>> { runs.iter().map(|r| r.and_then(f)).collect() };
     let mut out = serde_json::Map::new();
     for (arm, runs) in slots {
         let alone = |r: &Option<&Value>| r.is_some_and(|r| r["collisions"]["status"] == "n/a");
@@ -765,11 +732,11 @@ pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
                     ),
                     _ => None,
                 };
-                (c.to_string(), stats(&per_run(runs, &count)))
+                (c.to_string(), figure(runs, count))
             })
             .collect();
         let premature = |r: &Value| r["collisions"]["premature_checks"].as_f64();
-        let total = |pointer: String| stats(&per_run(runs, &|r| sum(r, &pointer)));
+        let total = |pointer: String| figure(runs, |r| sum(r, &pointer));
         let handling: serde_json::Map<String, Value> = crate::collisions::HANDLED
             .iter()
             .map(|c| {
@@ -782,8 +749,8 @@ pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
             "model_seconds": total("/rereads/model_seconds".into())});
         out.insert(
             arm.to_string(),
-            json!({"waste_lines": stats(&per_run(runs, &collision_waste)),
-            "collisions": classes, "premature_checks": stats(&per_run(runs, &premature)),
+            json!({"waste_lines": figure(runs, collision_waste),
+            "collisions": classes, "premature_checks": figure(runs, premature),
             "handling": handling, "rereads": rereads}),
         );
     }
@@ -791,8 +758,8 @@ pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
         out.insert(
             "label".into(),
             label(
-                &per_run(git, &collision_waste),
-                &per_run(falinks, &collision_waste),
+                &per_run(git, collision_waste),
+                &per_run(falinks, collision_waste),
             )
             .into(),
         );
@@ -803,7 +770,127 @@ pub fn collision_cells(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> Value {
     Value::Object(out)
 }
 
-/// The runs a later run replaced, and every other run, for the track-T reports.
+/// A run's arm, as the scored report keys it.
+fn arm_of(run: &Value) -> Option<String> {
+    run["arm"].as_str().map(String::from)
+}
+
+/// A run's team size, as track T keys it.
+fn size_of(run: &Value) -> Option<String> {
+    run["team_size"].as_u64().map(|s| s.to_string())
+}
+
+/// The runs of `fixture` per repetition (its pair), each keyed by `key`: its arm or team size.
+fn grouped<'a>(
+    current: &[&'a Value],
+    fixture: &str,
+    key: fn(&Value) -> Option<String>,
+) -> BTreeMap<&'a str, BTreeMap<String, &'a Value>> {
+    let mut pairs: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
+    for &run in current.iter().filter(|r| r["fixture"] == fixture) {
+        if let (Some(pair), Some(key)) = (run["pair"].as_str(), key(run)) {
+            pairs.entry(pair).or_default().insert(key, run);
+        }
+    }
+    pairs
+}
+
+/// Each repetition's run per key: None when it is absent or interrupted.
+fn slots<'a, 'k>(
+    pairs: &BTreeMap<&str, BTreeMap<String, &'a Value>>,
+    keys: &[&'k str],
+) -> BTreeMap<&'k str, Vec<Option<&'a Value>>> {
+    keys.iter()
+        .map(|&k| {
+            let slots = pairs
+                .values()
+                .map(|runs| runs.get(k).copied().filter(|r| !replaceable(r)));
+            (k, slots.collect())
+        })
+        .collect()
+}
+
+/// The repetitions with a run in every key's slot.
+fn complete_repetitions(slots: &BTreeMap<&str, Vec<Option<&Value>>>) -> usize {
+    let repetitions = slots.values().next().map_or(0, Vec::len);
+    let complete = |i: usize| slots.values().all(|runs| runs[i].is_some());
+    (0..repetitions).filter(|&i| complete(i)).count()
+}
+
+/// Each key's successful runs among its slots.
+fn success_counts<'k>(slots: &BTreeMap<&'k str, Vec<Option<&Value>>>) -> BTreeMap<&'k str, u64> {
+    slots
+        .iter()
+        .map(|(&k, runs)| (k, successes(runs)))
+        .collect()
+}
+
+/// The runs of `fixture` whose `key` is `k`.
+fn keyed<'a>(
+    runs: &[&'a Value],
+    fixture: &str,
+    key: fn(&Value) -> Option<String>,
+    k: &str,
+) -> Vec<&'a Value> {
+    let of = |r: &&Value| r["fixture"] == fixture && key(r).as_deref() == Some(k);
+    runs.iter().copied().filter(of).collect()
+}
+
+/// Each key's `cost` over its runs of `fixture` among `runs`, with its successes.
+fn costs(
+    runs: &[&Value],
+    fixture: &str,
+    key: fn(&Value) -> Option<String>,
+    successes: &BTreeMap<&str, u64>,
+) -> serde_json::Map<String, Value> {
+    successes
+        .iter()
+        .map(|(&k, &n)| (k.to_string(), cost(&keyed(runs, fixture, key, k), n)))
+        .collect()
+}
+
+/// Runs a nested agent made invalid (#178 C7), per key.
+fn nested_hits(
+    runs: &[Value],
+    keys: &[&str],
+    key: fn(&Value) -> Option<String>,
+) -> serde_json::Map<String, Value> {
+    let hits = |k: &str| {
+        let runs = runs.iter().filter(|r| key(r).as_deref() == Some(k));
+        runs.filter(|r| !r["nested_agent"].is_null()).count()
+    };
+    keys.iter()
+        .map(|&k| (k.to_string(), json!(hits(k))))
+        .collect()
+}
+
+/// Whether `fixture` has no milestones, so no development arrives.
+fn no_milestones(fixture: &str) -> bool {
+    crate::fixture(fixture).is_ok_and(|f| f["milestones"].as_array().is_some_and(Vec::is_empty))
+}
+
+/// One pair's evidence label and its paired differences per repetition, `b` minus `a`.
+fn compare(
+    metric: &str,
+    no_milestones: bool,
+    a: &[Option<f64>],
+    b: &[Option<f64>],
+) -> (&'static str, Vec<Option<f64>>) {
+    let paired = a
+        .iter()
+        .zip(b)
+        .map(|(a, b)| Some(b.as_ref()? - a.as_ref()?))
+        .collect();
+    // Without milestones the host never delivers a development (#257).
+    let label = if no_milestones && metric.contains("development") {
+        "n/a"
+    } else {
+        label(a, b)
+    };
+    (label, paired)
+}
+
+/// The runs a later run replaced, and every other run, for every report.
 fn unreplaced(runs: &[Value]) -> (Vec<&Value>, Vec<&Value>) {
     let replaced: Vec<&Value> = runs.iter().filter_map(|r| r.get("replaces")).collect();
     let current = runs
@@ -822,11 +909,12 @@ fn track_t_names() -> impl Iterator<Item = String> {
         .chain(CLASSES.iter().map(|c| format!("tokens_{c}")))
 }
 
-/// The track-T reports' gaps beyond missing repetitions: unreplaced interruptions and runs a
-/// nested agent made invalid.
+/// Every report's gaps beyond missing repetitions: unreplaced interruptions and runs a nested
+/// agent made invalid.
 fn run_gaps(runs: &[Value], current: &[&Value]) -> Vec<String> {
     let mut gaps = vec![];
     for run in current.iter().filter(|r| replaceable(r)) {
+        // As `replaceable` reads it: no outcome is an infrastructure failure.
         let outcome = run["outcome"].as_str().unwrap_or("infrastructure_failure");
         let id = run["run_id"].as_str().unwrap_or_default();
         gaps.push(format!("unreplaced interruption {id}: {outcome}"));
@@ -844,55 +932,25 @@ fn run_gaps(runs: &[Value], current: &[&Value]) -> Vec<String> {
 /// its sample coefficient of variation per team size. Like `report`, it computes no winner.
 pub fn track_t_report(runs: &[Value]) -> Value {
     let (replaced, current) = unreplaced(runs);
-    let size = |r: &Value| r["team_size"].as_u64().map(|s| s.to_string());
+    let all: Vec<&Value> = runs.iter().collect();
     let mut fixtures = serde_json::Map::new();
     let mut gaps = Vec::new();
     for fixture in FIXTURES {
-        let mut pairs: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
-        for run in current.iter().filter(|r| r["fixture"] == fixture) {
-            let (Some(pair), Some(size)) = (run["pair"].as_str(), size(run)) else {
-                continue;
-            };
-            pairs.entry(pair).or_default().insert(size, run);
-        }
+        let pairs = grouped(&current, fixture, size_of);
         // A fixture this batch did not run (`--fixtures`).
         if pairs.is_empty() {
             continue;
         }
-        // Each repetition's run per team size: None when it is absent or interrupted.
-        let slots: BTreeMap<&str, Vec<Option<&Value>>> = SIZES
-            .map(|s| {
-                let slots = pairs
-                    .values()
-                    .map(|sizes| sizes.get(s).copied().filter(|r| !replaceable(r)));
-                (s, slots.collect())
-            })
-            .into();
-        let complete = slots["1"]
-            .iter()
-            .zip(&slots["2"])
-            .filter(|(one, two)| one.is_some() && two.is_some())
-            .count();
+        let slots = slots(&pairs, &SIZES);
+        let complete = complete_repetitions(&slots);
         if complete < 5 {
             gaps.push(format!("{fixture}: {complete} of 5 complete pairs"));
         }
-        let no_milestones = crate::fixture(fixture)
-            .is_ok_and(|f| f["milestones"].as_array().is_some_and(Vec::is_empty));
+        let no_milestones = no_milestones(fixture);
         let mut metrics = serde_json::Map::new();
         let mut cv = serde_json::Map::new();
         for metric in track_t_names() {
-            let values = |s: &str| -> Vec<Option<f64>> {
-                slots[s]
-                    .iter()
-                    .map(|r| r.and_then(|r| value(r, &metric)))
-                    .collect()
-            };
-            let (one, two) = (values("1"), values("2"));
-            let paired: Vec<Option<f64>> = one
-                .iter()
-                .zip(&two)
-                .map(|(one, two)| Some(two.as_ref()? - one.as_ref()?))
-                .collect();
+            let [one, two] = SIZES.map(|s| per_run(&slots[s], |r| value(r, &metric)));
             if metric == "completion_seconds" {
                 cv = SIZES
                     .iter()
@@ -900,38 +958,16 @@ pub fn track_t_report(runs: &[Value]) -> Value {
                     .map(|(s, v)| (s.to_string(), json!(variation(v))))
                     .collect();
             }
-            // Without milestones the host never delivers a development (#257).
-            let label = if no_milestones && metric.contains("development") {
-                "n/a"
-            } else {
-                label(&one, &two)
-            };
+            let (label, paired) = compare(&metric, no_milestones, &one, &two);
             metrics.insert(
                 metric.clone(),
                 json!({"1": stats(&one), "2": stats(&two), "label": label,
                     "paired_differences": paired}),
             );
         }
-        let successes: BTreeMap<&str, u64> = SIZES
-            .map(|s| {
-                let ok = slots[s]
-                    .iter()
-                    .flatten()
-                    .filter(|r| r["outcome"] == "success");
-                (s, ok.count() as u64)
-            })
-            .into();
+        let successes = success_counts(&slots);
         // Every run of a team size, failed, interrupted and replaced runs included.
-        let costs: serde_json::Map<String, Value> = SIZES
-            .iter()
-            .map(|s| {
-                let all: Vec<&Value> = runs
-                    .iter()
-                    .filter(|r| r["fixture"] == fixture && size(r).as_deref() == Some(*s))
-                    .collect();
-                (s.to_string(), cost(&all, successes[s]))
-            })
-            .collect();
+        let costs = costs(&all, fixture, size_of, &successes);
         fixtures.insert(
             fixture.into(),
             json!({
@@ -951,21 +987,11 @@ pub fn track_t_report(runs: &[Value]) -> Value {
         );
     }
     gaps.extend(run_gaps(runs, &current));
-    // Runs a nested agent made invalid (#178 C7), per team size.
-    let nested: serde_json::Map<String, Value> = SIZES
-        .iter()
-        .map(|s| {
-            let hits = runs
-                .iter()
-                .filter(|r| size(r).as_deref() == Some(*s) && !r["nested_agent"].is_null());
-            (s.to_string(), json!(hits.count()))
-        })
-        .collect();
     json!({
         "qualification": "Exploratory: five repetitions per team size and fixture, Git arm only, and no p-values. No winner is computed; the decision is written on the ticket. Cost is API-equivalent list price, not billed cost.",
         "fixtures": fixtures,
         "gaps": gaps,
-        "nested_agent_hits": nested,
+        "nested_agent_hits": nested_hits(runs, &SIZES, size_of),
         "replaced_runs": replaced,
     })
 }
@@ -977,66 +1003,39 @@ pub fn track_t_report(runs: &[Value]) -> Value {
 /// run identity apart. Like `report`, it computes no winner.
 pub fn step_6_report(runs: &[Value]) -> Value {
     let (replaced, current) = unreplaced(runs);
+    let all: Vec<&Value> = runs.iter().collect();
     let mut fixtures = serde_json::Map::new();
     let mut gaps = Vec::new();
     for fixture in FIXTURES {
-        let mut rotations: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
-        for run in current.iter().filter(|r| r["fixture"] == fixture) {
-            let (Some(pair), Some(arm)) = (run["pair"].as_str(), team(run)) else {
-                continue;
-            };
-            rotations.entry(pair).or_default().insert(arm, run);
-        }
+        let rotations = grouped(&current, fixture, team);
         // A fixture this batch did not run.
         if rotations.is_empty() {
             continue;
         }
-        // Each rotation's run per arm: None when it is absent or interrupted.
-        let slots: BTreeMap<&str, Vec<Option<&Value>>> = STEP_6_ARMS
-            .map(|a| {
-                let slots = rotations
-                    .values()
-                    .map(|arms| arms.get(a).copied().filter(|r| !replaceable(r)));
-                (a, slots.collect())
-            })
-            .into();
-        let rotations_complete = (0..rotations.len())
-            .filter(|&i| STEP_6_ARMS.iter().all(|a| slots[a][i].is_some()))
-            .count();
+        let slots = slots(&rotations, &STEP_6_ARMS);
+        let rotations_complete = complete_repetitions(&slots);
         if rotations_complete < 5 {
             gaps.push(format!(
                 "{fixture}: {rotations_complete} of 5 complete rotations"
             ));
         }
-        let no_milestones = crate::fixture(fixture)
-            .is_ok_and(|f| f["milestones"].as_array().is_some_and(Vec::is_empty));
-        let values = |a: &str, metric: &str| -> Vec<Option<f64>> {
-            slots[a]
-                .iter()
-                .map(|r| r.and_then(|r| value(r, metric)))
-                .collect()
+        let no_milestones = no_milestones(fixture);
+        let values = |metric: &str| -> BTreeMap<&str, Vec<Option<f64>>> {
+            STEP_6_ARMS
+                .map(|a| (a, per_run(&slots[a], |r| value(r, metric))))
+                .into()
         };
         let mut metrics = serde_json::Map::new();
         for metric in track_t_names() {
+            let values = values(&metric);
             let mut entry: serde_json::Map<String, Value> = STEP_6_ARMS
                 .iter()
-                .map(|a| (a.to_string(), stats(&values(a, &metric))))
+                .map(|a| (a.to_string(), stats(&values[a])))
                 .collect();
             let pairs: serde_json::Map<String, Value> = STEP_6_PAIRS
                 .iter()
                 .map(|(a, b)| {
-                    let (a_values, b_values) = (values(a, &metric), values(b, &metric));
-                    let paired: Vec<Option<f64>> = a_values
-                        .iter()
-                        .zip(&b_values)
-                        .map(|(a, b)| Some(b.as_ref()? - a.as_ref()?))
-                        .collect();
-                    // Without milestones the host never delivers a development (#257).
-                    let label = if no_milestones && metric.contains("development") {
-                        "n/a"
-                    } else {
-                        label(&a_values, &b_values)
-                    };
+                    let (label, paired) = compare(&metric, no_milestones, &values[a], &values[b]);
                     let entry = json!({"label": label, "paired_differences": paired});
                     (format!("{b} - {a}"), entry)
                 })
@@ -1044,8 +1043,8 @@ pub fn step_6_report(runs: &[Value]) -> Value {
             entry.insert("pairs".into(), pairs.into());
             metrics.insert(metric, entry.into());
         }
-        let time = |a: &str| values(a, "completion_seconds");
-        let lower = |a: &str, b: &str| below(&time(a), &time(b));
+        let time = values("completion_seconds");
+        let lower = |a: &str, b: &str| below(&time[a], &time[b]);
         let (one, git, falinks) = ("git-1", "git-2", "falinks-2");
         let [
             one_wins,
@@ -1054,7 +1053,7 @@ pub fn step_6_report(runs: &[Value]) -> Value {
             two_win,
             inconclusive,
         ] = OUTCOMES;
-        let row = if STEP_6_ARMS.iter().any(|a| complete(&time(a)).is_none()) {
+        let row = if STEP_6_ARMS.iter().any(|a| complete(&time[a]).is_none()) {
             None
         } else if lower(one, git) && lower(one, falinks) {
             Some(one_wins)
@@ -1074,28 +1073,11 @@ pub fn step_6_report(runs: &[Value]) -> Value {
         };
         let variation: serde_json::Map<String, Value> = STEP_6_ARMS
             .iter()
-            .map(|a| (a.to_string(), json!(variation(&time(a)))))
+            .map(|a| (a.to_string(), json!(variation(&time[a]))))
             .collect();
-        let successes: BTreeMap<&str, u64> = STEP_6_ARMS
-            .map(|a| {
-                let ok = slots[a]
-                    .iter()
-                    .flatten()
-                    .filter(|r| r["outcome"] == "success");
-                (a, ok.count() as u64)
-            })
-            .into();
+        let successes = success_counts(&slots);
         // Every run of an arm, failed, interrupted and replaced runs included.
-        let costs: serde_json::Map<String, Value> = STEP_6_ARMS
-            .iter()
-            .map(|a| {
-                let all: Vec<&Value> = runs
-                    .iter()
-                    .filter(|r| r["fixture"] == fixture && team(r).as_deref() == Some(*a))
-                    .collect();
-                (a.to_string(), cost(&all, successes[a]))
-            })
-            .collect();
+        let costs = costs(&all, fixture, team, &successes);
         let overhead: Vec<Value> = slots["falinks-2"]
             .iter()
             .flatten()
@@ -1135,21 +1117,11 @@ pub fn step_6_report(runs: &[Value]) -> Value {
         );
     }
     gaps.extend(run_gaps(runs, &current));
-    // Runs a nested agent made invalid (#178 C7), per arm.
-    let nested: serde_json::Map<String, Value> = STEP_6_ARMS
-        .iter()
-        .map(|a| {
-            let hits = runs
-                .iter()
-                .filter(|r| team(r).as_deref() == Some(*a) && !r["nested_agent"].is_null());
-            (a.to_string(), json!(hits.count()))
-        })
-        .collect();
     json!({
         "qualification": "Exploratory: five rotations of one agent, two Git agents and two Falinks agents, and no p-values. No winner is computed; the outcome row is a reading guide, and the decision is written on the ticket. Cost is API-equivalent list price, not billed cost.",
         "fixtures": fixtures,
         "gaps": gaps,
-        "nested_agent_hits": nested,
+        "nested_agent_hits": nested_hits(runs, &STEP_6_ARMS, team),
         "replaced_runs": replaced,
     })
 }
@@ -1202,12 +1174,11 @@ fn team(run: &Value) -> Option<String> {
 
 /// Each arm's p of having more successes than the other, and the arm that passes at `LEVEL`.
 fn success_test(a: (&str, &[&Value]), b: (&str, &[&Value])) -> Value {
-    let ok = |runs: &[&Value]| runs.iter().filter(|r| r["outcome"] == "success").count() as u64;
     let ((a, a_runs), (b, b_runs)) = (a, b);
     let (x, n, y, m) = (
-        ok(a_runs),
+        successes(a_runs),
         a_runs.len() as u64,
-        ok(b_runs),
+        successes(b_runs),
         b_runs.len() as u64,
     );
     let p = [(a, fisher(x, n, y, m)), (b, fisher(y, m, x, n))];
@@ -1284,9 +1255,6 @@ const ONE_AGENT_ARM: &str = "This research advises that the trial include a one-
 /// begin with the success counts.
 fn one_agent(arms: [(&str, &[&Value]); 3]) -> Value {
     let [(_, one), two @ ..] = arms;
-    let per_run = |runs: &[&Value], f: fn(&Value) -> Option<f64>| -> Vec<Option<f64>> {
-        runs.iter().map(|r| f(r)).collect()
-    };
     let comparisons: serde_json::Map<String, Value> = two
         .iter()
         .map(|&(arm, runs)| {
@@ -1298,9 +1266,8 @@ fn one_agent(arms: [(&str, &[&Value]); 3]) -> Value {
             (arm.to_string(), entry)
         })
         .collect();
-    let ok = |runs: &[&Value]| runs.iter().filter(|r| r["outcome"] == "success").count();
     let counts = arms
-        .map(|(arm, runs)| format!("{arm} {}/{}", ok(runs), runs.len()))
+        .map(|(arm, runs)| format!("{arm} {}/{}", successes(runs), runs.len()))
         .join(", ");
     let fewer = two
         .iter()
@@ -1361,6 +1328,11 @@ fn completion(run: &Value) -> Option<f64> {
     }
 }
 
+/// P3's σ reads a success's completion seconds only.
+fn success_seconds(run: &Value) -> Option<f64> {
+    completion(run).filter(|s| s.is_finite())
+}
+
 /// One run's collision waste: `discarded_or_rewritten_work.lines` once `collisions::waste` marks
 /// it `complete` (#334). None while a duplicate-work candidate is unclassified, when the records
 /// are unreadable, and for a team of one (`n/a`).
@@ -1400,18 +1372,16 @@ const COORDINATION_NOTE: &str = "Coordination overhead (#205, Q7b; #337), per ru
 
 /// Per run, summed over agents, the round-trips and model seconds at two `timing` pointers.
 fn part(runs: &[&Value], count: &str, seconds: &str) -> Value {
-    let figure = |pointer: &str| stats(&runs.iter().map(|r| sum(r, pointer)).collect::<Vec<_>>());
-    json!({"round_trips": figure(count), "model_seconds": figure(seconds)})
+    let total = |pointer: &str| figure(runs, |r| sum(r, pointer));
+    json!({"round_trips": total(count), "model_seconds": total(seconds)})
 }
 
 /// One arm's coordination overhead per run with its parts, and for Falinks the operations
 /// table beside it.
 fn coordination_cells(runs: &[&Value], falinks: bool) -> (Value, Option<Value>) {
-    let figure =
-        |f: &dyn Fn(&Value) -> Option<f64>| stats(&runs.iter().map(|r| f(r)).collect::<Vec<_>>());
     let mut cells = json!({
-        "round_trips": figure(&|r| Some(coordination_overhead(r)?[0])),
-        "model_seconds": figure(&|r| Some(coordination_overhead(r)?[1])),
+        "round_trips": figure(runs, |r| Some(coordination_overhead(r)?[0])),
+        "model_seconds": figure(runs, |r| Some(coordination_overhead(r)?[1])),
         "rereads": part(runs, "/rereads/round_trips", "/rereads/model_seconds"),
         "integration": part(runs, "/integration/round_trips", "/integration/model_seconds"),
     });
@@ -1423,7 +1393,7 @@ fn coordination_cells(runs: &[&Value], falinks: bool) -> (Value, Option<Value>) 
     if !falinks {
         return (cells, None);
     }
-    cells["review_estimate"] = json!({"model_seconds": figure(&|r| sum(r, "/review_estimate/model_seconds")),
+    cells["review_estimate"] = json!({"model_seconds": figure(runs, |r| sum(r, "/review_estimate/model_seconds")),
         "label": "estimate"});
     let ops: BTreeSet<String> = runs
         .iter()
@@ -1437,7 +1407,7 @@ fn coordination_cells(runs: &[&Value], falinks: bool) -> (Value, Option<Value>) 
         .into_iter()
         .map(|op| {
             let cell = |key: &str| {
-                figure(&|r: &Value| {
+                figure(runs, |r: &Value| {
                     let agents = r["transcript"]["agents"].as_object()?.values();
                     let of = |a: &Value| {
                         Some(
@@ -1504,9 +1474,11 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         ("falinks-2", &falinks[..]),
     ];
     let git_1 = one_agent(arms);
-    let per_run = |runs: &[&Value], f: fn(&Value) -> Option<f64>| -> Vec<Option<f64>> {
-        runs.iter().map(|r| f(r)).collect()
-    };
+    // Each arm's ranked runs as repetition slots.
+    let ranked_slots: BTreeMap<&str, Vec<Option<&Value>>> = arms
+        .iter()
+        .map(|(a, runs)| (*a, runs.iter().map(|r| Some(*r)).collect()))
+        .collect();
     let between = |f: fn(&Value) -> Option<f64>| {
         rank_test(
             ("falinks-2", &per_run(&falinks, f)),
@@ -1570,16 +1542,11 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
     } else {
         ("not shown", NEXT_NOT_SHOWN.into())
     };
-    let successes = |runs: &[&Value]| -> Vec<Option<f64>> {
-        runs.iter()
-            .map(|r| completion(r).filter(|s| s.is_finite()))
-            .collect()
-    };
     let reading = json!({"result": result, "passed_for_falinks": passed, "mechanism": evidence,
         "next_step": next_step, "safety_failures": unsafe_runs,
         "sigma": {
             "P2": sigma(("falinks-2", &per_run(&falinks, cold_start)), ("git-2", &per_run(&git, cold_start))),
-            "P3": sigma(("falinks-2", &successes(&falinks)), ("git-2", &successes(&git))),
+            "P3": sigma(("falinks-2", &per_run(&falinks, success_seconds)), ("git-2", &per_run(&git, success_seconds))),
             "note": POWER_NOTE,
         },
         "false_payback": FALSE_PAYBACK});
@@ -1588,20 +1555,17 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
     let per_arm: serde_json::Map<String, Value> = arms
         .iter()
         .map(|&(arm, runs)| {
-            let figure = |f: &dyn Fn(&Value) -> Option<f64>| {
-                stats(&runs.iter().map(|r| f(r)).collect::<Vec<_>>())
-            };
             let (overhead, operations) = coordination_cells(runs, arm == "falinks-2");
             let mut entry = json!({
                 "per_ticket": {
-                    "coordination_round_trips": figure(&per_ticket(|r| Some(coordination_overhead(r)?[0]))),
-                    "coordination_model_seconds": figure(&per_ticket(|r| Some(coordination_overhead(r)?[1]))),
-                    "protocol_acts": figure(&per_ticket(protocol_acts)),
+                    "coordination_round_trips": figure(runs, per_ticket(|r| Some(coordination_overhead(r)?[0]))),
+                    "coordination_model_seconds": figure(runs, per_ticket(|r| Some(coordination_overhead(r)?[1]))),
+                    "protocol_acts": figure(runs, per_ticket(protocol_acts)),
                 },
                 "coordination_overhead": overhead,
                 "runtime_refusals": part(runs, "/runtime_refusals/round_trips", "/runtime_refusals/model_seconds"),
-                "waiting_on_peer_seconds": figure(&|r| sum(r, "/waiting_on_peer_seconds")),
-                "load_balance": figure(&|r| value(r, "load_balance")),
+                "waiting_on_peer_seconds": figure(runs, |r| sum(r, "/waiting_on_peer_seconds")),
+                "load_balance": figure(runs, |r| value(r, "load_balance")),
             });
             if let Some(operations) = operations {
                 entry["operations"] = operations;
@@ -1609,20 +1573,8 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
             (arm.to_string(), entry)
         })
         .collect();
-    let mut rotations: BTreeMap<&str, BTreeMap<String, &Value>> = BTreeMap::new();
-    for run in &current {
-        if let (Some(pair), Some(arm)) = (run["pair"].as_str(), team(run)) {
-            rotations.entry(pair).or_default().insert(arm, run);
-        }
-    }
-    let complete = rotations
-        .values()
-        .filter(|arms| {
-            STEP_6_ARMS
-                .iter()
-                .all(|a| arms.get(*a).is_some_and(|r| !replaceable(r)))
-        })
-        .count();
+    let rotations = grouped(&current, LARGE_SPEC_FIXTURE, team);
+    let complete = complete_repetitions(&slots(&rotations, &STEP_6_ARMS));
     let mut gaps = vec![];
     if complete < 8 {
         gaps.push(format!(
@@ -1630,18 +1582,10 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         ));
     }
     gaps.extend(run_gaps(runs, &current));
-    let ok = |runs: &[&Value]| runs.iter().filter(|r| r["outcome"] == "success").count() as u64;
+    let successes = success_counts(&ranked_slots);
     // Every run of an arm, failed, interrupted and replaced runs included.
-    let costs: serde_json::Map<String, Value> = arms
-        .iter()
-        .map(|&(arm, ranked)| {
-            let all: Vec<&Value> = runs
-                .iter()
-                .filter(|r| r["fixture"] == LARGE_SPEC_FIXTURE && team(r).as_deref() == Some(arm))
-                .collect();
-            (arm.to_string(), cost(&all, ok(ranked)))
-        })
-        .collect();
+    let all: Vec<&Value> = runs.iter().collect();
+    let costs = costs(&all, LARGE_SPEC_FIXTURE, team, &successes);
     let mut git_1 = git_1;
     git_1["cost_per_success_usd"] = costs
         .iter()
@@ -1652,16 +1596,8 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         })
         .collect::<serde_json::Map<_, _>>()
         .into();
-    let nested = |arm: &str| {
-        let hits = runs.iter().filter(|r| team(r).as_deref() == Some(arm));
-        hits.filter(|r| !r["nested_agent"].is_null()).count()
-    };
-    let slots = arms
-        .iter()
-        .map(|(a, runs)| (*a, runs.iter().map(|r| Some(*r)).collect()))
-        .collect();
     // #336: all three arms are measured; the labels compare the payback arms only.
-    let quality = code_quality(LARGE_SPEC_FIXTURE, &slots, PAYBACK_ARMS);
+    let quality = code_quality(LARGE_SPEC_FIXTURE, &ranked_slots, PAYBACK_ARMS);
     json!({
         "qualification": "Scored: #205's eight rotations, read by the #5 decision's fixed payback criteria, which the decision may not amend. P1–P3 and the mechanism compare two Falinks agents with two Git agents only; one agent is descriptive. Judge cells, size metrics and cross-batch ratios are not payback. Cost is API-equivalent list price, not billed cost.",
         "fixture": LARGE_SPEC_FIXTURE,
@@ -1672,18 +1608,18 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
                 .collect::<serde_json::Map<_, _>>()}))
             .collect::<Vec<_>>(),
         "complete_rotations": complete,
-        "successes": arms.iter().map(|(a, runs)| (a.to_string(), json!(ok(runs)))).collect::<serde_json::Map<_, _>>(),
+        "successes": successes,
         "primaries": primaries.into_iter().map(|(n, t)| (n.to_string(), t)).collect::<serde_json::Map<_, _>>(),
         "primaries_note": "Exact one-sided tests at 2.5%. P1: Fisher's exact test on success counts. P2 (per-run cold-start cost, failed runs at their actual cost) and P3 (per-run completion seconds): permutation rank tests over every split of the pooled runs, U counting ties as half; an oracle failure or a timeout ranks slower than every success and ties with the others, and a replaced interruption is never ranked. p is each arm's chance of ranking below (P1: of more successes than) the other; null when a run lacks the value.",
         "mechanism": mechanism,
-        "collisions": collision_cells(&arms.iter().map(|(a, runs)| (*a, runs.iter().map(|r| Some(*r)).collect())).collect()),
+        "collisions": collision_cells(&ranked_slots),
         "reading": reading,
         "git_1": git_1,
         "per_arm": per_arm, "per_arm_note": PER_ARM_NOTE, "coordination_note": COORDINATION_NOTE,
         "cost": costs,
         "code_quality": quality,
         "gaps": gaps,
-        "nested_agent_hits": STEP_6_ARMS.iter().map(|a| (a.to_string(), json!(nested(a)))).collect::<serde_json::Map<_, _>>(),
+        "nested_agent_hits": nested_hits(runs, &STEP_6_ARMS, team),
         "replaced_runs": replaced,
     })
 }

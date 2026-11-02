@@ -814,7 +814,6 @@ fn evaluation_copies_of_the_edit_forms_and_counts_agree() {
     for (text, name, values) in [
         (&timing, "EDITS", &EDITS[..]),
         (&timing, "FORMS", &FORMS[..]),
-        (&report, "FORMS", &FORMS[..]),
         (&report, "EDIT_COUNTS", &EDIT_COUNTS[..]),
     ] {
         assert!(text.contains(&constant(name, values)), "{name}");

@@ -83,7 +83,7 @@ const CATEGORIES: [(Category, &str); 4] = [
 /// Falinks mutations that take output forms, and the forms (#193 decision 1), as
 /// `adapters/claude/arm.rs` counts them; its `tests/arm.rs` checks they agree.
 const EDITS: [&str; 3] = ["edit", "retry", "incorporate"];
-const FORMS: [&str; 3] = ["content", "replace", "from"];
+pub const FORMS: [&str; 3] = ["content", "replace", "from"];
 /// #193's fit: a round-trip's model time grows 3.56 ms per emitted character.
 const SECONDS_PER_CHARACTER: f64 = 0.00356;
 
@@ -125,7 +125,7 @@ struct Message {
 }
 
 /// A tool result's text; a Falinks result's is its JSON.
-fn text(block: &Value) -> String {
+pub fn text(block: &Value) -> String {
     let content = &block["content"];
     match content.as_str() {
         Some(text) => text.into(),
