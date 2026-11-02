@@ -367,15 +367,21 @@ fn write(
         let log = |line: String| eprintln!("studio: {line}");
         let store = app.state::<Cards>();
         let agent = request.agent.clone();
+        let sent = || {
+            let _ = app.emit("sessions", sessions(app.state(), app.state()));
+        };
+        // The list and the notice go out once the card is stored, before a brief rewrite.
+        let stored = || {
+            sent();
+            tell(&app, "New card", &session.agent.id, agent.as_deref());
+        };
         let written = match card {
-            true => write_stop(&store, &*writer, request, &session, log),
+            true => write_stop(&store, &*writer, request, &session, stored, log),
             false => write_brief(&store, &*writer, request, &session, log),
         };
+        // The brief, which a row's line may show, changed again.
         if written {
-            let _ = app.emit("sessions", sessions(app.state(), app.state()));
-        }
-        if written && card {
-            tell(&app, "New card", &session.agent.id, agent.as_deref());
+            sent();
         }
     };
     let queue = queues.entry(id).or_insert_with(|| {

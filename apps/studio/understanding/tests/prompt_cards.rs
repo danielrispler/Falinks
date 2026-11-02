@@ -29,6 +29,10 @@ struct Recording {
     updates: RefCell<Vec<(String, String)>>,
     /// The change each "explain more" read.
     mores: RefCell<Vec<String>>,
+    /// The subagents whose cards get an empty summary.
+    blank: RefCell<Vec<String>>,
+    /// Each "New card" notice the shell sent and each rewrite, in turn.
+    sent: RefCell<Vec<&'static str>>,
 }
 
 impl CardWriter for Recording {
@@ -39,7 +43,14 @@ impl CardWriter for Recording {
         brief: &str,
     ) -> Result<String, String> {
         self.cards.borrow_mut().push((earlier.into(), brief.into()));
-        FakeWriter.reply(request, earlier, brief)
+        let reply = FakeWriter.reply(request, earlier, brief)?;
+        let agent = request.agent.as_ref();
+        if !self.blank.borrow().iter().any(|a| agent == Some(a)) {
+            return Ok(reply);
+        }
+        let mut card: Value = serde_json::from_str(&reply).unwrap();
+        card["summary"] = "".into();
+        Ok(card.to_string())
     }
 
     fn more(&self, request: &CardRequest, card: &Card) -> Result<String, String> {
@@ -53,6 +64,7 @@ impl CardWriter for Recording {
         summaries: &[String],
         diffstat: &str,
     ) -> Result<String, String> {
+        self.sent.borrow_mut().push("rewrite");
         let read = prompts.iter().map(|p| p.to_string()).collect();
         self.rewrites
             .borrow_mut()
@@ -141,7 +153,9 @@ impl Shell {
         let log = |line| panic!("{line}");
         match output {
             Output::Card(request) => {
-                assert!(write_stop(&self.store, &self.writer, request, session, log))
+                let notice = || self.writer.sent.borrow_mut().push("notice");
+                let written = write_stop(&self.store, &self.writer, request, session, notice, log);
+                assert!(written)
             }
             Output::Brief(request) => {
                 assert!(write_brief(
@@ -331,6 +345,30 @@ fn a_parent_that_changed_nothing_itself_gets_one_card_from_its_workers_summaries
     // "Explain more" reads the workers' text the stored card keeps.
     explain_more(&shell.store, &shell.writer, &id, |line| panic!("{line}")).unwrap();
     assert_eq!(*shell.writer.mores.borrow(), [read]);
+}
+
+#[test]
+fn a_worker_card_with_an_empty_summary_is_left_out_of_its_parents_input() {
+    let mut shell = Shell::new();
+    shell.writer.blank.borrow_mut().push("w2".into());
+    shell.take(
+        "UserPromptSubmit",
+        json!({ "prompt": "Implement #378 and #379" }),
+    );
+    worker_writes_and_ends(&mut shell);
+    shell.take("PostToolUse", spawn_child("w2", "Implement #379", true));
+    let tree = shell.worktree("w2");
+    shell.child("w2", &tree, "SubagentStart", json!({}));
+    fs::write(tree.join("b.rs"), "fn b1() {}\n").unwrap();
+    shell.child("w2", &tree, "SubagentStop", json!({}));
+    shell.take("Stop", json!({}));
+
+    let store = shell.store.lock().unwrap();
+    let parent = &store.cards().last().unwrap().request;
+    assert_eq!(parent.workers.len(), 2, "{parent:?}");
+    let read = parent.diff();
+    assert!(read.contains("`Implement #378`"), "{read}");
+    assert!(!read.contains("`Implement #379`"), "{read}");
 }
 
 #[test]
@@ -585,6 +623,25 @@ fn the_5th_update_rewrites_the_brief_from_daniels_prompts_the_summaries_and_the_
     let brief = store.brief("s1").unwrap();
     assert!(brief.text.contains("שנכתב מחדש"), "{}", brief.text);
     assert_eq!(brief.updates, 5);
+}
+
+#[test]
+fn the_new_card_notice_goes_out_before_the_rewrite_starts() {
+    let mut shell = Shell::new();
+    for (prompt, path) in [
+        ("Add a", "a.rs"),
+        ("Add b", "b.rs"),
+        ("Add c", "c.rs"),
+        ("Add d", "d.rs"),
+        ("Add e", "e.rs"),
+    ] {
+        shell.prompt(prompt, path);
+    }
+
+    assert_eq!(
+        *shell.writer.sent.borrow(),
+        ["notice", "notice", "notice", "notice", "notice", "rewrite"]
+    );
 }
 
 #[test]

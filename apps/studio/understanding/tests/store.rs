@@ -27,9 +27,14 @@ fn edit(id: &str, path: &str) -> CardRequest {
 
 /// The fake writer's card on `request`, whose quiz's key is its first option of three.
 fn card(request: &CardRequest) -> Card {
-    write_card(&FakeWriter, request, &[], "", |line| panic!("{line}"))
+    let mut card = write_card(&FakeWriter, request, &[], "", |line| panic!("{line}"))
         .unwrap()
-        .0
+        .0;
+    // The app shuffled the options; put the key back first.
+    let quiz = card.quiz.as_mut().unwrap();
+    quiz.options.swap(0, quiz.key);
+    quiz.key = 0;
+    card
 }
 
 /// A store at `path` with a card on `src/lib.rs` and one on `README.md`.
