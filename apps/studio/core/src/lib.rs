@@ -31,17 +31,12 @@ pub struct Selection<'a> {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Session {
-    pub id: String,
+    /// Its own agent: the session id, last step, first and latest events, and worktree since.
+    #[serde(flatten)]
+    pub agent: Agent,
     /// The folder the session works in, from its latest event.
     pub cwd: String,
-    pub last_step: Option<Step>,
     pub state: State,
-    /// When the hook received its first and its latest event (`studio_received_ms`), in Unix
-    /// milliseconds.
-    #[serde(skip)]
-    started_at: u64,
-    #[serde(skip)]
-    last_event_at: u64,
     /// The checks that ran, oldest first: pass or fail lines in the session's timeline (#369,
     /// decision 14).
     pub checks: Vec<CheckLine>,
@@ -79,8 +74,6 @@ pub struct Session {
     /// Whether its turn was opened by a wake-up and has had no prompt of Daniel's since.
     #[serde(skip)]
     woken: bool,
-    #[serde(skip)]
-    since: Since,
 }
 
 /// What happened in a worktree since the last card on it: a session's own, or a subagent's that
@@ -163,8 +156,9 @@ pub enum Answer {
 /// A subagent of a session (#369, decisions 5, 6 and 8).
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Subagent {
-    /// Its `agent_id`.
-    pub id: String,
+    /// Its `agent_id`, last step, first and latest events, and worktree since.
+    #[serde(flatten)]
+    pub agent: Agent,
     pub parent: Parent,
     pub kind: Kind,
     /// Its spawn's description and its type, such as `Explore`.
@@ -174,24 +168,71 @@ pub struct Subagent {
     /// `completed` when only its `SubagentStop`, its spawn's response or its session's `Stop` says it
     /// ended.
     pub status: Status,
-    /// When its first event and its end were received, in Unix milliseconds.
-    pub started_at: u64,
+    /// When its end was received, in Unix milliseconds.
     pub ended_at: Option<u64>,
-    pub last_step: Option<Step>,
     /// The first line of its last message, from its `SubagentStop`.
     pub result: Option<String>,
     /// Daniel opened its line.
     pub opened: bool,
-    #[serde(skip)]
-    last_event_at: u64,
     /// The folder of its first event that has one: its worktree, or its parent's folder.
     #[serde(skip)]
     pub folder: Option<String>,
     /// What its spawn asked it to do, which its brief's rewrite reads; the pane never shows it.
     #[serde(skip)]
     pub prompt: String,
+}
+
+/// The state a session's own agent and each subagent share (#410, decision 22). Its id is the owner
+/// key of its card stream.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Agent {
+    pub id: String,
+    pub last_step: Option<Step>,
+    /// When the hook received its first and its latest event (`studio_received_ms`), in Unix
+    /// milliseconds.
+    pub started_at: u64,
+    #[serde(skip)]
+    last_event_at: u64,
     #[serde(skip)]
     since: Since,
+}
+
+impl Agent {
+    fn new(id: &str, at: u64) -> Self {
+        Agent {
+            id: id.into(),
+            started_at: at,
+            last_event_at: at,
+            ..Agent::default()
+        }
+    }
+}
+
+// Both read their shared fields as their own: `session.last_step`, `subagent.id`.
+impl std::ops::Deref for Session {
+    type Target = Agent;
+    fn deref(&self) -> &Agent {
+        &self.agent
+    }
+}
+
+impl std::ops::DerefMut for Session {
+    fn deref_mut(&mut self) -> &mut Agent {
+        &mut self.agent
+    }
+}
+
+impl std::ops::Deref for Subagent {
+    type Target = Agent;
+    fn deref(&self) -> &Agent {
+        &self.agent
+    }
+}
+
+impl std::ops::DerefMut for Subagent {
+    fn deref_mut(&mut self) -> &mut Agent {
+        &mut self.agent
+    }
 }
 
 impl Subagent {
@@ -307,10 +348,8 @@ impl Session {
             Some(index) => index,
             None => {
                 self.agents.push(Subagent {
-                    id: id.into(),
+                    agent: Agent::new(id, at),
                     status: Status::Running,
-                    started_at: at,
-                    last_event_at: at,
                     ..Subagent::default()
                 });
                 self.agents.len() - 1
@@ -442,18 +481,19 @@ impl Session {
         unrecognised.map_or(Sender::Daniel, Sender::Unrecognised)
     }
 
-    /// The subagent whose cards cover subagent `id`'s changes in `folder`: `id` itself when its parent
-    /// works in another folder, else its parent's; `None` for the session's own agent's cards.
-    fn owner(&self, id: &str, folder: &str) -> Option<String> {
+    /// The owner key of the cards that cover subagent `id`'s changes in `folder`: `id` itself when its
+    /// parent works in another folder, else its parent's, up to the session's own agent's id.
+    fn owner(&self, id: &str, folder: &str) -> String {
         let find = |id: &str| self.subagent(id);
         match find(id).map(|a| &a.parent) {
             Some(Parent::Agent(parent)) => {
                 if find(parent).and_then(|a| a.folder.as_deref()) != Some(folder) {
-                    return Some(id.into());
+                    return id.into();
                 }
                 self.owner(parent, folder)
             }
-            _ => (folder != self.cwd).then(|| id.into()),
+            _ if folder != self.cwd => id.into(),
+            _ => self.id.clone(),
         }
     }
 
@@ -461,41 +501,44 @@ impl Session {
     fn has_cards(&self, id: &str) -> bool {
         self.subagent(id).is_some_and(|a| {
             let folder = a.folder.as_deref().unwrap_or_default();
-            a.kind == Kind::Worker && self.owner(id, folder).as_deref() == Some(id)
+            a.kind == Kind::Worker && self.owner(id, folder) == id
         })
     }
 
-    /// What happened in the worktree of `owner`, a subagent, or else the session's own agent, since
-    /// its last card.
-    fn since(&mut self, owner: Option<&str>) -> &mut Since {
-        match owner.and_then(|id| self.agents.iter_mut().find(|a| a.id == id)) {
-            Some(agent) => &mut agent.since,
-            None => &mut self.since,
+    /// The agent record of owner key `key`: subagent `key`'s, or else the session's own.
+    fn record(&self, key: &str) -> &Agent {
+        self.subagent(key).map_or(&self.agent, |a| &a.agent)
+    }
+
+    fn record_mut(&mut self, key: &str) -> &mut Agent {
+        match self.agents.iter().position(|a| a.id == key) {
+            Some(index) => &mut self.agents[index].agent,
+            None => &mut self.agent,
         }
     }
 
     /// The card on `owner`'s change since its last card, as `Since` says, which starts the next one
     /// at `at`: `change`, or else its workers' cards.
-    fn card(&mut self, owner: Option<&str>, change: Option<Change>, at: u64) -> CardRequest {
+    fn card(&mut self, owner: &str, change: Option<Change>, at: u64) -> CardRequest {
         // A worker's cards belong to its task, and a session's to Daniel's latest prompt.
-        let prompt = match owner {
-            Some(id) => self.subagent(id).map(|a| a.started_at),
-            None => self
-                .prompts
-                .iter()
-                .rfind(|p| p.sender.is_daniels())
-                .map(|p| p.at),
+        let worker = owner != self.id;
+        let prompt = if worker {
+            self.subagent(owner).map(|a| a.started_at)
+        } else {
+            let daniels = self.prompts.iter().rfind(|p| p.sender.is_daniels());
+            daniels.map(|p| p.at)
         };
-        let since = std::mem::take(self.since(owner));
-        self.since(owner).at = at;
+        let record = self.record_mut(owner);
+        let since = std::mem::take(&mut record.since);
+        record.since.at = at;
         let (base, change) = change.map_or_default(|c| (c.base, Some(c.diff)));
         CardRequest {
             session_id: self.id.clone(),
-            id: card_id(owner.unwrap_or(&self.id), at),
+            id: card_id(owner, at),
             base,
             change,
             prompt,
-            agent: owner.map(Into::into),
+            agent: worker.then(|| owner.into()),
             changed_by: since.by,
             workers: since.cards,
         }
@@ -999,16 +1042,14 @@ impl Studio {
         }
         let bash = step && bash;
         let owner = session.owner(id, folder);
-        let owner = owner.and_then(|o| session.subagent(&o));
-        match owner {
-            Some(own)
-                if &own.id == id && worker(own) && (name == "SubagentStop" || due(&own.since)) =>
-            {
+        let since = &session.record(&owner).since;
+        match session.subagent(&owner) {
+            Some(own) if &own.id == id && worker(own) && (name == "SubagentStop" || due(since)) => {
                 look(id, folder, Keep::Always)
             }
             Some(own) if &own.id == id => look(id, folder, Keep::OnCommit).filter(|_| bash),
             // It works in the worktree of a worker above it, or of its session.
-            Some(above) if worker(above) && due(&above.since) => {
+            Some(above) if worker(above) && due(since) => {
                 look(&above.id, above.folder.as_deref()?, Keep::Always)
             }
             None if session_due(session) => look(&session.id, &session.cwd, Keep::Always),
@@ -1058,14 +1099,13 @@ impl Studio {
         let session = self
             .sessions
             .entry(event.session_id.clone())
-            .or_insert_with(|| Session {
-                id: event.session_id.clone(),
-                started_at: event.studio_received_ms,
-                since: Since {
-                    at: event.studio_received_ms,
-                    ..Since::default()
-                },
-                ..Session::default()
+            .or_insert_with(|| {
+                let mut agent = Agent::new(&event.session_id, event.studio_received_ms);
+                agent.since.at = event.studio_received_ms;
+                Session {
+                    agent,
+                    ..Session::default()
+                }
             });
         // The hooks are async, so the latest event can land before an earlier one.
         session.last_event_at = session.last_event_at.max(event.studio_received_ms);
@@ -1100,8 +1140,8 @@ impl Studio {
             let folder = session.subagent(agent);
             let folder = folder.and_then(|a| a.folder.clone()).unwrap_or_default();
             let owner = session.owner(agent, &folder);
-            if owner.as_ref() != Some(agent) {
-                let by = &mut session.since(owner.as_deref()).by;
+            if owner != *agent {
+                let by = &mut session.record_mut(&owner).since.by;
                 by.entry(agent.clone())
                     .or_default()
                     .insert(relative(path, &folder).into());
@@ -1119,10 +1159,10 @@ impl Studio {
             else {
                 continue;
             };
-            let owner = (look.key != session.id).then_some(look.key.as_str());
-            if owner.is_none_or(|id| session.has_cards(id)) {
-                let request = session.card(owner, Some(found), at);
-                if owner.is_some() {
+            let worker = look.key != session.id;
+            if !worker || session.has_cards(&look.key) {
+                let request = session.card(&look.key, Some(found), at);
+                if worker {
                     session.since.cards.push(request.id.clone());
                 }
                 outputs.push(Output::Card(request));
@@ -1177,11 +1217,17 @@ impl Studio {
                 // brief when a wake-up opened the turn.
                 let workers = !session.since.cards.is_empty();
                 let output = match changes.remove(&session.id) {
-                    Some(change) => Some(Output::Card(session.card(None, Some(change), at))),
+                    Some(change) => Some(Output::Card(session.card(
+                        &event.session_id,
+                        Some(change),
+                        at,
+                    ))),
                     None if workers && session.woken => {
-                        Some(Output::Brief(session.card(None, None, at)))
+                        Some(Output::Brief(session.card(&event.session_id, None, at)))
                     }
-                    None if workers => Some(Output::Card(session.card(None, None, at))),
+                    None if workers => {
+                        Some(Output::Card(session.card(&event.session_id, None, at)))
+                    }
                     None => None,
                 };
                 session.since.by.clear();
