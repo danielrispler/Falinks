@@ -1,6 +1,7 @@
 //! Host-launched helpers run by Claude Code outside the worker sandbox: the `falinks`
 //! stdio MCP server and the `PreToolUse` identity hook. Both forward to the trusted host
 //! over its controller socket; neither touches the workspace itself.
+use falinks_claude::refuse;
 use falinks_host::{Result, require};
 use serde_json::{Value, json};
 use std::{
@@ -59,7 +60,7 @@ fn mcp(controller: &Path) -> Result<()> {
                     json!({"kind":"call","session":session,"tool_use_id":params["_meta"]["claudecode/toolUseId"],
                         "tool":params["name"],"arguments":params["arguments"]}),
                 )
-                .unwrap_or_else(|error| json!({"accepted":false,"reason":error.to_string()}));
+                .unwrap_or_else(|error| refuse(&error.to_string()));
                 json!({"result":{"content":[{"type":"text","text":result.to_string()}],
                     "isError":result["accepted"] != true}})
             }

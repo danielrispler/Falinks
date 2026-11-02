@@ -591,6 +591,65 @@ fn the_launch_tool_profile_sets_init_and_registered_operations() {
     );
 }
 
+/// The two-agent launch exposes only the agent's own live root: its own scratch and
+/// controller, the shared worker tools, and the base protections plus the peer's controller
+/// and every other space.
+#[test]
+fn a_pair_launch_exposes_only_the_agents_own_live_root() {
+    let run = Path::new("/runs/r");
+    let tools = json!([{"name":"falinks_capture"}]);
+    let launch = Launch::pair(
+        run,
+        0,
+        run.join("space1"),
+        tools.clone(),
+        vec![run.join("state")],
+    );
+    assert_eq!(launch.source, run.join("space1"));
+    assert_eq!(launch.scratch, run.join("agent-0/scratch"));
+    assert_eq!(launch.controller, run.join("agent-0/controller"));
+    assert_eq!(launch.worker_tools, run.join("worker-tools"));
+    assert_eq!(launch.tools, tools);
+    assert_eq!(
+        launch.protected,
+        [
+            run.join("state"),
+            run.join("agent-1/controller"),
+            run.join("space0")
+        ]
+    );
+}
+
+/// A session bound in one live root resumes in another only after the launch's tool-less
+/// relocation, as after an applied regrouping.
+#[test]
+fn a_moved_agent_resumes_only_after_relocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = dir.path().canonicalize().unwrap();
+    for path in ["space0", "space1", "agent-1/controller"] {
+        std::fs::create_dir_all(run.join(path)).unwrap();
+    }
+    let engine = || -> falinks_host::Engine { Box::new(|_: &Value| Ok(Default::default())) };
+    let launch = |space: &str| Launch::pair(&run, 1, run.join(space), json!([]), vec![]);
+    Session::new(
+        &launch("space0"),
+        "agent-1",
+        SESSION,
+        TOKEN,
+        engine(),
+        false,
+    )
+    .unwrap();
+    let moved = launch("space1");
+    let refused = Session::new(&moved, "agent-1", SESSION, TOKEN, engine(), true)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refused.contains("workspace mismatch"), "{refused}");
+    moved.relocate(SESSION, "agent-1").unwrap();
+    Session::new(&moved, "agent-1", SESSION, TOKEN, engine(), true).unwrap();
+}
+
 #[test]
 fn queued_messages_merged_into_one_presentation_each_count_as_presented() {
     let mut f = fixture();
