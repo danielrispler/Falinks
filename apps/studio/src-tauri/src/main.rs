@@ -379,7 +379,7 @@ fn write(
             let _ = app.emit("sessions", sessions(app.state(), app.state()));
         }
         if written && card {
-            tell(&app, "New card", &session.id, agent.as_deref());
+            tell(&app, "New card", &session.agent.id, agent.as_deref());
         }
     };
     let queue = queues.entry(id).or_insert_with(|| {

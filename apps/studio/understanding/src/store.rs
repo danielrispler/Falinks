@@ -197,7 +197,7 @@ impl CardStore {
     /// Daniel, who asks and for how long; once its turn is over, the stopped line; after a wake-up
     /// with no step since, which worker returned; else its last step, else "No step yet".
     pub fn line(&self, session: &Session, now: u64) -> String {
-        let step = match &session.last_step {
+        let step = match &session.agent.last_step {
             Some(Step {
                 tool,
                 detail: Some(detail),
@@ -239,7 +239,9 @@ impl CardStore {
             .iter()
             .find(|kept| kept.request.id == stopped.card);
         let summary = card.map(|kept| kept.card.summary.clone());
-        let brief = self.brief(&session.id).and_then(|b| b.text.lines().last());
+        let brief = self
+            .brief(&session.agent.id)
+            .and_then(|b| b.text.lines().last());
         let pending = stopped.requested.then(|| stopped.message.clone()).flatten();
         let latest = pending.or(brief.map(Into::into));
         summary

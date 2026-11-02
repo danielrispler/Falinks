@@ -214,33 +214,6 @@ impl Agent {
     }
 }
 
-// Both read their shared fields as their own: `session.last_step`, `subagent.id`.
-impl std::ops::Deref for Session {
-    type Target = Agent;
-    fn deref(&self) -> &Agent {
-        &self.agent
-    }
-}
-
-impl std::ops::DerefMut for Session {
-    fn deref_mut(&mut self) -> &mut Agent {
-        &mut self.agent
-    }
-}
-
-impl std::ops::Deref for Subagent {
-    type Target = Agent;
-    fn deref(&self) -> &Agent {
-        &self.agent
-    }
-}
-
-impl std::ops::DerefMut for Subagent {
-    fn deref_mut(&mut self) -> &mut Agent {
-        &mut self.agent
-    }
-}
-
 impl Subagent {
     /// Ends it at `at`, with its wake-up's `status`, or with none from any other signal. A wake-up's
     /// status overrides the others.
@@ -345,12 +318,12 @@ pub enum Kind {
 impl Session {
     /// Its subagent `id`, at any depth.
     pub fn subagent(&self, id: &str) -> Option<&Subagent> {
-        self.agents.iter().find(|a| a.id == id)
+        self.agents.iter().find(|a| a.agent.id == id)
     }
 
     /// Subagent `id`, added in "unattached" when this is the first event that names it.
     fn agent(&mut self, id: &str, at: u64) -> &mut Subagent {
-        let index = match self.agents.iter().position(|a| a.id == id) {
+        let index = match self.agents.iter().position(|a| a.agent.id == id) {
             Some(index) => index,
             None => {
                 self.agents.push(Subagent {
@@ -372,21 +345,21 @@ impl Session {
         let tool = event.tool_name.as_deref().unwrap_or_default();
         if let Some(id) = &event.agent_id {
             let agent = self.agent(id, at);
-            agent.last_event_at = agent.last_event_at.max(at);
+            agent.agent.last_event_at = agent.agent.last_event_at.max(at);
             if agent.agent_type.is_none() {
                 agent.agent_type.clone_from(&event.agent_type);
             }
             // Its first folder is its first base (`Studio::look`).
             if agent.folder.is_none() && !event.cwd.is_empty() {
                 agent.folder = Some(event.cwd.clone());
-                agent.since.at = at;
+                agent.agent.since.at = at;
             }
             // A changed file promotes a helper at that step.
             let changed = matches!(tool, "Edit" | "Write") || (tool == "Bash" && worktree_changed);
             match event.hook_event_name.as_str() {
                 // A step after its end means its parent continued it (`SendMessage`).
                 "PreToolUse" => {
-                    agent.last_step = Some(Step {
+                    agent.agent.last_step = Some(Step {
                         tool: tool.into(),
                         detail: step_detail(&event.tool_input, &event.cwd),
                     });
@@ -438,7 +411,7 @@ impl Session {
             // A wake-up names the task it reports on, and how it ended (#370 note).
             "UserPromptSubmit" => {
                 for (id, status) in reported(&event.prompt) {
-                    if let Some(agent) = self.agents.iter_mut().find(|a| a.id == id) {
+                    if let Some(agent) = self.agents.iter_mut().find(|a| a.agent.id == id) {
                         agent.end(Some(status), at);
                     }
                 }
@@ -453,10 +426,12 @@ impl Session {
             {
                 let listed = |id: &str| tasks.iter().any(|task| task["id"] == id);
                 let ended = self.agents.iter_mut().filter(|a| {
-                    a.parent == Parent::Session && a.status == Status::Running && !listed(&a.id)
+                    a.parent == Parent::Session
+                        && a.status == Status::Running
+                        && !listed(&a.agent.id)
                 });
                 for agent in ended {
-                    agent.end(None, agent.last_event_at);
+                    agent.end(None, agent.agent.last_event_at);
                 }
             }
             _ => {}
@@ -464,7 +439,9 @@ impl Session {
         // A subagent that ended waits on nobody.
         let agents = &self.agents;
         let ended = |call: &Call| {
-            let agent = agents.iter().find(|a| Some(&a.id) == call.agent.as_ref());
+            let agent = agents
+                .iter()
+                .find(|a| Some(&a.agent.id) == call.agent.as_ref());
             agent.is_some_and(|a| a.ended_at.is_some())
         };
         self.blocks.retain(|call| !ended(call));
@@ -475,7 +452,7 @@ impl Session {
     /// knows: `<agent-message from="…">` or `<task-id>…</task-id>`. A known id in other markup is
     /// drift, and one in plain text is Daniel's.
     fn sender(&self, prompt: &str) -> Sender {
-        let known = self.agents.iter().map(|a| &a.id).chain(&self.tasks);
+        let known = self.agents.iter().map(|a| &a.agent.id).chain(&self.tasks);
         let mut unrecognised = None;
         for id in known {
             if prompt.contains(&format!("<agent-message from=\"{id}\""))
@@ -502,7 +479,7 @@ impl Session {
                 self.owner(parent, folder)
             }
             _ if folder != self.cwd => id.into(),
-            _ => self.id.clone(),
+            _ => self.agent.id.clone(),
         }
     }
 
@@ -520,7 +497,7 @@ impl Session {
     }
 
     fn record_mut(&mut self, key: &str) -> &mut Agent {
-        match self.agents.iter().position(|a| a.id == key) {
+        match self.agents.iter().position(|a| a.agent.id == key) {
             Some(index) => &mut self.agents[index].agent,
             None => &mut self.agent,
         }
@@ -530,9 +507,9 @@ impl Session {
     /// at `at`: `change`, or else its workers' cards.
     fn card(&mut self, owner: &str, change: Option<Change>, at: u64) -> CardRequest {
         // A worker's cards belong to its task, and a session's to Daniel's latest prompt.
-        let worker = owner != self.id;
+        let worker = owner != self.agent.id;
         let prompt = if worker {
-            self.subagent(owner).map(|a| a.started_at)
+            self.subagent(owner).map(|a| a.agent.started_at)
         } else {
             let daniels = self.prompts.iter().rfind(|p| p.sender.is_daniels());
             daniels.map(|p| p.at)
@@ -542,7 +519,7 @@ impl Session {
         record.since.at = at;
         let (base, change) = change.map_or_default(|c| (c.base, Some(c.diff)));
         CardRequest {
-            session_id: self.id.clone(),
+            session_id: self.agent.id.clone(),
             id: card_id(owner, at),
             base,
             change,
@@ -567,7 +544,7 @@ impl Session {
         self.agents
             .iter()
             .filter(|a| a.kind == Kind::Worker && a.failed())
-            .map(|a| a.id.clone())
+            .map(|a| a.agent.id.clone())
             .collect()
     }
 
@@ -1031,7 +1008,7 @@ impl Studio {
         let due = |since: &Since| step && event.studio_received_ms >= since.at + FALLBACK_MS;
         let session = self.sessions.get(&event.session_id);
         // A session's own fallback is on a prompt's steps only, not between its turns.
-        let session_due = |s: &Session| s.in_turn() && due(&s.since);
+        let session_due = |s: &Session| s.in_turn() && due(&s.agent.since);
         let look = |key: &str, folder: &str, purpose| {
             let look = Fingerprint {
                 key: key.into(),
@@ -1064,18 +1041,20 @@ impl Studio {
         let owner = session.owner(id, folder);
         let since = &session.record(&owner).since;
         match session.subagent(&owner) {
-            Some(own) if &own.id == id && worker(own) && name == "SubagentStop" => {
+            Some(own) if &own.agent.id == id && worker(own) && name == "SubagentStop" => {
                 look(id, folder, Purpose::Card)
             }
-            Some(own) if &own.id == id && worker(own) && due(since) => {
+            Some(own) if &own.agent.id == id && worker(own) && due(since) => {
                 look(id, folder, Purpose::Fallback)
             }
-            Some(own) if &own.id == id => look(id, folder, Purpose::Commit).filter(|_| bash),
+            Some(own) if &own.agent.id == id => look(id, folder, Purpose::Commit).filter(|_| bash),
             // It works in the worktree of a worker above it, or of its session.
             Some(above) if worker(above) && due(since) => {
-                look(&above.id, above.folder.as_deref()?, Purpose::Fallback)
+                look(&above.agent.id, above.folder.as_deref()?, Purpose::Fallback)
             }
-            None if session_due(session) => look(&session.id, &session.cwd, Purpose::Fallback),
+            None if session_due(session) => {
+                look(&session.agent.id, &session.cwd, Purpose::Fallback)
+            }
             _ => look(id, folder, Purpose::Commit)
                 .filter(|_| bash && agent.is_some_and(|a| !worker(a))),
         }
@@ -1088,9 +1067,9 @@ impl Studio {
         let waiting = self.sessions.values().filter(|s| s.in_turn());
         let agents = self.sessions.values().flat_map(|s| &s.agents);
         let running = agents.filter(|a| a.status == Status::Running);
-        let running = running.filter_map(|a| Some((a.id.as_str(), a.folder.as_deref()?)));
+        let running = running.filter_map(|a| Some((a.agent.id.as_str(), a.folder.as_deref()?)));
         let folders = waiting
-            .map(|s| (s.id.as_str(), s.cwd.as_str()))
+            .map(|s| (s.agent.id.as_str(), s.cwd.as_str()))
             .chain(running);
         let print = |(key, folder): (&str, &str)| Fingerprint {
             key: key.into(),
@@ -1131,7 +1110,7 @@ impl Studio {
                 }
             });
         // The hooks are async, so the latest event can land before an earlier one.
-        session.last_event_at = session.last_event_at.max(event.studio_received_ms);
+        session.agent.last_event_at = session.agent.last_event_at.max(event.studio_received_ms);
         let failed_before = session.failed_workers();
         let its_own = |id: &String| changes.contains_key(id);
         session.track_agents(&event, event.agent_id.as_ref().is_some_and(its_own));
@@ -1188,11 +1167,11 @@ impl Studio {
                 }
                 continue;
             };
-            let worker = look.key != session.id;
+            let worker = look.key != session.agent.id;
             if !worker || session.has_cards(&look.key) {
                 let request = session.card(&look.key, Some(found), at);
                 if worker {
-                    session.since.cards.push(request.id.clone());
+                    session.agent.since.cards.push(request.id.clone());
                 }
                 outputs.push(Output::Card(request));
             }
@@ -1206,10 +1185,10 @@ impl Studio {
                 // A base for the prompt: what Daniel changed himself before it is no one's.
                 if looks
                     .iter()
-                    .any(|look| look.purpose == Purpose::Base && look.key == session.id)
+                    .any(|look| look.purpose == Purpose::Base && look.key == session.agent.id)
                 {
-                    session.since.at = at;
-                    session.since.by.clear();
+                    session.agent.since.at = at;
+                    session.agent.since.by.clear();
                 }
                 match &sender {
                     // The row says which worker returned until the session's next step.
@@ -1252,8 +1231,8 @@ impl Studio {
                 }
                 // Its own change, else its workers' cards since its last card: a card, or only its
                 // brief when a wake-up opened the turn.
-                let workers = !session.since.cards.is_empty();
-                let output = match changes.remove(&session.id) {
+                let workers = !session.agent.since.cards.is_empty();
+                let output = match changes.remove(&session.agent.id) {
                     Some(change) => Some(Output::Card(session.card(
                         &event.session_id,
                         Some(change),
@@ -1267,7 +1246,7 @@ impl Studio {
                     }
                     None => None,
                 };
-                session.since.by.clear();
+                session.agent.since.by.clear();
                 let mut lines = event.last_assistant_message.lines().map(str::trim);
                 session.stopped = Some(Stopped {
                     card: card_id(&event.session_id, at),
@@ -1292,7 +1271,7 @@ impl Studio {
             "PreToolUse" => {
                 if own {
                     session.returned = None;
-                    session.last_step = Some(Step {
+                    session.agent.last_step = Some(Step {
                         tool: tool.clone(),
                         detail: step_detail(&event.tool_input, &event.cwd),
                     });
@@ -1424,7 +1403,7 @@ impl Studio {
         let mut changed = false;
         for session in self.sessions.values_mut() {
             if session.state == State::YourTurn
-                && now.saturating_sub(session.last_event_at) >= IDLE_AFTER_MS
+                && now.saturating_sub(session.agent.last_event_at) >= IDLE_AFTER_MS
             {
                 session.state = State::Idle;
                 changed = true;
@@ -1437,7 +1416,7 @@ impl Studio {
     /// fingerprint records and writer queues of every other key (#410, decision 18).
     pub fn live_keys(&self) -> std::collections::HashSet<String> {
         let live = self.sessions.values().filter(|s| !s.ended);
-        live.flat_map(|s| std::iter::once(&s.id).chain(s.agents.iter().map(|a| &a.id)))
+        live.flat_map(|s| std::iter::once(&s.agent.id).chain(s.agents.iter().map(|a| &a.agent.id)))
             .cloned()
             .collect()
     }
@@ -1454,7 +1433,7 @@ impl Studio {
     /// The session list: every session, grouped in `State` order, the newest first in each group.
     pub fn sessions(&self) -> Vec<&Session> {
         let mut sessions: Vec<&Session> = self.sessions.values().collect();
-        sessions.sort_by_key(|s| (s.state, Reverse(s.started_at), &s.id));
+        sessions.sort_by_key(|s| (s.state, Reverse(s.agent.started_at), &s.agent.id));
         sessions
     }
 
@@ -1469,7 +1448,7 @@ impl Studio {
     pub fn open(&mut self, id: &str) {
         self.viewed = Some(id.into());
         let agents = self.sessions.values_mut().flat_map(|s| &mut s.agents);
-        for agent in agents.filter(|a| a.id == id) {
+        for agent in agents.filter(|a| a.agent.id == id) {
             agent.opened = true;
         }
     }

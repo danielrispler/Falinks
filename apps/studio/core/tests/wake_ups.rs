@@ -61,7 +61,7 @@ fn new_senders(studio: &Studio) -> Vec<&Sender> {
 fn a_wake_up_is_the_rows_text_until_the_sessions_next_step() {
     let mut studio = replay(DAY);
     let session = |studio: &Studio| studio.session(IMPLEMENT_SPEC).unwrap().clone();
-    let before = session(&studio).last_step.clone();
+    let before = session(&studio).agent.last_step.clone();
     assert!(before.is_some());
 
     studio.apply(&prompt(
@@ -70,7 +70,7 @@ fn a_wake_up_is_the_rows_text_until_the_sessions_next_step() {
 
     // The row reads "worker Implement #355 relocation returned", and the last step stays true.
     let woken = session(&studio);
-    assert_eq!(woken.last_step, before);
+    assert_eq!(woken.agent.last_step, before);
     assert_eq!(
         woken.returned.as_deref(),
         Some("worker Implement #355 relocation returned")
@@ -85,7 +85,7 @@ fn a_wake_up_is_the_rows_text_until_the_sessions_next_step() {
     });
     studio.apply(&step.to_string());
     let stepped = session(&studio);
-    assert_ne!(stepped.last_step, before);
+    assert_ne!(stepped.agent.last_step, before);
     assert_eq!(stepped.returned, None);
 }
 

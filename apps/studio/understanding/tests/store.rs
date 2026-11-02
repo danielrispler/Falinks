@@ -449,14 +449,18 @@ fn every_session_of_the_day_shows_all_of_its_cards_whichever_was_prompted_last()
             }
         }
     }
-    let sessions: Vec<String> = studio.sessions().iter().map(|s| s.id.clone()).collect();
+    let sessions: Vec<String> = studio
+        .sessions()
+        .iter()
+        .map(|s| s.agent.id.clone())
+        .collect();
 
     let shown: Vec<(&str, usize)> = sessions
         .iter()
         .map(|id| {
             studio.select(id);
             let selected = studio.selected().unwrap();
-            let cards = store.session_cards(&selected.id, studio.now());
+            let cards = store.session_cards(&selected.agent.id, studio.now());
             (&id[..8], cards.recent.len() + cards.older.len())
         })
         .collect();

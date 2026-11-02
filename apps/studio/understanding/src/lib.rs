@@ -212,7 +212,7 @@ pub fn write_brief(
 ) -> bool {
     let (brief, workers) = {
         let store = store.lock().unwrap();
-        let brief = store.brief(&session.id).cloned().unwrap_or_default();
+        let brief = store.brief(&session.agent.id).cloned().unwrap_or_default();
         (brief, workers(&store, &request, session))
     };
     let reply = workers
@@ -252,7 +252,9 @@ fn workers(store: &CardStore, request: &CardRequest, session: &Session) -> Optio
         return None;
     }
     let lines = session.agents.iter().filter_map(|agent| {
-        let of = cards.iter().filter(|kept| kept.request.owner() == agent.id);
+        let of = cards
+            .iter()
+            .filter(|kept| kept.request.owner() == agent.agent.id);
         let summaries: Vec<&str> = of.map(|kept| kept.card.summary.as_str()).collect();
         let running = agent.status == Status::Running && agent.kind == Kind::Worker;
         let name = &agent.name;
@@ -288,7 +290,7 @@ fn rebrief(
     if (updates + 1).is_multiple_of(REWRITE_EVERY) {
         let read = |kept: &&StoredCard| match agent {
             Some(_) => kept.request.agent.as_deref() == agent,
-            None => kept.request.session_id == session.id,
+            None => kept.request.session_id == session.agent.id,
         };
         let (summaries, since) = {
             let store = store.lock().unwrap();
