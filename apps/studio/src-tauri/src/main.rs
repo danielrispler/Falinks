@@ -66,16 +66,80 @@ fn selected(studio: State<Mutex<Studio>>) -> Option<Session> {
 }
 
 /// The brief and cards of the selected session, or of the worker of it Daniel opened, split at the
-/// latest tick.
+/// latest tick, without each card's diff and base, which the pane never reads.
 #[tauri::command]
-fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> SessionCards {
+fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> serde_json::Value {
     let (viewed, now) = {
         let studio = studio.lock().unwrap();
         (studio.viewed().map(String::from), studio.now())
     };
-    match viewed {
+    let shown = match viewed {
         Some(owner) => cards.lock().unwrap().session_cards(&owner, now),
         None => SessionCards::default(),
+    };
+    let mut shown = serde_json::to_value(shown).expect("cards serialize");
+    for group in ["recent", "older"] {
+        for kept in shown[group].as_array_mut().into_iter().flatten() {
+            if let Some(request) = kept["request"].as_object_mut() {
+                request.remove("change");
+                request.remove("base");
+            }
+        }
+    }
+    shown
+}
+
+/// What the read loop last sent the window, so it sends each again only when it changes.
+#[derive(Default)]
+struct Sent {
+    list: Option<serde_json::Value>,
+    selected: Option<serde_json::Value>,
+    badge: Option<usize>,
+    /// The viewed owner, the store's revision and the minute the cards were built for; the minute
+    /// moves a card past 30 minutes, up to one minute late.
+    cards: Option<(Option<String>, u64, u64)>,
+}
+
+impl Sent {
+    /// Sends the session list, the Dock badge and the selection, each only if it changed.
+    fn list(&mut self, app: &AppHandle) {
+        let list = sessions(app.state(), app.state());
+        let needing = list.iter().filter(|r| r.session.state == NeedsYou).count();
+        // macOS shows `Some(0)` as a "0" badge.
+        if self.badge != Some(needing)
+            && let Some(window) = app.get_webview_window("main")
+        {
+            let _ = window.set_badge_count((needing > 0).then_some(needing as i64));
+            self.badge = Some(needing);
+        }
+        let list = serde_json::to_value(list).expect("sessions serialize");
+        if self.list.as_ref() != Some(&list) {
+            let _ = app.emit("sessions", &list);
+            self.list = Some(list);
+        }
+        let selected = serde_json::to_value(selected(app.state())).expect("session serializes");
+        if self.selected.as_ref() != Some(&selected) {
+            let _ = app.emit("selected", &selected);
+            self.selected = Some(selected);
+        }
+    }
+
+    /// Sends the cards when the viewed owner, the store's revision or the minute changed.
+    fn cards(&mut self, app: &AppHandle) {
+        let key = {
+            let studio = app.state::<Mutex<Studio>>();
+            let studio = studio.lock().unwrap();
+            let revision = app.state::<Cards>().lock().unwrap().revision();
+            (
+                studio.viewed().map(String::from),
+                revision,
+                studio.now() / 60_000,
+            )
+        };
+        if self.cards.as_ref() != Some(&key) {
+            let _ = app.emit("cards", cards(app.state(), app.state()));
+            self.cards = Some(key);
+        }
     }
 }
 
@@ -174,8 +238,7 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
     // its workers' cards, and two cards never update one brief at once.
     let mut queues = HashMap::<String, mpsc::Sender<Job>>::new();
     let versions = Versions::beside(log);
-    let mut drawn_cards = None;
-    let mut badge = None;
+    let mut sent = Sent::default();
     loop {
         let state = app.state::<Mutex<Studio>>();
         let mut read = false;
@@ -204,8 +267,11 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 line.clear();
             }
             // A worktree's first fingerprint only records it, so the turns still open after the
-            // replay get their base now, and their `Stop` has something to compare with.
+            // replay get their base now, and their `Stop` has something to compare with. The list
+            // goes first, so Daniel sees it while `git` runs.
             if !live {
+                state.lock().unwrap().tick(millis());
+                sent.list(app);
                 let waiting = state.lock().unwrap().waiting_folders();
                 fingerprint_changes(waiting, &mut fingerprints);
             }
@@ -248,17 +314,7 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
             }
         }
         if state.lock().unwrap().tick(millis()) || read {
-            let list = sessions(app.state(), app.state());
-            let needing = list.iter().filter(|r| r.session.state == NeedsYou).count();
-            // macOS shows `Some(0)` as a "0" badge.
-            if badge != Some(needing)
-                && let Some(window) = app.get_webview_window("main")
-            {
-                let _ = window.set_badge_count((needing > 0).then_some(needing as i64));
-                badge = Some(needing);
-            }
-            let _ = app.emit("sessions", list);
-            let _ = app.emit("selected", selected(state));
+            sent.list(app);
         }
         // Asking for focus waits on the main thread, which never takes this lock.
         let focused = || {
@@ -274,11 +330,7 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
             let _ = app.notification().builder().title(title).body(body).show();
         }
         // The cards also change with no line read: a card arrives, or one turns 30 minutes old.
-        let shown = cards(app.state(), app.state());
-        if drawn_cards.as_ref() != Some(&shown) {
-            let _ = app.emit("cards", &shown);
-            drawn_cards = Some(shown);
-        }
+        sent.cards(app);
         live = true;
         thread::sleep(Duration::from_millis(200));
     }
