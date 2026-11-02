@@ -13,7 +13,8 @@ type Subagent = {
   id: string;
   parent: Parent;
   kind: "worker" | "helper";
-  description: string | null;
+  // Its spawn's description, else its short id: the core's one name for it.
+  name: string;
   agent_type: string | null;
   // "running", then its wake-up's status, such as "completed" or "killed".
   status: string;
@@ -41,7 +42,7 @@ type Answer = "open" | "not_answered" | { answered: Record<string, string> };
 type Question = { agent: string | null; questions: Asked[]; answer: Answer };
 type Session = {
   id: string;
-  cwd: string;
+  folder_name: string;
   last_step: Step | null;
   state: SessionState;
   checks: CheckLine[];
@@ -114,8 +115,6 @@ declare global {
 
 const element = (id: string) => document.getElementById(id)!;
 
-const folder = (session: Session) => session.cwd.split("/").pop() || session.cwd;
-
 // The session list and the selection, as the shell last sent them. The selection is the core's: the
 // session Daniel selected and the subagent of it he opened, whose view then shows its own line.
 type Selection = { session: Session; agent: string | null };
@@ -183,7 +182,7 @@ function returned(session: Session): string | null {
   const sender = session.prompts[session.prompts.length - 1]?.sender;
   if (session.last_step !== null || typeof sender !== "object" || !("wake_up" in sender)) return null;
   const agent = session.agents.find((agent) => agent.id === sender.wake_up);
-  return `worker ${agent?.description ?? sender.wake_up.slice(0, 5)} returned`;
+  return `worker ${agent?.name ?? sender.wake_up.slice(0, 5)} returned`;
 }
 
 // What the session's line says: once its turn is over, its card's summary, the agent's first line or
@@ -194,7 +193,7 @@ function rowText(session: Session): string {
   if (wait === null) return session.line ?? returned(session) ?? stepText(session.last_step);
   if (wait.agent === null) return `${stepText(session.last_step)} · ${age(wait.since)}`;
   const asker = session.agents.find((agent) => agent.id === wait.agent);
-  return `${wait.agent.slice(0, 5)} · ${asker?.description ?? ""} asks · ${age(wait.since)}`;
+  return `${wait.agent.slice(0, 5)} · ${asker?.name ?? ""} asks · ${age(wait.since)}`;
 }
 
 // One line: the folder, the session's short id, its state and what it is doing.
@@ -205,7 +204,7 @@ function row(session: Session, children: Children): HTMLElement {
   const state = text("span", stateLabels[session.state], "row-state");
   state.dataset.state = session.state;
   button.append(
-    text("span", folder(session), "name"),
+    text("span", session.folder_name, "name"),
     text("span", session.id.slice(0, 8), "id"),
     state,
     ...done(children.get("session")),
@@ -232,7 +231,7 @@ function agentRow(session: Session, children: Children, agent: Subagent, depth: 
       ? [stepText(agent.last_step)]
       : [agent.agent_type, age(agent.started_at, agent.ended_at ?? Date.now()), agent.result];
   button.append(
-    text("span", agent.description ?? agent.id.slice(0, 5), "name"),
+    text("span", agent.name, "name"),
     state,
     ...done(children.get(agent.id)),
     text("span", details.filter(Boolean).join(" · "), "row-step"),
@@ -310,8 +309,8 @@ function show(selected: Selection | null) {
   element("view").toggleAttribute("data-agent", agent !== null);
   element("session").textContent =
     agent === null
-      ? `${folder(session)} · ${session.id.slice(0, 8)}`
-      : `${agent.description ?? ""} · ${agent.id.slice(0, 5)}`;
+      ? `${session.folder_name} · ${session.id.slice(0, 8)}`
+      : agent.name;
   element("state").textContent = label;
   element("state").dataset.state = state;
   element("tool").textContent = step?.tool ?? (agent === null ? returned(session) : null) ?? "No step yet";
@@ -464,7 +463,7 @@ function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCa
 function changedBy({ session_id, changed_by }: CardRequest): HTMLElement[] {
   const agents = listed.find((session) => session.id === session_id)?.agents ?? [];
   return Object.entries(changed_by).map(([id, files]) => {
-    const name = agents.find((agent) => agent.id === id)?.description ?? id.slice(0, 5);
+    const name = agents.find((agent) => agent.id === id)?.name ?? id.slice(0, 5);
     const line = document.createElement("p");
     line.className = "paths";
     line.append(text("span", `שונו בידי ${name}:`), ...files.map(code));

@@ -76,8 +76,8 @@ fn the_runs_worker_completes_with_its_last_message_and_its_killed_helper_stays_v
 
     let worker = agent(&studio, RUN_SESSION, RUN_WORKER);
     assert_eq!(
-        (worker.kind, &worker.parent, worker.description.as_deref()),
-        (Worker, &Parent::Session, Some("Add hello file"))
+        (worker.kind, &worker.parent, worker.name.as_str()),
+        (Worker, &Parent::Session, "Add hello file")
     );
     // It ends at its `SubagentStop` (line 18), with that event's last message, scrubbed to `…`; its
     // wake-up (line 22) says `completed`.
@@ -94,9 +94,9 @@ fn the_runs_worker_completes_with_its_last_message_and_its_killed_helper_stays_v
         (
             helper.kind,
             helper.agent_type.as_deref(),
-            helper.description.as_deref()
+            helper.name.as_str()
         ),
-        (Helper, Some("general-purpose"), Some("Wait and report"))
+        (Helper, Some("general-purpose"), "Wait and report")
     );
     // Only its wake-up (line 25) tells it was killed; it has no `SubagentStop` and no result.
     assert_eq!(
