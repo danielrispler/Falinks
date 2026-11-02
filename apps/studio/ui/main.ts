@@ -441,11 +441,11 @@ function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCa
 }
 
 // Who changed what: the files another subagent, such as a helper, edited in the card's worktree, one
-// line per subagent, named by its task or its short id.
+// line per subagent, by the name the core gave it.
 function changedBy({ session_id, changed_by }: CardRequest): HTMLElement[] {
   const agents = listed.find((session) => session.id === session_id)?.agents ?? [];
   return Object.entries(changed_by).map(([id, files]) => {
-    const name = agents.find((agent) => agent.id === id)?.name ?? id.slice(0, 5);
+    const name = agents.find((agent) => agent.id === id)?.name ?? id;
     const line = document.createElement("p");
     line.className = "paths";
     line.append(text("span", `שונו בידי ${name}:`), ...files.map(code));

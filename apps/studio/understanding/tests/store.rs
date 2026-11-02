@@ -569,3 +569,37 @@ fn quizzes_that_showed_at_once_are_saved_in_one_call() {
     let shown: Vec<_> = reopened.cards().iter().map(|kept| kept.shown_at).collect();
     assert_eq!(shown, [Some(1_761_744_000_000), Some(1_761_744_000_000)]);
 }
+
+/// The pane never reads a card's diff or base, so the payload of a session's cards goes without them.
+#[test]
+fn the_payload_without_diffs() {
+    let data = tempfile::tempdir().unwrap();
+    let path = data.path().join("cards.json");
+    let request = edit("toolu_01A", "src/lib.rs");
+    let card = card(&request);
+    let kept = serde_json::json!([{ "request": request, "card": card }]);
+    std::fs::write(&path, kept.to_string()).unwrap();
+    let store = CardStore::open(path).unwrap();
+
+    let shown = store.session_cards("5b9e3d71-0c2a-4f8e-b6d4-8a1c3e5f7092", 1_761_743_990_000);
+
+    let payload = serde_json::to_value(&shown).unwrap();
+    let sent = payload["older"][0]["request"].as_object().unwrap();
+    let mut keys: Vec<&str> = sent.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "agent",
+            "changed_by",
+            "id",
+            "prompt",
+            "session_id",
+            "workers"
+        ]
+    );
+    assert_eq!(
+        payload["older"][0]["card"],
+        serde_json::to_value(&card).unwrap()
+    );
+}

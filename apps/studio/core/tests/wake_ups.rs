@@ -51,6 +51,19 @@ fn prompt(prompt: &str) -> String {
     .to_string()
 }
 
+#[test]
+fn a_wake_up_from_a_task_with_no_subagent_names_it_by_its_short_id() {
+    let mut studio = replay(DAY);
+
+    // `brh86k1fz` is the day's background command, which no subagent record names.
+    studio.apply(&prompt(
+        "<task-notification><task-id>brh86k1fz</task-id><status>completed</status></task-notification>",
+    ));
+
+    let session = studio.session(IMPLEMENT_SPEC).unwrap();
+    assert_eq!(session.returned.as_deref(), Some("worker brh86 returned"));
+}
+
 /// The senders of the prompts after the day's 18.
 fn new_senders(studio: &Studio) -> Vec<&Sender> {
     let session = studio.session(IMPLEMENT_SPEC).unwrap();

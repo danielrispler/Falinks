@@ -321,6 +321,11 @@ impl Session {
         self.agents.iter().find(|a| a.agent.id == id)
     }
 
+    /// The name of subagent `id`: its own, or else the first 5 characters of `id` (#410, decision 26).
+    pub fn agent_name<'a>(&'a self, id: &'a str) -> &'a str {
+        self.subagent(id).map_or(short(id, 5), |a| &a.name)
+    }
+
     /// Subagent `id`, added in "unattached" when this is the first event that names it.
     fn agent(&mut self, id: &str, at: u64) -> &mut Subagent {
         let index = match self.agents.iter().position(|a| a.agent.id == id) {
@@ -497,8 +502,8 @@ impl Session {
     }
 
     fn record_mut(&mut self, key: &str) -> &mut Agent {
-        match self.agents.iter().position(|a| a.agent.id == key) {
-            Some(index) => &mut self.agents[index].agent,
+        match self.agents.iter_mut().find(|a| a.agent.id == key) {
+            Some(a) => &mut a.agent,
             None => &mut self.agent,
         }
     }
@@ -1041,13 +1046,11 @@ impl Studio {
         let owner = session.owner(id, folder);
         let since = &session.record(&owner).since;
         match session.subagent(&owner) {
-            Some(own) if &own.agent.id == id && worker(own) && name == "SubagentStop" => {
-                look(id, folder, Purpose::Card)
-            }
-            Some(own) if &own.agent.id == id && worker(own) && due(since) => {
-                look(id, folder, Purpose::Fallback)
-            }
-            Some(own) if &own.agent.id == id => look(id, folder, Purpose::Commit).filter(|_| bash),
+            Some(own) if &own.agent.id == id => match worker(own) {
+                true if name == "SubagentStop" => look(id, folder, Purpose::Card),
+                true if due(since) => look(id, folder, Purpose::Fallback),
+                _ => look(id, folder, Purpose::Commit).filter(|_| bash),
+            },
             // It works in the worktree of a worker above it, or of its session.
             Some(above) if worker(above) && due(since) => {
                 look(&above.agent.id, above.folder.as_deref()?, Purpose::Fallback)
@@ -1193,9 +1196,8 @@ impl Studio {
                 match &sender {
                     // The row says which worker returned until the session's next step.
                     Sender::WakeUp(task_id) => {
-                        let name = session.agents.iter().find(|a| a.agent.id == *task_id);
-                        let name = name.map_or(short(task_id, 5), |a| &a.name);
-                        session.returned = Some(format!("worker {name} returned"));
+                        let returned = format!("worker {} returned", session.agent_name(task_id));
+                        session.returned = Some(returned);
                     }
                     Sender::Unrecognised(task_id) => outputs.push(Output::Unrecognised {
                         session_id: event.session_id.clone(),
@@ -1480,9 +1482,8 @@ impl Studio {
         let folder = session.map(|s| s.folder_name.as_str());
         let mut body = format!("{} {}", folder.unwrap_or_default(), short(id, 8));
         if let Some(agent) = agent {
-            let child = session.and_then(|s| s.subagent(agent));
-            let name = child.map(|a| a.name.as_str());
-            body = format!("{body} · {}", name.unwrap_or(short(agent, 5)));
+            let name = session.map_or(short(agent, 5), |s| s.agent_name(agent));
+            body = format!("{body} · {name}");
         }
         body
     }
