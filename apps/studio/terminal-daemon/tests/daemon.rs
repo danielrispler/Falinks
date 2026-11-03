@@ -34,7 +34,10 @@ impl Daemon {
         let d = Daemon { child, dir };
         let deadline = Instant::now() + Duration::from_secs(5);
         while !d.socket().exists() {
-            assert!(Instant::now() < deadline, "the daemon did not open its socket");
+            assert!(
+                Instant::now() < deadline,
+                "the daemon did not open its socket"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         d
@@ -58,7 +61,8 @@ impl Drop for Daemon {
 }
 
 fn spawn(c: &mut Client, id: &str, argv: &[&str]) {
-    c.send(&json!({ "op": "spawn", "id": id, "argv": argv, "cwd": "/", "cols": 80, "rows": 24 })).unwrap();
+    c.send(&json!({ "op": "spawn", "id": id, "argv": argv, "cwd": "/", "cols": 80, "rows": 24 }))
+        .unwrap();
     let ev = c.recv_until(|v| v["id"] == id).unwrap();
     assert_eq!(ev["ev"], "spawned", "{ev}");
 }
@@ -68,7 +72,11 @@ fn output_until(c: &mut Client, id: &str, needle: &str) -> String {
     let mut seen = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(10);
     while !String::from_utf8_lossy(&seen).contains(needle) {
-        assert!(Instant::now() < deadline, "no {needle:?} in {:?}", String::from_utf8_lossy(&seen));
+        assert!(
+            Instant::now() < deadline,
+            "no {needle:?} in {:?}",
+            String::from_utf8_lossy(&seen)
+        );
         let ev = c.recv().unwrap();
         if ev["id"] == id && (ev["ev"] == "output" || ev["ev"] == "replay") {
             seen.extend(studio_terminal_daemon::decode(&ev["data"]));
@@ -83,7 +91,12 @@ fn list(c: &mut Client) -> Value {
 }
 
 fn term<'a>(list: &'a Value, id: &str) -> &'a Value {
-    list["terms"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap()
+    list["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == id)
+        .unwrap()
 }
 
 fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
@@ -107,28 +120,74 @@ fn a_second_client_attaches_with_replay_and_types_into_the_terminal() {
     let mut second = d.client();
     second.send(&json!({ "op": "attach", "id": "t1" })).unwrap();
     let replay = second.recv_until(|v| v["ev"] == "replay").unwrap();
-    assert_eq!(String::from_utf8_lossy(&studio_terminal_daemon::decode(&replay["data"])), "before\r\nbefore\r\n");
+    assert_eq!(
+        String::from_utf8_lossy(&studio_terminal_daemon::decode(&replay["data"])),
+        "before\r\nbefore\r\n"
+    );
     second.send(&json!({ "op": "input", "id": "t1", "data": studio_terminal_daemon::encode(b"after\n") })).unwrap();
     output_until(&mut second, "t1", "after\r\nafter");
+}
+
+// The terminal app running `attach` is itself a daemon terminal here, so the test drives it through a real PTY.
+#[test]
+fn attach_connects_another_terminal_and_detaches_with_ctrl_bracket() {
+    let d = Daemon::start("cli");
+    let mut c = d.client();
+    spawn(&mut c, "agent", &["cat"]);
+    c.send(&json!({ "op": "input", "id": "agent", "data": studio_terminal_daemon::encode(b"earlier\n") })).unwrap();
+    let (bin, socket) = (env!("CARGO_BIN_EXE_studio-terminal-daemon"), d.socket());
+    spawn(
+        &mut c,
+        "zed",
+        &[bin, "attach", "agent", "--socket", socket.to_str().unwrap()],
+    );
+    c.send(&json!({ "op": "attach", "id": "zed" })).unwrap();
+    output_until(&mut c, "zed", "earlier\r\nearlier");
+
+    c.send(
+        &json!({ "op": "input", "id": "zed", "data": studio_terminal_daemon::encode(b"typed\r") }),
+    )
+    .unwrap();
+    output_until(&mut c, "zed", "typed\r\ntyped");
+    c.send(&json!({ "op": "input", "id": "zed", "data": studio_terminal_daemon::encode(b"\x1d") }))
+        .unwrap();
+    output_until(&mut c, "zed", "[detached]");
+    wait_for("attach to end", || {
+        term(&list(&mut c), "zed")["exited"] == "code 0"
+    });
+    assert!(term(&list(&mut c), "agent")["exited"].is_null());
 }
 
 #[test]
 fn resize_reaches_the_program_and_list_shows_size_program_and_exit_code() {
     let d = Daemon::start("resize");
     let mut c = d.client();
-    spawn(&mut c, "t1", &["sh", "-c", "read x; stty size; exec sleep 1000"]);
+    spawn(
+        &mut c,
+        "t1",
+        &["sh", "-c", "read x; stty size; exec sleep 1000"],
+    );
     c.send(&json!({ "op": "attach", "id": "t1" })).unwrap();
-    c.send(&json!({ "op": "resize", "id": "t1", "cols": 101, "rows": 33 })).unwrap();
-    c.send(&json!({ "op": "input", "id": "t1", "data": studio_terminal_daemon::encode(b"go\n") })).unwrap();
+    c.send(&json!({ "op": "resize", "id": "t1", "cols": 101, "rows": 33 }))
+        .unwrap();
+    c.send(&json!({ "op": "input", "id": "t1", "data": studio_terminal_daemon::encode(b"go\n") }))
+        .unwrap();
     output_until(&mut c, "t1", "33 101");
-    wait_for("sleep in the foreground", || term(&list(&mut c), "t1")["foreground"] == "sleep");
+    wait_for("sleep in the foreground", || {
+        term(&list(&mut c), "t1")["foreground"] == "sleep"
+    });
     let t = term(&list(&mut c), "t1").clone();
-    assert_eq!((t["cols"].as_u64(), t["rows"].as_u64(), t["cwd"].as_str()), (Some(101), Some(33), Some("/")));
+    assert_eq!(
+        (t["cols"].as_u64(), t["rows"].as_u64(), t["cwd"].as_str()),
+        (Some(101), Some(33), Some("/"))
+    );
     assert!(t["exited"].is_null());
     assert!(t["rss_kb"].as_u64().unwrap() > 0, "{t}");
 
     spawn(&mut c, "t2", &["sh", "-c", "exit 7"]);
-    wait_for("the exit code", || term(&list(&mut c), "t2")["exited"] == "code 7");
+    wait_for("the exit code", || {
+        term(&list(&mut c), "t2")["exited"] == "code 7"
+    });
 }
 
 #[test]
@@ -136,31 +195,58 @@ fn killing_a_terminal_leaves_no_process_of_its_group() {
     let d = Daemon::start("kill");
     let mut c = d.client();
     // A child in its own process group, as job control makes it, and one that ignores the hangup.
-    spawn(&mut c, "t1", &["sh", "-c", "set -m; sleep 1001 & trap '' HUP; sleep 1002 & echo started; wait"]);
+    spawn(
+        &mut c,
+        "t1",
+        &[
+            "sh",
+            "-c",
+            "set -m; sleep 1001 & trap '' HUP; sleep 1002 & echo started; wait",
+        ],
+    );
     c.send(&json!({ "op": "attach", "id": "t1" })).unwrap();
     output_until(&mut c, "t1", "started");
-    let before = term(&list(&mut c), "t1")["processes"].as_array().unwrap().len();
+    let before = term(&list(&mut c), "t1")["processes"]
+        .as_array()
+        .unwrap()
+        .len();
     assert!(before >= 3, "{}", term(&list(&mut c), "t1"));
 
     c.send(&json!({ "op": "kill", "id": "t1" })).unwrap();
     wait_for("every process of the terminal to end", || {
-        term(&list(&mut c), "t1")["processes"].as_array().unwrap().is_empty()
+        term(&list(&mut c), "t1")["processes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     });
     assert!(!term(&list(&mut c), "t1")["exited"].is_null());
     c.send(&json!({ "op": "forget", "id": "t1" })).unwrap();
-    wait_for("forget", || list(&mut c)["terms"].as_array().unwrap().is_empty());
+    wait_for("forget", || {
+        list(&mut c)["terms"].as_array().unwrap().is_empty()
+    });
 }
 
 #[test]
 fn processes_left_behind_after_the_shell_exits_are_listed() {
     let d = Daemon::start("leftover");
     let mut c = d.client();
-    spawn(&mut c, "t1", &["sh", "-c", "trap '' HUP; sleep 1003 & exit 0"]);
-    wait_for("the exit", || term(&list(&mut c), "t1")["exited"] == "code 0");
+    spawn(
+        &mut c,
+        "t1",
+        &["sh", "-c", "trap '' HUP; sleep 1003 & exit 0"],
+    );
+    wait_for("the exit", || {
+        term(&list(&mut c), "t1")["exited"] == "code 0"
+    });
     let t = term(&list(&mut c), "t1").clone();
     assert_eq!(t["processes"][0]["command"], "sleep", "{t}");
     c.send(&json!({ "op": "kill", "id": "t1" })).unwrap();
-    wait_for("the leftover to end", || term(&list(&mut c), "t1")["processes"].as_array().unwrap().is_empty());
+    wait_for("the leftover to end", || {
+        term(&list(&mut c), "t1")["processes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    });
 }
 
 #[test]
@@ -169,9 +255,16 @@ fn an_app_whose_minimum_protocol_is_older_works_with_a_newer_daemon() {
     let mut old_app = Client::connect(&d.socket(), 0).unwrap();
     assert!(old_app.protocol >= 1);
     // Requests and fields a daemon added later are ignored, and the connection keeps serving.
-    old_app.send(&json!({ "op": "a-request-from-the-future", "id": "t1" })).unwrap();
-    old_app.send(&json!({ "op": "list", "a_new_field": true })).unwrap();
-    assert_eq!(old_app.recv_until(|v| v["ev"] == "list").unwrap()["terms"], json!([]));
+    old_app
+        .send(&json!({ "op": "a-request-from-the-future", "id": "t1" }))
+        .unwrap();
+    old_app
+        .send(&json!({ "op": "list", "a_new_field": true }))
+        .unwrap();
+    assert_eq!(
+        old_app.recv_until(|v| v["ev"] == "list").unwrap()["terms"],
+        json!([])
+    );
     spawn(&mut old_app, "t1", &["true"]);
 
     let too_new = Client::connect(&d.socket(), studio_terminal_daemon::PROTOCOL + 1);
@@ -194,10 +287,20 @@ fn only_one_daemon_serves_a_socket() {
 fn a_terminal_starts_without_claude_or_terminal_identity_variables() {
     let d = Daemon::start("env");
     let mut c = d.client();
-    spawn(&mut c, "t1", &["sh", "-c", "env; echo END-OF-ENV; sleep 1000"]);
+    spawn(
+        &mut c,
+        "t1",
+        &["sh", "-c", "env; echo END-OF-ENV; sleep 1000"],
+    );
     c.send(&json!({ "op": "attach", "id": "t1" })).unwrap();
     let env = output_until(&mut c, "t1", "END-OF-ENV");
-    for leaked in ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "TERM_PROGRAM", "GHOSTTY_RESOURCES_DIR", "TMUX="] {
+    for leaked in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_SESSION_ID",
+        "TERM_PROGRAM",
+        "GHOSTTY_RESOURCES_DIR",
+        "TMUX=",
+    ] {
         assert!(!env.contains(leaked), "{leaked} leaked into:\n{env}");
     }
     assert!(env.contains("STUDIO_TERMINAL_ID=t1"), "{env}");
@@ -208,7 +311,15 @@ fn a_terminal_starts_without_claude_or_terminal_identity_variables() {
 fn scrollback_is_cut_at_a_fixed_size() {
     let d = Daemon::start("scrollback");
     let mut c = d.client();
-    spawn(&mut c, "t1", &["sh", "-c", "head -c 6000000 /dev/zero | tr '\\0' x; sleep 1000"]);
+    spawn(
+        &mut c,
+        "t1",
+        &[
+            "sh",
+            "-c",
+            "head -c 6000000 /dev/zero | tr '\\0' x; sleep 1000",
+        ],
+    );
     wait_for("the full scrollback", || {
         term(&list(&mut c), "t1")["scrollback_bytes"] == studio_terminal_daemon::daemon::SCROLLBACK
     });

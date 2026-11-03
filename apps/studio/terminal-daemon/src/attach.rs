@@ -18,12 +18,20 @@ fn size() -> Option<(u16, u16)> {
 }
 
 pub fn run(socket: &Path, id: &str) -> Result<(), String> {
-    let connect = || Client::connect(socket, PROTOCOL).map_err(|e| format!("{}: {e}", socket.display()));
+    let connect =
+        || Client::connect(socket, PROTOCOL).map_err(|e| format!("{}: {e}", socket.display()));
     let (mut events, mut requests) = (connect()?, connect()?);
-    events.send(&json!({ "op": "attach", "id": id })).map_err(|e| e.to_string())?;
-    let replay = events.recv_until(|v| v["id"] == id).map_err(|e| e.to_string())?;
+    events
+        .send(&json!({ "op": "attach", "id": id }))
+        .map_err(|e| e.to_string())?;
+    let replay = events
+        .recv_until(|v| v["id"] == id)
+        .map_err(|e| e.to_string())?;
     if replay["ev"] != "replay" {
-        return Err(format!("{id}: {}", replay["message"].as_str().unwrap_or("no such terminal")));
+        return Err(format!(
+            "{id}: {}",
+            replay["message"].as_str().unwrap_or("no such terminal")
+        ));
     }
     let mut saved: libc::termios = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(0, &mut saved) } != 0 {
@@ -47,7 +55,9 @@ pub fn run(socket: &Path, id: &str) -> Result<(), String> {
                     let _ = out.write_all(&decode(&ev["data"]));
                     let _ = out.flush();
                 }
-                Ok(ev) if ev["ev"] == "exit" => break format!("exited: {}", ev["status"].as_str().unwrap_or("")),
+                Ok(ev) if ev["ev"] == "exit" => {
+                    break format!("exited: {}", ev["status"].as_str().unwrap_or(""));
+                }
                 Ok(_) => {}
                 Err(_) => break "the daemon is gone".into(),
             }
@@ -67,7 +77,8 @@ pub fn run(socket: &Path, id: &str) -> Result<(), String> {
             if now != last
                 && let Some((cols, rows)) = now
             {
-                let _ = resizes.send(&json!({ "op": "resize", "id": resized, "cols": cols, "rows": rows }));
+                let _ = resizes
+                    .send(&json!({ "op": "resize", "id": resized, "cols": cols, "rows": rows }));
             }
             last = now;
             // shortcut: polls the window size instead of handling SIGWINCH; fine for an escape hatch.
@@ -87,7 +98,11 @@ pub fn run(socket: &Path, id: &str) -> Result<(), String> {
                 Some(at) => (&buf[..at], true),
                 None => (&buf[..n], false),
             };
-            if !data.is_empty() && requests.send(&json!({ "op": "input", "id": id, "data": encode(data) })).is_err() {
+            if !data.is_empty()
+                && requests
+                    .send(&json!({ "op": "input", "id": id, "data": encode(data) }))
+                    .is_err()
+            {
                 break "the daemon is gone";
             }
             if detach {

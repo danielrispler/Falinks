@@ -58,11 +58,18 @@ impl Client {
     /// Connects and refuses a daemon older than `min_protocol`.
     pub fn connect(socket: &Path, min_protocol: u64) -> io::Result<Client> {
         let writer = UnixStream::connect(socket)?;
-        let mut client = Client { reader: BufReader::new(writer.try_clone()?), writer, protocol: 0 };
+        let mut client = Client {
+            reader: BufReader::new(writer.try_clone()?),
+            writer,
+            protocol: 0,
+        };
         let hello = client.recv()?;
         client.protocol = hello["protocol"].as_u64().unwrap_or(0);
         if hello["ev"] != "hello" || client.protocol < min_protocol {
-            return Err(io::Error::other(format!("daemon protocol {} is below {min_protocol}", client.protocol)));
+            return Err(io::Error::other(format!(
+                "daemon protocol {} is below {min_protocol}",
+                client.protocol
+            )));
         }
         Ok(client)
     }
