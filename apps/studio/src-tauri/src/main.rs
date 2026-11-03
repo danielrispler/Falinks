@@ -18,7 +18,7 @@ use std::{
 use studio_core::{CardRequest, Notifications, Output, Session, State::NeedsYou, Studio};
 use studio_understanding::{
     CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, Rating, Row, SessionCards,
-    Versions, fingerprint_changes, millis, worktree_root, write_brief, write_stop,
+    Versions, backfilled, fingerprint_changes, millis, worktree_root, write_brief, write_stop,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -231,7 +231,8 @@ fn main() {
 
 /// Reads the log from its start, then from where it stopped. A line counts once it ends in a newline,
 /// so a line the hook is still writing waits for the next read. The lines there at start are
-/// replayed, so steps that ran while the app was down get no cards and no notifications. Live lines
+/// replayed, so steps that ran while the app was down get no cards and no notifications, but for the
+/// turns of the last 24 hours with no card, which get one on the hook's trees (#486). Live lines
 /// get the worktree fingerprint the core asks for; replayed ones get none. Each pass ends with a
 /// tick, the first right after the replay.
 // shortcut: polls every 200 ms; switch to file-system events if the delay or the wake-ups matter.
@@ -278,12 +279,20 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
             // goes first, so Daniel sees it while `git` runs.
             if !live {
                 let mut studio = state.lock().unwrap();
-                app.state::<Cards>().lock().unwrap().restore(&mut studio);
-                drop(studio);
+                let store = app.state::<Cards>();
+                let store = store.lock().unwrap();
+                store.restore(&mut studio);
+                // The turns that ended while the app was down get their cards now (#486).
+                let requests: Vec<CardRequest> =
+                    store.cards().iter().map(|k| k.request.clone()).collect();
+                let backfill = studio.backfill(millis(), &requests);
+                drop((store, studio));
                 state.lock().unwrap().tick(millis());
                 sent.list(app);
                 let waiting = state.lock().unwrap().waiting_folders();
                 fingerprint_changes(waiting, &mut fingerprints);
+                let cards = backfill.into_iter().filter_map(backfilled);
+                outputs.extend(cards.map(Output::Card));
             }
             for output in outputs {
                 match output {

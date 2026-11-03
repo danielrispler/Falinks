@@ -25,8 +25,11 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim_end().into()
 }
 
+/// The working tree's files, by path, with their content.
+type Files = Vec<(String, Vec<u8>)>;
+
 /// What recording a tree must leave as it was: `git status`, the index and the working tree.
-fn state(repo: &Path) -> (String, Vec<u8>, Vec<(String, Vec<u8>)>) {
+fn state(repo: &Path) -> (String, Vec<u8>, Files) {
     let status = git(repo, &["status", "--porcelain", "--untracked-files=all"]);
     let index = fs::read(repo.join(".git/index")).unwrap();
     let mut files = Vec::new();
