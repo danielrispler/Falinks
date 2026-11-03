@@ -404,16 +404,16 @@
     "scope": "#205's research (its resolution, \"Budget (B1)\"): engine waves, pilots, smoke runs and the scored batch. It never draws on the setup budget above or on track T's. Each session charges run wall time (including the usage drain) and harness preparation, with complete-only usage; implementation is recorded but not charged, as in track T. Hard stop: stop and ask before exceeding cap_seconds; re-estimated after the smoke runs, when git-1 is dropped first if the batch at n = 8 does not fit.",
     "cap_seconds": 43200,
     "totals": {
-      "implementation_seconds": 84962,
-      "run_seconds": 10351,
-      "preparation_seconds": 55,
-      "charged_seconds": 10406,
+      "implementation_seconds": 87057,
+      "run_seconds": 14222,
+      "preparation_seconds": 301,
+      "charged_seconds": 14523,
       "complete_usage": {
-        "runs": 21,
-        "input_tokens": 2458,
-        "output_tokens": 596362,
-        "cache_read_input_tokens": 47602779,
-        "cache_creation_input_tokens": 2435260
+        "runs": 25,
+        "input_tokens": 2858,
+        "output_tokens": 741297,
+        "cache_read_input_tokens": 55620231,
+        "cache_creation_input_tokens": 2896795
       }
     },
     "sessions": [
@@ -663,6 +663,25 @@
         },
         "measurement": "Continues the session above, from its entry to this one. preparation_seconds is measured: 0 s (10:16:31Z; the clone was already at 73e436e and built). run_seconds is measured: the final regression sweep, 1,260 s (10:16:31-10:37:31Z), the gate and five runs. Usage is from the three complete runs (rust-errors, go-page and go-relationships-falinks-2), one usage per message.id from the archived sessions (cache_creation_input_tokens sums the 1-hour and 5-minute writes); go-indep-2 and go-indep-4-falinks-2 are partial (#355 A3) and the gate is excluded. implementation_seconds is the rest: waiting for the sweep, its analysis, moving the evidence into local-evidence and the closing comment; it is not charged.",
         "work": "#335's final regression sweep at 73e436e (manifest v55): five runs, all successful, no regression (local-evidence/2026-11-02-sweep-335). The waves end with 8 clean dev runs on engine v54; the pilots' protocol version is manifest v55."
+      },
+      {
+        "issue": 338,
+        "start_utc": "2026-11-03T14:23:00Z",
+        "stop_utc": "2026-11-03T16:06:32Z",
+        "measured_seconds": 6212,
+        "implementation_seconds": 2095,
+        "run_seconds": 3871,
+        "preparation_seconds": 246,
+        "charged_seconds": 4117,
+        "complete_usage": {
+          "runs": 4,
+          "input_tokens": 400,
+          "output_tokens": 144935,
+          "cache_read_input_tokens": 8017452,
+          "cache_creation_input_tokens": 461535
+        },
+        "measurement": "From the claim (14:23:00Z) to the end of the git-1 smoke run (16:06:32Z). preparation_seconds is measured, 246 s in seven segments: the 2.1.309 runtime copy downloaded again (/private/tmp had been cleared; sha256 matches) with a clone in /private/tmp/f338, release builds, configuration and verify 14:28:01-14:30:09Z (128 s); rebuild at v58 15:02:37-15:02:47Z (10 s); the pilot configuration 15:21:54-15:21:59Z (5 s); rebuild at v59 with the smoke configuration and verify 15:32:04-15:33:26Z (82 s); and three smoke configurations (3, 8 and 10 s). run_seconds is measured, 3,871 s: batch --schedule confirm at v57 14:30:09-14:40:05Z (596 s, the gate and one run invalidated by the nested-agent false positive); confirm at v58 15:02:47-15:19:39Z (1,012 s, the gate and two runs); pilot 1 15:21:59-15:27:22Z (323 s); an aborted git-2 start 15:33:26-15:33:43Z (17 s, stopped by the operator: the git-1 configuration did not deny it); the git-2 run invalidated by that start's leftover session 15:33:46-15:35:57Z (131 s); git-2 15:36:30-16:01:02Z (1,472 s: completion at 332 s, then the host waited out a 19-minute model stall in B's turn); git-1 16:01:12-16:06:32Z (320 s). Usage is from the four complete runs (confirm-v58's two, git-2 and git-1), one usage per message.id from the archived sessions; pilot 1 is partial (#355 A3) and the invalid runs and gates are excluded. implementation_seconds is the rest: the detector fix and both freezes, diagnosis and waiting; it is not charged.",
+        "work": "#338: confirm at v57 then v58 (the nested-agent heredoc fix, #338), pilot 1 on go-invoice (success, 317 s, Split gate met, no revision), #205's final freeze (v59, 654c68c), and the git-2 (332 s) and git-1 (318 s) smoke runs, all successful. Re-estimate: about 14,523 s charged of 43,200, so the batch at n = 8 fits with git-1 (local-evidence/2026-11-03-pilots-338)."
       }
     ]
   }
