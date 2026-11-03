@@ -297,11 +297,40 @@ pub fn effort_failure(file: Option<&Path>, effort: &str) -> Option<String> {
 
 /// Whether a Bash command starts a nested agent (#178 C7): a command's first word, after shell
 /// separators and `env`/`exec`-style prefixes, names `claude`, `codex`, `node`, `npx` or the
-/// configured runtime binary. The Git arm's `claude-worker` keeps a copy.
-/// shortcut: an obfuscated launch (`$(echo cl)aude`, an alias, a script) evades it, as #178 states.
+/// configured runtime binary. A heredoc's body is data, such as Go source with `&node{`, and is
+/// skipped unless its opening line names a shell that could run it (#338). The Git arm's
+/// `claude-worker` keeps a copy.
+/// shortcut: an obfuscated launch (`$(echo cl)aude`, an alias, a script, a quoted `<<`) evades it,
+/// as #178 states.
 pub fn nested_agent(command: &str, runtime: &str) -> bool {
     let runtime_name = Path::new(runtime).file_name();
-    command
+    let (mut scanned, mut ends) = (String::new(), Vec::<String>::new());
+    for line in command.lines() {
+        if let Some(end) = ends.first() {
+            if line.trim_start_matches('\t') == end {
+                ends.remove(0);
+            }
+            continue;
+        }
+        scanned += line;
+        scanned += "\n";
+        let shell = line
+            .split(|c: char| c.is_whitespace() || "|;&()".contains(c))
+            .any(|w| ["sh", "bash", "zsh", "dash", "ksh"].contains(&w.rsplit('/').next().unwrap()));
+        if !shell {
+            let opened = line
+                .split("<<")
+                .skip(1)
+                .filter(|rest| !rest.starts_with('<'));
+            ends.extend(opened.map(|rest| {
+                let word = rest.trim_start_matches('-').trim_start();
+                let mut word = word.split(|c: char| c.is_whitespace() || ";|&<>()".contains(c));
+                word.next().unwrap().replace(['\'', '"', '\\'], "")
+            }));
+            ends.retain(|end| !end.is_empty());
+        }
+    }
+    scanned
         .split(['\n', ';', '&', '|', '(', ')', '`', '{', '}'])
         .filter_map(|part| {
             part.split_whitespace()

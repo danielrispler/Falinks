@@ -142,10 +142,37 @@ fn prompt(start: &Value) -> String {
 }
 
 /// Copy of `falinks_claude::nested_agent` (#178 C7); this crate is standalone from the adapter.
-/// shortcut: an obfuscated launch (`$(echo cl)aude`, an alias, a script) evades it, as #178 states.
+/// shortcut: an obfuscated launch (`$(echo cl)aude`, an alias, a script, a quoted `<<`) evades it,
+/// as #178 states.
 fn nested_agent(command: &str, runtime: &str) -> bool {
     let runtime_name = Path::new(runtime).file_name();
-    command
+    let (mut scanned, mut ends) = (String::new(), Vec::<String>::new());
+    for line in command.lines() {
+        if let Some(end) = ends.first() {
+            if line.trim_start_matches('\t') == end {
+                ends.remove(0);
+            }
+            continue;
+        }
+        scanned += line;
+        scanned += "\n";
+        let shell = line
+            .split(|c: char| c.is_whitespace() || "|;&()".contains(c))
+            .any(|w| ["sh", "bash", "zsh", "dash", "ksh"].contains(&w.rsplit('/').next().unwrap()));
+        if !shell {
+            let opened = line
+                .split("<<")
+                .skip(1)
+                .filter(|rest| !rest.starts_with('<'));
+            ends.extend(opened.map(|rest| {
+                let word = rest.trim_start_matches('-').trim_start();
+                let mut word = word.split(|c: char| c.is_whitespace() || ";|&<>()".contains(c));
+                word.next().unwrap().replace(['\'', '"', '\\'], "")
+            }));
+            ends.retain(|end| !end.is_empty());
+        }
+    }
+    scanned
         .split(['\n', ';', '&', '|', '(', ')', '`', '{', '}'])
         .filter_map(|part| {
             part.split_whitespace()
@@ -630,10 +657,16 @@ mod tests {
             "cd .. && node -e 1",
             "FOO=1 npx tsx",
             "/r/claude-x -p",
+            "bash <<'EOF'\nclaude -p hi\nEOF",
+            "cat <<EOF | /bin/sh\nnode x\nEOF",
+            "cat > a.go <<EOF\nx\nEOF\nnode -e 1",
+            "cat > a.go <<-'EOF'\n\tx\n\tEOF\nclaude",
         ] {
             assert!(nested_agent(command, "/r/claude-x"), "{command}");
         }
-        for command in ["go test ./...", "cat node_modules.txt", "echo claude"] {
+        // #338: Go source in a heredoc body is data, not a launch.
+        let go = "cat > q.go <<'EOF'\n\tn = &node{op: \"or\"}\nnode := 1\nEOF\ngo test ./...";
+        for command in ["go test ./...", "cat node_modules.txt", "echo claude", go] {
             assert!(!nested_agent(command, "/r/claude-x"), "{command}");
         }
         // The adapter's copy must stay identical (#178 C7).
