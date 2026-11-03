@@ -21,6 +21,8 @@ pub struct Studio {
     /// The shell's latest tick, in Unix milliseconds.
     now: u64,
     roots: Roots,
+    /// The turns the replay saw end with both trees, for `backfill`.
+    ended: Vec<Backfill>,
 }
 
 type FindRoot = dyn Fn(&str) -> Option<String> + Send;
@@ -119,6 +121,9 @@ pub struct Session {
     /// decision 9).
     #[serde(skip)]
     touched: BTreeSet<String>,
+    /// The tree the hook recorded at its latest turn's first touch of each worktree, by root (#486).
+    #[serde(skip)]
+    trees: BTreeMap<String, String>,
     /// "worker <name> returned", from its latest wake-up until its own next step or Daniel's next
     /// prompt (#410, decision 27).
     pub returned: Option<String>,
@@ -771,6 +776,27 @@ impl Session {
         output
     }
 
+    /// The backfill of its turn ended at `at` with the hook's trees `ends`: `None` when no worktree
+    /// has a start tree and another end tree.
+    fn backfill(&self, ends: &BTreeMap<String, String>, at: u64) -> Option<Backfill> {
+        let trees: Vec<Trees> = ends
+            .iter()
+            .filter_map(|(root, end)| {
+                let start = self.trees.get(root).filter(|start| *start != end)?;
+                let (root, start, end) = (root.clone(), start.clone(), end.clone());
+                Some(Trees { root, start, end })
+            })
+            .collect();
+        let daniels = self.prompts.iter().rfind(|p| p.sender.is_daniels());
+        let request = CardRequest {
+            session_id: self.agent.id.clone(),
+            id: card_id(&self.agent.id, at),
+            prompt: daniels.map(|p| p.at),
+            ..CardRequest::default()
+        };
+        (!trees.is_empty()).then_some(Backfill { request, trees })
+    }
+
     fn needs_you(&self) -> bool {
         self.asked || !self.blocks.is_empty()
     }
@@ -983,6 +1009,22 @@ pub struct CardRequest {
     pub workers: Vec<String>,
 }
 
+/// A turn that ended with no card, as the replay saw it (#486): its card request with no change,
+/// and its worktrees' trees, whose diffs the shell joins into the change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Backfill {
+    pub request: CardRequest,
+    pub trees: Vec<Trees>,
+}
+
+/// The git trees the hook recorded for worktree `root` at a turn's start and end, which differ.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trees {
+    pub root: String,
+    pub start: String,
+    pub end: String,
+}
+
 impl CardRequest {
     /// The change the writer reads: the diff, or the workers' text; empty when there is none.
     pub fn diff(&self) -> &str {
@@ -1132,6 +1174,12 @@ struct Event {
     source: String,
     #[serde(default)]
     studio_received_ms: u64,
+    /// The trees the hook recorded at a turn's first touch of each worktree, by root (#486).
+    #[serde(default)]
+    studio_turn_start: BTreeMap<String, String>,
+    /// The trees the hook recorded at the end of the turn this event ends, by root.
+    #[serde(default)]
+    studio_turn_end: BTreeMap<String, String>,
 }
 
 /// Whether the turn's final message asks Daniel something: a sentence ending in `?`, after removing
@@ -1529,7 +1577,17 @@ impl Studio {
     pub fn apply_with_changes(
         &mut self,
         line: &str,
+        changes: BTreeMap<String, Change>,
+    ) -> Vec<Output> {
+        self.take(line, changes, false)
+    }
+
+    /// `apply_with_changes`, which on a replayed line keeps the turn it ends for `backfill`.
+    fn take(
+        &mut self,
+        line: &str,
         mut changes: BTreeMap<String, Change>,
+        replay: bool,
     ) -> Vec<Output> {
         let Ok(event) = serde_json::from_str::<Event>(line) else {
             return Vec::new();
@@ -1592,6 +1650,10 @@ impl Studio {
         if ends_early {
             let change = changes.remove(&session.agent.id);
             outputs.extend(session.end_turn(change, at));
+            if replay {
+                self.ended
+                    .extend(session.backfill(&event.studio_turn_end, at));
+            }
         }
         if starts {
             session.turn.clone_from(&event.prompt_id);
@@ -1604,6 +1666,15 @@ impl Studio {
         }
         if opens {
             session.touched.clear();
+            session.trees.clear();
+        }
+        if own {
+            for (root, tree) in &event.studio_turn_start {
+                session
+                    .trees
+                    .entry(root.clone())
+                    .or_insert_with(|| tree.clone());
+            }
         }
         // Who changed what (#369, story 20): a subagent's edit in a worktree whose cards are another's.
         if let Some(agent) = &event.agent_id
@@ -1702,7 +1773,12 @@ impl Studio {
             }
             "Stop" => {
                 // The order on `Stop`: clear its own blocks first, then ask if the message asks.
+                let in_turn = session.in_turn();
                 let output = session.end_turn(changes.remove(&session.agent.id), at);
+                if replay && in_turn {
+                    self.ended
+                        .extend(session.backfill(&event.studio_turn_end, at));
+                }
                 // A subagent's block outlasts the turn, so it gives no second notice.
                 blocked_before = session.needs_you();
                 session.asked = asks(&event.last_assistant_message);
@@ -1872,9 +1948,21 @@ impl Studio {
     }
 
     /// Takes one event log line replayed at app start. It updates state exactly like `apply` and
-    /// requests nothing, so turns that ended while the app was down get no cards and no notices.
+    /// requests nothing, so turns that ended while the app was down get no cards and no notices
+    /// here; `backfill` then asks for their cards.
     pub fn replay(&mut self, line: &str) {
-        self.apply(line);
+        self.take(line, BTreeMap::new(), true);
+    }
+
+    /// After the replay, the turns that ended in the 24 hours before `now` with a change between
+    /// the hook's trees and no card among `cards` (#486). Each is returned once.
+    pub fn backfill(&mut self, now: u64, cards: &[CardRequest]) -> Vec<Backfill> {
+        let since = now.saturating_sub(24 * 60 * 60 * 1000);
+        let ended = std::mem::take(&mut self.ended).into_iter();
+        let ended = ended.filter(|b| card_time(&b.request.id) >= since);
+        ended
+            .filter(|b| cards.iter().all(|c| c.id != b.request.id))
+            .collect()
     }
 
     /// Applies, after the replay, what the live app learned before a restart (#434, decisions 37 and
