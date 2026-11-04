@@ -10,7 +10,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{Read, Seek, Write},
     path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use studio_hook::{Turn, record_tree, worktree_root};
 
@@ -49,7 +49,8 @@ fn append() -> Result<(), Box<dyn Error>> {
 /// Adds to `event` the trees of the turn it ends, `studio_turn_end`, and of the worktrees its turn
 /// touches first with it, `studio_turn_start`, each by worktree root. Like the core, it takes a
 /// session's own events, and its folder and an `Edit` or `Write` path as what it touches (#434,
-/// decision 9). What it knows of the turn is kept in `turns/` in the data directory `data`.
+/// decision 9). What it knows of the turn is kept in `turns/` in the data directory `data`, until the
+/// session ends or, if its end never comes, for 7 days.
 fn trees(event: &mut Map<String, Value>, data: &Path) -> Result<(), Box<dyn Error>> {
     let text = |key: &str| event.get(key).and_then(Value::as_str);
     let name = text("hook_event_name").unwrap_or_default();
@@ -58,15 +59,20 @@ fn trees(event: &mut Map<String, Value>, data: &Path) -> Result<(), Box<dyn Erro
     let session = text("session_id").unwrap_or_default();
     // The id names a file, so it must be a plain one.
     let plain = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
-    if event.contains_key("agent_id")
-        || outside && !idle
-        || session.is_empty()
-        || !session.chars().all(plain)
-    {
+    let plain = !session.is_empty() && session.chars().all(plain);
+    let turns = data.join("turns");
+    let state = turns.join(format!("{session}.json"));
+    // A session's record goes with it; a start, which is rare, prunes those whose end never came.
+    if name == "SessionEnd" && plain {
+        let _ = fs::remove_file(&state);
+    }
+    if name == "SessionStart" {
+        prune(&turns);
+    }
+    if event.contains_key("agent_id") || outside && !idle || !plain {
         return Ok(());
     }
-    let state = data.join("turns").join(format!("{session}.json"));
-    fs::create_dir_all(data.join("turns"))?;
+    fs::create_dir_all(&turns)?;
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -117,6 +123,21 @@ fn trees(event: &mut Map<String, Value>, data: &Path) -> Result<(), Box<dyn Erro
         }
     }
     Ok(())
+}
+
+/// Deletes the records in `turns` unchanged for 7 days.
+fn prune(turns: &Path) {
+    let week = Duration::from_secs(7 * 24 * 3600);
+    let Ok(entries) = fs::read_dir(turns) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let modified = entry.metadata().and_then(|m| m.modified());
+        let age = modified.ok().and_then(|t| t.elapsed().ok());
+        if age.is_some_and(|age| age > week) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Worktree `root`'s tree now, as a JSON pair.

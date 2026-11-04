@@ -415,7 +415,10 @@ fn every_prompt_asks_for_english_and_none_for_hebrew() {
         writer.update_command("brief", "workers").1,
     ];
     for prompt in prompts {
-        assert!(prompt.contains("Write in English, in plain words"), "{prompt}");
+        assert!(
+            prompt.contains("Write in English, in plain words"),
+            "{prompt}"
+        );
         assert!(!prompt.contains("Hebrew"), "{prompt}");
     }
 }

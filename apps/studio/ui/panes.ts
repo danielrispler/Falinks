@@ -41,6 +41,8 @@ export function startPanes(): Promise<void> {
 async function revive(outdated: boolean) {
   const lost = await invoke<Listed[]>("terminal_lost");
   for (const r of await invoke<Revive[]>("revival", { terms: lost })) {
+    // A revived conversation keeps its terminal's id, on purpose: its session stays linked to the
+    // pane it had. Only a new conversation gets a fresh id (`startClaude`, #467).
     const argv = r.session ? await invoke<string[]>("claude_argv", { resume: r.session }) : r.argv;
     const term = panes.get(r.id)?.term;
     await request({ op: "spawn", id: r.id, argv, cwd: r.cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24 });
@@ -102,6 +104,8 @@ function header({ term, title }: Pane) {
 export async function closePane(id: string) {
   await request({ op: "kill", id });
   await request({ op: "forget", id });
+  // Its sessions end now, whether or not their `claude` lived to run its own end hook.
+  await invoke("closed", { terminal: id });
   const pane = panes.get(id);
   pane?.term?.dispose();
   pane?.box.remove();
