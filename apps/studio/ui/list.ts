@@ -75,7 +75,7 @@ function row(session: Session, children: Children): HTMLElement {
     button,
     session.state,
     stateLabels[session.state],
-    [text("span", session.folder_name, "name"), text("span", session.id.slice(0, 8), "id")],
+    [text("span", session.name ?? session.folder_name, "name"), text("span", session.id.slice(0, 8), "id")],
     [...done(children, children.get("session")), rowLine(session.line ?? "")],
   );
   return button;

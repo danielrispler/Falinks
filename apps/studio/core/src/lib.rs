@@ -71,7 +71,16 @@ pub struct Session {
     /// The studio terminal it runs in, its `STUDIO_TERMINAL_ID` from its latest event, `None` when
     /// it runs outside the studio (#461, decision 8).
     pub terminal: Option<String>,
+    /// Daniel's name for it, from the studio's latest rename line in the log (#469); `None` for its
+    /// folder's.
+    pub name: Option<String>,
     pub state: State,
+    /// Whether closing its terminal asks first: it is in a turn, or its latest `Stop` listed
+    /// background tasks (#469).
+    pub asks_before_closing: bool,
+    /// Its latest `Stop` listed background tasks.
+    #[serde(skip)]
+    background: bool,
     /// The checks that ran, oldest first: pass or fail lines in the session's timeline (#369,
     /// decision 14).
     pub checks: Vec<CheckLine>,
@@ -1185,7 +1194,14 @@ struct Event {
     /// The trees the hook recorded at the end of the turn this event ends, by root.
     #[serde(default)]
     studio_turn_end: BTreeMap<String, String>,
+    /// On the studio's own `StudioRename` line, the session's new name; empty for none.
+    #[serde(default)]
+    studio_name: String,
 }
+
+/// The event the shell appends to the log when Daniel renames a session (#469). The log is what a
+/// restart replays, so the name survives it.
+pub const RENAME: &str = "StudioRename";
 
 /// Whether the turn's final message asks Daniel something: a sentence ending in `?`, after removing
 /// fenced code, inline code, blockquotes, headings and table rows (#321's evidence, "Transcripts").
@@ -1374,8 +1390,9 @@ impl Studio {
     /// with its own key: none, one, or at a wake-up also its workers' ends (#369, decisions 6, 8, 10
     /// and 11).
     pub fn fingerprint_folders(&self, line: &str) -> Vec<Fingerprint> {
-        let event = serde_json::from_str(line);
-        event.map_or_else(|_| Vec::new(), |event| self.looks(&event))
+        let event = serde_json::from_str::<Event>(line);
+        let event = event.ok().filter(|e| e.hook_event_name != RENAME);
+        event.map_or_else(Vec::new, |event| self.looks(&event))
     }
 
     /// The fingerprints before `event`: its own (`look`), and the end of each worker with cards that
@@ -1597,6 +1614,13 @@ impl Studio {
         let Ok(event) = serde_json::from_str::<Event>(line) else {
             return Vec::new();
         };
+        // A rename names a known session and is none of its events.
+        if event.hook_event_name == RENAME {
+            if let Some(session) = self.sessions.get_mut(&event.session_id) {
+                session.name = Some(event.studio_name).filter(|name| !name.is_empty());
+            }
+            return Vec::new();
+        }
         let looks = self.looks(&event);
         let touches = self.touches(&event);
         let roots = &self.roots;
@@ -1781,6 +1805,8 @@ impl Studio {
             "Stop" => {
                 // The order on `Stop`: clear its own blocks first, then ask if the message asks.
                 let in_turn = session.in_turn();
+                let tasks = event.background_tasks.as_array();
+                session.background = tasks.is_some_and(|tasks| !tasks.is_empty());
                 let output = session.end_turn(changes.remove(&session.agent.id), at);
                 if replay && in_turn {
                     self.ended
@@ -1932,6 +1958,7 @@ impl Studio {
         } else {
             State::Running
         };
+        session.asks_before_closing = session.in_turn() || !session.ended && session.background;
         session.asker = session.blocks.first().map(|block| Asker {
             agent: block.asker(),
             since: block.at,
