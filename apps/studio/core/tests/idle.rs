@@ -18,7 +18,10 @@ fn event(name: &str, extra: Value) -> String {
         "studio_terminal_id": "claude-1",
         "studio_received_ms": 1_793_262_000_000u64,
     });
-    event.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    event
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
     event.to_string()
 }
 
@@ -37,7 +40,12 @@ fn shell(foreground: &str) -> Terminal {
 }
 
 fn claude() -> Terminal {
-    listed("claude-1", &["env", "CLAUDE_CODE_PLUGIN_DIRS=/p", "claude"], "claude", "claude")
+    listed(
+        "claude-1",
+        &["env", "CLAUDE_CODE_PLUGIN_DIRS=/p", "claude"],
+        "claude",
+        "claude",
+    )
 }
 
 fn replayed(lines: &[String]) -> Studio {
@@ -56,7 +64,10 @@ fn in_turn() -> Vec<String> {
 
 fn stopped(tasks: Value) -> Vec<String> {
     let mut lines = in_turn();
-    lines.push(event("Stop", json!({ "background_tasks": tasks, "last_assistant_message": "Done." })));
+    lines.push(event(
+        "Stop",
+        json!({ "background_tasks": tasks, "last_assistant_message": "Done." }),
+    ));
     lines
 }
 
@@ -91,8 +102,14 @@ fn a_session_with_background_tasks_is_not_idle_until_a_stop_lists_none() {
     let revival = replayed(&lines).revival(&[claude()]);
     assert_eq!(revival[0].busy.as_deref(), Some("background tasks"));
     // Its wake-up opens a turn, whose `Stop` lists no task.
-    lines.push(event("UserPromptSubmit", json!({ "prompt": "<agent-message from=\"b1\">done</agent-message>", "prompt_id": "p-2" })));
-    lines.push(event("Stop", json!({ "background_tasks": [], "prompt_id": "p-2" })));
+    lines.push(event(
+        "UserPromptSubmit",
+        json!({ "prompt": "<agent-message from=\"b1\">done</agent-message>", "prompt_id": "p-2" }),
+    ));
+    lines.push(event(
+        "Stop",
+        json!({ "background_tasks": [], "prompt_id": "p-2" }),
+    ));
     assert!(replayed(&lines).idle(&[claude()]));
 }
 
@@ -127,5 +144,8 @@ fn a_claude_terminal_comes_back_resumed_and_a_shell_as_a_shell() {
         .iter()
         .map(|r| (r.id.as_str(), r.cwd.as_str(), r.session.as_deref()))
         .collect();
-    assert_eq!(found, [("shell", "/tmp", None), ("claude-1", CWD, Some(SESSION))]);
+    assert_eq!(
+        found,
+        [("shell", "/tmp", None), ("claude-1", CWD, Some(SESSION))]
+    );
 }

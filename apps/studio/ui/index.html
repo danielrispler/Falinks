@@ -40,6 +40,8 @@
     <!-- The terminal panes (#466, #467) draw into #terminal-body. -->
     <section id="terminal" class="term" aria-label="Terminal">
       <div class="term-h"><span id="terminal-title">terminal</span><span id="size" class="mono"></span></div>
+      <!-- A new build to restart into, or the daemon upgrade's wait (#470). -->
+      <div id="restart" class="restart" role="status" hidden></div>
       <div id="terminal-body" class="term-body"></div>
     </section>
 
@@ -99,6 +101,15 @@
       <p><strong id="close-name"></strong> is still working: it is in a turn or has background tasks.</p>
       <p>Closing ends its terminal and every process in it.</p>
       <div class="ask-buttons"><button value="close">Close</button><button value="cancel" autofocus>Cancel</button></div>
+    </form>
+  </dialog>
+  <!-- The daemon upgrade's question (#470, #322 resolution point 4). -->
+  <dialog id="upgrade" class="upgrade" aria-labelledby="upgrade-title">
+    <form method="dialog">
+      <h1 id="upgrade-title">Restart the terminal daemon?</h1>
+      <p>The daemon is older than this app. Every terminal is idle. A restart ends each terminal and brings it back:</p>
+      <ul id="upgrade-terms"></ul>
+      <p class="actions"><button value="no">Not now</button> <button value="yes" class="primary">Restart the daemon</button></p>
     </form>
   </dialog>
   <span id="probe" aria-hidden="true">MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM</span>

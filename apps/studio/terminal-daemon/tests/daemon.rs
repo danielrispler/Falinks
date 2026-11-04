@@ -209,7 +209,11 @@ fn killing_a_terminal_leaves_no_process_of_its_group() {
     output_until(&mut c, "t1", "started");
     // `echo` can run before a background `sleep` shows in `ps` under load, so wait for all three.
     wait_for("the shell and both sleeps", || {
-        term(&list(&mut c), "t1")["processes"].as_array().unwrap().len() >= 3
+        term(&list(&mut c), "t1")["processes"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 3
     });
 
     c.send(&json!({ "op": "kill", "id": "t1" })).unwrap();
@@ -343,7 +347,9 @@ fn stopping_the_daemon_ends_its_terminals_and_leaves_the_record_of_the_running_o
     let mut c = d.client();
     spawn(&mut c, "t1", &["cat"]);
     spawn(&mut c, "t2", &["sh", "-c", "exit 0"]);
-    wait_for("t2's exit", || !term(&list(&mut c), "t2")["exited"].is_null());
+    wait_for("t2's exit", || {
+        !term(&list(&mut c), "t2")["exited"].is_null()
+    });
     spawn(&mut c, "t3", &["cat"]);
     c.send(&json!({ "op": "forget", "id": "t3" })).unwrap();
     let running = [r#""t1" ["cat"] "/""#];

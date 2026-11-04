@@ -49,7 +49,10 @@ pub fn stop(socket: &Path) -> io::Result<()> {
     let list = client.recv_until(|v| v["ev"] == "list")?;
     let terms = list["terms"].as_array().into_iter().flatten();
     let procs = terms.flat_map(|t| t["processes"].as_array().into_iter().flatten());
-    let pids: Vec<i32> = procs.filter_map(|p| p["pid"].as_i64()).map(|p| p as i32).collect();
+    let pids: Vec<i32> = procs
+        .filter_map(|p| p["pid"].as_i64())
+        .map(|p| p as i32)
+        .collect();
     unsafe { libc::kill(client.daemon_pid as i32, libc::SIGTERM) };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while UnixStream::connect(socket).is_ok() {

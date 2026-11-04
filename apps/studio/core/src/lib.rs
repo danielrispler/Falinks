@@ -2116,7 +2116,10 @@ impl Studio {
     pub fn revival(&self, terms: &[Terminal]) -> Vec<Revive> {
         let running = terms.iter().filter(|t| t.exited.is_none());
         let revive = |t: &Terminal| {
-            let linked = self.sessions.values().filter(|s| s.terminal.as_ref() == Some(&t.id));
+            let linked = self
+                .sessions
+                .values()
+                .filter(|s| s.terminal.as_ref() == Some(&t.id));
             let latest = linked.max_by_key(|s| s.agent.last_event_at);
             let program = || Some(t.foreground.clone().unwrap_or_else(|| "a program".into()));
             let busy = if t.argv.is_empty() {
@@ -2138,7 +2141,9 @@ impl Studio {
                 id: t.id.clone(),
                 cwd: t.cwd.clone(),
                 argv: t.argv.clone(),
-                session: (!t.argv.is_empty()).then(|| latest.map(|s| s.agent.id.clone())).flatten(),
+                session: (!t.argv.is_empty())
+                    .then(|| latest.map(|s| s.agent.id.clone()))
+                    .flatten(),
                 busy,
             }
         };

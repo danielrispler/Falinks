@@ -80,7 +80,20 @@ h1 { margin: 0 0 8px; }
 .dot[data-state="needs_you"] { background: var(--needs-you); box-shadow: 0 0 0 3px var(--needs-you-bg); }
 
 /* The terminal, left to right; its header shows the columns and rows it fits. */
-.term { background: var(--term-bg); color: var(--term-fg); display: grid; grid-template-rows: 26px 1fr; min-width: 0; }
+.term { background: var(--term-bg); color: var(--term-fg); display: grid; grid-template-rows: 26px auto 1fr; min-width: 0; }
+.term > .term-body { grid-row: 3; }
+.restart { display: flex; gap: 10px; align-items: center; padding: 4px 14px; font-size: var(--size-small); color: var(--fg);
+           background: var(--raised); border-bottom: 1px solid var(--line); }
+.restart[hidden] { display: none; }
+.restart button, .upgrade button { border: 1px solid var(--line); background: none; border-radius: var(--radius); padding: 1px 9px;
+                                   cursor: pointer; font-size: var(--size-small); flex: none; }
+.upgrade { background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: var(--radius);
+           max-width: 560px; padding: 16px 20px; }
+.upgrade::backdrop { background: #0009; }
+.upgrade h1 { font-size: 15px; margin: 0 0 8px; }
+.upgrade ul { margin: 0 0 12px; padding-inline-start: 18px; }
+.upgrade .actions { display: flex; justify-content: flex-end; gap: 8px; margin: 0; }
+.upgrade .primary { background: var(--raised); }
 .term-h { display: flex; gap: 12px; align-items: center; padding: 0 14px; font-size: 11.5px; color: var(--faint);
           border-bottom: 1px solid var(--line-soft); white-space: nowrap; overflow: hidden; }
 .term-h .mono { font-size: 11.5px; color: var(--muted); }

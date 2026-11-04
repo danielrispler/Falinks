@@ -20,7 +20,7 @@ const openLink = (target: string) => invoke("open_link", { target }).catch((e) =
 
 // Draws terminal `id` of the daemon into `place`, spawning it in `cwd` running `argv` (empty: a login
 // shell) unless it already runs. A terminal that exited, or a daemon that is gone, starts again at
-// the next key.
+// the next key; one whose daemon is gone comes back through `panes.ts` (#470).
 export function openPane(place: HTMLElement, id: string, cwd: string, argv: string[] = []): Xterm.Terminal {
   const css = getComputedStyle(document.documentElement);
   const value = (name: string) => css.getPropertyValue(name).trim();
@@ -71,6 +71,7 @@ export function openPane(place: HTMLElement, id: string, cwd: string, argv: stri
   const note = (text: string) => term.write(`\r\n\x1b[2m[${text}]\x1b[0m\r\n`);
   const input = (data: string) => {
     if (quiet) return;
+    if (ended === "lost") return;
     if (ended) return restart();
     request({ op: "input", id, data: encode(utf8.encode(data)) });
   };
@@ -81,6 +82,7 @@ export function openPane(place: HTMLElement, id: string, cwd: string, argv: stri
       // It ended while the app was away: a new one starts in its place.
       request({ op: "forget", id }).then(start);
     } else if (event.ev === "replay") {
+      ended = null;
       // At the size its bytes were written for, then fitted, which redraws full-screen programs.
       term.reset();
       term.resize(event.cols ?? term.cols, event.rows ?? term.rows);
@@ -95,8 +97,9 @@ export function openPane(place: HTMLElement, id: string, cwd: string, argv: stri
       ended = "exited";
       note(`exited: ${event.status}; press a key for a new shell`);
     } else if (event.ev === "lost") {
+      // `panes.ts` reconnects and brings the terminal back (#470).
       ended = "lost";
-      note("the terminal daemon is gone; press a key to reconnect");
+      note("the terminal daemon is gone; reconnecting");
     } else if (event.ev === "error" && event.message !== "the id is taken") {
       note(event.message ?? "error");
     }

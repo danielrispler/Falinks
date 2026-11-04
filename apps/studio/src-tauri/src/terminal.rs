@@ -3,6 +3,11 @@
 //! no useful `PATH`), then sends the daemon's requests with `terminal_send` and gets every daemon
 //! event as a `terminal` event, `{"ev":"lost"}` once the daemon is gone. The protocol is in
 //! `terminal-daemon/src/lib.rs`.
+//!
+//! #470: a daemon below this app's protocol is still connected to, so its terminals work while the
+//! window waits for idle; `terminal_connect` says it is `outdated`, and `terminal_upgrade` stops it
+//! once Daniel says yes. When the app starts the daemon itself, after a crash, a reboot or an
+//! upgrade, the old daemon's record of its terminals is kept for `terminal_lost`.
 
 use serde_json::{Value, json};
 use std::{
@@ -18,17 +23,22 @@ use std::{
 use studio_terminal_daemon::{Client, PROTOCOL, default_socket};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// The connection's writing half; `None` before the first connect and after the daemon is lost.
+/// The connection's writing half, `None` before the first connect and after the daemon is lost;
+/// whether its daemon is below `PROTOCOL`; and the terminals a dead daemon left in its record.
 #[derive(Default)]
-pub struct Daemon(Mutex<Option<UnixStream>>);
+pub struct Daemon(Mutex<Option<UnixStream>>, Mutex<bool>, Mutex<Vec<Value>>);
 
-/// Connects to the daemon, once per app run until it is lost, and returns `{repo}`: the
-/// configured repository, where the pane's shell starts.
+/// Connects to the daemon, once per app run until it is lost, and returns `{repo, outdated}`: the
+/// configured repository, where the pane's shell starts, and whether the daemon is below this
+/// app's protocol.
 #[tauri::command(async)]
 pub fn terminal_connect(app: AppHandle, daemon: State<Daemon>) -> Result<Value, String> {
     let mut writer = daemon.0.lock().unwrap();
     if writer.is_none() {
-        let (reader, stream) = connect()?.split();
+        let (client, lost) = connect()?;
+        *daemon.1.lock().unwrap() = client.protocol < PROTOCOL;
+        daemon.2.lock().unwrap().extend(lost);
+        let (reader, stream) = client.split();
         *writer = Some(stream);
         thread::spawn(move || {
             for line in reader.lines().map_while(Result::ok) {
@@ -40,7 +50,21 @@ pub fn terminal_connect(app: AppHandle, daemon: State<Daemon>) -> Result<Value, 
             let _ = app.emit("terminal", json!({ "ev": "lost" }));
         });
     }
-    Ok(json!({ "repo": repo() }))
+    let outdated = *daemon.1.lock().unwrap();
+    Ok(json!({ "repo": repo(), "outdated": outdated }))
+}
+
+/// The terminals the last daemon ran when it died, each once.
+#[tauri::command]
+pub fn terminal_lost(daemon: State<Daemon>) -> Vec<Value> {
+    std::mem::take(&mut daemon.2.lock().unwrap())
+}
+
+/// Stops the daemon for an upgrade; the read loop then reports it `lost`, and the next connect
+/// starts this build's daemon.
+#[tauri::command(async)]
+pub fn terminal_upgrade() -> Result<(), String> {
+    studio_terminal_daemon::stop(&default_socket()).map_err(|e| format!("stop the daemon: {e}"))
 }
 
 /// Sends one request, such as `{"op":"input","id":…,"data":…}`, to the daemon.
@@ -110,11 +134,12 @@ pub fn open_link(target: String) -> Result<(), String> {
     }
 }
 
-/// Connects, starting the daemon first when nothing listens on its socket.
-fn connect() -> Result<Client, String> {
+/// Connects to a daemon of any protocol, starting one first when nothing listens on its socket;
+/// then also returns the record of the terminals the dead one ran.
+fn connect() -> Result<(Client, Vec<Value>), String> {
     let socket = default_socket();
-    match Client::connect(&socket, PROTOCOL) {
-        Ok(client) => return Ok(client),
+    match Client::connect(&socket, 0) {
+        Ok(client) => return Ok((client, Vec::new())),
         Err(e)
             if !matches!(
                 e.kind(),
@@ -125,12 +150,17 @@ fn connect() -> Result<Client, String> {
         }
         Err(_) => {}
     }
+    // Read before the new daemon's first spawn rewrites it.
+    let record = std::fs::read_to_string(studio_terminal_daemon::record(&socket));
+    let lost = record
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
     let log = socket.with_extension("log");
     start(&log).map_err(|e| format!("start the terminal daemon: {e}"))?;
     for _ in 0..50 {
         thread::sleep(Duration::from_millis(100));
-        if let Ok(client) = Client::connect(&socket, PROTOCOL) {
-            return Ok(client);
+        if let Ok(client) = Client::connect(&socket, 0) {
+            return Ok((client, lost.unwrap_or_default()));
         }
     }
     Err(format!(

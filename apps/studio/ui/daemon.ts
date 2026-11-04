@@ -4,8 +4,10 @@
 import { invoke, listen } from "./dom.js";
 
 // What the shell answers on connect: the configured repository, where new terminals start.
+// `outdated` when the daemon is below this app's protocol (#470).
 export interface Config {
   repo: string;
+  outdated: boolean;
 }
 
 // One daemon event: `spawned`, `error`, `replay`, `output`, `exit`, `list`, or `lost` from the shell.
