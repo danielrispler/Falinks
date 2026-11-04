@@ -118,4 +118,4 @@ The default project mode. Waits and cards serve Daniel's understanding of this p
 The project mode for a project where Daniel cares only about the result. The wait is his own time, for practice or enrichment unrelated to the project. Approval requests and agent questions still reach him.
 
 **Explanation language**:
-The human language of cards and questions, such as Hebrew, in plain words at Daniel's level. Code terms stay in English.
+The human language of cards and questions: English for now, no longer Hebrew (#463), in plain words at Daniel's level. Code terms are in backticks.

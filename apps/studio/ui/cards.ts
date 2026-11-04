@@ -1,7 +1,7 @@
-// The cards, in the story rail: the session's brief, then its cards in Hebrew, right to left, the
-// last 30 minutes' and the older ones. The writer writes them in Hebrew (#461, decision 28).
+// The cards, in the story rail: the session's brief, then its cards, the last 30 minutes' and the
+// older ones. The writer writes them in English (#487); cards stored in Hebrew keep their direction.
 
-import { code, element, hebrew, invoke, pressable, text } from "./dom.js";
+import { code, element, prose, invoke, pressable, text } from "./dom.js";
 import { refreshCards } from "./selection.js";
 import { studio } from "./state.js";
 import type { CardRequest, Guess, Level, Quiz, Rating, Reason, SessionCards, StoredCard } from "./types.js";
@@ -21,26 +21,29 @@ function quizElements(id: string, quiz: Quiz, guess: Guess | null): HTMLElement[
   options.append(
     ...quiz.options.map((option, i) => {
       const item = document.createElement("li");
-      const button = pressable(hebrew("button", option.text) as HTMLButtonElement, guess?.option === i, () =>
+      const button = pressable(prose("button", option.text) as HTMLButtonElement, guess?.option === i, () =>
         record("guess", { id, option: i }),
       );
       button.disabled = guess !== null;
       item.append(button);
       if (guess) {
-        item.append(hebrew("p", `${i === quiz.key ? "התשובה הנכונה. " : ""}${option.why}`));
+        const why = prose("p", option.why);
+        // A left-to-right label, which `dir="auto"` skips, so a Hebrew reason keeps its direction.
+        if (i === quiz.key) why.prepend(Object.assign(text("span", "The right answer. "), { dir: "ltr" }));
+        item.append(why);
       }
       return item;
     }),
   );
-  const title = hebrew("p", quiz.text);
+  const title = prose("p", quiz.text);
   title.className = "quiz";
   if (!guess) return [title, options];
-  const verdict = hebrew("p", guess.right ? "צדקת." : "לא צדקת.");
+  const verdict = prose("p", guess.right ? "You were right." : "You were wrong.");
   verdict.className = "verdict";
   return [title, verdict, options];
 }
 
-// A card in Hebrew, right to left: its quiz first, then, once Daniel taps an option, the
+// A card: its quiz first, then, once Daniel taps an option, the
 // explanation, the file paths, those other subagents changed, the code left to right, the architecture section when the change is
 // structural, why the change matters, what was not checked, his flag on the key, "explain more" and
 // his rating. A card with no quiz shows the explanation at once. The shell keeps each tap in the card
@@ -48,12 +51,10 @@ function quizElements(id: string, quiz: Quiz, guess: Guess | null): HTMLElement[
 function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCard): HTMLElement {
   const node = document.createElement("article");
   node.className = "card";
-  node.dir = "rtl";
-  node.lang = "he";
   const quiz = card.quiz;
   if (quiz) node.append(...quizElements(request.id, quiz, guess));
   if (quiz && !guess) return node;
-  const explanation = hebrew("p", card.explanation);
+  const explanation = prose("p", card.explanation);
   explanation.className = "explanation";
   const paths = document.createElement("p");
   paths.className = "paths";
@@ -62,12 +63,12 @@ function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCa
   source.dir = "ltr";
   source.textContent = card.code;
   node.append(explanation, paths, ...changedBy(request), source);
-  if (card.architecture) node.append(hebrew("h2", "ארכיטקטורה"), hebrew("p", card.architecture));
+  if (card.architecture) node.append(prose("h2", "Architecture"), prose("p", card.architecture));
   node.append(
-    hebrew("h2", "למה זה חשוב"),
-    hebrew("p", card.why_it_matters),
-    hebrew("h2", "מה לא נבדק"),
-    hebrew("p", card.not_checked),
+    prose("h2", "Why it matters"),
+    prose("p", card.why_it_matters),
+    prose("h2", "Not checked"),
+    prose("p", card.not_checked),
   );
   if (quiz) node.append(keyWrongButton(request.id, key_wrong));
   node.append(moreElement(request.id, more), ratingElement(request.id, rating, quiz ? key_wrong : null));
@@ -82,15 +83,15 @@ function changedBy({ session_id, changed_by }: CardRequest): HTMLElement[] {
     const name = agents.find((agent) => agent.id === id)?.name ?? id;
     const line = document.createElement("p");
     line.className = "paths";
-    line.append(text("span", `שונו בידי ${name}:`), ...files.map(code));
+    line.append(text("span", `Changed by ${name}:`), ...files.map(code));
     return line;
   });
 }
 
 // "The key is wrong": one record, flagged from the quiz or from the rating, and never undone.
 function keyWrongButton(id: string, keyWrong: boolean): HTMLElement {
-  const label = keyWrong ? "סימנת שהמפתח שגוי" : "המפתח שגוי";
-  const flag = pressable(hebrew("button", label) as HTMLButtonElement, keyWrong, () => record("key_wrong", { id }));
+  const label = keyWrong ? "You flagged the key as wrong" : "The key is wrong";
+  const flag = pressable(prose("button", label) as HTMLButtonElement, keyWrong, () => record("key_wrong", { id }));
   flag.className = "key-wrong";
   flag.disabled = keyWrong;
   return flag;
@@ -107,9 +108,9 @@ function moreElement(id: string, more: string | null): HTMLElement {
   const node = document.createElement("details");
   node.className = "more";
   node.open = moreOpen.has(id);
-  const text = hebrew("p", more ?? "כותב…");
+  const text = prose("p", more ?? "Writing…");
   text.className = "explanation";
-  node.append(hebrew("summary", "הסבר עוד"), text);
+  node.append(prose("summary", "Explain more"), text);
   node.addEventListener("toggle", () => {
     if (node.open) moreOpen.add(id);
     else moreOpen.delete(id);
@@ -130,27 +131,27 @@ async function explainMore(id: string) {
 }
 
 const levels: [Level, string][] = [
-  ["good", "טוב"],
-  ["fair", "בינוני"],
-  ["poor", "חלש"],
+  ["good", "Good"],
+  ["fair", "Fair"],
+  ["poor", "Poor"],
 ];
 const reasons: [Reason, string][] = [
-  ["unclear", "לא ברור"],
-  ["wrong", "שגוי"],
-  ["too_shallow", "שטחי מדי"],
-  ["too_easy", "קל מדי"],
+  ["unclear", "Unclear"],
+  ["wrong", "Wrong"],
+  ["too_shallow", "Too shallow"],
+  ["too_easy", "Too easy"],
 ];
 
 // Daniel's rating of the explanation: a level, then, once he picked one, the reasons, each tap
 // toggling one. `keyWrong` is the quiz's flag, offered as a reason on a card with a quiz.
 function ratingElement(id: string, rating: Rating | null, keyWrong: boolean | null): HTMLElement {
   const choice = (label: string, pressed: boolean, picked: Rating) =>
-    pressable(hebrew("button", label), pressed, () => record("rate", { id, rating: picked }));
+    pressable(prose("button", label), pressed, () => record("rate", { id, rating: picked }));
   const node = document.createElement("div");
   node.className = "rating";
   const row = document.createElement("p");
   row.append(
-    hebrew("span", "דירוג ההסבר:"),
+    prose("span", "Rate the explanation:"),
     ...levels.map(([level, label]) =>
       choice(label, rating?.level === level, { level, reasons: rating?.reasons ?? [] }),
     ),
@@ -186,9 +187,9 @@ export function markShown() {
 // only when its record changed, such as after a tap, and is moved whole to the older group.
 const drawn = new Map<string, { record: string; node: HTMLElement }>();
 
-// The session's brief at the top of its view, in Hebrew, one paragraph per line.
+// The session's brief at the top of its view, one paragraph per line.
 function showBrief(brief: string | null) {
-  element("brief").replaceChildren(...(brief ?? "").split("\n").map((line) => hebrew("p", line)));
+  element("brief").replaceChildren(...(brief ?? "").split("\n").map((line) => prose("p", line)));
   element("brief").hidden = brief === null;
 }
 

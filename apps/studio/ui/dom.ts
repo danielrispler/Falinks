@@ -49,10 +49,11 @@ export function code(text: string): HTMLElement {
   return node;
 }
 
-// Hebrew text whose code is in backticks. Each code span becomes a left-to-right isolate, so `a <= b`
-// is not mirrored inside the right-to-left text.
-export function hebrew(tag: string, text: string): HTMLElement {
+// The writer's text, whose code is in backticks. It sets its own direction, so a card stored in Hebrew
+// still reads right to left; each code span is a left-to-right isolate, so `a <= b` is not mirrored.
+export function prose(tag: string, text: string): HTMLElement {
   const node = document.createElement(tag);
+  node.dir = "auto";
   node.append(...text.split("`").map((part, i) => (i % 2 ? code(part) : part)));
   return node;
 }

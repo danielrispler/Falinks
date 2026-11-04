@@ -2,7 +2,7 @@
 // nested under it. When the window is narrow it collapses to a strip of state dots and issue numbers,
 // which opens the full list on click or ⌘1.
 
-import { age, element, hebrew, pressable, stepText, text } from "./dom.js";
+import { age, element, prose, pressable, stepText, text } from "./dom.js";
 import { select } from "./selection.js";
 import { studio } from "./state.js";
 import { stateLabels, type Session, type SessionState, type Subagent } from "./types.js";
@@ -81,10 +81,10 @@ function row(session: Session, children: Children): HTMLElement {
   return button;
 }
 
-// A row's line, such as a Hebrew card summary, laid out by its own direction, its code spans
+// A row's line, such as a card summary stored in Hebrew, laid out by its own direction, its code spans
 // cleaned as a card's are (#434, decision 40).
 function rowLine(line: string): HTMLElement {
-  const node = hebrew("span", line);
+  const node = prose("span", line);
   node.className = "row-step";
   node.dir = "auto";
   return node;
