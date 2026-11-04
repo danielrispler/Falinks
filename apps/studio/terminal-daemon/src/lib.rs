@@ -87,6 +87,11 @@ impl Client {
         serde_json::from_str(&line).map_err(io::Error::other)
     }
 
+    /// The reading half, for a thread that reads events, and the writing half, for requests.
+    pub fn split(self) -> (BufReader<UnixStream>, UnixStream) {
+        (self.reader, self.writer)
+    }
+
     /// Skips events until one matches.
     pub fn recv_until(&mut self, matches: impl Fn(&Value) -> bool) -> io::Result<Value> {
         loop {

@@ -23,6 +23,8 @@ use studio_understanding::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
+mod terminal;
+
 /// The card store, which the log thread adds to and the pane records guesses in.
 type Cards = Mutex<CardStore>;
 
@@ -208,6 +210,7 @@ fn main() {
         .manage(Cards::new(store))
         .manage(Notices::default())
         .manage(writer.clone())
+        .manage(terminal::Daemon::default())
         .invoke_handler(tauri::generate_handler![
             sessions,
             select,
@@ -218,7 +221,10 @@ fn main() {
             guess,
             key_wrong,
             rate,
-            explain_more
+            explain_more,
+            terminal::terminal_connect,
+            terminal::terminal_send,
+            terminal::open_link
         ])
         .setup(move |app| {
             let app = app.handle().clone();

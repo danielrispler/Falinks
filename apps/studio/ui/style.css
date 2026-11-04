@@ -80,11 +80,12 @@ h1 { margin: 0 0 8px; }
 .dot[data-state="needs_you"] { background: var(--needs-you); box-shadow: 0 0 0 3px var(--needs-you-bg); }
 
 /* The terminal, left to right; its header shows the columns and rows it fits. */
-.term { background: var(--term-bg); color: var(--term-fg); display: grid; grid-template-rows: 26px 1fr; }
+.term { background: var(--term-bg); color: var(--term-fg); display: grid; grid-template-rows: 26px 1fr; min-width: 0; }
 .term-h { display: flex; gap: 12px; align-items: center; padding: 0 14px; font-size: 11.5px; color: var(--faint);
           border-bottom: 1px solid var(--line-soft); white-space: nowrap; overflow: hidden; }
 .term-h .mono { font-size: 11.5px; color: var(--muted); }
-.term-body { min-height: 0; padding: 8px 14px; }
+.term-body { min-height: 0; min-width: 0; overflow: hidden; padding: 8px 14px; position: relative; }
+.term-find { position: absolute; top: 6px; right: 14px; z-index: 10; width: 220px; font: inherit; }
 #probe { position: absolute; visibility: hidden; white-space: pre; font: var(--size-mono)/var(--term-line) var(--mono); }
 
 /* The rail: the story, its open question docked at the bottom. In "overlay" ⌘2 toggles it over the
