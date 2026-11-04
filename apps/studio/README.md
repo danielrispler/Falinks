@@ -46,7 +46,7 @@ This builds `target/release/bundle/macos/Studio.app` with an ad-hoc signature (`
 - `terminal-daemon/tests/`: the daemon against real PTYs: spawn, attach with replay, input, resize, list with size, foreground program, exit code and memory, kill leaving no process of the terminal's session, processes left behind, an app with an older minimum protocol, one daemon per socket, the clean environment, the scrollback cut, and `attach` run inside a daemon terminal;
 - the unit tests of the event log's path (`hook`), of what `scrub` keeps (`studio-core`) and of the weekly rates' dates (`understanding`).
 
-It leaves out the shell, which needs `dist/` from `npm run build`. `npm test` (after `npm ci`) runs `terminal-daemon/tests/replay.test.mjs`: a terminal's bytes replayed into a headless xterm of another size, with the resize sent, match a fresh render at that size.
+It leaves out the shell, which needs `dist/` from `npm run build`. `npm test` (after `npm ci`) builds the UI with `tsc` and runs `terminal-daemon/tests/replay.test.mjs`: a terminal's bytes replayed into a headless xterm of another size, with the resize sent, match a fresh render at that size; and `ui/tests/`: the UI's pure functions on the `tsc` output in `dist/`, such as the width rule's layout.
 
 ## Load the plugin
 
