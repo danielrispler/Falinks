@@ -53,6 +53,21 @@ pub fn terminal_send(msg: Value, daemon: State<Daemon>) -> Result<(), String> {
     writeln!(stream, "{msg}").map_err(|e| e.to_string())
 }
 
+/// The picker's places: the configured repository's main checkout and its tasks, read live from git
+/// (#461, decision 8).
+#[tauri::command(async)]
+pub fn places() -> Result<studio_workbench::Places, String> {
+    studio_workbench::places(Path::new(&repo()))
+}
+
+/// The command a session's terminal runs: `claude` with the studio plugin of this checkout, whose
+/// hooks run its `studio-hook`, or `claude --resume <resume>` for an ended session.
+#[tauri::command]
+pub fn claude_argv(resume: Option<String>) -> Vec<String> {
+    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).with_file_name("plugin");
+    studio_workbench::claude(&plugin, resume.as_deref())
+}
+
 /// Opens a link Daniel clicked in a terminal: an `http(s)` URL, or a file path, absolute or
 /// relative to the configured repository, with any `:line:column` dropped.
 // shortcut: opens files in their default app and loses the line; open in an editor at the line if

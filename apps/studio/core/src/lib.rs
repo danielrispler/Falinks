@@ -68,6 +68,9 @@ pub struct Session {
     pub cwd: String,
     /// The last segment of `cwd`, or the whole `cwd` when that segment is empty.
     pub folder_name: String,
+    /// The studio terminal it runs in, its `STUDIO_TERMINAL_ID` from its latest event, `None` when
+    /// it runs outside the studio (#461, decision 8).
+    pub terminal: Option<String>,
     pub state: State,
     /// The checks that ran, oldest first: pass or fail lines in the session's timeline (#369,
     /// decision 14).
@@ -1174,6 +1177,8 @@ struct Event {
     source: String,
     #[serde(default)]
     studio_received_ms: u64,
+    /// The terminal the session runs in, which the hook records from `STUDIO_TERMINAL_ID`.
+    studio_terminal_id: Option<String>,
     /// The trees the hook recorded at a turn's first touch of each worktree, by root (#486).
     #[serde(default)]
     studio_turn_start: BTreeMap<String, String>,
@@ -1608,6 +1613,8 @@ impl Studio {
             });
         // The hooks are async, so the latest event can land before an earlier one.
         session.agent.last_event_at = session.agent.last_event_at.max(event.studio_received_ms);
+        // Every event of a `claude` process carries its terminal, so a resume elsewhere moves it.
+        session.terminal.clone_from(&event.studio_terminal_id);
         let failed_before = session.failed_workers();
         let in_turn = session.in_turn();
         let ends_early = session.ends_turn_early(&event);

@@ -4,6 +4,7 @@
 
 import { code, element, text } from "./dom.js";
 import { agentState } from "./list.js";
+import { startClaude } from "./panes.js";
 import { questionElement } from "./questions.js";
 import { stateLabels, type CheckLine, type Question, type Selection } from "./types.js";
 
@@ -24,6 +25,9 @@ export function showView(selected: Selection | null) {
     agent === null ? `${session.folder_name} · ${session.id.slice(0, 8)}` : `${session.folder_name} · ${agent.name}`;
   element("state").textContent = label;
   element("state").dataset.state = state;
+  // "Open" resumes an ended session in a new terminal, in its folder, where Claude Code keeps it.
+  element("reopen").hidden = agent !== null || session.state !== "ended";
+  element("reopen").onclick = () => startClaude(session.cwd, session.id).catch((e) => console.warn(e));
   element("tool").textContent = step?.tool ?? (agent === null ? session.returned : null) ?? "No step yet";
   element("detail").textContent = step?.detail ?? "";
   showQuestions(session.questions.filter((question) => question.agent === (agent?.id ?? null)));

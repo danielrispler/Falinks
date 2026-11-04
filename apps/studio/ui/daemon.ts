@@ -30,5 +30,26 @@ export const request = (msg: Record<string, unknown>) => invoke<void>("terminal_
 // Every daemon event, for every terminal; each pane keeps those of its own id.
 export const onEvent = (handler: (event: DaemonEvent) => void) => listen<DaemonEvent>("terminal", handler);
 
+// One terminal in the daemon's `list` reply.
+export interface Listed {
+  id: string;
+  argv: string[];
+  cwd: string;
+  exited: string | null;
+}
+
+// The daemon's terminals, from its next `list` reply.
+const waiting: ((terms: Listed[]) => void)[] = [];
+let listening: Promise<unknown> | null = null;
+export async function list(): Promise<Listed[]> {
+  listening ??= onEvent((event) => {
+    if (event.ev === "list") waiting.splice(0).forEach((reply) => reply((event.terms as Listed[]) ?? []));
+  });
+  await listening;
+  const reply = new Promise<Listed[]>((resolve) => waiting.push(resolve));
+  await request({ op: "list" });
+  return reply;
+}
+
 export const encode = (bytes: Uint8Array) => btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
 export const decode = (data: string) => Uint8Array.from(atob(data), (c) => c.charCodeAt(0));

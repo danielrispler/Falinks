@@ -224,7 +224,9 @@ fn main() {
             explain_more,
             terminal::terminal_connect,
             terminal::terminal_send,
-            terminal::open_link
+            terminal::open_link,
+            terminal::places,
+            terminal::claude_argv
         ])
         .setup(move |app| {
             let app = app.handle().clone();

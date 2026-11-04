@@ -5,6 +5,7 @@
 import { showCards } from "./cards.js";
 import { invoke } from "./dom.js";
 import { showSessions } from "./list.js";
+import { showSession } from "./panes.js";
 import { studio } from "./state.js";
 import { showView } from "./story.js";
 import type { Selection, Session, SessionCards } from "./types.js";
@@ -24,6 +25,7 @@ export async function select(id: string, agent: string | null = null) {
   }
   document.body.classList.remove("list-open");
   show(selected);
+  showSession(selected.session, true);
   await refreshCards();
 }
 
@@ -31,4 +33,5 @@ export function show(selected: Selection | null) {
   studio.selection = selected;
   showSessions(studio.listed);
   showView(selected);
+  showSession(selected?.session ?? null);
 }

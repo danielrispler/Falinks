@@ -3370,6 +3370,7 @@ dependencies = [
  "studio-hook",
  "studio-terminal-daemon",
  "studio-understanding",
+ "studio-workbench",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
@@ -3410,6 +3411,14 @@ dependencies = [
  "similar",
  "studio-core",
  "studio-hook",
+ "tempfile",
+]
+
+[[package]]
+name = "studio-workbench"
+version = "0.0.0"
+dependencies = [
+ "serde",
  "tempfile",
 ]
 
