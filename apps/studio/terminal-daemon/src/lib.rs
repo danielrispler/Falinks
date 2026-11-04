@@ -15,12 +15,13 @@
 //! - `forget {id}`: kills it if needed and drops it from `list`.
 //! - `list`: `list {daemon_pid, daemon_rss_kb, terms: [{id, argv, cwd, pid, exited, foreground, cols, rows,
 //!   scrollback_bytes, rss_kb, processes: [{pid, command, rss_kb}]}]}`. `processes` is every live process of the
-//!   terminal's session, so after `exited` is set it lists what was left behind; `rss_kb` is their sum.
+//!   terminal's session, so after `exited` is set it lists what was left behind; `rss_kb` is their sum. `cwd` is
+//!   the folder its leader is in now, such as where its shell `cd`-ed to, until it exits.
 //!
 //! Unknown requests and fields are ignored.
 //!
 //! Beside the socket, the daemon keeps a record of the terminals it runs, `[{id, argv, cwd}]` ([`record`]), rewritten
-//! at each spawn, exit and forget. It outlives the daemon, so after a crash, a reboot or [`stop`] it lists the
+//! at each spawn, exit, forget and `list`, with `cwd` as `list` gives it. It outlives the daemon, so after a crash, a reboot or [`stop`] it lists the
 //! terminals that were lost (#470).
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::Value;
@@ -61,15 +62,19 @@ pub fn stop(socket: &Path) -> io::Result<()> {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    for sig in [libc::SIGHUP, libc::SIGKILL] {
-        pids.iter().for_each(|&pid| unsafe {
-            libc::kill(pid, sig);
-        });
-        if sig == libc::SIGHUP {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-    }
+    hang_up(|| pids.clone());
     Ok(())
+}
+
+/// Sends `SIGHUP` to `pids()`, then, after a grace period for shells to save history, `SIGKILL` to
+/// whatever `pids()` then gives, which ignored the hangup.
+fn hang_up(pids: impl Fn() -> Vec<i32>) {
+    for (sig, grace) in [(libc::SIGHUP, 500), (libc::SIGKILL, 0)] {
+        for pid in pids() {
+            unsafe { libc::kill(pid, sig) };
+        }
+        std::thread::sleep(std::time::Duration::from_millis(grace));
+    }
 }
 
 /// The one socket the studio's daemon listens on.
