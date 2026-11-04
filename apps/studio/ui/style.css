@@ -180,4 +180,29 @@ body.wide .choices { grid-template-columns: repeat(3, 1fr); }
           box-shadow: 0 8px 24px #0008; padding: 6px; }
 .picker .row .l2 { font-family: var(--mono); font-size: 11.5px; }
 .picker .hidden-count { color: var(--faint); font-size: var(--size-small); margin: 2px 8px 6px; }
-#reopen { margin: 0 0 8px; }
+.picker .task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.picker .task .losses { grid-column: 1 / -1; }
+.picker button.remove, .picker .losses button, .picker .new-task button { border: 1px solid var(--line); background: none;
+  border-radius: var(--radius); padding: 1px 9px; margin: 6px 4px 0 0; cursor: pointer; }
+.picker .losses { border: 1px solid var(--needs-you-line); background: var(--needs-you-bg); border-radius: var(--radius);
+                  padding: 6px 10px; margin: 2px 0 6px; }
+.picker .losses p { margin: 0 0 4px; }
+.picker .losses .losses-title { color: var(--muted); font-size: var(--size-small); }
+.picker .losses ul { margin: 0 0 6px; padding-left: 18px; overflow-wrap: anywhere; }
+.picker .new-task { display: flex; gap: 6px; margin: 8px 4px 2px; border-top: 1px solid var(--line); padding-top: 8px; }
+.picker .new-task input { flex: 1; font: 13px var(--mono); color: inherit; background: var(--bg); border: 1px solid var(--line);
+                          border-radius: var(--radius); padding: 3px 6px; }
+.picker .new-task button { margin: 0; }
+.picker .picker-error { white-space: pre-wrap; font: 12px var(--mono); color: var(--needs-you); margin: 6px 4px; }
+#reopen, #rename, #close { margin: 0 0 8px; }
+/* The questions of rename and close (#469). */
+.ask { background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: var(--radius);
+       box-shadow: 0 8px 24px #0008; padding: 14px; width: 380px; }
+.ask::backdrop { background: #0006; }
+.ask p { margin: 0 0 8px; }
+.ask label { display: block; margin-bottom: 6px; }
+.ask input { width: 100%; box-sizing: border-box; font: inherit; padding: 6px; background: var(--raised); color: var(--fg);
+             border: 1px solid var(--line); border-radius: var(--radius); }
+.ask-buttons { display: flex; flex-direction: row-reverse; gap: 8px; margin-top: 12px; }
+.ask-buttons button { font: inherit; padding: 4px 12px; background: var(--raised); color: var(--fg);
+                      border: 1px solid var(--line); border-radius: var(--radius); }

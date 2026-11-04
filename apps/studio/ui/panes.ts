@@ -2,11 +2,11 @@
 // login shell `shell` in the configured repository shows until a session's pane does. A session
 // started from the studio runs `claude` in its own terminal, whose fresh id reaches its hooks as
 // `STUDIO_TERMINAL_ID`, so the core links its row to the pane (`Session.terminal`).
-// #469 closes a pane here (`kill`, `forget`, then drop it from `panes`); #470 revives a terminal the
+// `closePane` ends a terminal and drops its pane (#469); #470 revives a terminal the
 // daemon lost, which `showSession` only reports today.
 
 import type * as Xterm from "@xterm/xterm";
-import { connect, list } from "./daemon.js";
+import { connect, list, request } from "./daemon.js";
 import { element, invoke } from "./dom.js";
 import { openPane } from "./terminal.js";
 import type { Session } from "./types.js";
@@ -60,6 +60,18 @@ function show(id: string, open: () => Xterm.Terminal | null) {
 function header({ term, title }: Pane) {
   element("terminal-title").textContent = title;
   element("size").textContent = term ? `${term.cols} × ${term.rows}` : "";
+}
+
+// Ends terminal `id`'s whole process group (#322, point 3), then forgets it and drops its pane; the
+// shell shows in its place.
+export async function closePane(id: string) {
+  await request({ op: "kill", id });
+  await request({ op: "forget", id });
+  const pane = panes.get(id);
+  pane?.term?.dispose();
+  pane?.box.remove();
+  panes.delete(id);
+  if (shown === id) show("shell", () => openPane(box("shell"), "shell", repo));
 }
 
 // Starts `claude` in `cwd` in a new terminal, or `claude --resume <resume>` for an ended session,

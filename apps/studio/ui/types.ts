@@ -45,6 +45,10 @@ export type Session = {
   folder_name: string;
   // The studio terminal it runs in, its `STUDIO_TERMINAL_ID`; null when it runs outside the studio.
   terminal: string | null;
+  // Daniel's name for it from the studio (#469); null for its folder's.
+  name: string | null;
+  // Closing its terminal asks first: it is in a turn or has background tasks (#469).
+  asks_before_closing: boolean;
   last_step: Step | null;
   state: SessionState;
   checks: CheckLine[];
@@ -107,6 +111,7 @@ export type Selection = { session: Session; agent: string | null };
 // the count of `agent-*` worktrees hidden. `branch` is null at a detached HEAD.
 export type Place = { path: string; branch: string | null };
 export type Places = { main: Place; tasks: Place[]; hidden: number };
+export type Losses = { uncommitted: string[]; unpushed: string[] };
 
 export const stateLabels: Record<SessionState, string> = {
   needs_you: "Needs you",

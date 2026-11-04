@@ -8,8 +8,8 @@
 
 use std::{
     collections::HashMap,
-    fs::File,
-    io::{self, BufRead, BufReader, Seek, SeekFrom},
+    fs::{File, OpenOptions},
+    io::{self, BufRead, BufReader, Seek, SeekFrom, Write},
     path::Path,
     sync::{Arc, LazyLock, Mutex, mpsc},
     thread,
@@ -183,6 +183,27 @@ fn explain_more(id: String, cards: State<Cards>, writer: State<Writer>) -> Optio
     studio_understanding::explain_more(&cards, &**writer, &id, log)
 }
 
+/// Daniel renamed session `id`: a `StudioRename` line in the event log, which the log thread then
+/// applies and a restart replays (#469). An empty `name` gives the row its folder's again.
+#[tauri::command(async)]
+fn rename(id: String, name: String) -> Result<(), String> {
+    let home = std::env::home_dir().ok_or("no home directory")?;
+    let line = serde_json::json!({
+        "session_id": id,
+        "hook_event_name": studio_core::RENAME,
+        "studio_name": name.trim(),
+        "studio_received_ms": millis(),
+    });
+    let open = OpenOptions::new()
+        .append(true)
+        .open(studio_hook::event_log(&home));
+    // One write under the lock the hook takes, so the line never interleaves with a hook's.
+    let mut log = open.map_err(|e| e.to_string())?;
+    log.lock().map_err(|e| e.to_string())?;
+    log.write_all(format!("{line}\n").as_bytes())
+        .map_err(|e| e.to_string())
+}
+
 /// Logs a card store change that could not be saved; it stays in memory until the next save.
 fn unsaved(saved: io::Result<()>) {
     if let Err(e) = saved {
@@ -222,11 +243,14 @@ fn main() {
             key_wrong,
             rate,
             explain_more,
+            rename,
             terminal::terminal_connect,
             terminal::terminal_send,
             terminal::open_link,
             terminal::places,
-            terminal::claude_argv
+            terminal::claude_argv,
+            terminal::create_task,
+            terminal::remove_task
         ])
         .setup(move |app| {
             let app = app.handle().clone();
