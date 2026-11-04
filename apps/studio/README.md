@@ -26,8 +26,8 @@ A session is running from a prompt until its turn ends; needs you while it waits
 - `hook/`: `studio-hook`, which appends each hook payload as one line to the event log, and the log's path.
 - `core/`: the studio core, plain Rust with no I/O, and `scrub`, which turns event log lines into test fixtures. The app replays the whole log through it at start, then feeds it each new line live. Only live lines request cards and notifications.
 - `understanding/`: the understanding layer's I/O: the card writer interface, the `claude -p` writer and a fake, the worktree fingerprint, the card store with the briefs, Claude Code's version kept beside the event log, and `weekly`, the command that prints the week's thinking and surprise rates, ratings by level and reason and flags on the key, then the drift: unrecognised wake-ups and version changes.
-- `terminal-daemon/`: `studio-terminal-daemon`, the background process that owns the terminals, so they outlive the app (#322, #464). Its own crate and binary, which the app does not depend on, so an app rebuild neither rebuilds nor restarts it. `serve` runs it on `~/Library/Application Support/dev.falinks.studio/terminal-daemon.sock`, one at a time; the protocol is in `src/lib.rs`. Every terminal starts through `$SHELL -l`, so the profile sets `PATH` even when the studio was started from the Dock, and without `CLAUDE*` or terminal-identity variables. `attach <terminal>` connects any terminal app to one of its terminals; Ctrl-] detaches.
-- `src-tauri/`: the app's Rust shell. `ui/`: its TypeScript pane.
+- `terminal-daemon/`: `studio-terminal-daemon`, the background process that owns the terminals, so they outlive the app (#322, #464). Its own crate and binary; the app links only its client library and runs the binary, so an app rebuild neither rebuilds nor restarts it. `serve` runs it on `~/Library/Application Support/dev.falinks.studio/terminal-daemon.sock`, one at a time; the protocol is in `src/lib.rs`. Every terminal starts through `$SHELL -l`, so the profile sets `PATH` even when the studio was started from the Dock, and without `CLAUDE*` or terminal-identity variables. `attach <terminal>` connects any terminal app to one of its terminals; Ctrl-] detaches.
+- `src-tauri/`: the app's Rust shell, with the terminal daemon's client (`src/terminal.rs`). `ui/`: its TypeScript pane.
 
 ## Build
 
@@ -37,7 +37,7 @@ Needs Node and the Rust toolchain.
     npm ci
     npm run tauri build
 
-This builds `target/release/bundle/macos/Studio.app` with an ad-hoc signature (`codesign -dv` shows `Signature=adhoc`), and `target/release/studio-hook`, which the plugin runs. Open the app with `open target/release/bundle/macos/Studio.app`.
+This builds `target/release/bundle/macos/Studio.app` with an ad-hoc signature (`codesign -dv` shows `Signature=adhoc`), and `target/release/studio-hook`, which the plugin runs. The bundle carries `studio-terminal-daemon` beside the app's executable, in `Contents/MacOS/`. Open the app with `open target/release/bundle/macos/Studio.app`.
 
 `cargo test` runs:
 
@@ -46,7 +46,32 @@ This builds `target/release/bundle/macos/Studio.app` with an ad-hoc signature (`
 - `terminal-daemon/tests/`: the daemon against real PTYs: spawn, attach with replay, input, resize, list with size, foreground program, exit code and memory, kill leaving no process of the terminal's session, processes left behind, an app with an older minimum protocol, one daemon per socket, the clean environment, the scrollback cut, and `attach` run inside a daemon terminal;
 - the unit tests of the event log's path (`hook`), of what `scrub` keeps (`studio-core`) and of the weekly rates' dates (`understanding`).
 
-It leaves out the shell, which needs `dist/` from `npm run build`. `npm test` (after `npm ci`) builds the UI with `tsc` and runs `terminal-daemon/tests/replay.test.mjs`: a terminal's bytes replayed into a headless xterm of another size, with the resize sent, match a fresh render at that size; and `ui/tests/`: the UI's pure functions on the `tsc` output in `dist/`, such as the width rule's layout.
+It leaves out the shell, which needs `dist/` from `npm run build`. `npm test` (after `npm ci`) builds the UI with `tsc` and runs `terminal-daemon/tests/replay.test.mjs`: a terminal's bytes replayed into a headless xterm of another size, with the resize sent, match a fresh render at that size; and `ui/tests/`: the UI's pure functions on the `tsc` output in `dist/`, such as the width rule's layout, the terminal's key mapping (`keys`) and its file paths (`paths`).
+
+## The terminal pane
+
+The centre of the window is one terminal (#466): a login shell in the configured repository, `STUDIO_REPO` when set, else the main checkout of the repository the app was built in. It runs in the terminal daemon, so it outlives the app; at start the app attaches to it again and replays its screen. When no daemon runs, the app starts `studio-terminal-daemon serve` from beside its own executable, logging to `terminal-daemon.log` beside the socket. A shell that exited, or a daemon that is gone, starts again at the next key.
+
+The pane is xterm.js 6 with the WebGL renderer, which falls back to the default renderer when its context is lost, Unicode 11 widths, fit, search and web links. The CSP allows inline styles, which the default renderer needs. Terminal text is left to right.
+
+- Ctrl+V, and Cmd+V with an image on the clipboard, send Ctrl+V: Claude Code reads the macOS clipboard itself and makes an `[Image #N]` chip. Cmd+V with text pastes it, bracketed.
+- Shift+Enter sends ESC CR, a newline in Claude Code. Option is Meta: ESC, then the physical key, so Option+B is ESC b on any layout.
+- URLs and file paths with a folder (`ui/keys.ts:12`) open on click, files in their default app, relative to the repository. A file dropped on the window types its path, quoted for the shell.
+- Claude Code asks `ESC ] 7501 ; ?`, its Program Status query, and reports its status only to a terminal that answers. The pane answers `ESC ] 7501 ; ? BEL`.
+
+Every Cmd shortcut goes to the terminal or to the app (`ui/keys.ts`):
+
+| Shortcut | Goes to | Does |
+|---|---|---|
+| Cmd+C | terminal | copies the selection (the Edit menu's Copy) |
+| Cmd+V | terminal | pastes text; with an image, sends Ctrl+V |
+| Cmd+A | terminal | selects all of the scrollback |
+| Cmd+F | terminal | finds in the scrollback: Enter next, Shift+Enter previous, Esc closes |
+| Cmd+K | terminal | clears the scrollback |
+| Cmd+Left, Cmd+Right | terminal | sends Ctrl+A, Ctrl+E: start and end of line |
+| Cmd+Backspace | terminal | sends Ctrl+U: deletes to the line's start |
+| Cmd+1, Cmd+2 | app | opens the session list, the story rail |
+| any other Cmd shortcut, and any Cmd with Shift, Ctrl or Option | app | the app's menu: Cmd+Q, Cmd+W, Cmd+H, Cmd+M and the like |
 
 ## Load the plugin
 

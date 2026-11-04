@@ -3,7 +3,14 @@
 <head>
   <meta charset="utf-8">
   <title>Studio</title>
+  <link rel="stylesheet" href="vendor/xterm.css">
   <link rel="stylesheet" href="style.css">
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-unicode11.js"></script>
+  <script src="vendor/addon-webgl.js"></script>
+  <script src="vendor/addon-search.js"></script>
+  <script src="vendor/addon-web-links.js"></script>
   <script type="module" src="main.js"></script>
 </head>
 <body data-layout="full">
@@ -28,7 +35,7 @@
 
     <!-- The terminal pane (#466) draws into #terminal-body. -->
     <section id="terminal" class="term" aria-label="Terminal">
-      <div class="term-h"><span>terminal</span><span id="size" class="mono"></span></div>
+      <div class="term-h"><span id="terminal-title">terminal</span><span id="size" class="mono"></span></div>
       <div id="terminal-body" class="term-body"></div>
     </section>
 
