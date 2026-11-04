@@ -139,10 +139,6 @@ pub struct Session {
     /// "worker <name> returned", from its latest wake-up until its own next step or Daniel's next
     /// prompt (#410, decision 27).
     pub returned: Option<String>,
-    /// Whether its latest `Stop` listed running background tasks, which a daemon restart would end
-    /// (#322 resolution, point 4).
-    #[serde(skip)]
-    background: bool,
 }
 
 /// A terminal of the daemon, as its `list` gives it, or as its record of the terminals it ran gives
@@ -1866,7 +1862,6 @@ impl Studio {
                         transcript_path: event.transcript_path,
                     });
                 }
-                session.background = event.background_tasks.as_array().is_some_and(|t| !t.is_empty());
                 let mut lines = event.last_assistant_message.lines().map(str::trim);
                 session.stopped = Some(Stopped {
                     card: card_id(&event.session_id, at),
@@ -2131,8 +2126,9 @@ impl Studio {
                 if at_prompt { None } else { program() }
             } else {
                 match latest {
-                    Some(s) if !s.ended && s.in_turn() => Some("a turn".into()),
-                    Some(s) if !s.ended && s.background => Some("background tasks".into()),
+                    // The rule a close asks by (#469).
+                    Some(s) if s.in_turn() => Some("a turn".into()),
+                    Some(s) if s.asks_before_closing => Some("background tasks".into()),
                     Some(s) if !s.ended => None,
                     // Started, with no event yet, or its session ended while the program runs on.
                     _ => program(),
