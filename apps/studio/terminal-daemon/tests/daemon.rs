@@ -33,7 +33,8 @@ impl Daemon {
             .unwrap();
         let d = Daemon { child, dir };
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !d.socket().exists() {
+        // The socket file appears at `bind`, before `listen`, so wait for a connection, not the file.
+        while std::os::unix::net::UnixStream::connect(d.socket()).is_err() {
             assert!(
                 Instant::now() < deadline,
                 "the daemon did not open its socket"
