@@ -18,6 +18,10 @@
 //!   terminal's session, so after `exited` is set it lists what was left behind; `rss_kb` is their sum.
 //!
 //! Unknown requests and fields are ignored.
+//!
+//! Beside the socket, the daemon keeps a record of the terminals it runs, `[{id, argv, cwd}]` ([`record`]), rewritten
+//! at each spawn, exit and forget. It outlives the daemon, so after a crash, a reboot or [`stop`] it lists the
+//! terminals that were lost (#470).
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::Value;
 use std::{
@@ -31,6 +35,39 @@ pub mod daemon;
 
 /// The protocol version this daemon speaks. Bump it only for a change an older app cannot read.
 pub const PROTOCOL: u64 = 1;
+
+/// The record of the terminals the daemon on `socket` runs.
+pub fn record(socket: &Path) -> PathBuf {
+    socket.with_extension("terminals.json")
+}
+
+/// Stops the daemon on `socket`, whatever its protocol, for an upgrade (#322 resolution, point 4): `SIGTERM`, then
+/// the hangup and, after 500 ms, `SIGKILL` to every process of its terminals, as `kill` does. Its record stays.
+pub fn stop(socket: &Path) -> io::Result<()> {
+    let mut client = Client::connect(socket, 0)?;
+    client.send(&serde_json::json!({ "op": "list" }))?;
+    let list = client.recv_until(|v| v["ev"] == "list")?;
+    let terms = list["terms"].as_array().into_iter().flatten();
+    let procs = terms.flat_map(|t| t["processes"].as_array().into_iter().flatten());
+    let pids: Vec<i32> = procs.filter_map(|p| p["pid"].as_i64()).map(|p| p as i32).collect();
+    unsafe { libc::kill(client.daemon_pid as i32, libc::SIGTERM) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while UnixStream::connect(socket).is_ok() {
+        if std::time::Instant::now() > deadline {
+            return Err(io::Error::other("the daemon did not stop"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    for sig in [libc::SIGHUP, libc::SIGKILL] {
+        pids.iter().for_each(|&pid| unsafe {
+            libc::kill(pid, sig);
+        });
+        if sig == libc::SIGHUP {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    Ok(())
+}
 
 /// The one socket the studio's daemon listens on.
 pub fn default_socket() -> PathBuf {
@@ -52,6 +89,8 @@ pub struct Client {
     writer: UnixStream,
     /// The daemon's protocol version, from its `hello`.
     pub protocol: u64,
+    /// The daemon's pid, from its `hello`.
+    pub daemon_pid: u32,
 }
 
 impl Client {
@@ -62,9 +101,11 @@ impl Client {
             reader: BufReader::new(writer.try_clone()?),
             writer,
             protocol: 0,
+            daemon_pid: 0,
         };
         let hello = client.recv()?;
         client.protocol = hello["protocol"].as_u64().unwrap_or(0);
+        client.daemon_pid = hello["daemon_pid"].as_u64().unwrap_or(0) as u32;
         if hello["ev"] != "hello" || client.protocol < min_protocol {
             return Err(io::Error::other(format!(
                 "daemon protocol {} is below {min_protocol}",

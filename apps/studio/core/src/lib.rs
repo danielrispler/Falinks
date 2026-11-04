@@ -130,6 +130,51 @@ pub struct Session {
     /// "worker <name> returned", from its latest wake-up until its own next step or Daniel's next
     /// prompt (#410, decision 27).
     pub returned: Option<String>,
+    /// Whether its latest `Stop` listed running background tasks, which a daemon restart would end
+    /// (#322 resolution, point 4).
+    #[serde(skip)]
+    background: bool,
+}
+
+/// A terminal of the daemon, as its `list` gives it, or as its record of the terminals it ran gives
+/// them after it died (`terminal-daemon/src/lib.rs`). Fields the record lacks are empty.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Terminal {
+    pub id: String,
+    /// What it was spawned with; empty for a login shell.
+    #[serde(default)]
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub cwd: String,
+    /// Its leader's pid, which leads its session.
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub exited: Option<String>,
+    /// The program in its foreground.
+    #[serde(default)]
+    pub foreground: Option<String>,
+    #[serde(default)]
+    pub processes: Vec<Process>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Process {
+    pub pid: u32,
+    pub command: String,
+}
+
+/// How a terminal comes back after its daemon is gone, and what a restart now would end.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Revive {
+    pub id: String,
+    pub cwd: String,
+    /// What it reruns: its spawn's argv, empty for a shell.
+    pub argv: Vec<String>,
+    /// The session to reopen with `claude --resume`, for a Claude terminal whose session is known.
+    pub session: Option<String>,
+    /// What runs in it that a restart would end: a program, "a turn" or "background tasks".
+    pub busy: Option<String>,
 }
 
 /// What happened in a worktree since the last card on it: a session's own, or a subagent's that
@@ -1795,6 +1840,7 @@ impl Studio {
                         transcript_path: event.transcript_path,
                     });
                 }
+                session.background = event.background_tasks.as_array().is_some_and(|t| !t.is_empty());
                 let mut lines = event.last_assistant_message.lines().map(str::trim);
                 session.stopped = Some(Stopped {
                     card: card_id(&event.session_id, at),
@@ -2034,6 +2080,46 @@ impl Studio {
     /// The latest tick, in Unix milliseconds.
     pub fn now(&self) -> u64 {
         self.now
+    }
+
+    /// Whether a daemon restart now ends nothing (#322 resolution, point 4): every shell at its
+    /// prompt and every Claude session between turns with no background tasks.
+    pub fn idle(&self, terms: &[Terminal]) -> bool {
+        self.revival(terms).iter().all(|r| r.busy.is_none())
+    }
+
+    /// How each terminal of `terms` that has not exited comes back in a new daemon: a terminal spawned
+    /// with an argv, a Claude terminal, reopens its latest session with `claude --resume`, whether or
+    /// not the hangup ended it; a shell restarts in its folder. `busy` says what runs in it now.
+    pub fn revival(&self, terms: &[Terminal]) -> Vec<Revive> {
+        let running = terms.iter().filter(|t| t.exited.is_none());
+        let revive = |t: &Terminal| {
+            let linked = self.sessions.values().filter(|s| s.terminal.as_ref() == Some(&t.id));
+            let latest = linked.max_by_key(|s| s.agent.last_event_at);
+            let program = || Some(t.foreground.clone().unwrap_or_else(|| "a program".into()));
+            let busy = if t.argv.is_empty() {
+                // Its leader is the shell, so its prompt is when the shell itself has the foreground.
+                let leader = t.processes.iter().find(|p| Some(p.pid) == t.pid);
+                let at_prompt = leader.is_some_and(|l| Some(&l.command) == t.foreground.as_ref());
+                if at_prompt { None } else { program() }
+            } else {
+                match latest {
+                    Some(s) if !s.ended && s.in_turn() => Some("a turn".into()),
+                    Some(s) if !s.ended && s.background => Some("background tasks".into()),
+                    Some(s) if !s.ended => None,
+                    // Started, with no event yet, or its session ended while the program runs on.
+                    _ => program(),
+                }
+            };
+            Revive {
+                id: t.id.clone(),
+                cwd: t.cwd.clone(),
+                argv: t.argv.clone(),
+                session: (!t.argv.is_empty()).then(|| latest.map(|s| s.agent.id.clone())).flatten(),
+                busy,
+            }
+        };
+        running.map(revive).collect()
     }
 
     pub fn session(&self, id: &str) -> Option<&Session> {

@@ -10,7 +10,7 @@ use std::{
         fd::AsRawFd,
         unix::net::{UnixListener, UnixStream},
     },
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -65,6 +65,25 @@ struct Conn {
 struct State {
     terms: HashMap<String, Term>,
     conns: HashMap<usize, Conn>,
+    /// Where it records the terminals it runs (`crate::record`).
+    record: PathBuf,
+}
+
+impl State {
+    // shortcut: rewrites the whole record under the lock at each change; fine for a few terminals.
+    fn save(&self) {
+        let running = self.terms.iter().filter(|(_, t)| t.exited.is_none());
+        let terms: Vec<Value> = running
+            .map(|(id, t)| json!({ "id": id, "argv": t.argv, "cwd": t.cwd }))
+            .collect();
+        // Written aside and renamed, so a crash mid-write leaves the last whole record.
+        let aside = self.record.with_extension("tmp");
+        let saved = std::fs::write(&aside, json!(terms).to_string())
+            .and_then(|()| std::fs::rename(&aside, &self.record));
+        if let Err(e) = saved {
+            eprintln!("record the terminals: {e}");
+        }
+    }
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -91,7 +110,10 @@ pub fn serve(socket: &Path) -> Result<(), String> {
         std::process::id(),
         socket.display()
     );
-    let state = Shared::default();
+    let state = Shared::new(Mutex::new(State {
+        record: crate::record(socket),
+        ..State::default()
+    }));
     for (n, stream) in listener.incoming().enumerate() {
         let (Ok(stream), state) = (stream, state.clone()) else {
             continue;
@@ -127,6 +149,7 @@ fn on_exit(state: &Shared, id: &str, status: String) {
     if let Some(t) = s.terms.get_mut(id) {
         t.exited = Some(status.clone());
     }
+    s.save();
     broadcast(
         &mut s.conns,
         id,
@@ -203,6 +226,7 @@ fn serve_conn(n: usize, stream: UnixStream, state: Shared) {
                                 exited: None,
                             },
                         );
+                        s.save();
                         json!({ "ev": "spawned", "id": id })
                     }
                     Err(message) => json!({ "ev": "error", "id": id, "message": message }),
@@ -250,6 +274,7 @@ fn serve_conn(n: usize, stream: UnixStream, state: Shared) {
             "forget" => {
                 if let Some(mut t) = s.terms.remove(&id) {
                     kill(&mut t);
+                    s.save();
                 }
             }
             _ => {}
