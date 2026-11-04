@@ -60,6 +60,21 @@ pub fn places() -> Result<studio_workbench::Places, String> {
     studio_workbench::places(Path::new(&repo()))
 }
 
+/// Creates task `name` in the configured repository (#468) and returns its place.
+#[tauri::command(async)]
+pub fn create_task(name: String) -> Result<studio_workbench::Place, String> {
+    studio_workbench::create_task(Path::new(&repo()), &name)
+}
+
+/// Removes the task's worktree at `path`, or, unless `confirmed`, returns what that would lose.
+#[tauri::command(async)]
+pub fn remove_task(
+    path: String,
+    confirmed: bool,
+) -> Result<Option<studio_workbench::Losses>, String> {
+    studio_workbench::remove_task(Path::new(&repo()), &path, confirmed)
+}
+
 /// The command a session's terminal runs: `claude` with the studio plugin of this checkout, whose
 /// hooks run its `studio-hook`, or `claude --resume <resume>` for an ended session.
 #[tauri::command]
