@@ -45,6 +45,10 @@ export type Session = {
   folder_name: string;
   // The studio terminal it runs in, its `STUDIO_TERMINAL_ID`; null when it runs outside the studio.
   terminal: string | null;
+  // Daniel's name for it from the studio (#469); null for its folder's.
+  name: string | null;
+  // Closing its terminal asks first: it is in a turn or has background tasks (#469).
+  asks_before_closing: boolean;
   last_step: Step | null;
   state: SessionState;
   checks: CheckLine[];
