@@ -23,21 +23,26 @@ use std::{
 use studio_terminal_daemon::{Client, PROTOCOL, default_socket};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// The connection's writing half, `None` before the first connect and after the daemon is lost;
-/// whether its daemon is below `PROTOCOL`; and the terminals a dead daemon left in its record.
 #[derive(Default)]
-pub struct Daemon(Mutex<Option<UnixStream>>, Mutex<bool>, Mutex<Vec<Value>>);
+pub struct Daemon {
+    /// The connection's writing half, `None` before the first connect and after the daemon is lost.
+    writer: Mutex<Option<UnixStream>>,
+    /// Whether the daemon is below `PROTOCOL`.
+    outdated: Mutex<bool>,
+    /// The terminals a dead daemon left in its record.
+    lost: Mutex<Vec<Value>>,
+}
 
 /// Connects to the daemon, once per app run until it is lost, and returns `{repo, outdated}`: the
 /// configured repository, where the pane's shell starts, and whether the daemon is below this
 /// app's protocol.
 #[tauri::command(async)]
 pub fn terminal_connect(app: AppHandle, daemon: State<Daemon>) -> Result<Value, String> {
-    let mut writer = daemon.0.lock().unwrap();
+    let mut writer = daemon.writer.lock().unwrap();
     if writer.is_none() {
         let (client, lost) = connect()?;
-        *daemon.1.lock().unwrap() = client.protocol < PROTOCOL;
-        daemon.2.lock().unwrap().extend(lost);
+        *daemon.outdated.lock().unwrap() = client.protocol < PROTOCOL;
+        daemon.lost.lock().unwrap().extend(lost);
         let (reader, stream) = client.split();
         *writer = Some(stream);
         thread::spawn(move || {
@@ -46,18 +51,18 @@ pub fn terminal_connect(app: AppHandle, daemon: State<Daemon>) -> Result<Value, 
                     let _ = app.emit("terminal", event);
                 }
             }
-            app.state::<Daemon>().0.lock().unwrap().take();
+            app.state::<Daemon>().writer.lock().unwrap().take();
             let _ = app.emit("terminal", json!({ "ev": "lost" }));
         });
     }
-    let outdated = *daemon.1.lock().unwrap();
+    let outdated = *daemon.outdated.lock().unwrap();
     Ok(json!({ "repo": repo(), "outdated": outdated }))
 }
 
 /// The terminals the last daemon ran when it died, each once.
 #[tauri::command]
 pub fn terminal_lost(daemon: State<Daemon>) -> Vec<Value> {
-    std::mem::take(&mut daemon.2.lock().unwrap())
+    std::mem::take(&mut daemon.lost.lock().unwrap())
 }
 
 /// Stops the daemon for an upgrade; the read loop then reports it `lost`, and the next connect
@@ -70,7 +75,7 @@ pub fn terminal_upgrade() -> Result<(), String> {
 /// Sends one request, such as `{"op":"input","id":…,"data":…}`, to the daemon.
 #[tauri::command]
 pub fn terminal_send(msg: Value, daemon: State<Daemon>) -> Result<(), String> {
-    let mut writer = daemon.0.lock().unwrap();
+    let mut writer = daemon.writer.lock().unwrap();
     let stream = writer
         .as_mut()
         .ok_or("not connected to the terminal daemon")?;
@@ -99,20 +104,23 @@ pub fn remove_task(
     studio_workbench::remove_task(Path::new(&repo()), &path, confirmed)
 }
 
-/// The command a session's terminal runs: `claude` with the studio plugin of this checkout, whose
-/// hooks run its `studio-hook`, or `claude --resume <resume>` for an ended session.
+/// The command a session's terminal runs: `claude` with the studio plugin of the configured
+/// repository's checkout, whose hooks run its `studio-hook`, or `claude --resume <resume>` for an
+/// ended session. From the repository, not the build folder, so a moved bundle still finds it.
 #[tauri::command]
 pub fn claude_argv(resume: Option<String>) -> Vec<String> {
-    let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).with_file_name("plugin");
+    let plugin = Path::new(&repo()).join("apps/studio/plugin");
     studio_workbench::claude(&plugin, resume.as_deref())
 }
 
 /// Opens a link Daniel clicked in a terminal: an `http(s)` URL, or a file path, absolute or
-/// relative to the configured repository, with any `:line:column` dropped.
+/// relative to the configured repository, with any `:line:column` dropped. A file that could run
+/// when opened is revealed in Finder instead (`reveals`).
 // shortcut: opens files in their default app and loses the line; open in an editor at the line if
 // that matters.
 #[tauri::command]
 pub fn open_link(target: String) -> Result<(), String> {
+    let mut reveal = false;
     let target = if target.starts_with("https://") || target.starts_with("http://") {
         target
     } else {
@@ -124,14 +132,36 @@ pub fn open_link(target: String) -> Result<(), String> {
         if !path.exists() {
             return Err(format!("no such file: {}", path.display()));
         }
+        reveal = reveals(&path);
         path.display().to_string()
     };
     // Never an option: a URL starts with its scheme and a path is absolute.
-    let opened = Command::new("/usr/bin/open").arg(&target).status();
+    let mut open = Command::new("/usr/bin/open");
+    if reveal {
+        open.arg("-R");
+    }
+    let opened = open.arg(&target).status();
     match opened {
         Ok(status) if status.success() => Ok(()),
         _ => Err(format!("could not open {target}")),
     }
+}
+
+/// Whether opening `path` could run it, so a click must only reveal it: an executable file, a
+/// script or app kind that `open` runs, or a directory bundle (a directory with an extension, such
+/// as `Tool.app`).
+fn reveals(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    const RUNS: &[&str] = &[
+        "app", "command", "sh", "tool", "terminal", "fileloc", "jar", "pkg", "mpkg",
+    ];
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+    let Ok(meta) = path.metadata() else {
+        return true;
+    };
+    meta.is_dir() && ext.is_some()
+        || meta.is_file() && meta.permissions().mode() & 0o111 != 0
+        || ext.is_some_and(|e| RUNS.contains(&e.as_str()))
 }
 
 /// Connects to a daemon of any protocol, starting one first when nothing listens on its socket;
@@ -210,4 +240,34 @@ fn repo() -> String {
         .unwrap_or_default()
         .display()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn a_file_that_could_run_is_revealed_and_any_other_opened() {
+        let dir = std::env::temp_dir().join(format!("studio-reveal-{}", std::process::id()));
+        fs::create_dir_all(dir.join("Tool.app")).unwrap();
+        fs::create_dir_all(dir.join("plain")).unwrap();
+        for name in ["notes.md", "run", "go.command", "setup.SH"] {
+            fs::write(dir.join(name), "").unwrap();
+        }
+        fs::set_permissions(dir.join("run"), fs::Permissions::from_mode(0o755)).unwrap();
+        let reveals = |name: &str| super::reveals(&dir.join(name));
+        let revealed: Vec<&str> = [
+            "Tool.app",
+            "plain",
+            "notes.md",
+            "run",
+            "go.command",
+            "setup.SH",
+        ]
+        .into_iter()
+        .filter(|name| reveals(name))
+        .collect();
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(revealed, ["Tool.app", "run", "go.command", "setup.SH"]);
+    }
 }

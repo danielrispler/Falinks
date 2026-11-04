@@ -107,3 +107,29 @@ fn a_rename_of_an_unknown_session_adds_no_row() {
     let studio = Studio::replayed([rename.to_string()]);
     assert!(studio.sessions().is_empty());
 }
+
+// Story 15, decision 8: after Close, the shell appends a `SessionEnd` for each session of the closed
+// terminal, as Claude Code may die before its own hook runs.
+#[test]
+fn the_shells_end_line_after_close_ends_the_row_and_a_late_real_one_is_harmless() {
+    let mut studio = Studio::default();
+    studio.apply(&event(
+        "SessionStart",
+        1_000,
+        json!({ "source": "startup" }),
+    ));
+    let prompt = json!({ "prompt": "Go.", "prompt_id": "p-1" });
+    studio.apply(&event("UserPromptSubmit", 2_000, prompt));
+    let folder = studio.session(ID).unwrap().folder_name.clone();
+
+    let closed = json!({ "session_id": ID, "hook_event_name": "SessionEnd", "reason": "studio_close", "studio_received_ms": 3_000 });
+    assert!(studio.apply(&closed.to_string()).is_empty());
+    let session = studio.session(ID).unwrap();
+    assert_eq!(session.state, State::Ended);
+    assert_eq!(session.folder_name, folder, "the line has no cwd");
+
+    let late = event("SessionEnd", 3_100, json!({ "reason": "other" }));
+    assert!(studio.apply(&late).is_empty());
+    assert_eq!(studio.session(ID).unwrap().state, State::Ended);
+    assert_eq!(studio.sessions().len(), 1);
+}

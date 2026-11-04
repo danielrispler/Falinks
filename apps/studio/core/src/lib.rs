@@ -2104,12 +2104,6 @@ impl Studio {
         self.now
     }
 
-    /// Whether a daemon restart now ends nothing (#322 resolution, point 4): every shell at its
-    /// prompt and every Claude session between turns with no background tasks.
-    pub fn idle(&self, terms: &[Terminal]) -> bool {
-        self.revival(terms).iter().all(|r| r.busy.is_none())
-    }
-
     /// How each terminal of `terms` that has not exited comes back in a new daemon: a terminal spawned
     /// with an argv, a Claude terminal, reopens its latest session with `claude --resume`, whether or
     /// not the hangup ended it; a shell restarts in its folder. `busy` says what runs in it now.

@@ -15,7 +15,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use studio_core::{CardRequest, Notifications, Output, Session, State::NeedsYou, Studio};
+use studio_core::{
+    CardRequest, Notifications, Output, Session,
+    State::{Ended, NeedsYou},
+    Studio,
+};
 use studio_understanding::{
     CardStore, CardWriter, ClaudeWriter, FakeWriter, Fingerprints, Rating, Row, SessionCards,
     Versions, backfilled, fingerprint_changes, millis, worktree_root, write_brief, write_stop,
@@ -188,21 +192,48 @@ fn explain_more(id: String, cards: State<Cards>, writer: State<Writer>) -> Optio
 /// applies and a restart replays (#469). An empty `name` gives the row its folder's again.
 #[tauri::command(async)]
 fn rename(id: String, name: String) -> Result<(), String> {
-    let home = std::env::home_dir().ok_or("no home directory")?;
-    let line = serde_json::json!({
+    append(&[serde_json::json!({
         "session_id": id,
         "hook_event_name": studio_core::RENAME,
         "studio_name": name.trim(),
         "studio_received_ms": millis(),
-    });
+    })])
+}
+
+/// Daniel closed terminal `terminal` (#461, story 15 and decision 8): a `SessionEnd` line in the event
+/// log for each session in it that has not ended, as its `claude` may die before its own hook runs.
+/// A real `SessionEnd` after it changes nothing.
+#[tauri::command(async)]
+fn closed(terminal: String, studio: State<Mutex<Studio>>) -> Result<(), String> {
+    let lines: Vec<serde_json::Value> = studio
+        .lock()
+        .unwrap()
+        .sessions()
+        .into_iter()
+        .filter(|s| s.terminal.as_deref() == Some(&terminal) && s.state != Ended)
+        .map(|s| {
+            serde_json::json!({
+                "session_id": s.agent.id,
+                "hook_event_name": "SessionEnd",
+                "reason": "studio_close",
+                "studio_received_ms": millis(),
+            })
+        })
+        .collect();
+    append(&lines)
+}
+
+/// Appends `lines` to the event log in one write under the lock the hook takes, so they never
+/// interleave with a hook's line.
+fn append(lines: &[serde_json::Value]) -> Result<(), String> {
+    let home = std::env::home_dir().ok_or("no home directory")?;
     let open = OpenOptions::new()
         .append(true)
         .open(studio_hook::event_log(&home));
-    // One write under the lock the hook takes, so the line never interleaves with a hook's.
     let mut log = open.map_err(|e| e.to_string())?;
     log.lock().map_err(|e| e.to_string())?;
-    log.write_all(format!("{line}\n").as_bytes())
-        .map_err(|e| e.to_string())
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    log.write_all(text.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Logs a card store change that could not be saved; it stays in memory until the next save.
@@ -247,6 +278,7 @@ fn main() {
             rate,
             explain_more,
             rename,
+            closed,
             terminal::terminal_connect,
             terminal::terminal_send,
             terminal::open_link,

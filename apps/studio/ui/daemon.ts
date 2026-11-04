@@ -29,7 +29,8 @@ export const connect = () => invoke<Config>("terminal_connect");
 // Sends one request, such as `{ op: "attach", id }`.
 export const request = (msg: Record<string, unknown>) => invoke<void>("terminal_send", { msg });
 
-// Every daemon event, for every terminal; each pane keeps those of its own id.
+// Every daemon event, for every terminal; each pane keeps those of its own id. Resolves, once
+// listening, to the function that stops it.
 export const onEvent = (handler: (event: DaemonEvent) => void) => listen<DaemonEvent>("terminal", handler);
 
 // One terminal in the daemon's `list` reply.

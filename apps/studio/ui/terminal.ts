@@ -19,8 +19,10 @@ const utf8 = new TextEncoder();
 const openLink = (target: string) => invoke("open_link", { target }).catch((e) => console.warn(e));
 
 // Draws terminal `id` of the daemon into `place`, spawning it in `cwd` running `argv` (empty: a login
-// shell) unless it already runs. A terminal that exited, or a daemon that is gone, starts again at
-// the next key; one whose daemon is gone comes back through `panes.ts` (#470).
+// shell) unless it already runs. A shell that exited starts again at the next key; an exited Claude
+// terminal does not, as its new conversation would keep this id: "Open" starts one in a new terminal,
+// so each conversation gets a fresh `STUDIO_TERMINAL_ID` (#467). One whose daemon is gone comes back
+// through `panes.ts` (#470). Disposing the returned terminal stops the pane's listeners.
 export function openPane(place: HTMLElement, id: string, cwd: string, argv: string[] = []): Xterm.Terminal {
   const css = getComputedStyle(document.documentElement);
   const value = (name: string) => css.getPropertyValue(name).trim();
@@ -69,20 +71,22 @@ export function openPane(place: HTMLElement, id: string, cwd: string, argv: stri
     forget.then(start).catch((e) => note(`${e}`));
   }
   const note = (text: string) => term.write(`\r\n\x1b[2m[${text}]\x1b[0m\r\n`);
+  const exited = (status: string) =>
+    note(argv.length ? `claude exited: ${status}; Open in the story starts it again` : `exited: ${status}; press a key for a new shell`);
   const input = (data: string) => {
     if (quiet) return;
-    if (ended === "lost") return;
+    if (ended === "lost" || (ended === "exited" && argv.length > 0)) return;
     if (ended) return restart();
     request({ op: "input", id, data: encode(utf8.encode(data)) });
   };
 
-  onEvent((event) => {
+  const listening = onEvent((event) => {
     if (event.id !== undefined && event.id !== id) return;
-    if (event.ev === "replay" && event.exited) {
-      // It ended while the app was away: a new one starts in its place.
+    if (event.ev === "replay" && event.exited && argv.length === 0) {
+      // A shell that ended while the app was away: a new one starts in its place.
       request({ op: "forget", id }).then(start);
     } else if (event.ev === "replay") {
-      ended = null;
+      ended = event.exited ? "exited" : null;
       // At the size its bytes were written for, then fitted, which redraws full-screen programs.
       term.reset();
       term.resize(event.cols ?? term.cols, event.rows ?? term.rows);
@@ -91,11 +95,12 @@ export function openPane(place: HTMLElement, id: string, cwd: string, argv: stri
         quiet = false;
         fit.fit();
       });
+      if (event.exited) exited(event.exited);
     } else if (event.ev === "output") {
       term.write(decode(event.data ?? ""));
     } else if (event.ev === "exit") {
       ended = "exited";
-      note(`exited: ${event.status}; press a key for a new shell`);
+      exited(event.status ?? "");
     } else if (event.ev === "lost") {
       // `panes.ts` reconnects and brings the terminal back (#470).
       ended = "lost";
@@ -103,12 +108,14 @@ export function openPane(place: HTMLElement, id: string, cwd: string, argv: stri
     } else if (event.ev === "error" && event.message !== "the id is taken") {
       note(event.message ?? "error");
     }
-  }).then(() => start().catch((e) => note(`${e}`)));
+  });
+  listening.then(() => start().catch((e) => note(`${e}`)));
 
   term.onData(input);
   term.onBinary((data) => !quiet && request({ op: "input", id, data: btoa(data) }));
   term.onResize(({ cols, rows }) => request({ op: "resize", id, cols, rows }));
-  new ResizeObserver(() => fit.fit()).observe(place);
+  const resizes = new ResizeObserver(() => fit.fit());
+  resizes.observe(place);
 
   // Claude Code asks `ESC ] 7501 ; ?` and reports its status (`state=working:app=claude-code:…`) only
   // to a terminal that answers; any reply whose data starts with `?` counts (#466).
@@ -183,10 +190,18 @@ export function openPane(place: HTMLElement, id: string, cwd: string, argv: stri
     },
   });
   // A file dropped on the window types its path into the visible pane.
-  listen<{ paths: string[] }>("tauri://drag-drop", ({ paths }) => {
+  const drops = listen<{ paths: string[] }>("tauri://drag-drop", ({ paths }) => {
     if (place.offsetParent === null) return;
     input(paths.map(quotePath).join(" ") + " ");
     term.focus();
+  });
+  // `term.dispose()` (`closePane`) disposes every addon, so this one stops the pane's listeners.
+  term.loadAddon({
+    activate() {},
+    dispose() {
+      resizes.disconnect();
+      for (const stop of [listening, drops]) stop.then((off) => off());
+    },
   });
 
   term.focus();

@@ -495,12 +495,14 @@ impl CardWriter for FakeWriter {
     }
 
     fn rewrite(&self, _: &[&str], _: &[String], _: &str) -> Result<String, String> {
-        let brief = "A sample brief from the fake writer, rewritten.\nIt does not read the session.";
+        let brief =
+            "A sample brief from the fake writer, rewritten.\nIt does not read the session.";
         Ok(serde_json::json!({ "brief": brief }).to_string())
     }
 
     fn update(&self, brief: &str, _: &str) -> Result<String, String> {
-        let brief = format!("{brief}\nThe workers came back, and the session itself changed nothing.");
+        let brief =
+            format!("{brief}\nThe workers came back, and the session itself changed nothing.");
         Ok(serde_json::json!({ "brief": brief }).to_string())
     }
 }
@@ -764,7 +766,7 @@ const MIN_PROMPT: usize = 4 << 10;
 
 /// The explanation language, one paragraph in each of the writer's instructions below. A macro, as
 /// `concat!` takes literals and no `const`.
-macro_rules! english {
+macro_rules! explanation_language {
     () => {
         "Write in English, in plain words a developer new to this code follows. Wrap code, code terms, file paths \
          and commands in backticks."
@@ -779,7 +781,7 @@ const PROMPT: &str = concat!(
 Answer from the input below: the summaries of the earlier cards on the same prompt of his, the brief so far, and the diff. Use only this input: do not use tools or read files.
 
 "#,
-    english!(),
+    explanation_language!(),
     r#"
 
 Reply with one JSON object and nothing else:
@@ -809,7 +811,7 @@ const UPDATE: &str = concat!(
 Answer from the input below: the brief so far, and the agent's workers, each with its status and the summaries of its cards since then. Use only this input: do not use tools or read files. Keep what still holds. Its last line says what came back.
 
 "#,
-    english!(),
+    explanation_language!(),
     r#"
 
 Reply with one JSON object and nothing else: {"brief": string}
@@ -825,7 +827,7 @@ const REWRITE: &str = concat!(
 Answer from the input below: the developer's prompts, the one-line summaries of the session's cards, and `git diff --stat` since the session began. Use only this input: do not use tools or read files.
 
 "#,
-    english!(),
+    explanation_language!(),
     r#"
 
 Reply with one JSON object and nothing else: {"brief": string}
@@ -842,7 +844,7 @@ Answer from the change below. Use only this input: do not use tools or read file
 When the change is not a diff but the agent's workers with the summaries of their cards, the agent changed nothing itself and handed the work to them: explain how the work was split and what came back, and do not invent code you were not shown.
 
 "#,
-    english!(),
+    explanation_language!(),
     r#"
 
 Reply with the explanation only, in at most three short paragraphs: no JSON and no heading.

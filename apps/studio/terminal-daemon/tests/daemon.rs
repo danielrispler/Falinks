@@ -223,7 +223,10 @@ fn killing_a_terminal_leaves_no_process_of_its_group() {
             .unwrap()
             .is_empty()
     });
-    assert!(!term(&list(&mut c), "t1")["exited"].is_null());
+    // The killed shell leaves `ps` before the daemon's waiter thread reaps it and records the exit.
+    wait_for("the exit", || {
+        !term(&list(&mut c), "t1")["exited"].is_null()
+    });
     c.send(&json!({ "op": "forget", "id": "t1" })).unwrap();
     wait_for("forget", || {
         list(&mut c)["terms"].as_array().unwrap().is_empty()
@@ -360,4 +363,55 @@ fn stopping_the_daemon_ends_its_terminals_and_leaves_the_record_of_the_running_o
     assert!(Client::connect(&d.socket(), 0).is_err());
     wait_for("t1's process to end", || unsafe { libc::kill(pid, 0) } != 0);
     assert_eq!(recorded(&d), running);
+}
+
+// #470: a shell comes back in the folder it moved to, not the one it started in.
+#[test]
+fn list_and_the_record_give_the_folder_a_shell_moved_to() {
+    let d = Daemon::start("cwd");
+    let mut c = d.client();
+    spawn(
+        &mut c,
+        "t1",
+        &["sh", "-c", "cd /usr/bin && echo moved && sleep 1000"],
+    );
+    c.send(&json!({ "op": "attach", "id": "t1" })).unwrap();
+    output_until(&mut c, "t1", "moved");
+    assert_eq!(term(&list(&mut c), "t1")["cwd"], "/usr/bin");
+    assert_eq!(
+        recorded(&d)[0],
+        r#""t1" ["sh","-c","cd /usr/bin && echo moved && sleep 1000"] "/usr/bin""#
+    );
+}
+
+// A client that stops reading must not stall the daemon: it is dropped once too far behind, and every
+// other terminal keeps flowing.
+#[test]
+fn a_client_that_stops_reading_leaves_the_other_terminals_flowing() {
+    let d = Daemon::start("stall");
+    let mut stalled = d.client();
+    spawn(&mut stalled, "flood", &["yes"]);
+    stalled
+        .send(&json!({ "op": "attach", "id": "flood" }))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    let socket = d.socket();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut other = Client::connect(&socket, 1).unwrap();
+        spawn(&mut other, "t2", &["cat"]);
+        other.send(&json!({ "op": "attach", "id": "t2" })).unwrap();
+        let data = studio_terminal_daemon::encode(b"still\n");
+        other
+            .send(&json!({ "op": "input", "id": "t2", "data": data }))
+            .unwrap();
+        output_until(&mut other, "t2", "still\r\nstill");
+        let _ = done.send(());
+    });
+    finished
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the other terminal stalled behind a client that stopped reading");
+    // The stalled client was dropped: what was sent before ends at the socket's close.
+    while stalled.recv().is_ok() {}
 }

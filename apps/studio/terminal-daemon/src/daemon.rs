@@ -6,13 +6,16 @@ use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     io::{BufRead, BufReader, Read, Write},
+    net::Shutdown,
     os::{
         fd::AsRawFd,
         unix::net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::Duration,
+    sync::{
+        Arc, Mutex,
+        mpsc::{SyncSender, sync_channel},
+    },
 };
 
 // shortcut: raw bytes, cut at a fixed size, replay garbled if the cut lands mid-sequence or after a screen switch;
@@ -49,6 +52,7 @@ struct Pty {
 struct Term {
     pty: Pty,
     argv: Vec<String>,
+    /// Where it was spawned; `Term::cwd` gives where it is now.
     cwd: String,
     buf: VecDeque<u8>,
     cols: u16,
@@ -56,9 +60,50 @@ struct Term {
     exited: Option<String>,
 }
 
+impl Term {
+    // The folder its leader is in now, such as where a shell `cd`-ed to, so a revived shell starts there (#470); the
+    // spawn's folder once it exited, as its pid may name another process by then.
+    fn cwd(&self) -> String {
+        let pid = self.pty.pid.filter(|_| self.exited.is_none());
+        pid.and_then(current_dir)
+            .unwrap_or_else(|| self.cwd.clone())
+    }
+}
+
+// Process `pid`'s current folder, from the kernel.
+fn current_dir(pid: u32) -> Option<String> {
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    let flavor = libc::PROC_PIDVNODEPATHINFO;
+    let read = unsafe { libc::proc_pidinfo(pid as i32, flavor, 0, (&raw mut info).cast(), size) };
+    if read != size {
+        return None;
+    }
+    let path = unsafe { std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast()) };
+    Some(path.to_string_lossy().into_owned()).filter(|p| !p.is_empty())
+}
+
+// A client further behind than this many messages (each `output` at most 16 KB) is dropped, so one that stops
+// reading never holds up the others.
+const BACKLOG: usize = 1024;
+
+// Nothing writes to a client's socket under the state lock: its messages go to a queue its own thread writes out.
 struct Conn {
+    queue: SyncSender<String>,
     stream: UnixStream,
     attached: HashSet<String>,
+}
+
+impl Conn {
+    // Queues `msg`; false when the client is gone or too far behind, and then closes its socket, which ends its
+    // reading thread.
+    fn send(&self, msg: &Value) -> bool {
+        let sent = self.queue.try_send(format!("{msg}\n")).is_ok();
+        if !sent {
+            let _ = self.stream.shutdown(Shutdown::Both);
+        }
+        sent
+    }
 }
 
 #[derive(Default)]
@@ -70,11 +115,18 @@ struct State {
 }
 
 impl State {
+    // Sends `msg` to client `n`, and drops it when it is gone or too far behind.
+    fn reply(&mut self, n: usize, msg: &Value) {
+        if self.conns.get(&n).is_some_and(|c| !c.send(msg)) {
+            self.conns.remove(&n);
+        }
+    }
+
     // shortcut: rewrites the whole record under the lock at each change; fine for a few terminals.
     fn save(&self) {
         let running = self.terms.iter().filter(|(_, t)| t.exited.is_none());
         let terms: Vec<Value> = running
-            .map(|(id, t)| json!({ "id": id, "argv": t.argv, "cwd": t.cwd }))
+            .map(|(id, t)| json!({ "id": id, "argv": t.argv, "cwd": t.cwd() }))
             .collect();
         // Written aside and renamed, so a crash mid-write leaves the last whole record.
         let aside = self.record.with_extension("tmp");
@@ -124,10 +176,14 @@ pub fn serve(socket: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// Writes to every client attached to `id`, and drops clients whose socket is gone (the app quit or crashed).
+// Sends to every client attached to `id`, and drops clients that are gone (the app quit or crashed) or too far
+// behind.
 fn broadcast(conns: &mut HashMap<usize, Conn>, id: &str, msg: &Value) {
-    let line = format!("{msg}\n");
-    conns.retain(|_, c| !c.attached.contains(id) || c.stream.write_all(line.as_bytes()).is_ok());
+    conns.retain(|_, c| !c.attached.contains(id) || c.send(msg));
+}
+
+fn error(id: &str, message: &str) -> Value {
+    json!({ "ev": "error", "id": id, "message": message })
 }
 
 fn on_output(state: &Shared, id: &str, bytes: &[u8]) {
@@ -158,15 +214,23 @@ fn on_exit(state: &Shared, id: &str, status: String) {
 }
 
 fn serve_conn(n: usize, stream: UnixStream, state: Shared) {
-    let mut out = stream.try_clone().unwrap();
-    let hello = json!({ "ev": "hello", "protocol": PROTOCOL, "daemon_pid": std::process::id() });
-    if writeln!(out, "{hello}").is_err() {
+    let (Ok(mut out), Ok(shut)) = (stream.try_clone(), stream.try_clone()) else {
         return;
-    }
+    };
+    let (queue, lines) = sync_channel::<String>(BACKLOG);
+    std::thread::spawn(move || {
+        for line in lines {
+            if out.write_all(line.as_bytes()).is_err() {
+                break;
+            }
+        }
+    });
     let conn = Conn {
-        stream: stream.try_clone().unwrap(),
+        queue,
+        stream: shut,
         attached: HashSet::new(),
     };
+    conn.send(&json!({ "ev": "hello", "protocol": PROTOCOL, "daemon_pid": std::process::id() }));
     state.lock().unwrap().conns.insert(n, conn);
     for line in BufReader::new(stream).lines() {
         let Ok(line) = line else { break };
@@ -184,19 +248,13 @@ fn serve_conn(n: usize, stream: UnixStream, state: Shared) {
         if op == "list" {
             // Outside the lock: `ps` is slow, and output must keep flowing meanwhile.
             let msg = list(&state);
-            let _ = writeln!(out, "{msg}");
+            state.lock().unwrap().reply(n, &msg);
             continue;
         }
-        // Every write happens under this lock, so a replay and the live output after it never interleave.
+        // Every message is queued under this lock, so a replay and the live output after it never interleave.
         let s = &mut *state.lock().unwrap();
         match op {
-            "spawn" if s.terms.contains_key(&id) => {
-                let _ = writeln!(
-                    out,
-                    "{}",
-                    json!({ "ev": "error", "id": id, "message": "the id is taken" })
-                );
-            }
+            "spawn" if s.terms.contains_key(&id) => s.reply(n, &error(&id, "the id is taken")),
             "spawn" => {
                 let argv: Vec<String> =
                     serde_json::from_value(req["argv"].clone()).unwrap_or_default();
@@ -229,26 +287,20 @@ fn serve_conn(n: usize, stream: UnixStream, state: Shared) {
                         s.save();
                         json!({ "ev": "spawned", "id": id })
                     }
-                    Err(message) => json!({ "ev": "error", "id": id, "message": message }),
+                    Err(message) => error(&id, &message),
                 };
-                let _ = writeln!(out, "{reply}");
+                s.reply(n, &reply);
             }
             "attach" => match s.terms.get_mut(&id) {
                 Some(t) => {
                     let msg = json!({ "ev": "replay", "id": id, "data": encode(t.buf.make_contiguous()),
                                       "cols": t.cols, "rows": t.rows, "exited": t.exited });
-                    let _ = writeln!(out, "{msg}");
+                    s.reply(n, &msg);
                     if let Some(c) = s.conns.get_mut(&n) {
                         c.attached.insert(id);
                     }
                 }
-                None => {
-                    let _ = writeln!(
-                        out,
-                        "{}",
-                        json!({ "ev": "error", "id": id, "message": "no such terminal" })
-                    );
-                }
+                None => s.reply(n, &error(&id, "no such terminal")),
             },
             "input" => {
                 if let Some(t) = s.terms.get_mut(&id) {
@@ -363,17 +415,13 @@ fn spawn(
 fn kill(t: &mut Term) {
     let _ = t.pty.killer.kill();
     let Some(sid) = t.pty.pid else { return };
-    let signal_all = move |sig| {
-        for p in session(&processes(), sid) {
-            unsafe { libc::kill(p.pid as i32, sig) };
-        }
+    let pids = move || {
+        session(&processes(), sid)
+            .iter()
+            .map(|p| p.pid as i32)
+            .collect()
     };
-    signal_all(libc::SIGHUP);
-    // A grace period for shells to save history, then whatever ignored the hangup.
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
-        signal_all(libc::SIGKILL);
-    });
+    std::thread::spawn(move || crate::hang_up(pids));
 }
 
 struct Proc {
@@ -420,10 +468,12 @@ fn list(state: &Shared) -> Value {
     // Read under the lock; `ps` runs after it, so output keeps flowing meanwhile.
     let terms: Vec<(Value, Option<u32>, Option<u32>)> = {
         let s = state.lock().unwrap();
+        // The record follows the shells' folders too; `stop` lists just before it stops the daemon.
+        s.save();
         s.terms
             .iter()
             .map(|(id, t)| {
-                let row = json!({ "id": id, "argv": t.argv, "cwd": t.cwd, "pid": t.pty.pid, "exited": t.exited,
+                let row = json!({ "id": id, "argv": t.argv, "cwd": t.cwd(), "pid": t.pty.pid, "exited": t.exited,
                                   "cols": t.cols, "rows": t.rows, "scrollback_bytes": t.buf.len() });
                 (row, t.pty.pid, t.pty.master.process_group_leader().map(|p| p as u32))
             })

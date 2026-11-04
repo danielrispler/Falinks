@@ -52,6 +52,11 @@ fn replayed(lines: &[String]) -> Studio {
     Studio::replayed(lines)
 }
 
+/// Whether a daemon restart now ends nothing, as the window asks it: no terminal is `busy`.
+fn idle(studio: &Studio, terms: &[Terminal]) -> bool {
+    studio.revival(terms).iter().all(|r| r.busy.is_none())
+}
+
 fn started() -> Vec<String> {
     vec![event("SessionStart", json!({ "source": "startup" }))]
 }
@@ -74,31 +79,31 @@ fn stopped(tasks: Value) -> Vec<String> {
 #[test]
 fn idle_when_the_shell_is_at_its_prompt_and_the_session_between_turns() {
     let studio = replayed(&stopped(json!([])));
-    assert!(studio.idle(&[shell("-zsh"), claude()]));
+    assert!(idle(&studio, &[shell("-zsh"), claude()]));
     // A session that started and has had no prompt yet is between turns too.
-    assert!(replayed(&started()).idle(&[shell("-zsh"), claude()]));
+    assert!(idle(&replayed(&started()), &[shell("-zsh"), claude()]));
     // No terminal at all is idle.
-    assert!(studio.idle(&[]));
+    assert!(idle(&studio, &[]));
 }
 
 #[test]
 fn a_program_in_a_shell_is_not_idle() {
     let studio = replayed(&stopped(json!([])));
-    assert!(!studio.idle(&[shell("cargo"), claude()]));
+    assert!(!idle(&studio, &[shell("cargo"), claude()]));
     let revival = studio.revival(&[shell("cargo")]);
     assert_eq!(revival[0].busy.as_deref(), Some("cargo"));
 }
 
 #[test]
 fn a_session_in_a_turn_is_not_idle() {
-    assert!(!replayed(&in_turn()).idle(&[shell("-zsh"), claude()]));
+    assert!(!idle(&replayed(&in_turn()), &[shell("-zsh"), claude()]));
 }
 
 #[test]
 fn a_session_with_background_tasks_is_not_idle_until_a_stop_lists_none() {
     let tasks = json!([{ "id": "b1", "type": "local_bash", "status": "running" }]);
     let mut lines = stopped(tasks);
-    assert!(!replayed(&lines).idle(&[claude()]));
+    assert!(!idle(&replayed(&lines), &[claude()]));
     let revival = replayed(&lines).revival(&[claude()]);
     assert_eq!(revival[0].busy.as_deref(), Some("background tasks"));
     // Its wake-up opens a turn, whose `Stop` lists no task.
@@ -110,7 +115,7 @@ fn a_session_with_background_tasks_is_not_idle_until_a_stop_lists_none() {
         "Stop",
         json!({ "background_tasks": [], "prompt_id": "p-2" }),
     ));
-    assert!(replayed(&lines).idle(&[claude()]));
+    assert!(idle(&replayed(&lines), &[claude()]));
 }
 
 #[test]
@@ -118,14 +123,14 @@ fn an_exited_terminal_is_idle_and_not_revived() {
     let studio = replayed(&in_turn());
     let mut gone = claude();
     gone.exited = Some("code 0".into());
-    assert!(studio.idle(&[gone.clone()]));
+    assert!(idle(&studio, &[gone.clone()]));
     assert!(studio.revival(&[gone]).is_empty());
 }
 
 #[test]
 fn a_claude_terminal_with_no_session_yet_is_busy() {
     let studio = replayed(&[]);
-    assert!(!studio.idle(&[claude()]));
+    assert!(!idle(&studio, &[claude()]));
 }
 
 #[test]
