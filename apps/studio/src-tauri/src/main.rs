@@ -23,6 +23,7 @@ use studio_understanding::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
+mod restart;
 mod terminal;
 
 /// The card store, which the log thread adds to and the pane records guesses in.
@@ -226,6 +227,8 @@ fn main() {
         _ => Arc::new(ClaudeWriter::beside(&log).expect("create the card writer's folder")),
     };
     tauri::Builder::default()
+        // First, so a second instance exits before it sets anything up (#470).
+        .plugin(tauri_plugin_single_instance::init(restart::second_instance))
         .plugin(tauri_plugin_notification::init())
         .manage(Mutex::new(studio))
         .manage(Cards::new(store))
@@ -250,10 +253,15 @@ fn main() {
             terminal::places,
             terminal::claude_argv,
             terminal::create_task,
-            terminal::remove_task
+            terminal::remove_task,
+            terminal::terminal_lost,
+            terminal::terminal_upgrade,
+            restart::revival,
+            restart::restart_into
         ])
         .setup(move |app| {
             let app = app.handle().clone();
+            restart::watch_build(app.clone());
             thread::spawn(move || follow(&app, &log, &writer));
             Ok(())
         })
@@ -396,6 +404,7 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
         // The cards also change with no line read: a card arrives, or one turns 30 minutes old.
         sent.cards(app);
         live = true;
+        restart::REPLAYED.store(true, std::sync::atomic::Ordering::Release);
         thread::sleep(Duration::from_millis(200));
     }
 }

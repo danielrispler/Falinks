@@ -207,11 +207,14 @@ fn killing_a_terminal_leaves_no_process_of_its_group() {
     );
     c.send(&json!({ "op": "attach", "id": "t1" })).unwrap();
     output_until(&mut c, "t1", "started");
-    let before = term(&list(&mut c), "t1")["processes"]
-        .as_array()
-        .unwrap()
-        .len();
-    assert!(before >= 3, "{}", term(&list(&mut c), "t1"));
+    // `echo` can run before a background `sleep` shows in `ps` under load, so wait for all three.
+    wait_for("the shell and both sleeps", || {
+        term(&list(&mut c), "t1")["processes"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 3
+    });
 
     c.send(&json!({ "op": "kill", "id": "t1" })).unwrap();
     wait_for("every process of the terminal to end", || {
@@ -324,4 +327,37 @@ fn scrollback_is_cut_at_a_fixed_size() {
     wait_for("the full scrollback", || {
         term(&list(&mut c), "t1")["scrollback_bytes"] == studio_terminal_daemon::daemon::SCROLLBACK
     });
+}
+
+// #470: the daemon keeps a record of the terminals it runs, which outlives it, so the app can revive
+// them after a crash, a reboot or `stop`.
+fn recorded(d: &Daemon) -> Vec<String> {
+    let record = studio_terminal_daemon::record(&d.socket());
+    let terms: Value = std::fs::read_to_string(record)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(json!([]));
+    let line = |t: &Value| format!("{} {} {}", t["id"], t["argv"], t["cwd"]);
+    terms.as_array().unwrap().iter().map(line).collect()
+}
+
+#[test]
+fn stopping_the_daemon_ends_its_terminals_and_leaves_the_record_of_the_running_ones() {
+    let d = Daemon::start("stop");
+    let mut c = d.client();
+    spawn(&mut c, "t1", &["cat"]);
+    spawn(&mut c, "t2", &["sh", "-c", "exit 0"]);
+    wait_for("t2's exit", || {
+        !term(&list(&mut c), "t2")["exited"].is_null()
+    });
+    spawn(&mut c, "t3", &["cat"]);
+    c.send(&json!({ "op": "forget", "id": "t3" })).unwrap();
+    let running = [r#""t1" ["cat"] "/""#];
+    wait_for("the record", || recorded(&d) == running);
+    let pid = term(&list(&mut c), "t1")["pid"].as_i64().unwrap() as i32;
+
+    studio_terminal_daemon::stop(&d.socket()).unwrap();
+    assert!(Client::connect(&d.socket(), 0).is_err());
+    wait_for("t1's process to end", || unsafe { libc::kill(pid, 0) } != 0);
+    assert_eq!(recorded(&d), running);
 }
