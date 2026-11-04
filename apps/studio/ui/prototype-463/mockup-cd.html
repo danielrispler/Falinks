@@ -1,0 +1,479 @@
+<!doctype html>
+<!--
+  PROTOTYPE for #463, throwaway. Round 2: A's layout (list | terminal | rail), B's look, the story in the rail.
+  Two variants on one page, ?variant=C or ?variant=D, switched in the bottom bar:
+    C, "Full story": the rail repeats the turn in full: every step line, every response.
+    D, "Digest": the rail holds only what the TUI lacks: intentions with grouped steps and times, the
+       check card, decisions, the open question. Responses stay in the terminal; "read wide" shows one.
+  Layout follows the width rules: the terminal keeps >= 100 columns, measured live in its header. The list
+  collapses first to a 48px strip, then the rail becomes an overlay.
+  Data: session 477b6b89 (#338), 3 Nov, 17:16 and 17:21. "example" marks illustrative items. English only for now.
+-->
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<title>Studio · mockups C/D (#463 prototype)</title>
+<style>
+/* Tokens: B's dark theme, A's grid. */
+:root {
+  --bg: #161719; --surface: #1d1e21; --raised: #24262a; --line: #31343a; --line-soft: #282a2f;
+  --fg: #e7e5df; --muted: #a09d95; --faint: #6f6c66;
+  --term-bg: #0f1011; --term-fg: #d4d2cc;
+  --needs-you: #ff8f5e; --needs-you-bg: #3a2318; --needs-you-line: #6b3a24;
+  --font: -apple-system, system-ui, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --size: 13.5px; --size-read: 14.5px; --size-small: 12px; --size-mono: 12.5px; --term-line: 1.5;
+  --radius: 4px; --list: 248px; --strip: 48px; --rail: 520px; --wide: 760px; --bar: 34px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: var(--size)/1.55 var(--font); overflow: hidden; font-variant-numeric: lining-nums tabular-nums; }
+body[data-moment="16"] .m21, body[data-moment="21"] .m16 { display: none !important; }
+body[data-variant="C"] .vD, body[data-variant="D"] .vC { display: none !important; }
+code, .mono { font-family: var(--mono); font-size: var(--size-mono); unicode-bidi: isolate; direction: ltr; }
+code { background: var(--raised); border-radius: 3px; padding: 0 4px; }
+button { font: inherit; color: inherit; }
+.muted { color: var(--muted); } .faint { color: var(--faint); } .you { color: var(--needs-you); }
+.example { border-bottom: 1px dotted var(--faint); }
+.example::after { content: " example"; font-size: 10px; color: var(--faint); vertical-align: super; }
+.sp { flex: 1; }
+
+/* The window. RTL grid: list on the right, terminal in the centre, rail on the left. */
+.app { direction: rtl; display: grid; grid-template-rows: var(--bar) 1fr; grid-template-columns: var(--list) 1fr var(--rail); height: 100vh; }
+body[data-layout="strip"] .app { grid-template-columns: var(--strip) 1fr var(--rail); }
+body[data-layout="overlay"] .app { grid-template-columns: var(--strip) 1fr 0; }
+
+.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 14px; background: var(--surface); border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
+.top h1 { font-size: 14px; margin: 0; font-weight: 600; }
+.top .k { color: var(--faint); font-size: var(--size-small); margin-inline-end: 4px; }
+.top .meter { font-size: var(--size-small); color: var(--muted); }
+.top button { border: 1px solid var(--line); background: none; border-radius: var(--radius); padding: 1px 9px; cursor: pointer; font-size: var(--size-small); color: var(--muted); }
+
+/* Session list: full, or a 48px strip that opens on click or ⌘1, over the terminal. */
+.list { background: var(--surface); border-left: 1px solid var(--line); overflow-y: auto; position: relative; z-index: 3; }
+.full { padding: 8px 6px; }
+.strip { display: none; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; }
+body[data-layout="strip"] .full, body[data-layout="overlay"] .full { display: none; }
+body[data-layout="strip"] .strip, body[data-layout="overlay"] .strip { display: flex; }
+body.list-open .full { display: block !important; position: fixed; top: var(--bar); bottom: 0; right: 0; width: var(--list); background: var(--surface); border-left: 1px solid var(--line); box-shadow: -8px 0 24px #0008; overflow-y: auto; z-index: 6; }
+.strip button { width: 40px; border: 0; background: none; border-radius: var(--radius); padding: 4px 0; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; font: 10.5px var(--mono); color: var(--muted); }
+.strip button[aria-pressed="true"] { background: var(--raised); color: var(--fg); }
+.strip .open { font-size: 14px; color: var(--faint); }
+.group { margin: 10px 8px 4px; font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--muted); display: flex; justify-content: space-between; }
+.row { display: block; width: 100%; text-align: start; border: 0; background: none; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
+.row[aria-pressed="true"] { background: var(--raised); }
+.row .l1 { display: flex; gap: 6px; align-items: center; }
+.row .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .state { margin-inline-start: auto; font-size: var(--size-small); color: var(--muted); white-space: nowrap; }
+.row .l2, .row .l3 { font-size: var(--size-small); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .l3 { color: var(--faint); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+.dot.run { background: var(--fg); } .dot.you { background: var(--needs-you); box-shadow: 0 0 0 3px var(--needs-you-bg); }
+.new { margin: 8px; width: calc(100% - 16px); padding: 5px; border: 1px dashed var(--line); border-radius: var(--radius); background: none; color: var(--muted); cursor: pointer; }
+
+/* Terminal, LTR. Its header shows the columns and rows it measured. */
+.term { background: var(--term-bg); color: var(--term-fg); display: grid; grid-template-rows: 26px 1fr; min-width: 0; min-height: 0; }
+.term-h { display: flex; gap: 12px; align-items: center; padding: 0 14px; font-size: 11.5px; color: var(--faint); border-bottom: 1px solid var(--line-soft); white-space: nowrap; overflow: hidden; }
+#size { color: var(--muted); font-family: var(--mono); }
+.term pre { margin: 0; padding: 8px 14px; overflow: auto; font: var(--size-mono)/var(--term-line) var(--mono); direction: ltr; text-align: left; white-space: pre-wrap; }
+.t-dim { color: #7c7a74; } .t-acc { color: #e8b37a; } .t-b { color: #fff; font-weight: 700; }
+
+/* The rail: the story, its question docked at the bottom. In "overlay" it is toggled over the terminal;
+   in "read wide" it widens over the terminal until Esc. */
+.rail { background: var(--bg); border-right: 1px solid var(--line); display: grid; grid-template-rows: auto 1fr auto; min-height: 0; min-width: 0; }
+body[data-layout="overlay"] .rail { display: none; }
+body[data-layout="overlay"].rail-open .rail, body.wide .rail { display: grid; position: fixed; top: var(--bar); bottom: 0; left: 0; width: var(--rail); box-shadow: 8px 0 24px #0008; z-index: 5; }
+body.wide .rail { width: min(var(--wide), calc(100vw - var(--strip))); }
+.rail-h { padding: 8px 14px; border-bottom: 1px solid var(--line-soft); font-size: var(--size-small); }
+.times { display: flex; gap: 14px; align-items: baseline; }
+.times b { font: 600 15px var(--mono); direction: ltr; }
+.times .l { color: var(--faint); font-size: 11px; margin-inline-start: 4px; }
+.est { margin-top: 4px; color: var(--muted); }
+.est b { color: var(--fg); font-weight: 600; }
+.est.you b { color: var(--needs-you); }
+.phases { display: flex; height: 5px; gap: 1px; margin-top: 6px; }
+.phases i { background: #4a4d52; } .phases i.you { background: repeating-linear-gradient(-45deg, var(--needs-you-line) 0 3px, transparent 3px 6px); }
+.phases i.now { background: var(--fg); }
+.story { overflow-y: auto; padding: 4px 14px 14px; }
+body.wide .story > * { max-width: var(--wide); }
+.collapsed { color: var(--faint); font-size: var(--size-small); padding: 3px 0; border-bottom: 1px solid var(--line-soft); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cleared { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 11px; margin: 8px 0; }
+.cleared::before, .cleared::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+.turn-h { display: flex; gap: 8px; font-size: 11px; color: var(--faint); margin: 12px 0 4px; }
+.prompt { padding: 4px 8px; border-inline-start: 2px solid var(--muted); background: var(--surface); margin-bottom: 6px; }
+.prompt p { margin: 0; direction: ltr; text-align: left; }
+.intent { margin: 10px 0 2px; }
+.intent p { margin: 0; direction: ltr; text-align: left; font-size: var(--size-read); }
+.intent.stale p { color: var(--faint); }
+.intent .age { font-size: 11px; color: var(--faint); display: flex; gap: 8px; }
+.steps { list-style: none; margin: 2px 0 0; padding: 0; direction: ltr; }
+.steps summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 12px 1fr 58px 28px; gap: 6px; font-size: 12.5px; color: var(--muted); padding: 1px 0; }
+.steps summary:hover { color: var(--fg); }
+.steps .at, .steps .dur { font: 11px var(--mono); color: var(--faint); text-align: right; }
+.steps pre { margin: 2px 0 6px 18px; padding: 6px 8px; background: var(--term-bg); border-radius: var(--radius); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--term-fg); }
+.group-steps > summary { list-style: none; cursor: pointer; font-size: 12px; color: var(--muted); padding: 2px 0; }
+.response { margin: 8px 0; direction: ltr; text-align: left; font-size: var(--size-read); line-height: 1.6; }
+.response p, .response ul { margin: 0 0 6px; } .response ul { padding-left: 18px; }
+.excerpt { margin: 8px 0; padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: var(--radius); font-size: var(--size-small); }
+.excerpt p { margin: 0 0 4px; direction: ltr; text-align: left; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 11.5px; padding: 0; text-decoration: underline dotted; }
+.note { margin: 6px 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-inline-start: 3px solid var(--muted); border-radius: var(--radius); background: var(--surface); font-size: 14px; }
+.note .who { font-size: 11px; color: var(--faint); }
+.note p { margin: 2px 0 6px; }
+.note input { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--fg); padding: 4px 8px; border-radius: var(--radius); font: inherit; }
+
+/* The check and its card. */
+.check { margin: 10px 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.check-h { display: flex; gap: 8px; align-items: baseline; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
+.track { position: relative; height: 3px; background: var(--line); margin: 0 10px; }
+.track b { position: absolute; inset-inline-start: 0; height: 100%; background: var(--fg); }
+.track i { position: absolute; top: -4px; width: 1px; height: 11px; background: var(--muted); }
+.card { padding: 8px 10px 10px; font-size: var(--size-read); line-height: 1.65; }
+.card p { margin: 6px 0 0; }
+.opts { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.opts button { text-align: start; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 10px; cursor: pointer; }
+.opts button[aria-pressed="true"] { border: 2px solid var(--fg); }
+.opts button.key { border-style: dashed; border-color: var(--muted); }
+.settled { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line-soft); font-size: 13.5px; }
+
+/* The open question, docked under the story. Options stack in the rail; three across in "read wide". */
+.dock { border-top: 1px solid var(--needs-you-line); background: var(--needs-you-bg); padding: 10px 14px; max-height: 55vh; overflow-y: auto; }
+.dock .h { display: flex; gap: 8px; align-items: baseline; font-size: var(--size-small); }
+.dock .asked { direction: ltr; text-align: left; margin: 6px 0 8px; font-weight: 600; font-size: var(--size-read); }
+.choices { display: grid; gap: 5px; direction: ltr; }
+body.wide .choices { grid-template-columns: repeat(3, 1fr); }
+.choices button { text-align: left; border: 1px solid var(--needs-you-line); background: var(--bg); border-radius: var(--radius); padding: 5px 8px; cursor: pointer; display: grid; grid-template-columns: 26px 1fr; gap: 0 4px; }
+.choices button.focus { outline: 2px solid var(--needs-you); outline-offset: -1px; }
+.choices .n { font: 11px var(--mono); color: var(--faint); grid-row: span 2; }
+.choices .lab { font-weight: 600; } .choices .desc { font-size: 12px; color: var(--muted); }
+.dock .foot { display: flex; gap: 10px; align-items: center; margin-top: 8px; font-size: var(--size-small); }
+.btn { border: 1px solid var(--line); background: var(--raised); border-radius: var(--radius); padding: 3px 10px; cursor: pointer; font-size: var(--size-small); }
+
+/* Decisions: a short section above the story's turns. */
+.decisions { margin: 6px 0; font-size: var(--size-small); }
+.decisions summary { list-style: none; cursor: pointer; color: var(--muted); }
+.dec { display: flex; gap: 6px; padding: 2px 0; color: var(--faint); }
+.dec .ans { color: var(--fg); direction: ltr; unicode-bidi: plaintext; }
+
+.proto { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); background: #fff; color: #111; border-radius: 99px; padding: 5px 8px 5px 14px; display: flex; gap: 6px; align-items: center; font-size: 12px; box-shadow: 0 4px 16px #000a; z-index: 9; direction: ltr; white-space: nowrap; }
+.proto button { background: #ddd; border: 0; color: #111; border-radius: 99px; padding: 3px 10px; cursor: pointer; }
+.proto button[aria-pressed="true"] { background: #111; color: #fff; }
+#measure { display: none; }
+#probe { position: absolute; visibility: hidden; white-space: pre; font: var(--size-mono)/var(--term-line) var(--mono); }
+
+/* C, readable: bigger type for what matters, controls to open and close every block. */
+body[data-variant="C"] { --size: 14px; --size-read: 15.5px; --size-small: 12.5px; }
+body[data-variant="C"] .intent { margin: 14px 0 4px; padding: 6px 10px; border-inline-start: 3px solid var(--fg); background: var(--surface); border-radius: var(--radius); }
+body[data-variant="C"] .intent p { font-size: 16.5px; font-weight: 500; line-height: 1.5; }
+body[data-variant="C"] .intent.stale { border-inline-start-color: var(--line); background: none; }
+body[data-variant="C"] .intent.stale p { font-size: 15px; font-weight: 400; }
+body[data-variant="C"] .turn-h { font-size: 12.5px; color: var(--muted); margin-top: 18px; padding-bottom: 3px; border-bottom: 1px solid var(--line-soft); }
+body[data-variant="C"] .turn-h span:first-child { font-weight: 600; color: var(--fg); }
+body[data-variant="C"] .times b { font-size: 18px; }
+body[data-variant="C"] .times .l { font-size: 12px; white-space: nowrap; }
+body[data-variant="C"] .times { gap: 4px 10px; flex-wrap: wrap; }
+.rail { grid-template-columns: minmax(0, 1fr); }
+body[data-variant="C"] .est { font-size: 13.5px; }
+body[data-variant="C"] .dock .asked { font-size: 16px; line-height: 1.55; }
+body[data-variant="C"] .choices .lab { font-size: 15px; }
+body[data-variant="C"] .choices button { padding: 8px 10px; }
+body[data-variant="C"] .choices .desc { display: none; font-size: 13px; margin-top: 2px; }
+body[data-variant="C"] .choices button.focus .desc, body[data-variant="C"] .dock.all .choices .desc { display: block; }
+body[data-variant="C"] .card p:first-of-type b { font-size: 16px; }
+.tw { display: inline-block; width: 14px; color: var(--faint); }
+.tool { white-space: nowrap; border: 1px solid var(--line); background: var(--raised); color: var(--muted); border-radius: var(--radius); padding: 2px 9px; cursor: pointer; font-size: 12px; }
+.tool:hover { color: var(--fg); border-color: var(--muted); }
+.stepbox { margin: 4px 0 6px; border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.stepbox > summary { list-style: none; cursor: pointer; padding: 4px 8px; font-size: 13px; display: flex; gap: 6px; align-items: baseline; }
+.stepbox > summary:hover { background: var(--surface); }
+.stepbox:not([open]) .tw { transform: rotate(90deg); }
+.stepbox .steps { padding: 2px 8px 6px; border-top: 1px solid var(--line-soft); }
+body[data-variant="C"] .steps summary { font-size: 13.5px; padding: 3px 0; border-radius: 3px; }
+body[data-variant="C"] .steps summary:hover { background: var(--surface); }
+body[data-variant="C"] .steps .at, body[data-variant="C"] .steps .dur { font-size: 11.5px; }
+.past { border-bottom: 1px solid var(--line-soft); }
+.past > summary { list-style: none; cursor: pointer; color: var(--muted); font-size: 13px; padding: 5px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.past > summary:hover { color: var(--fg); }
+.past[open] .tw { transform: rotate(90deg); }
+.past-b { padding: 0 14px 8px; font-size: 13.5px; } .past-b p { margin: 2px 0; }
+.response.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.more { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 2px 0; font-size: 13px; }
+.more:hover { color: var(--fg); }
+.app > * { direction: ltr; }
+.tools { display: flex; gap: 6px; margin-top: 6px; }
+</style>
+</head>
+<body data-moment="21" data-variant="C" data-layout="full">
+<div class="app">
+
+  <header class="top">
+    <h1>#338 <span dir="auto" style="font-weight:400">#205: pilots, final freeze and smoke runs</span></h1>
+    <span><span class="k">PR</span>none yet</span>
+    <span><span class="k">worktree</span><span class="mono">issue-338-205-pilots-final-freeze</span></span>
+    <span class="sp"></span>
+    <span class="meter" title="Tokens in the last transcript message. The share comes from the status-line snapshot (R4.8).">context <span class="mono m16">144k</span><span class="mono m21">161k</span></span>
+    <span class="meter" title="From the status-line snapshot (R4.8), not built yet">5h —</span>
+    <span class="meter" title="From the status-line snapshot (R4.8), not built yet">week —</span>
+    <button id="rail-toggle" hidden>Story ⌘2</button>
+  </header>
+
+  <nav class="list" aria-label="Sessions">
+    <div class="full">
+      <div class="m21">
+        <div class="group"><span>NEEDS YOU</span><span>1</span></div>
+        <button class="row" aria-pressed="true"><div class="l1"><span class="dot you"></span><span class="name">#338 · pilots, final freeze</span><span class="state you">question 0:10</span></div>
+          <div class="l2"><span class="mono">issue-338-205-pilots-final-freeze</span> · 1:09:10 · 161k</div></button>
+        <div class="group"><span>RUNNING</span><span>1</span></div>
+        <button class="row"><div class="l1"><span class="dot run"></span><span class="name">main · ae410674</span><span class="state">turn 0:17</span></div>
+          <div class="l2">grilling · 1:07:02</div></button>
+      </div>
+      <div class="m16">
+        <div class="group"><span>RUNNING</span><span>1</span></div>
+        <button class="row"><div class="l1"><span class="dot run"></span><span class="name">main · ae410674</span><span class="state">turn 1:04</span></div>
+          <div class="l2">grilling · 1:02:00</div><div class="l3" dir="auto">Check spike's xterm setup</div></button>
+        <div class="group"><span>YOUR TURN</span><span>1</span></div>
+        <button class="row" aria-pressed="true"><div class="l1"><span class="dot"></span><span class="name">#338 · pilots, final freeze</span><span class="state">check running 13:13</span></div>
+          <div class="l2"><span class="mono">issue-338-205-pilots-final-freeze</span> · 1:04:00 · 144k</div></button>
+      </div>
+      <div class="group"><span>FINISHED ▸</span><span>8</span></div>
+      <button class="new">+ New session</button>
+    </div>
+    <div class="strip">
+      <button class="open" id="list-open" title="Open list (⌘1)">☰</button>
+      <button aria-pressed="true"><span class="dot m21 you"></span><span class="dot m16"></span>338</button>
+      <button><span class="dot run"></span>main</button>
+      <button title="Finished">8</button>
+    </div>
+  </nav>
+
+  <section class="term" aria-label="Terminal">
+    <div class="term-h"><span>terminal · claude</span><span id="size" dir="ltr"></span><span class="sp"></span><span class="mono">~/work/Falinks/.claude/worktrees/issue-338-205-pilots-final-freeze</span></div>
+<pre class="m21"><span class="t-dim">⏺ Bash(cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; A=$(ls claude-projects/*agent-0*/*.jsonl); …)
+</span>
+⏺ Agent B found the bug and sent agent A the fix, then also called <span class="t-b">ready</span>. Checking whether A ever
+  received that message after its own <span class="t-b">ready</span>.
+
+<span class="t-dim">⏺ Bash(cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; B=$(ls claude-projects/*agent-1*/*.jsonl); …)
+⏺ Bash(cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; A=$(ls claude-projects/*agent-0*/*.jsonl); …)
+⏺ Bash(cd /private/tmp/f338 &amp;&amp; grep -n -i 'ready' adapters/claude/falinks_arm.rs | grep -i -E 'wake|deliver|present|…')
+⏺ Bash(cd /private/tmp/f338 &amp;&amp; sed -n 300,345p adapters/claude/falinks_arm.rs; sed -n 395,420p adapters/claude/falinks_arm.rs; …)
+⏺ Bash(cd /private/tmp/f338 &amp;&amp; git log -L '/A ready agent is woken only/,+3:adapters/claude/falinks_arm.rs' --format='%h %ad %s' …)
+</span>
+⏺ AskUserQuestion
+<span class="t-acc">✻ Answer in the studio card… (0:10)</span>
+
+<span class="t-dim">────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on</span></pre>
+<pre class="m16">⏺ That's settled. 900 s is #205's fixture-size criterion (design rule 7): the slowest arm's pilots and
+  smoke runs must each finish under it. The hard run timeout stays at the config's 1800 s.
+
+  Waiting for <span class="t-b">confirm</span> at v58.
+
+<span class="t-b">&gt; how much time left?</span>
+
+<span class="t-dim">⏺ Bash(head -1 /private/tmp/claude-501/…/tasks/bndgbg5ao.output; date -u +%FT%TZ; grep -E '^Running|outcome' …)
+⏺ Bash(sed -n 2p /private/tmp/claude-501/…/tasks/bndgbg5ao.output; jq '.elapsed_seconds // .completion_seconds' …)
+</span>
+⏺ About 3–5 minutes left on <span class="t-b">confirm</span>:
+
+  - <span class="t-b">Run 1</span> (go-tasks-1-falinks-2) finished as success.
+  - <span class="t-b">Run 2</span> started at 15:13:59Z and had been going for about 1 minute when I checked.
+    Wave-4 runs on go-tasks took 220–315 s.
+
+  After confirm, the pilots take about 15–40 more minutes, depending on how many are needed
+  (one to three). Each one should finish under 900 s.
+<span class="t-dim">────────────────────────────────────────────────────────────────────────────────────────────────────</span>
+&gt; █
+<span class="t-dim">  ⏵⏵ auto mode on · 1 background task</span></pre>
+  </section>
+
+  <aside class="rail" aria-label="Session story">
+    <div class="rail-h">
+      <div class="times">
+        <span><b class="m21">1:09:10</b><b class="m16">1:04:00</b><span class="l">session</span></span>
+        <span><b class="m21">1:31</b><b class="m16">0:11</b><span class="l">turn</span></span>
+        <span><b class="m21">17:27</b><b class="m16">17:17</b><span class="l">waited on you</span></span>
+      </div>
+      <div class="est m21 you"><b>Depends on you</b> · then: no estimate (pilots: 0 of 20 past sessions)</div>
+      <div class="est m16"><b>No estimate</b> · pilots: 0 of 20 past sessions</div>
+      <div class="tools"><button class="tool vC" id="open-all">Open all</button><button class="tool vC" id="close-all">Close all</button><button class="tool" id="wide">Read wide</button></div>
+      <div class="phases" title="16:22 to now. Hatched: waited on you.">
+        <i style="flex:2"></i><i class="you" style="flex:3"></i><i style="flex:10"></i><i class="you" style="flex:14"></i><i style="flex:8"></i>
+        <i class="m16 now" style="flex:13"></i><i class="m21" style="flex:17"></i><i class="m21" style="flex:1"></i><i class="m21 you now" style="flex:1"></i>
+      </div>
+    </div>
+
+    <div class="story">
+      <details class="decisions"><summary>▸ 2 decisions · <span class="muted">Detector, v57 smoke</span></summary>
+        <div class="dec"><span class="mono">16:55</span><span class="ans">Fix detector, re-freeze</span><span class="sp"></span><span>in terminal · waited 14:18</span></div>
+        <div class="dec"><span class="mono">16:27</span><span class="ans">confirm: 2 runs</span><span class="sp"></span><span>in terminal · waited 2:59</span></div>
+      </details>
+      <details class="past"><summary><span class="tw">▸</span><span dir="auto">16:12 · ask-matt · what left for the engine?</span></summary><div class="past-b"><p>A planning question in the same row, before <code>/clear</code>.</p></div></details>
+      <div class="cleared">/clear at 16:22 · same row</div>
+      <details class="past"><summary><span class="tw">▸</span>16:22 · Turn 1 · 7:35 · decision: v57 smoke · confirm v57</summary><div class="past-b"><p>Decision: <b>confirm: 2 runs</b> · waited on you 2:59</p><p><code>confirm</code> at v57 ran 9:56 (16:30–16:40).</p></div></details>
+      <details class="past"><summary><span class="tw">▸</span>16:40 · Turn 2 · 22:52, 14:18 of it yours · decision: Detector · v58</summary><div class="past-b"><p>Decision: <b>Fix detector, re-freeze</b> · waited on you 14:18</p><p><code>confirm</code> at v58 started at 17:02.</p></div></details>
+
+      <!-- The check, where it started (turn 2). -->
+      <div class="check">
+        <div class="check-h"><b dir="auto">confirm at v58</b><span class="muted">background · 2 runs</span><span class="sp"></span>
+          <span class="mono m16">13:13 · usually 10:00</span><span class="mono m21">16:52 · 1 success · 1 task_failure</span></div>
+        <div class="track m16"><b style="width:100%"></b><i style="inset-inline-start:75%"></i></div>
+        <article class="card">
+          <div class="faint" style="font-size:11px"><span class="m16">Ready since 17:03, while the check runs</span><span class="m21">The check settled it</span> <span class="example"></span></div>
+          <p><b>What <code>confirm</code> at v58 tests in your change</b></p>
+          <p>The last change teaches the nested-agent detector (rule C7) to skip a heredoc body unless the heredoc is piped to a shell. At v57 an agent that wrote Go code through <code>cat &gt; query/query.go &lt;&lt;'EOF'</code> was disqualified, because the detector split <code>&amp;node{</code>.</p>
+          <p><b>What do you predict?</b></p>
+          <div class="opts">
+            <button class="m16">Both runs end in success</button><button class="m21" aria-pressed="true">Both runs end in success</button>
+            <button>At least one run is disqualified by C7 again</button>
+            <button class="m16">C7 does not fire, but a run fails for another reason</button><button class="m21 key">C7 does not fire, but a run fails for another reason</button>
+          </div>
+          <div class="settled m21"><b>Not this time.</b> Run 1 <code>success</code>, run 2 <code>task_failure</code>. C7 did not fire, so the fix worked; the failure came from something else. <button class="link">Ask about this</button></div>
+        </article>
+      </div>
+
+      <!-- 17:16: turn 3. -->
+      <div class="m16">
+        <div class="turn-h"><span>Turn 3</span><span class="mono">17:15:09</span><span class="sp"></span><span class="mono">0:11</span></div>
+        <div class="prompt"><p>how much time left?</p></div>
+        <div class="intent"><p>About 3–5 minutes left on <code>confirm</code>.</p><div class="age"><span>latest text in the turn · 17:15:20</span></div></div>
+        <details class="stepbox vC" open><summary><span class="tw">▾</span><b>2 steps</b><span class="faint">· 0s in commands · click a step for its command</span></summary><ul class="steps">
+          <li><details><summary><span>›</span><span>Check confirm batch progress and elapsed time</span><span class="at">17:15:13</span><span class="dur">0s</span></summary><pre>head -1 /private/tmp/claude-501/…/tasks/bndgbg5ao.output; date -u +%FT%TZ; grep -E '^Running|outcome' /private/tmp/ev/confirm-v58.log | cut -c1-200</pre></details></li>
+          <li><details><summary><span>›</span><span>Get batch start time and run 1 duration</span><span class="at">17:15:17</span><span class="dur">0s</span></summary><pre>sed -n 2p /private/tmp/claude-501/…/tasks/bndgbg5ao.output; jq '.elapsed_seconds // .completion_seconds' …</pre></details></li>
+        </ul></details>
+        <details class="group-steps vD"><summary>▸ 2 steps · 0:04 · Check confirm batch progress…</summary></details>
+        <div class="response vC clamp" id="resp">
+          <p>About 3–5 minutes left on <code>confirm</code>:</p>
+          <ul><li><b>Run 1</b> (<code>go-tasks-1-falinks-2</code>) finished as <code>success</code>.</li>
+          <li><b>Run 2</b> started at 15:13:59Z and had been going for about 1 minute when I checked. Wave-4 runs on <code>go-tasks</code> took 220–315 s.</li></ul>
+          <p>After <code>confirm</code>, the pilots take about 15–40 more minutes, depending on how many are needed (one to three). Each one should finish under 900 s.</p>
+        </div>
+        <button class="more vC" data-for="resp">Show full answer ▾</button>
+        <div class="excerpt vD"><p>About 3–5 minutes left on confirm: Run 1 (go-tasks-1-falinks-2) finished as success. Run 2 started at 15:13:59Z…</p><button class="link">Read wide</button> · <span class="faint">in terminal</span></div>
+        <button class="link">Ask about this</button>
+      </div>
+
+      <!-- 17:21: turn 3 collapsed, turn 4 open. -->
+      <div class="m21">
+        <details class="past"><summary><span class="tw">▸</span>17:15 · Turn 3 · 0:11 · how much time left?</summary><div class="past-b"><p>About 3–5 minutes left on <code>confirm</code>.</p></div></details>
+        <div class="turn-h"><span>Turn 4 · woken: confirm finished</span><span class="mono">17:19:39</span><span class="sp"></span><span class="mono">1:31</span></div>
+        <div class="intent"><p>Run 2 ended in <code>task_failure</code>; every wave run on <code>go-tasks</code> succeeded. Checking why.</p><div class="age"><span>17:19:46</span></div></div>
+        <details class="stepbox vC" open><summary><span class="tw">▾</span><b>7 steps</b><span class="faint">· 2s in commands · click a step for its command</span></summary><ul class="steps">
+          <li><details><summary><span>›</span><span>Read confirm v58 outcome and report</span><span class="at">17:19:44</span><span class="dur">0s</span></summary><pre>cat /private/tmp/claude-501/…/tasks/bndgbg5ao.output; grep -E '^Running|outcome|paused|Batch' /private/tmp/ev/confirm-v58.log | cut -c1-300; …</pre></details></li>
+          <li><details><summary><span>›</span><span>Inspect failed run result fields</span><span class="at">17:19:48</span><span class="dur">1s</span></summary><pre>R=/private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller; jq -c 'to_entries|map(select(.key|test("fail|reason|oracle|ready|final|outcome|transition|validation")))' $R/result.json | cut -c1-3000; ls $R</pre></details></li>
+          <li><details><summary><span>›</span><span>Find which ticket owns the --status filter</span><span class="at">17:19:55</span><span class="dur">0s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span>›</span><span>Inspect final candidate list.go status handling</span><span class="at">17:19:57</span><span class="dur">0s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span>›</span><span>Read final list.go and earlier check failures</span><span class="at">17:20:00</span><span class="dur">0s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span>›</span><span>List check and ready events in order</span><span class="at">17:20:07</span><span class="dur">0s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span>›</span><span>Show check/ready events and agents' last messages</span><span class="at">17:20:10</span><span class="dur">1s</span></summary><pre>…</pre></details></li>
+        </ul></details>
+        <details class="group-steps vD"><summary>▸ 7 steps · 0:26 · Read confirm v58 outcome… Show check/ready events…</summary></details>
+        <div class="intent stale"><p>Agent B found the bug and sent agent A the fix, then also called <code>ready</code>. Checking whether A ever received that message after its own <code>ready</code>.</p>
+          <div class="age"><span>6 steps ago · dimmed</span><span class="sp"></span><button class="link">Ask about this</button></div></div>
+        <div class="note">
+          <div class="who">Side question · the session does not see it</div>
+          <p>Why would A not get the message? They are in the same run.</p>
+          <div class="who">Answer <span class="example"></span></div>
+          <p>Under the rule from #27, an agent that called <code>ready</code> wakes only when a new development is posted. A peer's post does not wake it, so B's fix waited in the queue until the run ended.</p>
+          <input placeholder="Ask another…">
+        </div>
+        <details class="stepbox vC" open><summary><span class="tw">▾</span><b>6 steps</b><span class="faint">· 2s in commands · click a step for its command</span></summary><ul class="steps">
+          <li><details><summary><span>›</span><span>Check whether agent A got B's fix message</span><span class="at">17:20:17</span><span class="dur">0s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span>›</span><span>Compare timing of B's fix message and A's ready</span><span class="at">17:20:22</span><span class="dur">0s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span>›</span><span>Get A's last activity and whether it saw the bug message</span><span class="at">17:20:25</span><span class="dur">1s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span>›</span><span>Find host handling of events after ready</span><span class="at">17:20:34</span><span class="dur">0s</span></summary><pre>cd /private/tmp/f338 &amp;&amp; grep -n -i 'ready' adapters/claude/falinks_arm.rs | grep -i -E 'wake|deliver|present|finished|done|idle|stop|turn' | head -15</pre></details></li>
+          <li><details><summary><span>›</span><span>Read event delivery logic around ready</span><span class="at">17:20:36</span><span class="dur">1s</span></summary><pre>cd /private/tmp/f338 &amp;&amp; sed -n 300,345p adapters/claude/falinks_arm.rs; …</pre></details></li>
+          <li><details><summary><span>›</span><span>Find which commit introduced the ready-agent wake rule</span><span class="at">17:20:40</span><span class="dur">0s</span></summary><pre>cd /private/tmp/f338 &amp;&amp; git log -L '/A ready agent is woken only/,+3:adapters/claude/falinks_arm.rs' …</pre></details></li>
+        </ul></details>
+        <details class="group-steps vD"><summary>▸ 6 steps · 0:23 · Check whether agent A got… Find which commit introduced…</summary></details>
+      </div>
+    </div>
+
+    <div class="dock m21">
+      <div class="h"><b class="you">Needs you</b><span class="mono faint">Next step</span><span class="sp"></span><span class="faint">0:10 · goes back to the terminal in 1:50</span></div>
+      <p class="asked">confirm at v58 gave 1 success and 1 task_failure. The failure was caused by agent A calling ready after its own checks failed, and by the host's #27 rule that a ready agent is woken only by a development, so B's fix post never reached A. The simplify pass is not implicated. How should we proceed?</p>
+      <div class="choices">
+        <button class="focus"><span class="n">1 ⏎</span><span class="lab">Proceed to pilots (Recommended)</span><span class="desc">Treat it as agent behaviour (class 2) plus a protocol property both arms have had since #27, and record it for #205's disclosures. Pilot 1 starts at v58.</span></button>
+        <button><span class="n">2</span><span class="lab">Fix: wake a ready agent on a peer post</span><span class="desc">A protocol version: re-freeze to v59, then two more confirm runs (about 600 s).</span></button>
+        <button><span class="n">3</span><span class="lab">Another confirm pair first</span><span class="desc">About 600 s, about $4. Two more runs can only detect a frequent problem.</span></button>
+      </div>
+      <div class="foot"><button class="btn">Answer in the terminal</button><button class="tool vC" id="all-desc">Show all explanations</button><button class="link">Ask about this</button><span class="sp"></span><span class="faint">↑↓ ⏎</span></div>
+    </div>
+  </aside>
+</div>
+
+<span id="probe">MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM</span>
+<div id="measure"></div>
+
+<div class="proto" role="toolbar" aria-label="prototype">
+  <b>PROTOTYPE #463</b>
+  <button data-v="C">C: full story</button><button data-v="D">D: digest</button>
+  <span>·</span>
+  <button data-m="16">17:16</button><button data-m="21">17:21</button>
+</div>
+
+<script>
+// Prototype only. Layout follows the width rules from measured terminal columns; the rest switches state.
+const MIN_COLS = 100;
+const css = (name) => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+const probe = document.getElementById("probe");
+function cols(termPx) {
+  const cell = probe.getBoundingClientRect().width / probe.textContent.length;
+  return Math.floor((termPx - 28) / cell);
+}
+function layout() {
+  const w = innerWidth, rail = css("--rail"), list = css("--list"), strip = css("--strip");
+  const mode = cols(w - list - rail) >= MIN_COLS ? "full" : cols(w - strip - rail) >= MIN_COLS ? "strip" : "overlay";
+  document.body.dataset.layout = mode;
+  document.getElementById("rail-toggle").hidden = mode !== "overlay";
+  requestAnimationFrame(() => {
+    const pre = document.querySelector(".term pre:not([style*=none])") || document.querySelector(".term pre");
+    const term = document.querySelector(".term").getBoundingClientRect();
+    const cell = probe.getBoundingClientRect();
+    const c = cols(term.width), r = Math.floor((term.height - 26 - 16) / cell.height);
+    document.getElementById("size").textContent = `${c} × ${r}`;
+    document.getElementById("measure").textContent = JSON.stringify({ window: w, layout: mode, terminalPx: Math.round(term.width), cols: c, rows: r, cell: +(cell.width / probe.textContent.length).toFixed(3) });
+  });
+}
+addEventListener("resize", layout);
+document.getElementById("list-open").onclick = () => document.body.classList.toggle("list-open");
+document.getElementById("rail-toggle").onclick = () => document.body.classList.toggle("rail-open");
+document.getElementById("wide").onclick = () => document.body.classList.add("wide");
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.body.classList.remove("wide", "list-open", "rail-open");
+  if (e.metaKey && e.key === "1") { e.preventDefault(); document.body.classList.toggle("list-open"); }
+  if (e.metaKey && e.key === "2") { e.preventDefault(); document.body.classList.toggle("rail-open"); }
+});
+const params = new URLSearchParams(location.search);
+function set(key, value) {
+  document.body.dataset[key] = value;
+  document.querySelectorAll(`.proto [data-${key[0]}]`).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset[key[0]] === value)));
+  params.set(key, value); history.replaceState(null, "", "?" + params);
+}
+document.querySelectorAll(".proto [data-v]").forEach((b) => b.onclick = () => set("variant", b.dataset.v));
+document.querySelectorAll(".proto [data-m]").forEach((b) => b.onclick = () => set("moment", b.dataset.m));
+set("variant", params.get("variant") || "C");
+set("moment", params.get("moment") || "21");
+layout();
+// The story opens at its newest turn.
+const story = document.querySelector(".story");
+story.scrollTop = story.scrollHeight;
+document.querySelectorAll(".proto button").forEach((b) => b.addEventListener("click", () => (story.scrollTop = story.scrollHeight)));
+
+// C: open or close every block; the response unclamps; an option click shows its description.
+const blocks = () => document.querySelectorAll(".stepbox, .past, .decisions");
+document.getElementById("open-all").onclick = () => { blocks().forEach((d) => d.open = true); document.getElementById("resp").classList.remove("clamp"); };
+document.getElementById("close-all").onclick = () => { blocks().forEach((d) => d.open = false); document.getElementById("resp").classList.add("clamp"); };
+document.querySelectorAll(".more").forEach((b) => b.onclick = () => {
+  const r = document.getElementById(b.dataset.for), shut = r.classList.toggle("clamp");
+  b.textContent = shut ? "Show full answer ▾" : "Hide ▴";
+});
+document.querySelectorAll(".choices button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".choices button").forEach((o) => o.classList.toggle("focus", o === b));
+});
+document.getElementById("all-desc").onclick = (e) => {
+  const on = document.querySelector(".dock").classList.toggle("all");
+  e.target.textContent = on ? "Hide explanations" : "Show all explanations";
+};
+</script>
+</body>
+</html>

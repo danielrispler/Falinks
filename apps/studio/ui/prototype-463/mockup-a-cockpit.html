@@ -1,0 +1,449 @@
+<!doctype html>
+<!--
+  PROTOTYPE for #463, throwaway. Mockup A, "Cockpit": sessions | terminal | studio rail, in one RTL window.
+  Not app code: nothing here is built, tested or imported. Open the file in a browser.
+  Data: session 477b6b89 (#338) on 3 Nov, from the studio event log and its transcript. Two real moments,
+  17:16 and 17:21, switch in the bottom bar. Items marked "דוגמה" are illustrative, not recorded data.
+-->
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>Studio · mockup A · Cockpit (#463 prototype)</title>
+<style>
+/* Tokens. These are what #463 records if A wins. */
+:root {
+  --bg: #f4f3ef; --panel: #fbfaf7; --raised: #ffffff; --line: #e2e0d9; --line-strong: #cfccc3;
+  --fg: #1f1e1c; --muted: #6b6963; --faint: #9a978e;
+  --term-bg: #1c1d1f; --term-fg: #d9d7d1; --term-dim: #8b8984; --term-accent: #e8b37a;
+  --needs-you: #b8430f; --needs-you-bg: #fbe8de; --needs-you-line: #efc2ab;
+  --font: -apple-system, "SF Pro Text", "SF Hebrew", "Arial Hebrew", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --size: 13.5px; --size-small: 12px; --size-card: 15px; --size-mono: 12.5px;
+  --gap: 8px; --radius: 6px;
+  --col-sessions: 248px; --col-rail: 404px; --bar: 40px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: var(--size)/1.5 var(--font); }
+body[data-moment="16"] .m21, body[data-moment="21"] .m16 { display: none !important; }
+code, .mono { font-family: var(--mono); font-size: var(--size-mono); unicode-bidi: isolate; direction: ltr; }
+code { background: #eeece6; border-radius: 4px; padding: 0 4px; }
+button { font: inherit; color: inherit; }
+.muted { color: var(--muted); } .faint { color: var(--faint); }
+.example { border-bottom: 1px dotted var(--faint); }
+.example::after { content: " דוגמה"; font-size: 10px; color: var(--faint); vertical-align: super; }
+
+/* The window: a top bar, then three columns. RTL, so the session list is on the right. */
+.app { display: grid; grid-template-rows: var(--bar) 1fr; grid-template-columns: var(--col-sessions) 1fr var(--col-rail); height: 100vh; }
+.top { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.top .brand { font-weight: 600; width: calc(var(--col-sessions) - 28px); }
+.ident { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 1; }
+.ident .issue { font-weight: 600; }
+.chip { font-size: var(--size-small); color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 0 8px; white-space: nowrap; }
+.meters { display: flex; gap: 14px; font-size: var(--size-small); color: var(--muted); }
+.meter { display: flex; align-items: center; gap: 6px; }
+.meter i { display: block; width: 48px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.meter i b { display: block; height: 100%; background: var(--muted); }
+
+/* Session list. */
+.sessions { overflow-y: auto; border-left: 1px solid var(--line); padding: 8px 6px; background: var(--panel); }
+.group { margin: 10px 8px 4px; font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--muted); display: flex; justify-content: space-between; }
+.row { display: block; width: 100%; text-align: start; border: 0; background: none; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
+.row[aria-pressed="true"] { background: #ebe9e3; }
+.row .l1 { display: flex; gap: 6px; align-items: baseline; }
+.row .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .state { margin-inline-start: auto; font-size: var(--size-small); color: var(--muted); white-space: nowrap; }
+.row .state.you { color: var(--needs-you); font-weight: 600; }
+.row .l2, .row .l3 { font-size: var(--size-small); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .l3 { color: var(--faint); }
+.new { margin: 8px; width: calc(100% - 16px); padding: 5px; border: 1px dashed var(--line-strong); border-radius: var(--radius); background: none; color: var(--muted); cursor: pointer; }
+details.ended summary { cursor: pointer; list-style: none; }
+
+/* The terminal pane: LTR, the real TUI. */
+.term { background: var(--term-bg); color: var(--term-fg); display: grid; grid-template-rows: 28px 1fr; min-width: 0; }
+.term-head { display: flex; align-items: center; gap: 10px; padding: 0 12px; font-size: var(--size-small); color: var(--term-dim); border-bottom: 1px solid #2b2c2f; direction: rtl; }
+.term-head .sp { flex: 1; }
+.term pre { margin: 0; padding: 10px 14px; overflow: auto; font: var(--size-mono)/1.55 var(--mono); direction: ltr; text-align: left; white-space: pre-wrap; }
+.t-dim { color: var(--term-dim); } .t-acc { color: var(--term-accent); } .t-b { font-weight: 700; color: #f2f0ea; }
+
+/* The studio rail: tabs, then what the session is doing. */
+.rail { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; }
+.tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2; }
+.tabs button { border: 0; background: none; padding: 6px 10px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--fg); font-weight: 600; }
+.panel { padding: 10px 12px 60px; display: none; }
+.panel.on { display: block; }
+.sec { margin: 0 0 14px; }
+.sec-h { font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--muted); margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
+.sec-h .sp { flex: 1; }
+
+/* Times and the estimate. */
+.times { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.times div { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; }
+.times b { display: block; font: 600 15px/1.3 var(--mono); direction: ltr; text-align: right; }
+.times span { font-size: 11px; color: var(--muted); }
+.estimate { margin-top: 6px; display: flex; gap: 8px; align-items: baseline; font-size: var(--size-small); }
+.estimate .you { color: var(--needs-you); font-weight: 600; }
+.phases { display: flex; height: 8px; margin-top: 8px; border-radius: 2px; overflow: hidden; gap: 1px; }
+.phases i { display: block; background: #c9c6bd; }
+.phases i.you { background: repeating-linear-gradient(-45deg, var(--needs-you-line) 0 3px, transparent 3px 6px); }
+.phases i.now { background: var(--fg); }
+.phase-key { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); margin-top: 2px; }
+
+/* The intention and the step line. */
+.intention { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; }
+.intention p { margin: 0; }
+.intention.stale p { color: var(--faint); }
+.intention .age { font-size: var(--size-small); color: var(--muted); margin-top: 4px; display: flex; gap: 8px; }
+.steps { list-style: none; margin: 6px 0 0; padding: 0; }
+.steps li { border-bottom: 1px solid var(--line); }
+.steps details summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 54px 1fr 34px; gap: 6px; padding: 3px 2px; align-items: baseline; }
+.steps .at, .steps .dur { font: var(--size-small) var(--mono); color: var(--faint); direction: ltr; }
+.steps .dur { text-align: left; }
+.steps .what { direction: ltr; text-align: left; unicode-bidi: plaintext; }
+.steps .bg { font-size: 10.5px; border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 3px; color: var(--muted); margin-inline-start: 4px; }
+.steps pre { margin: 2px 0 6px; padding: 6px 8px; background: #efede7; border-radius: 4px; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; direction: ltr; text-align: left; overflow-wrap: anywhere; }
+.response { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; }
+.response p, .response ul { margin: 0 0 6px; } .response ul { padding-inline-start: 18px; }
+
+/* A running check. */
+.check { border: 1px solid var(--line); border-radius: var(--radius); background: var(--raised); padding: 8px 10px; }
+.check .l1 { display: flex; gap: 8px; align-items: baseline; }
+.check .bar { height: 4px; background: var(--line); border-radius: 2px; margin: 6px 0 2px; position: relative; overflow: visible; }
+.check .bar b { position: absolute; inset-inline-start: 0; top: 0; height: 100%; background: var(--fg); border-radius: 2px; }
+.check .bar .typical { position: absolute; top: -3px; width: 1px; height: 10px; background: var(--muted); }
+
+/* A card: Hebrew, RTL, as today, its code LTR. */
+.card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--raised); padding: 10px 12px; font-size: var(--size-card); line-height: 1.6; }
+.card .kicker { font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--muted); }
+.card p { margin: 6px 0 0; }
+.card ol { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 5px; }
+.card ol button { width: 100%; text-align: start; padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); cursor: pointer; }
+.card ol button[aria-pressed="true"] { border: 2px solid var(--fg); font-weight: 600; }
+.card ol button.key { border-style: dashed; }
+.card .settled { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 14px; }
+
+/* The open question: the one place with colour. */
+.q { border: 1px solid var(--needs-you-line); background: var(--needs-you-bg); border-radius: var(--radius); padding: 10px 12px; }
+.q .l1 { display: flex; gap: 8px; align-items: baseline; }
+.q .tag { color: var(--needs-you); font-weight: 600; }
+.q .asked { margin: 6px 0 8px; direction: ltr; text-align: left; font-weight: 600; }
+.q ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 5px; }
+.q ol button { width: 100%; text-align: left; direction: ltr; display: grid; grid-template-columns: 20px 1fr; gap: 6px; padding: 6px 8px; border: 1px solid var(--line-strong); background: var(--raised); border-radius: var(--radius); cursor: pointer; }
+.q ol button:focus-visible, .q ol button.focus { outline: 2px solid var(--fg); outline-offset: -1px; }
+.q ol .n { font: 600 var(--size-small) var(--mono); color: var(--muted); }
+.q ol .lab { font-weight: 600; }
+.q ol .desc { grid-column: 2; font-size: var(--size-small); color: var(--muted); }
+.q .foot { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: var(--size-small); }
+.q .foot .sp { flex: 1; }
+.btn { border: 1px solid var(--line-strong); background: var(--raised); border-radius: var(--radius); padding: 3px 10px; cursor: pointer; font-size: var(--size-small); }
+.ask { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: var(--size-small); padding: 0; text-decoration: underline dotted; }
+
+/* "Ask about this": a side question the session never sees. */
+.side { margin-top: 8px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg); padding: 8px 10px; font-size: 14px; }
+.side .who { font-size: 11px; color: var(--muted); font-weight: 600; }
+.side p { margin: 2px 0 6px; }
+.side input { width: 100%; font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--raised); }
+
+/* Decision history and responses. */
+.hist { list-style: none; padding: 0; margin: 0; }
+.hist > li { border-bottom: 1px solid var(--line); padding: 6px 0; }
+.hist summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; }
+.hist .when { font: var(--size-small) var(--mono); color: var(--faint); direction: ltr; }
+.hist .ans { direction: ltr; unicode-bidi: plaintext; font-weight: 600; }
+.hist .where { font-size: 11px; color: var(--muted); margin-inline-start: auto; white-space: nowrap; }
+.hist ul { margin: 6px 0 0; padding-inline-start: 0; list-style: none; direction: ltr; text-align: left; font-size: var(--size-small); }
+.hist ul li { padding: 2px 6px; border-radius: 4px; color: var(--muted); }
+.hist ul li.chosen { color: var(--fg); font-weight: 600; outline: 1px solid var(--line-strong); }
+.cleared { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--size-small); margin: 10px 0; }
+.cleared::before, .cleared::after { content: ""; flex: 1; border-top: 1px dashed var(--line-strong); }
+
+/* The prototype's own bar: not part of the design. */
+.proto { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); background: #111; color: #fff; border-radius: 99px; padding: 6px 8px 6px 14px; display: flex; gap: 8px; align-items: center; font-size: 12px; box-shadow: 0 4px 16px #0004; z-index: 9; direction: ltr; }
+.proto button { background: #333; border: 0; color: #fff; border-radius: 99px; padding: 3px 10px; cursor: pointer; }
+.proto button[aria-pressed="true"] { background: #fff; color: #111; }
+.proto a { color: #9cf; }
+</style>
+</head>
+<body data-moment="21">
+<div class="app">
+
+  <header class="top">
+    <div class="brand">סטודיו</div>
+    <div class="ident">
+      <span class="issue">#338</span>
+      <span dir="auto">#205: pilots, final freeze and smoke runs</span>
+      <span class="chip">PR: אין עדיין</span>
+      <span class="chip mono">issue-338-205-pilots-final-freeze</span>
+      <span class="chip">Opus 5.5 · auto</span>
+    </div>
+    <div class="meters">
+      <span class="meter" title="מהטוקנים בהודעה האחרונה בתמליל; בהנחת חלון של 1M">הקשר
+        <i><b class="m16" style="width:14%"></b><b class="m21" style="width:16%"></b></i>
+        <span class="mono m16">144k · 14%</span><span class="mono m21">161k · 16%</span></span>
+      <span class="meter example">5 שעות <i><b style="width:41%"></b></i> <span class="mono">41%</span></span>
+      <span class="meter example">שבועי <i><b style="width:63%"></b></i> <span class="mono">63%</span></span>
+    </div>
+  </header>
+
+  <nav class="sessions" aria-label="סשנים">
+    <!-- 17:21 -->
+    <div class="m21">
+      <div class="group"><span>צריך אותך</span><span>1</span></div>
+      <button class="row" aria-pressed="true">
+        <div class="l1"><span class="name">#338 · pilots, final freeze</span><span class="state you">שאלה · 0:10</span></div>
+        <div class="l2"><span class="mono">issue-338-205-pilots-final-freeze</span> · 1:09:10 · 16%</div>
+        <div class="l3" dir="auto">Next step: confirm at v58 gave 1 success and 1 task_failure…</div>
+      </button>
+      <div class="group"><span>רץ</span><span>1</span></div>
+      <button class="row" aria-pressed="false">
+        <div class="l1"><span class="name">main · ae410674</span><span class="state">תור 0:17</span></div>
+        <div class="l2">grilling · 1:07:02</div>
+        <div class="l3">עוד אין צעד בתור הזה</div>
+      </button>
+    </div>
+    <!-- 17:16 -->
+    <div class="m16">
+      <div class="group"><span>רץ</span><span>1</span></div>
+      <button class="row" aria-pressed="false">
+        <div class="l1"><span class="name">main · ae410674</span><span class="state">תור 1:04</span></div>
+        <div class="l2">grilling · 1:02:00</div>
+        <div class="l3" dir="auto">Check spike's xterm setup</div>
+      </button>
+      <div class="group"><span>תורך</span><span>1</span></div>
+      <button class="row" aria-pressed="true">
+        <div class="l1"><span class="name">#338 · pilots, final freeze</span><span class="state">בדיקה ברקע 13:13</span></div>
+        <div class="l2"><span class="mono">issue-338-205-pilots-final-freeze</span> · 1:04:00 · 14%</div>
+        <div class="l3" dir="auto">About 3–5 minutes left on confirm</div>
+      </button>
+    </div>
+    <details class="ended">
+      <summary class="group"><span>הסתיימו ▸</span><span>8</span></summary>
+      <button class="row"><div class="l1"><span class="name">#381 · main</span><span class="state">16:07–16:11</span></div><div class="l3" dir="auto">lets do issue 381, guide me</div></button>
+      <button class="row"><div class="l1"><span class="name">main · 6bdb8cf8</span><span class="state">נוקה · 16:12</span></div><div class="l3" dir="auto">i update claude make sure all ok with the engine</div></button>
+      <button class="row"><div class="l1"><span class="name">main · 38d65dfc</span><span class="state">16:51–16:55</span></div></button>
+      <div class="l3 faint" style="padding: 2px 8px">ועוד 5 קצרים, בלי צעדים</div>
+    </details>
+    <button class="new">+ סשן חדש · main או worktree</button>
+  </nav>
+
+  <section class="term" aria-label="טרמינל">
+    <div class="term-head"><span>טרמינל · claude</span><span class="mono">~/work/Falinks/.claude/worktrees/issue-338-205-pilots-final-freeze</span><span class="sp"></span><span>⌘K נקה · ⌘F חפש</span></div>
+<pre class="m21"><span class="t-dim">⏺ Bash(cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; A=$(ls claude-projects/*agent-0*/*.jsonl); …)
+  ⎿  …
+
+</span>⏺ Agent B found the bug and sent agent A the fix, then also called <span class="t-b">ready</span>. Checking whether A ever
+  received that message after its own <span class="t-b">ready</span>.
+
+<span class="t-dim">⏺ Bash(cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; B=$(ls claude-projects/*agent-1*/*.jsonl); …)
+⏺ Bash(cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; A=$(ls claude-projects/*agent-0*/*.jsonl); …)
+⏺ Bash(cd /private/tmp/f338 &amp;&amp; grep -n -i 'ready' adapters/claude/falinks_arm.rs | grep -i -E 'wake|deliver|present|…')
+⏺ Bash(cd /private/tmp/f338 &amp;&amp; sed -n 300,345p adapters/claude/falinks_arm.rs; sed -n 395,420p adapters/claude/falinks_arm.rs; …)
+⏺ Bash(cd /private/tmp/f338 &amp;&amp; git log -L '/A ready agent is woken only/,+3:adapters/claude/falinks_arm.rs' --format='%h %ad %s' …)
+</span>
+⏺ AskUserQuestion
+<span class="t-acc">✻ Answer in the studio card… (0:10)</span>
+
+<span class="t-dim">──────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on · 0 background tasks</span></pre>
+<pre class="m16"><span class="t-dim">⏺ Bash(…regenerate config…  run confirm at v58)  <span class="t-acc">running in background</span>
+</span>
+⏺ That's settled. 900 s is #205's fixture-size criterion (design rule 7): the slowest arm's pilots and
+  smoke runs must each finish under it. The hard run timeout stays at the config's 1800 s.
+
+  Waiting for <span class="t-b">confirm</span> at v58.
+
+<span class="t-b">&gt; how much time left?</span>
+
+<span class="t-dim">⏺ Bash(head -1 /private/tmp/claude-501/…/tasks/bndgbg5ao.output; date -u +%FT%TZ; grep -E '^Running|outcome' …)
+⏺ Bash(sed -n 2p /private/tmp/claude-501/…/tasks/bndgbg5ao.output; jq '.elapsed_seconds // .completion_seconds' …)
+</span>
+⏺ About 3–5 minutes left on <span class="t-b">confirm</span>:
+
+  - <span class="t-b">Run 1</span> (go-tasks-1-falinks-2) finished as success.
+  - <span class="t-b">Run 2</span> started at 15:13:59Z and had been going for about 1 minute when I checked.
+    Wave-4 runs on go-tasks took 220–315 s.
+
+  After confirm, the pilots take about 15–40 more minutes, depending on how many are needed
+  (one to three). Each one should finish under 900 s.
+
+<span class="t-dim">──────────────────────────────────────────────────────────────────────────────</span>
+&gt; █
+<span class="t-dim">  ⏵⏵ auto mode on · 1 background task</span></pre>
+  </section>
+
+  <aside class="rail" aria-label="מה הסשן עושה">
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-tab="now">עכשיו</button>
+      <button role="tab" aria-selected="false" data-tab="decisions">החלטות · 2</button>
+      <button role="tab" aria-selected="false" data-tab="responses">תגובות</button>
+    </div>
+
+    <!-- Now -->
+    <div class="panel on" id="now">
+
+      <div class="sec">
+        <div class="sec-h">זמנים<span class="sp"></span></div>
+        <div class="times">
+          <div><b class="m21">1:09:10</b><b class="m16">1:04:00</b><span>סשן · מ-16:12</span></div>
+          <div><b class="m21">1:31</b><b class="m16">0:11</b><span class="m21">תור · מ-17:19</span><span class="m16">תור אחרון · הסתיים</span></div>
+          <div><b class="m21">0:10</b><b class="m16">13:13</b><span class="m21">שאלה פתוחה</span><span class="m16">בדיקה ברקע</span></div>
+        </div>
+        <div class="estimate m21"><span class="you">תלוי בך</span><span class="muted">· אחר כך: אין הערכה (pilots: 0 מתוך 20 סשנים קודמים)</span></div>
+        <div class="estimate m16"><span>אין הערכה</span><span class="muted">· pilots: 0 מתוך 20 סשנים קודמים</span></div>
+        <div class="phases" title="שלבים מאז 16:22. מקווקו: מחכה לך.">
+          <i style="flex:2"></i><i class="you" style="flex:3"></i><i style="flex:13"></i><i style="flex:1"></i><i class="you" style="flex:14"></i><i style="flex:8"></i>
+          <i class="m16 now" style="flex:13"></i><i class="m21" style="flex:17"></i><i class="m21 you now" style="flex:1"></i>
+        </div>
+        <div class="phase-key"><span>16:22 התמצאות</span><span>בדיקה</span><span>תיקון</span><span>בדיקה</span><span class="m21">17:21 החלטה</span><span class="m16">17:16</span></div>
+      </div>
+
+      <!-- 17:21: the open question. -->
+      <div class="sec m21">
+        <div class="q">
+          <div class="l1"><span class="tag">צריך אותך</span><span class="mono muted">Next step</span><span class="sp" style="flex:1"></span><span class="muted" style="font-size:12px">נשאל 17:21:00</span></div>
+          <p class="asked" dir="auto">confirm at v58 gave 1 success and 1 task_failure. The failure was caused by agent A calling ready after its own checks failed, and by the host's #27 rule that a ready agent is woken only by a development, so B's fix post never reached A. The simplify pass is not implicated. How should we proceed?</p>
+          <ol>
+            <li><button class="focus"><span class="n">1 ⏎</span><span class="lab">Proceed to pilots (Recommended)</span><span class="desc">Treat it as agent behaviour (class 2) plus a protocol property both arms have had since #27, and record it on the ticket and for #205's disclosures. Arm outcomes are what the batch measures; changing the host now would be a protocol change in front of the pilots. Pilot 1 starts at v58.</span></button></li>
+            <li><button><span class="n">2</span><span class="lab">Fix: wake a ready agent on a peer post</span><span class="desc">Change the host so a peer's post or message reopens a ready agent, in both arms for parity. That is a protocol version: re-freeze to v59, then two more confirm runs (about 600 s) before the pilots.</span></button></li>
+            <li><button><span class="n">3</span><span class="lab">Another confirm pair first</span><span class="desc">Run confirm again at v58 (about 600 s, about $4) to see whether this repeats, before deciding on a fix. That gives more evidence, but two more runs can only detect a frequent problem.</span></button></li>
+          </ol>
+          <div class="foot">
+            <button class="btn">ענה בטרמינל</button>
+            <button class="ask">שאל על זה</button>
+            <span class="sp"></span>
+            <span class="muted">חוזר לטרמינל בעוד 1:50</span>
+          </div>
+          <div class="side">
+            <div class="who">שאלת צד · הסשן לא רואה אותה</div>
+            <p>מה זה הכלל של #27, שסוכן ready מתעורר רק מ-development?</p>
+            <div class="who">תשובה <span class="example"></span></div>
+            <p>אחרי ש-A קרא ל-<code>ready</code>, ה-host מעיר אותו רק כש-development חדש מתפרסם. הודעה או post של עמית לא נחשבים לכזה. לכן התיקון ש-B שלח נשאר בתור, ו-A לא ראה אותו עד סוף הריצה. אפשרות 2 משנה בדיוק את הכלל הזה, ולכן היא שינוי פרוטוקול.</p>
+            <input placeholder="שאלה נוספת…">
+          </div>
+        </div>
+      </div>
+
+      <!-- 17:16: the background check. -->
+      <div class="sec m16">
+        <div class="sec-h">בדיקה ברקע</div>
+        <div class="check">
+          <div class="l1"><b dir="auto">confirm at v58</b><span class="muted">· 2 ריצות על go-tasks</span><span style="flex:1"></span><span class="mono">13:13</span></div>
+          <div class="bar"><b style="width:100%"></b><span class="typical" style="inset-inline-start:75%"></span></div>
+          <div class="muted" style="font-size:12px">13 דק׳ מתוך בדרך כלל 10 · ארוך מהרגיל · ריצה 1: success · ריצה 2 רצה</div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-h">כוונה<span class="sp"></span><button class="ask">שאל על זה</button></div>
+        <div class="intention m21 stale">
+          <p dir="auto">Agent B found the bug and sent agent A the fix, then also called <code>ready</code>. Checking whether A ever received that message after its own <code>ready</code>.</p>
+          <div class="age"><span>לפני 6 צעדים · 17:20:15</span><span>מעומעם: עברו יותר מ-5 צעדים</span></div>
+        </div>
+        <div class="intention m16">
+          <p dir="auto">About 3–5 minutes left on <code>confirm</code>.</p>
+          <div class="age"><span>הטקסט האחרון בתור · 17:15:20</span></div>
+        </div>
+        <div class="sec-h" style="margin-top:10px">צעדים בתור<span class="sp"></span><span class="faint">לחיצה מציגה את הפקודה</span></div>
+        <ul class="steps m21">
+          <li><details><summary><span class="at">17:19:44</span><span class="what">Read confirm v58 outcome and report</span><span class="dur">0s</span></summary><pre>cat /private/tmp/claude-501/-Users-danielrispler-work-Falinks/ba5d93a9-3822-42a6-a0da-e521e1ee1537/tasks/bndgbg5ao.output; grep -E '^Running|outcome|paused|Batch' /private/tmp/ev/confirm-v58.log | cut -c1-300; cd /private/tmp/f338/evaluation &amp;&amp; ./target/release/falinks-eval report --runs /private/tmp/ev/confirm-v58 --schedule confirm …</pre></details></li>
+          <li><details><summary><span class="at">17:19:48</span><span class="what">Inspect failed run result fields</span><span class="dur">1s</span></summary><pre>R=/private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller; jq -c 'to_entries|map(select(.key|test("fail|reason|oracle|ready|final|outcome|transition|validation")))' $R/result.json | cut -c1-3000; ls $R</pre></details></li>
+          <li><details><summary><span class="at">17:19:55</span><span class="what">Find which ticket owns the --status filter</span><span class="dur">0s</span></summary><pre>jq -r '.. | strings | select(test("--status"))' evaluation/fixtures/go-tasks.json | head -5 | cut -c1-400; …</pre></details></li>
+          <li><details><summary><span class="at">17:19:57</span><span class="what">Inspect final candidate list.go status handling</span><span class="dur">0s</span></summary><pre>cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; ls oracle; f=$(ls -d oracle/candidate-* 2&gt;/dev/null | tail -1); …</pre></details></li>
+          <li><details><summary><span class="at">17:20:00</span><span class="what">Read final list.go and earlier check failures</span><span class="dur">0s</span></summary><pre>cd /private/tmp/ev/confirm-v58/go-tasks-2-falinks-2/controller &amp;&amp; sed -n 1,80p oracle/candidate-6/list.go; …</pre></details></li>
+          <li><details><summary><span class="at">17:20:07</span><span class="what">List check and ready events in order</span><span class="dur">0s</span></summary><pre>… jq -c 'select((.kind // .type // .event // "") | test("check|ready|validation|final"; "i")) | …' events.jsonl | head -30</pre></details></li>
+          <li><details><summary><span class="at">17:20:10</span><span class="what">Show check/ready events and agents' last messages</span><span class="dur">1s</span></summary><pre>…</pre></details></li>
+          <li class="faint" style="padding:3px 2px; font-size:11px">▲ הכוונה נכתבה כאן, 17:20:15</li>
+          <li><details><summary><span class="at">17:20:17</span><span class="what">Check whether agent A got B's fix message</span><span class="dur">0s</span></summary><pre>… grep -c 'status open\|--status' $A; …</pre></details></li>
+          <li><details><summary><span class="at">17:20:22</span><span class="what">Compare timing of B's fix message and A's ready</span><span class="dur">0s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span class="at">17:20:25</span><span class="what">Get A's last activity and whether it saw the bug message</span><span class="dur">1s</span></summary><pre>…</pre></details></li>
+          <li><details><summary><span class="at">17:20:34</span><span class="what">Find host handling of events after ready</span><span class="dur">0s</span></summary><pre>cd /private/tmp/f338 &amp;&amp; grep -n -i 'ready' adapters/claude/falinks_arm.rs | grep -i -E 'wake|deliver|present|finished|done|idle|stop|turn' | head -15</pre></details></li>
+          <li><details><summary><span class="at">17:20:36</span><span class="what">Read event delivery logic around ready</span><span class="dur">1s</span></summary><pre>cd /private/tmp/f338 &amp;&amp; sed -n 300,345p adapters/claude/falinks_arm.rs; sed -n 395,420p adapters/claude/falinks_arm.rs; git log --oneline 90dc671..HEAD -- adapters/claude/falinks_arm.rs</pre></details></li>
+          <li><details><summary><span class="at">17:20:40</span><span class="what">Find which commit introduced the ready-agent wake rule</span><span class="dur">0s</span></summary><pre>cd /private/tmp/f338 &amp;&amp; git log -L '/A ready agent is woken only/,+3:adapters/claude/falinks_arm.rs' --format='%h %ad %s' --date=short | …</pre></details></li>
+        </ul>
+        <ul class="steps m16">
+          <li><details><summary><span class="at">17:15:13</span><span class="what">Check confirm batch progress and elapsed time</span><span class="dur">0s</span></summary><pre>head -1 /private/tmp/claude-501/-Users-danielrispler-work-Falinks/ba5d93a9-3822-42a6-a0da-e521e1ee1537/tasks/bndgbg5ao.output; date -u +%FT%TZ; grep -E '^Running|outcome' /private/tmp/ev/confirm-v58.log | cut -c1-200</pre></details></li>
+          <li><details><summary><span class="at">17:15:17</span><span class="what">Get batch start time and run 1 duration</span><span class="dur">0s</span></summary><pre>sed -n 2p /private/tmp/claude-501/…/tasks/bndgbg5ao.output; jq '.elapsed_seconds // .completion_seconds' /private/tmp/ev/confirm-v58/go-tasks-1-falinks-2/controller/result.json; …</pre></details></li>
+        </ul>
+      </div>
+
+      <div class="sec m16">
+        <div class="sec-h">התגובה האחרונה<span class="sp"></span><button class="ask">שאל על זה</button></div>
+        <div class="response" dir="auto">
+          <p>About 3–5 minutes left on <code>confirm</code>:</p>
+          <ul><li><b>Run 1</b> (<code>go-tasks-1-falinks-2</code>) finished as <code>success</code>.</li>
+          <li><b>Run 2</b> started at 15:13:59Z and had been going for about 1 minute when I checked. Wave-4 runs on <code>go-tasks</code> took 220–315 s.</li></ul>
+          <p>After <code>confirm</code>, the pilots take about 15–40 more minutes, depending on how many are needed (one to three). Each one should finish under 900 s.</p>
+        </div>
+      </div>
+
+      <div class="sec">
+        <div class="sec-h"><span class="m16">כרטיס בזמן הבדיקה</span><span class="m21">כרטיס הבדיקה · הוכרע</span><span class="sp"></span><button class="ask">שאל על זה</button></div>
+        <article class="card" dir="rtl" lang="he">
+          <div class="kicker"><span class="m16">מוכן מ-17:03 · הבדיקה עדיין רצה</span><span class="m21">confirm הסתיימה 17:19:39 · אחרי 16:52</span> <span class="example"></span></div>
+          <p><b>מה <code>confirm</code> ב-v58 בודק בשינוי שלך</b></p>
+          <p>השינוי האחרון מלמד את בודק הסוכנים המקוננים (כלל C7) לדלג על גוף של heredoc, אלא אם ה-heredoc מוזן ל-shell. ב-v57, סוכן שכתב קוד Go דרך <code>cat &gt; query/query.go &lt;&lt;'EOF'</code> נפסל: הבודק פיצל את <code>&amp;node{</code> ומצא את המילה <code>node</code>. עכשיו שתי ריצות Falinks אמיתיות על <code>go-tasks</code> עוברות את אותו מסלול.</p>
+          <p><b>מה תחזה?</b></p>
+          <ol>
+            <li><button class="m16">שתי הריצות יסתיימו ב-success</button><button class="m21" aria-pressed="true">שתי הריצות יסתיימו ב-success</button></li>
+            <li><button>ריצה אחת לפחות תיפסל שוב ב-C7</button></li>
+            <li><button class="m16">C7 לא ייפסל, אבל ריצה תיכשל מסיבה אחרת</button><button class="m21 key">C7 לא ייפסל, אבל ריצה תיכשל מסיבה אחרת</button></li>
+          </ol>
+          <div class="settled m21"><b>התוצאה מכריעה: לא צדקת.</b> ריצה 1 הסתיימה ב-<code>success</code>, ריצה 2 ב-<code>task_failure</code>. C7 לא הופעל באף ריצה, אז התיקון עבד. הכישלון בא מכלל אחר: סוכן ready לא מתעורר מ-post של עמית.</div>
+          <div class="settled m16 muted">התוצאה של הבדיקה תכריע את התשובה.</div>
+        </article>
+      </div>
+    </div>
+
+    <!-- Decision history -->
+    <div class="panel" id="decisions">
+      <div class="sec-h">החלטות בסשן הזה · שמורות בדיסק</div>
+      <ul class="hist">
+        <li><details open><summary><span class="when">16:41 → 16:55</span><span class="mono muted">Detector</span><span class="ans">Fix detector, re-freeze</span><span class="where">בטרמינל · חיכה 14:18</span></summary>
+          <p dir="auto" style="direction:ltr;text-align:left;margin:6px 0 0">The nested-agent detector fired a false positive on Go code inside a heredoc. How should we handle it before the go-invoice pilots?</p>
+          <ul><li class="chosen">Fix detector, re-freeze (Recommended)</li><li>Accept, resume as is</li><li>Something else</li></ul>
+          <button class="ask" style="margin-top:4px">שאל על זה</button></details></li>
+        <li><details><summary><span class="when">16:24 → 16:27</span><span class="mono muted">v57 smoke</span><span class="ans">confirm: 2 runs</span><span class="where">בטרמינל · חיכה 2:59</span></summary>
+          <p dir="auto" style="direction:ltr;text-align:left;margin:6px 0 0">Before the first go-invoice pilot, should I run a smoke check on go-tasks at v57 (main, after the #402 simplify pass) to confirm the engine still works with real agents?</p>
+          <ul><li class="chosen">confirm: 2 runs (Recommended)</li><li>One full wave (6 runs)</li><li>No smoke, pilot now</li></ul></details></li>
+      </ul>
+      <div class="cleared">נוקה ב-16:22 · אותה שורה</div>
+      <p class="faint" style="font-size:12px">לפני הניקוי: אין החלטות.</p>
+    </div>
+
+    <!-- Responses -->
+    <div class="panel" id="responses">
+      <div class="sec-h">תגובות הסוכן, החדשה למעלה</div>
+      <div class="response m16" dir="auto" style="margin-bottom:8px"><p class="faint" style="direction:rtl">17:15:20 · תשובה ל-"how much time left?"</p><p>About 3–5 minutes left on <code>confirm</code>: … After <code>confirm</code>, the pilots take about 15–40 more minutes.</p></div>
+      <div class="response" dir="auto" style="margin-bottom:8px"><p class="faint" style="direction:rtl">17:02:57</p><p>That's settled. 900 s is #205's fixture-size criterion (design rule 7): the slowest arm's pilots and smoke runs must each finish under it. The hard run timeout stays at the config's 1800 s. So a pilot that runs past 900 s still completes, and it counts as evidence for a revision that shrinks every ticket evenly.</p><p>Waiting for <code>confirm</code> at v58.</p></div>
+      <div class="cleared">נוקה ב-16:22</div>
+      <div class="response" dir="auto"><p class="faint" style="direction:rtl">16:14:28 · ask-matt · "what left for the engine?"</p>
+        <p>Only two engine tickets are left, and they run in order. Next is <b>#338</b>: the pilots, the final freeze and the smoke runs. <b>#339</b>, the scored batch and its decision, waits on it. Both run outside auto mode, so they need you present.</p>
+        <p><b>Where things stand</b></p>
+        <ul><li><b>Map #19</b>: everything else is closed, including the waves (#335, closed 2 Nov) and the simplify pass (#402).</li><li><b>Manifest</b>: v57 on <code>main</code>. #335 named v55 at <code>90dc671</code> as the starting point.</li><li><b>The rule for the pilots</b>: once the first scored-fixture pilot runs, any engine change means stop and ask.</li></ul>
+        <p><b>Why this matters</b>: #205 exists to show that Falinks is worth its cost on coupled work. A <code>Split</code> followed by a <code>Join</code> has never happened with real agents…</p>
+        <button class="ask" style="direction:rtl">שאל על זה</button></div>
+    </div>
+  </aside>
+</div>
+
+<div class="proto" role="toolbar" aria-label="prototype">
+  <b>PROTOTYPE #463 · A: Cockpit</b>
+  <span>moment</span>
+  <button data-m="16" aria-pressed="false">17:16 check running</button>
+  <button data-m="21" aria-pressed="true">17:21 question open</button>
+  <a href="mockup-b-story.html">B →</a>
+</div>
+
+<script>
+// Prototype only: switch the moment and the rail's tabs.
+document.querySelectorAll(".proto [data-m]").forEach((b) => b.onclick = () => {
+  document.body.dataset.moment = b.dataset.m;
+  document.querySelectorAll(".proto [data-m]").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+});
+document.querySelectorAll(".tabs button").forEach((t) => t.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((o) => o.setAttribute("aria-selected", String(o === t)));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("on", p.id === t.dataset.tab));
+});
+</script>
+</body>
+</html>
