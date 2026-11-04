@@ -20,6 +20,7 @@
       <!-- Identity: the selected session's name; naming and the context share fill it (#480). -->
       <span id="identity" class="identity"></span>
       <span class="sp"></span>
+      <button id="new-session" type="button">New session</button>
       <!-- Usage: context, 5h and week (#480, #481). -->
       <span id="usage" class="usage"></span>
       <button id="rail-toggle" type="button" hidden>Story ⌘2</button>
@@ -33,7 +34,10 @@
       <div id="strip" class="strip"></div>
     </nav>
 
-    <!-- The terminal pane (#466) draws into #terminal-body. -->
+    <!-- The picker (#467): where a new session starts. #468 adds creating and removing tasks. -->
+    <div id="picker" class="picker" role="dialog" aria-label="New session" hidden></div>
+
+    <!-- The terminal panes (#466, #467) draw into #terminal-body. -->
     <section id="terminal" class="term" aria-label="Terminal">
       <div class="term-h"><span id="terminal-title">terminal</span><span id="size" class="mono"></span></div>
       <div id="terminal-body" class="term-body"></div>
@@ -54,6 +58,8 @@
         <p id="empty" class="empty">Pick a session in the list.</p>
         <section id="view" hidden>
           <p id="state" class="state"></p>
+          <!-- An ended session opens again with `claude --resume` (#467). -->
+          <button id="reopen" class="tool" type="button" hidden>Open</button>
           <!-- Decision history (#479), a collapsed section above the turns. -->
           <div id="decisions" class="decisions"></div>
           <!-- The intention and step line (#472). -->

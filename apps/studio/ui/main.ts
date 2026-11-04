@@ -5,12 +5,12 @@
 // columns out by the width rule in `layout.ts`.
 
 import { markShown, showCards } from "./cards.js";
-import { connect } from "./daemon.js";
 import { element, invoke, listen } from "./dom.js";
 import { layoutMode } from "./layout.js";
 import { showSessions } from "./list.js";
 import { show } from "./selection.js";
-import { openPane } from "./terminal.js";
+import { startPanes } from "./panes.js";
+import { showPicker } from "./picker.js";
 import type { Selection, Session, SessionCards } from "./types.js";
 
 // The terminal's cell, measured from a probe in its font, sets the columns' layout.
@@ -29,6 +29,7 @@ layout();
 const toggle = (name: string) => document.body.classList.toggle(name);
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") document.body.classList.remove("wide", "list-open", "rail-open");
+  if (event.key === "Escape") element("picker").hidden = true;
   if (event.metaKey && event.key === "1") toggle("list-open");
   if (event.metaKey && event.key === "2") toggle("rail-open");
   if (event.metaKey && ["1", "2"].includes(event.key)) event.preventDefault();
@@ -43,16 +44,9 @@ element("close-all").addEventListener("click", () => blocks().forEach((block) =>
 
 document.addEventListener("visibilitychange", markShown);
 
-// One login shell in the configured repository; #467 links terminals to sessions.
-connect()
-  .then(({ repo }) => {
-    const term = openPane(element("terminal-body"), "shell", repo);
-    const size = () => (element("size").textContent = `${term.cols} × ${term.rows}`);
-    size();
-    term.onResize(size);
-    term.onTitleChange((title) => (element("terminal-title").textContent = title || "terminal"));
-  })
-  .catch((e) => (element("terminal-body").textContent = `No terminal: ${e}`));
+// A login shell in the configured repository, then a pane per session terminal (#467).
+startPanes().catch((e) => (element("terminal-body").textContent = `No terminal: ${e}`));
+element("new-session").addEventListener("click", showPicker);
 
 listen<Session[]>("sessions", showSessions);
 invoke<Session[]>("sessions").then(showSessions);

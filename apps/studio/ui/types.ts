@@ -40,7 +40,11 @@ export type Answer = "open" | "not_answered" | { answered: Record<string, string
 export type Question = { agent: string | null; questions: Asked[]; answer: Answer };
 export type Session = {
   id: string;
+  // The folder it works in, from its latest event; `folder_name` is its last segment.
+  cwd: string;
   folder_name: string;
+  // The studio terminal it runs in, its `STUDIO_TERMINAL_ID`; null when it runs outside the studio.
+  terminal: string | null;
   last_step: Step | null;
   state: SessionState;
   checks: CheckLine[];
@@ -98,6 +102,11 @@ export type SessionCards = { brief: string | null; recent: StoredCard[]; older: 
 // The selection is the core's: the session Daniel selected and the subagent of it he opened, whose
 // view then shows its own line.
 export type Selection = { session: Session; agent: string | null };
+
+// Where a session can start (#467): the main checkout and the tasks under `.claude/worktrees/`, with
+// the count of `agent-*` worktrees hidden. `branch` is null at a detached HEAD.
+export type Place = { path: string; branch: string | null };
+export type Places = { main: Place; tasks: Place[]; hidden: number };
 
 export const stateLabels: Record<SessionState, string> = {
   needs_you: "Needs you",

@@ -9,6 +9,7 @@ studio-core = { path = "../core" }
 studio-hook = { path = "../hook" }
 studio-understanding = { path = "../understanding" }
 studio-terminal-daemon = { path = "../terminal-daemon" }
+studio-workbench = { path = "../workbench" }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
