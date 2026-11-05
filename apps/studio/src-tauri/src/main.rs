@@ -412,7 +412,10 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 queues.retain(|key, _| keys.contains(key));
             }
         }
-        if state.lock().unwrap().tick(millis()) || read {
+        // Reads the transcripts' lines and nothing else (`apps/studio/AGENTS.md`).
+        let log = |line: String| eprintln!("studio: {line}");
+        let told = state.lock().unwrap().follow_transcripts(log);
+        if state.lock().unwrap().tick(millis()) || read || told {
             sent.list(app);
         }
         // Asking for focus waits on the main thread, which never takes this lock.

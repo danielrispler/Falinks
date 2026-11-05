@@ -1,6 +1,10 @@
 // What the shell sends the window: sessions, the selection and a session's cards.
 
-export type Step = { tool: string; detail: string | null };
+// `detail` is a command's description, else what the step works on; `command` a command's full text.
+export type Step = { tool: string; detail: string | null; command?: string | null };
+// What the transcript says of the latest turn (#472): the agent's latest line, the steps since it,
+// its full texts, and why the transcript cannot be read, when it cannot.
+export type Story = { intention: string | null; steps_ago: number; responses: string[]; unavailable: string | null };
 export type SessionState = "needs_you" | "running" | "your_turn" | "idle" | "ended";
 // A check that ran: a pass or fail line, oldest first. `passed` is null when its exit code is masked.
 export type CheckLine = { command: string; passed: boolean | null };
@@ -58,6 +62,7 @@ export type Session = {
   questions: Question[];
   // "worker <name> returned", after a wake-up until its next step or Daniel's next prompt.
   returned: string | null;
+  story: Story;
   // In the session list only: what its row says, built by the card store.
   line?: string;
 };

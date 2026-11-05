@@ -7,7 +7,7 @@ import { encode, request } from "./daemon.js";
 import { agentState } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
 import { questionElement } from "./questions.js";
-import { stateLabels, type CheckLine, type Question, type Selection, type Session } from "./types.js";
+import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Story } from "./types.js";
 
 export function showView(selected: Selection | null) {
   element("empty").hidden = selected !== null;
@@ -36,8 +36,29 @@ export function showView(selected: Selection | null) {
   element("close").onclick = () => askClose(session);
   element("tool").textContent = step?.tool ?? (agent === null ? session.returned : null) ?? "No step yet";
   element("detail").textContent = step?.detail ?? "";
+  element("command").textContent = step?.command ?? "";
+  element("step").classList.toggle("has-command", Boolean(step?.command));
+  // A subagent's transcript is its own, which the studio does not read.
+  showStory(agent === null ? session.story : null);
   showQuestions(session.questions.filter((question) => question.agent === (agent?.id ?? null)));
   showChecks(session.checks);
+}
+
+// After this many steps the intention dims, as it may no longer say what the agent does (#472).
+const FRESH_STEPS = 5;
+
+// The intention, its age, the turn's full responses, and the mark when the transcript is unreadable.
+function showStory(story: Story | null) {
+  const steps = story?.steps_ago ?? 0;
+  element("intention-text").textContent = story?.intention ?? "";
+  element("intention-age").textContent = steps === 0 ? "" : `· ${steps} ${steps === 1 ? "step" : "steps"} ago`;
+  element("intention").classList.toggle("old", steps > FRESH_STEPS);
+  element("unavailable").hidden = !story?.unavailable;
+  element("unavailable-why").textContent = story?.unavailable ? `The transcript cannot be read: ${story.unavailable}.` : "";
+  const responses = story?.responses ?? [];
+  element("responses").hidden = responses.length === 0;
+  element("responses-title").textContent = `Responses (${responses.length})`;
+  element("responses-body").replaceChildren(...responses.map((response) => text("pre", response)));
 }
 
 // Rename (#469): the row's name, kept in the event log, and `/rename` typed into the session while

@@ -1,4 +1,5 @@
-//! The studio core (#328, module 3): plain Rust with no I/O. It takes hook events one at a time, in
+//! The studio core (#328, module 3): plain Rust with no I/O but the transcript reader
+//! (`transcript.rs`), which reads the sessions' transcripts. It takes hook events one at a time, in
 //! event log order, and keeps the state the app shows. App start replays the whole log through
 //! `replay`; live events go through `apply`, which updates state the same way and also returns what
 //! the shell must do.
@@ -10,6 +11,9 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     time::Duration,
 };
+
+mod transcript;
+pub use transcript::Story;
 
 #[derive(Default)]
 pub struct Studio {
@@ -139,6 +143,11 @@ pub struct Session {
     /// "worker <name> returned", from its latest wake-up until its own next step or Daniel's next
     /// prompt (#410, decision 27).
     pub returned: Option<String>,
+    /// What its transcript says of its latest turn: the intention, the agent's texts, or why it
+    /// cannot be read (#461, decision 12).
+    pub story: Story,
+    #[serde(skip)]
+    transcript: transcript::Transcript,
 }
 
 /// A terminal of the daemon, as its `list` gives it, or as its record of the terminals it ran gives
@@ -599,10 +608,7 @@ impl Session {
             match event.hook_event_name.as_str() {
                 // A step after its end means its parent continued it (`SendMessage`).
                 "PreToolUse" => {
-                    agent.agent.last_step = Some(Step {
-                        tool: tool.into(),
-                        detail: step_detail(&event.tool_input, &event.cwd),
-                    });
+                    agent.agent.last_step = Some(Step::new(tool, &event.tool_input, &event.cwd));
                     agent.status = Status::Running;
                     agent.ended_at = None;
                 }
@@ -989,7 +995,21 @@ const IDLE_AFTER_MS: u64 = 2 * 60 * 60 * 1000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Step {
     pub tool: String,
+    /// What it works on (`step_detail`): a command's `description`, else its first line.
     pub detail: Option<String>,
+    /// A command's full text, one click away in the session view (#461, decision 12).
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+impl Step {
+    fn new(tool: &str, input: &Value, cwd: &str) -> Step {
+        Step {
+            tool: tool.into(),
+            detail: step_detail(input, cwd),
+            command: input["command"].as_str().map(Into::into),
+        }
+    }
 }
 
 /// What the shell must act on after a live event.
@@ -1288,10 +1308,17 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     Some(rest.split_once(&format!("</{name}>"))?.0)
 }
 
-/// The tool input that says what a step works on: a command's first line, a path relative to the
-/// session's folder, the first question asked, or a search pattern, URL, query or task description.
+/// The tool input that says what a step works on: a command's `description`, which the agent sets
+/// on every Bash call (#461, decision 12), else its first line; a path relative to the session's
+/// folder, the first question asked, or a search pattern, URL, query or task description.
 fn step_detail(input: &Value, cwd: &str) -> Option<String> {
     if let Some(command) = input["command"].as_str() {
+        if let Some(description) = input["description"]
+            .as_str()
+            .filter(|d| !d.trim().is_empty())
+        {
+            return Some(description.into());
+        }
         return command.lines().next().map(Into::into);
     }
     if let Some(question) = input["questions"][0]["question"].as_str() {
@@ -1702,6 +1729,15 @@ impl Studio {
             let last = event.cwd.rsplit('/').next().unwrap_or_default();
             session.folder_name = if last.is_empty() { &event.cwd } else { last }.into();
         }
+        // A resume or `/clear` may move it to another transcript, read from its start.
+        if own
+            && !event.transcript_path.is_empty()
+            && session.transcript.path != event.transcript_path
+        {
+            session.transcript = transcript::Transcript::default();
+            session.transcript.path.clone_from(&event.transcript_path);
+            session.story = Story::default();
+        }
         let failed = session.failed_workers().into_iter();
         let mut outputs: Vec<Output> = failed
             .filter(|agent| !failed_before.contains(agent))
@@ -1886,10 +1922,7 @@ impl Studio {
             "PreToolUse" => {
                 if own {
                     session.returned = None;
-                    session.agent.last_step = Some(Step {
-                        tool: tool.clone(),
-                        detail: step_detail(&event.tool_input, &event.cwd),
-                    });
+                    session.agent.last_step = Some(Step::new(&tool, &event.tool_input, &event.cwd));
                 }
                 let call = Call {
                     id,
@@ -2142,6 +2175,33 @@ impl Studio {
             }
         };
         running.map(revive).collect()
+    }
+
+    /// Reads what was added to the transcripts of the sessions that have not ended, and of the
+    /// selected one, since the last call (#461, decision 12). `log` gets one line when a session's
+    /// transcript becomes unavailable. A session is read only from its first step or `Stop`, as its
+    /// transcript may not exist before. Returns whether any session's story changed.
+    pub fn follow_transcripts(&mut self, mut log: impl FnMut(String)) -> bool {
+        let mut changed = false;
+        for session in self.sessions.values_mut() {
+            let shown = self.selected.as_ref() == Some(&session.agent.id);
+            let started = session.agent.last_step.is_some() || session.stopped.is_some();
+            if !started
+                || session.transcript.path.is_empty()
+                || session.state == State::Ended && !shown
+            {
+                continue;
+            }
+            let before = session.story.clone();
+            if let Some(why) = session.transcript.follow(&mut session.story) {
+                log(format!(
+                    "session {}: transcript unavailable, showing steps only: {why}",
+                    session.agent.id
+                ));
+            }
+            changed |= session.story != before;
+        }
+        changed
     }
 
     pub fn session(&self, id: &str) -> Option<&Session> {

@@ -377,6 +377,7 @@ fn a_childs_steps_are_its_own_not_its_sessions() {
     let own = Step {
         tool: "ToolSearch".into(),
         detail: Some("…".into()),
+        command: None,
     };
     assert_eq!(session.agent.last_step.as_ref(), Some(&own));
     assert_eq!(
@@ -386,6 +387,7 @@ fn a_childs_steps_are_its_own_not_its_sessions() {
     let write = Step {
         tool: "Write".into(),
         detail: Some("hello.txt".into()),
+        command: None,
     };
     assert_eq!(
         agent(&studio, RUN_SESSION, RUN_WORKER).agent.last_step,
