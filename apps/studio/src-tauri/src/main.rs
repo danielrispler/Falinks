@@ -221,7 +221,7 @@ fn closed(terminal: String, studio: State<Mutex<Studio>>) -> Result<(), String> 
         .filter(|s| s.terminal.as_deref() == Some(&terminal) && s.state != Ended)
         .map(|s| {
             serde_json::json!({
-                "session_id": s.agent.id,
+                "session_id": s.resume_id,
                 "hook_event_name": "SessionEnd",
                 "reason": "studio_close",
                 "studio_received_ms": millis(),
