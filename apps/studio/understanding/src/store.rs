@@ -252,6 +252,7 @@ impl CardStore {
             Some(Step {
                 tool,
                 detail: Some(detail),
+                ..
             }) => format!("{tool} {detail}"),
             Some(step) => step.tool.clone(),
             None => "No step yet".into(),

@@ -8,12 +8,14 @@ import { agentState } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
 import { openDecision } from "./answer.js";
 import { decisionElement, questionElement } from "./questions.js";
-import { stateLabels, type CheckLine, type Question, type Selection, type Session } from "./types.js";
+import { checkTime, counts, timesText } from "./times.js";
+import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Story } from "./types.js";
 
 export function showView(selected: Selection | null) {
   element("empty").hidden = selected !== null;
   element("view").hidden = selected === null;
   element("identity").textContent = "";
+  element("times").replaceChildren();
   if (selected === null) {
     showQuestions([]);
     return;
@@ -22,6 +24,8 @@ export function showView(selected: Selection | null) {
   const agent = session.agents.find((a) => a.id === selected.agent) ?? null;
   const [label, state] = agent === null ? [stateLabels[session.state], session.state] : agentState(session, agent);
   const step = (agent ?? session).last_step;
+  const stepSpan = (agent ?? session).step_span;
+  element("times").replaceChildren(counts(document.createElement("span"), (now) => timesText(session, stepSpan, now)));
   element("view").toggleAttribute("data-agent", agent !== null);
   element("identity").textContent =
     agent === null ? `${session.name ?? session.folder_name} · ${session.id.slice(0, 8)}` : `${session.folder_name} · ${agent.name}`;
@@ -37,8 +41,29 @@ export function showView(selected: Selection | null) {
   element("close").onclick = () => askClose(session);
   element("tool").textContent = step?.tool ?? (agent === null ? session.returned : null) ?? "No step yet";
   element("detail").textContent = step?.detail ?? "";
+  element("command").textContent = step?.command ?? "";
+  element("step").classList.toggle("has-command", Boolean(step?.command));
+  // A subagent's transcript is its own, which the studio does not read.
+  showStory(agent === null ? session.story : null);
   showQuestions(session.questions.filter((question) => question.agent === (agent?.id ?? null)));
   showChecks(session.checks);
+}
+
+// After this many steps the intention dims, as it may no longer say what the agent does (#472).
+const FRESH_STEPS = 5;
+
+// The intention, its age, the turn's full responses, and the mark when the transcript is unreadable.
+function showStory(story: Story | null) {
+  const steps = story?.steps_ago ?? 0;
+  element("intention-text").textContent = story?.intention ?? "";
+  element("intention-age").textContent = steps === 0 ? "" : `· ${steps} ${steps === 1 ? "step" : "steps"} ago`;
+  element("intention").classList.toggle("old", steps > FRESH_STEPS);
+  element("unavailable").hidden = !story?.unavailable;
+  element("unavailable-why").textContent = story?.unavailable ? `The transcript cannot be read: ${story.unavailable}.` : "";
+  const responses = story?.responses ?? [];
+  element("responses").hidden = responses.length === 0;
+  element("responses-title").textContent = `Responses (${responses.length})`;
+  element("responses-body").replaceChildren(...responses.map((response) => text("pre", response)));
 }
 
 // Rename (#469): the row's name, kept in the event log, and `/rename` typed into the session while
@@ -92,12 +117,15 @@ function outcome(passed: boolean | null): string {
   return passed ? "Passed" : "Failed";
 }
 
-// The checks that ran, newest first, one line each.
+// The checks, newest first, one line each, with how long each took or, while it runs, its time against
+// its typical time.
 function showChecks(checks: CheckLine[]) {
   element("checks").replaceChildren(
     ...[...checks].reverse().map((line) => {
       const item = document.createElement("li");
-      item.append(text("span", outcome(line.passed), "outcome"), code(line.command));
+      const label = line.ended_at === null ? "Running" : outcome(line.passed);
+      const time = counts(text("span", "", "check-time"), (now) => checkTime(line, now));
+      item.append(text("span", label, "outcome"), code(line.command), time);
       return item;
     }),
   );

@@ -3,6 +3,7 @@
 // which opens the full list on click or ⌘1.
 
 import { age, element, prose, pressable, stepText, text } from "./dom.js";
+import { counts, timesText } from "./times.js";
 import { select } from "./selection.js";
 import { studio } from "./state.js";
 import { stateLabels, type Session, type SessionState, type Subagent } from "./types.js";
@@ -53,7 +54,7 @@ function done(all: Children, children: Subagent[] = []): HTMLElement[] {
   return faded ? [text("span", `${faded} done`, "id")] : [];
 }
 
-// A row's two lines: its dot, name and state, then what it is doing.
+// A row's lines: its dot, name and state, then what it is doing, then for a session its times.
 function rowLines(button: HTMLElement, state: string, label: string, name: HTMLElement[], below: HTMLElement[]) {
   const first = text("span", "", "l1");
   const stateNode = text("span", label, "row-state");
@@ -78,6 +79,7 @@ function row(session: Session, children: Children): HTMLElement {
     [text("span", session.name ?? session.folder_name, "name"), text("span", session.id.slice(0, 8), "id")],
     [...done(children, children.get("session")), rowLine(session.line ?? "")],
   );
+  button.append(counts(text("span", "", "l3"), (now) => timesText(session, session.step_span, now)));
   return button;
 }
 

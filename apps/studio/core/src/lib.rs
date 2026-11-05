@@ -1,4 +1,5 @@
-//! The studio core (#328, module 3): plain Rust with no I/O. It takes hook events one at a time, in
+//! The studio core (#328, module 3): plain Rust with no I/O but the transcript reader
+//! (`transcript.rs`), which reads the sessions' transcripts. It takes hook events one at a time, in
 //! event log order, and keeps the state the app shows. App start replays the whole log through
 //! `replay`; live events go through `apply`, which updates state the same way and also returns what
 //! the shell must do.
@@ -10,6 +11,9 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     time::Duration,
 };
+
+mod transcript;
+pub use transcript::Story;
 
 #[derive(Default)]
 pub struct Studio {
@@ -23,6 +27,8 @@ pub struct Studio {
     roots: Roots,
     /// The turns the replay saw end with both trees, for `backfill`.
     ended: Vec<Backfill>,
+    /// How long each check ran when it did not fail, by `check_key`, oldest first (#461, decision 13).
+    durations: HashMap<String, Vec<u64>>,
     /// The row of each session that continues another after a `/clear`, by its own id (#461,
     /// decision 18). A session not here is its own row.
     rows: HashMap<String, String>,
@@ -125,6 +131,8 @@ pub struct Session {
     tasks: BTreeSet<String>,
     /// The questions its agents asked, oldest first (#369, decision 21).
     pub questions: Vec<Question>,
+    /// When its latest turn started and ended (#461, decision 13).
+    pub turn_span: Option<Span>,
     /// Its latest `Stop`, until its next prompt (#369, decision 19).
     pub stopped: Option<Stopped>,
     /// When its latest turn ended, which took its workers' cards since its last card.
@@ -151,6 +159,11 @@ pub struct Session {
     /// "worker <name> returned", from its latest wake-up until its own next step or Daniel's next
     /// prompt (#410, decision 27).
     pub returned: Option<String>,
+    /// What its transcript says of its latest turn: the intention, the agent's texts, or why it
+    /// cannot be read (#461, decision 12).
+    pub story: Story,
+    #[serde(skip)]
+    transcript: transcript::Transcript,
 }
 
 /// A terminal of the daemon, as its `list` gives it, or as its record of the terminals it ran gives
@@ -320,10 +333,22 @@ pub struct Agent {
     /// When the hook received its first and its latest event (`studio_received_ms`), in Unix
     /// milliseconds.
     pub started_at: u64,
+    pub last_event_at: u64,
+    /// When its last step started, and ended at its result or its turn's end (#461, decision 13).
+    pub step_span: Option<Span>,
+    /// The last step's `tool_use_id`, whose result ends it.
     #[serde(skip)]
-    last_event_at: u64,
+    step_call: String,
     #[serde(skip)]
     since: Since,
+}
+
+/// When something started and ended, in Unix milliseconds as the hook received them; `end` is `None`
+/// while it runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Span {
+    pub start: u64,
+    pub end: Option<u64>,
 }
 
 impl Agent {
@@ -333,6 +358,26 @@ impl Agent {
             started_at: at,
             last_event_at: at,
             ..Agent::default()
+        }
+    }
+
+    /// Its step of call `call` starts at `at`.
+    fn step(&mut self, step: Step, call: &str, at: u64) {
+        self.last_step = Some(step);
+        self.step_call = call.into();
+        self.step_span = Some(Span {
+            start: at,
+            end: None,
+        });
+    }
+
+    /// Call `call`'s result came at `at`: it ends the step when it is the last step's.
+    // shortcut: the hooks are async, so a result that lands before its step's start leaves that step
+    // running until the next one or the turn's end; remember ended calls if that shows.
+    fn step_done(&mut self, call: &str, at: u64) {
+        let span = self.step_span.as_mut().filter(|_| self.step_call == call);
+        if let Some(span) = span.filter(|s| s.end.is_none()) {
+            span.end = Some(at);
         }
     }
 }
@@ -611,14 +656,17 @@ impl Session {
             match event.hook_event_name.as_str() {
                 // A step after its end means its parent continued it (`SendMessage`).
                 "PreToolUse" => {
-                    agent.agent.last_step = Some(Step {
-                        tool: tool.into(),
-                        detail: step_detail(&event.tool_input, &event.cwd),
-                    });
+                    let step = Step::new(tool, &event.tool_input, &event.cwd);
+                    agent.agent.step(step, &event.tool_use_id, at);
                     agent.status = Status::Running;
                     agent.ended_at = None;
                 }
-                "PostToolUse" | "PostToolUseFailure" if changed => agent.kind = Kind::Worker,
+                "PostToolUse" | "PostToolUseFailure" => {
+                    agent.agent.step_done(&event.tool_use_id, at);
+                    if changed {
+                        agent.kind = Kind::Worker;
+                    }
+                }
                 "SubagentStop" => {
                     let mut lines = event.last_assistant_message.lines().map(str::trim);
                     agent.result = lines.find(|line| !line.is_empty()).map(Into::into);
@@ -827,6 +875,7 @@ impl Session {
     /// workers' cards since its last card, or only its brief when a wake-up opened the turn.
     fn end_turn(&mut self, change: Option<Change>, at: u64) -> Option<Output> {
         self.unblock();
+        self.close_spans(at);
         self.turn_ended = true;
         self.stopped_at = at;
         let workers = !self.agent.since.cards.is_empty();
@@ -860,6 +909,14 @@ impl Session {
             ..CardRequest::default()
         };
         (!trees.is_empty()).then_some(Backfill { request, trees })
+    }
+
+    /// Ends its turn's span and its step's at `at`, when they run.
+    fn close_spans(&mut self, at: u64) {
+        let spans = [&mut self.turn_span, &mut self.agent.step_span];
+        for span in spans.into_iter().flatten().filter(|s| s.end.is_none()) {
+            span.end = Some(at);
+        }
     }
 
     fn needs_you(&self) -> bool {
@@ -1001,7 +1058,21 @@ const IDLE_AFTER_MS: u64 = 2 * 60 * 60 * 1000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Step {
     pub tool: String,
+    /// What it works on (`step_detail`): a command's `description`, else its first line.
     pub detail: Option<String>,
+    /// A command's full text, one click away in the session view (#461, decision 12).
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+impl Step {
+    fn new(tool: &str, input: &Value, cwd: &str) -> Step {
+        Step {
+            tool: tool.into(),
+            detail: step_detail(input, cwd),
+            command: input["command"].as_str().map(Into::into),
+        }
+    }
 }
 
 /// What the shell must act on after a live event.
@@ -1111,14 +1182,69 @@ pub struct Fingerprint {
     pub purpose: Purpose,
 }
 
-/// A check that ran, shown as a pass or fail line.
+/// A check that runs or ran, shown as a pass or fail line once it ends.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CheckLine {
     /// The command's first line.
     pub command: String,
     /// Whether the command exited 0, when that says whether the check passed: nothing in the
-    /// command masks the check's exit code (`exit_code_counts`). `None` otherwise.
+    /// command masks the check's exit code (`exit_code_counts`). `None` otherwise, and while it runs.
     pub passed: Option<bool>,
+    /// When it started, and when it ended: its result, or for a command in the background its
+    /// `<task-notification>`; `None` while it runs (#461, decision 13).
+    pub started_at: u64,
+    pub ended_at: Option<u64>,
+    /// Its typical duration when it started, from the checks that ran before (`Studio::typical`).
+    pub typical_ms: Option<u64>,
+    /// Its call's `tool_use_id`, and its background task's id once it moved to the background.
+    #[serde(skip)]
+    call: String,
+    #[serde(skip)]
+    task: Option<String>,
+    /// Whether its exit code says whether it passed (`exit_code_counts`).
+    #[serde(skip)]
+    counts: bool,
+}
+
+impl CheckLine {
+    fn new(command: &str, call: &str, at: u64, typical_ms: Option<u64>) -> Self {
+        CheckLine {
+            command: command.lines().next().unwrap_or_default().into(),
+            passed: None,
+            started_at: at,
+            ended_at: None,
+            typical_ms,
+            call: call.into(),
+            task: None,
+            counts: exit_code_counts(command),
+        }
+    }
+
+    /// It ended at `at`, failed or not, which its typical duration counts only when it did not fail.
+    fn end(&mut self, failed: bool, at: u64, durations: &mut HashMap<String, Vec<u64>>) {
+        self.ended_at = Some(at);
+        self.passed = self.counts.then_some(!failed);
+        if !failed {
+            let runs = durations.entry(check_key(&self.command)).or_default();
+            runs.push(at.saturating_sub(self.started_at));
+        }
+    }
+}
+
+/// What typical durations group check runs by: the command's first line, up to any pipe or output
+/// redirection, so `cargo test 2>&1 | tail` counts with `cargo test`.
+fn check_key(command: &str) -> String {
+    let first = command.lines().next().unwrap_or_default();
+    let first = first.split('|').next().unwrap_or_default();
+    let first = first.replace("2>&1", "");
+    first.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The lower median of `runs`, `None` when there is none.
+fn median(runs: &[u64]) -> Option<u64> {
+    let mut runs = runs.to_vec();
+    runs.sort_unstable();
+    runs.get(runs.len().checked_sub(1)? / 2).copied()
 }
 
 /// The worktree a card's change starts from (#369, decision 10): the session's previous card, or its
@@ -1242,6 +1368,8 @@ struct Event {
     reason: String,
     #[serde(default)]
     studio_received_ms: u64,
+    /// On a tool's result, how long its call took.
+    duration_ms: Option<u64>,
     /// The terminal the session runs in, which the hook records from `STUDIO_TERMINAL_ID`.
     studio_terminal_id: Option<String>,
     /// The trees the hook recorded at a turn's first touch of each worktree, by root (#486).
@@ -1312,10 +1440,17 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
     Some(rest.split_once(&format!("</{name}>"))?.0)
 }
 
-/// The tool input that says what a step works on: a command's first line, a path relative to the
-/// session's folder, the first question asked, or a search pattern, URL, query or task description.
+/// The tool input that says what a step works on: a command's `description`, which the agent sets
+/// on every Bash call (#461, decision 12), else its first line; a path relative to the session's
+/// folder, the first question asked, or a search pattern, URL, query or task description.
 fn step_detail(input: &Value, cwd: &str) -> Option<String> {
     if let Some(command) = input["command"].as_str() {
+        if let Some(description) = input["description"]
+            .as_str()
+            .filter(|d| !d.trim().is_empty())
+        {
+            return Some(description.into());
+        }
         return command.lines().next().map(Into::into);
     }
     if let Some(question) = input["questions"][0]["question"].as_str() {
@@ -1373,14 +1508,6 @@ fn is_check(command: &str) -> bool {
                 ) | ("go", Some("test" | "vet"))
             )
         })
-}
-
-/// Whether a tool call runs a check in the foreground. A background command's result arrives as soon
-/// as it starts, before the check has run.
-fn runs_check(tool: &str, input: &Value) -> bool {
-    tool == "Bash"
-        && input["run_in_background"] != true
-        && is_check(input["command"].as_str().unwrap_or_default())
 }
 
 /// Whether a check's exit code says whether it passed (#328, module 4). A command exits with its
@@ -1719,6 +1846,7 @@ impl Studio {
         }
         let looks = self.looks(&event);
         let touches = self.touches(&event);
+        let typical = self.typical(event.tool_input["command"].as_str().unwrap_or_default());
         let roots = &self.roots;
         let session = self
             .sessions
@@ -1761,6 +1889,15 @@ impl Studio {
             let last = event.cwd.rsplit('/').next().unwrap_or_default();
             session.folder_name = if last.is_empty() { &event.cwd } else { last }.into();
         }
+        // A resume or `/clear` may move it to another transcript, read from its start.
+        if own
+            && !event.transcript_path.is_empty()
+            && session.transcript.path != event.transcript_path
+        {
+            session.transcript = transcript::Transcript::default();
+            session.transcript.path.clone_from(&event.transcript_path);
+            session.story = Story::default();
+        }
         let failed = session.failed_workers().into_iter();
         let mut outputs: Vec<Output> = failed
             .filter(|agent| !failed_before.contains(agent))
@@ -1796,6 +1933,10 @@ impl Studio {
             }
         }
         if opens {
+            session.turn_span = Some(Span {
+                start: at,
+                end: None,
+            });
             session.touched.clear();
             session.trees.clear();
         }
@@ -1883,6 +2024,17 @@ impl Studio {
                     }),
                     Sender::Daniel => {}
                 }
+                // A background check ends at the notification that names its task.
+                for (task, status) in reported(&event.prompt) {
+                    let running = session.checks.iter_mut().filter(|l| l.ended_at.is_none());
+                    let mut lines = running.filter(|l| l.task.as_deref() == Some(task));
+                    if let Some(line) = lines.next() {
+                        line.end(status != "completed", at, &mut self.durations);
+                        if !matches!(status, "completed" | "failed") {
+                            line.passed = None;
+                        }
+                    }
+                }
                 let prompt = Prompt {
                     at,
                     sender,
@@ -1934,6 +2086,9 @@ impl Studio {
                 // Its subagents end with it.
                 session.blocks.clear();
                 session.running.clear();
+                if session.in_turn() {
+                    session.close_spans(at);
+                }
                 session.turn_ended = true;
                 session.ended = true;
                 session.clearing = event.reason == "clear";
@@ -1947,10 +2102,19 @@ impl Studio {
             "PreToolUse" => {
                 if own {
                     session.returned = None;
-                    session.agent.last_step = Some(Step {
-                        tool: tool.clone(),
-                        detail: step_detail(&event.tool_input, &event.cwd),
-                    });
+                    let step = Step::new(&tool, &event.tool_input, &event.cwd);
+                    session.agent.step(step, &event.tool_use_id, at);
+                    // A check's line runs from its start (#461, decision 13).
+                    let command = event.tool_input["command"].as_str().unwrap_or_default();
+                    let known = session.checks.iter().any(|l| l.call == event.tool_use_id);
+                    if tool == "Bash" && is_check(command) && !known {
+                        session.checks.push(CheckLine::new(
+                            command,
+                            &event.tool_use_id,
+                            at,
+                            typical,
+                        ));
+                    }
                 }
                 let call = Call {
                     id,
@@ -2034,14 +2198,39 @@ impl Studio {
                 // A denied or interrupted call, or a failed Edit or Write, changed nothing: only a
                 // command that ran and failed has its exit code in its error.
                 let ran = !failed || event.error.starts_with("Exit code");
-                // A check gets its line whether it passed or failed. A child's checks are its own,
-                // so they add no line.
-                if ran && own && runs_check(&tool, input) {
-                    let command = input["command"].as_str().unwrap_or_default();
-                    session.checks.push(CheckLine {
-                        command: command.lines().next().unwrap_or_default().into(),
-                        passed: exit_code_counts(command).then_some(!failed),
-                    });
+                if own {
+                    session.agent.step_done(&event.tool_use_id, at);
+                }
+                // A check gets its line whether it passed or failed; one that did not run loses
+                // the line its start gave it. A child's checks are its own, so they add no line.
+                let command = input["command"].as_str().unwrap_or_default();
+                if own && tool == "Bash" && is_check(command) {
+                    let index = session
+                        .checks
+                        .iter()
+                        .position(|l| l.call == event.tool_use_id);
+                    let index = match index {
+                        _ if !ran => {
+                            session.checks.retain(|l| l.call != event.tool_use_id);
+                            None
+                        }
+                        Some(index) => Some(index),
+                        // The hooks are async, so its result can land before its start.
+                        None => {
+                            let start = at.saturating_sub(event.duration_ms.unwrap_or_default());
+                            let line = CheckLine::new(command, &event.tool_use_id, start, typical);
+                            session.checks.push(line);
+                            Some(session.checks.len() - 1)
+                        }
+                    };
+                    let task = event.tool_response.background_task_id.clone();
+                    if let Some(line) = index.map(|i| &mut session.checks[i]) {
+                        // In the background it runs on until its notification.
+                        match task {
+                            Some(task) => line.task = Some(task),
+                            None => line.end(failed, at, &mut self.durations),
+                        }
+                    }
                 }
             }
             _ => {}
@@ -2212,6 +2401,42 @@ impl Studio {
             }
         };
         running.map(revive).collect()
+    }
+
+    /// Reads what was added to the transcripts of the sessions that have not ended, and of the
+    /// selected one, since the last call (#461, decision 12). `log` gets one line when a session's
+    /// transcript becomes unavailable. A session is read only from its first step or `Stop`, as its
+    /// transcript may not exist before. Returns whether any session's story changed.
+    pub fn follow_transcripts(&mut self, mut log: impl FnMut(String)) -> bool {
+        let mut changed = false;
+        for session in self.sessions.values_mut() {
+            let shown = self.selected.as_ref() == Some(&session.agent.id);
+            // shortcut: after a `/clear` the row keeps its old step, so the new transcript may read as
+            // gone for one poll (one stderr line); track a step per transcript if that shows.
+            let started = session.agent.last_step.is_some() || session.stopped.is_some();
+            if !started
+                || session.transcript.path.is_empty()
+                || session.state == State::Ended && !shown
+            {
+                continue;
+            }
+            let before = session.story.clone();
+            if let Some(why) = session.transcript.follow(&mut session.story) {
+                log(format!(
+                    "session {}: transcript unavailable, showing steps only: {why}",
+                    session.agent.id
+                ));
+            }
+            changed |= session.story != before;
+        }
+        changed
+    }
+
+    /// The typical duration of check `command`, in milliseconds: the median of how long its earlier
+    /// runs took when they did not fail, its backgrounded runs included (#461, decisions 13 to 15).
+    /// `None` when it never ran. Runs group by `check_key`.
+    pub fn typical(&self, command: &str) -> Option<u64> {
+        median(self.durations.get(&check_key(command))?)
     }
 
     /// Session `id`'s row: its own, or the row it continues after a `/clear`.
