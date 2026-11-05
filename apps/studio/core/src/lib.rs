@@ -289,6 +289,20 @@ const FALLBACK_MS: u64 = 20 * 60 * 1000;
 /// its start (decision 15).
 const LONG_CHECK_MS: u64 = 2 * 60 * 1000;
 
+/// A check a `PreToolUse` starts (`Studio::check_start`): its whole command, and its typical duration
+/// (`Studio::typical`).
+struct CheckStart {
+    command: String,
+    typical: Option<u64>,
+}
+
+impl CheckStart {
+    /// It usually takes over 2 minutes, so it gets a card at its start (#461, decision 15).
+    fn long(&self) -> bool {
+        self.typical.is_some_and(|ms| ms > LONG_CHECK_MS)
+    }
+}
+
 /// A prompt of a session (#369, decision 7), received at `at`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Prompt {
@@ -1688,7 +1702,8 @@ impl Studio {
         let event = event.ok().filter(|e| e.hook_event_name != RENAME);
         event.map_or_else(Vec::new, |mut event| {
             event.session_id = self.row(&event);
-            self.looks(&event)
+            let long_check = self.check_start(&event).is_some_and(|start| start.long());
+            self.looks(&event, long_check)
         })
     }
 
@@ -1716,8 +1731,8 @@ impl Studio {
 
     /// The fingerprints before `event`: its own (`look`), and the end of each worker with cards that
     /// it ends, by any signal (#434, decision 19).
-    fn looks(&self, event: &Event) -> Vec<Fingerprint> {
-        let mut looks = self.look(event);
+    fn looks(&self, event: &Event, long_check: bool) -> Vec<Fingerprint> {
+        let mut looks = self.look(event, long_check);
         let Some(session) = self.sessions.get(&event.session_id) else {
             return looks;
         };
@@ -1766,7 +1781,7 @@ impl Studio {
     /// worker's after each Bash step, for a commit; and a worker's end. On a step 20 minutes after
     /// the last card of the worktree it is in, that worktree's, for the fallback card; a session's
     /// only in a turn. A helper's look after its Bash step comes beside such a fallback's.
-    fn look(&self, event: &Event) -> Vec<Fingerprint> {
+    fn look(&self, event: &Event, long_check: bool) -> Vec<Fingerprint> {
         let name = event.hook_event_name.as_str();
         let step = matches!(name, "PostToolUse" | "PostToolUseFailure");
         let due = |since: &Since| step && event.studio_received_ms >= since.at + FALLBACK_MS;
@@ -1798,8 +1813,9 @@ impl Studio {
                 true => Some(Purpose::TurnEnd),
                 // A long check's start cards the change so far, as a fallback would (#461,
                 // decision 15).
-                false => (session.is_some_and(session_due) || self.long_check(event).is_some())
-                    .then_some(Purpose::Fallback),
+                false => {
+                    (session.is_some_and(session_due) || long_check).then_some(Purpose::Fallback)
+                }
             };
             let mut looks: Vec<Fingerprint> = purpose
                 .into_iter()
@@ -1947,8 +1963,12 @@ impl Studio {
             }
             return Vec::new();
         }
-        let looks = self.looks(&event);
-        let check = self.long_check(&event).map(String::from);
+        let start = self.check_start(&event);
+        let long_check = start.as_ref().filter(|start| start.long());
+        let looks = self.looks(&event, long_check.is_some());
+        let long_check = long_check.map(|start| start.command.clone());
+        // The card a long check's start requests, which its line keeps.
+        let mut check_card = None;
         let touches = self.touches(&event);
         let typical = self.typical(event.tool_input["command"].as_str().unwrap_or_default());
         let roots = &self.roots;
@@ -2111,8 +2131,9 @@ impl Studio {
             if !worker || session.has_cards(&look.key) {
                 let mut request = session.card(&look.key, Some(found), at);
                 // At a long check's start, the session's own look is the check's card.
-                if !worker {
-                    request.check.clone_from(&check);
+                if !worker && long_check.is_some() {
+                    request.check.clone_from(&long_check);
+                    check_card.get_or_insert_with(|| request.id.clone());
                 }
                 if worker {
                     session.agent.since.cards.push(request.id.clone());
@@ -2229,15 +2250,10 @@ impl Studio {
                     session.agent.step(step, &event.tool_use_id, at);
                     session.work.call(&tool, &event.tool_input, at);
                     // A check's line runs from its start (#461, decision 13).
-                    let command = event.tool_input["command"].as_str().unwrap_or_default();
-                    let known = session.checks.iter().any(|l| l.call == event.tool_use_id);
-                    if tool == "Bash" && is_check(command) && !known {
-                        let mut line = CheckLine::new(command, &event.tool_use_id, at, typical);
-                        let carded = outputs.iter().find_map(|output| match output {
-                            Output::Card(request) if request.check.is_some() => Some(&request.id),
-                            _ => None,
-                        });
-                        line.card = carded.cloned();
+                    if let Some(start) = &start {
+                        let call = &event.tool_use_id;
+                        let mut line = CheckLine::new(&start.command, call, at, start.typical);
+                        line.card = check_card.take();
                         session.checks.push(line);
                     }
                 }
@@ -2687,16 +2703,19 @@ impl Studio {
         median(self.durations.get(&check_key(command))?)
     }
 
-    /// The command of the check `event` starts, when it is its session's own agent's, new, and
-    /// usually takes over 2 minutes (#461, decision 15).
-    fn long_check<'a>(&self, event: &'a Event) -> Option<&'a str> {
+    /// The check `event` starts: a new Bash call of its session's own agent that runs a check. A
+    /// subagent's checks are not recorded, so they get no line and no card.
+    fn check_start(&self, event: &Event) -> Option<CheckStart> {
         let command = event.tool_input["command"].as_str()?;
         let session = self.sessions.get(&event.session_id);
         let known = session.is_some_and(|s| s.checks.iter().any(|l| l.call == event.tool_use_id));
-        let long = self.typical(command).is_some_and(|ms| ms > LONG_CHECK_MS);
         let start = event.hook_event_name == "PreToolUse" && event.agent_id.is_none();
-        (start && event.tool_name.as_deref() == Some("Bash") && is_check(command) && !known && long)
-            .then_some(command)
+        (start && event.tool_name.as_deref() == Some("Bash") && is_check(command) && !known).then(
+            || CheckStart {
+                command: command.into(),
+                typical: self.typical(command),
+            },
+        )
     }
 
     /// Session `id`'s row: its own, or the row it continues after a `/clear`.

@@ -2,7 +2,7 @@
 //! #369, decision 23): whether the questions make Daniel think, and how he rated the cards. Only the
 //! weekly command prints these; the app shows no rate. The thresholds are starting guesses.
 
-use crate::{CheckResult, Level, Reason, StoredCard};
+use crate::{Level, Reason, StoredCard};
 use std::fmt;
 
 pub(crate) const WEEK: u64 = 7 * DAY;
@@ -56,15 +56,11 @@ pub fn week(cards: &[StoredCard], now: u64) -> Week {
         Some(guess.at.saturating_sub(shown))
     });
     // A guess on a check's card counts once the check's result settles it.
-    let settled = |kept: &&&StoredCard| {
-        kept.request.check.is_none()
-            || matches!(kept.check, Some(CheckResult::Passed | CheckResult::Failed))
-    };
-    let guesses = cards.iter().filter(settled).filter_map(|kept| kept.guess);
+    let graded = cards.iter().filter_map(|kept| kept.guess?.right);
     Week {
         to: now,
         thinking: rate(gaps, |gap| *gap >= THINKING),
-        surprise: rate(guesses, |guess| !guess.right),
+        surprise: rate(graded, |right| !right),
         ratings: ratings(&cards),
     }
 }

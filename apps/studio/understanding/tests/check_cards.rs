@@ -42,34 +42,42 @@ impl CardWriter for Recording {
     }
 }
 
-#[test]
-fn a_long_checks_card_request_reaches_the_writer_with_the_change_so_far_and_the_command() {
-    // The first check's result lands 200 s late, so the second usually takes over 2 minutes.
-    let log = CHECKS.lines().enumerate().map(|(index, line)| {
+/// `checks.jsonl` with its first check's result 200 s late, so the second, which passes, usually
+/// takes over 2 minutes.
+fn long_check_log() -> Vec<String> {
+    let lines = CHECKS.lines().enumerate().map(|(index, line)| {
         let mut event: Value = serde_json::from_str(line).unwrap();
         let at = event["studio_received_ms"].as_u64().unwrap();
         event["studio_received_ms"] = (at + if index >= 3 { 200_000 } else { 0 }).into();
         event.to_string()
     });
+    lines.collect()
+}
+
+/// Every worktree `line` looks at changed by `DIFF`, but at a base.
+fn changed(studio: &Studio, line: &str) -> BTreeMap<String, Change> {
+    let looks = studio.fingerprint_folders(line).into_iter();
+    looks
+        .filter(|look| look.purpose != Purpose::Base)
+        .map(|look| {
+            let change = Change {
+                base: Base::default(),
+                diff: DIFF.into(),
+                head: None,
+            };
+            (look.key, change)
+        })
+        .collect()
+}
+
+#[test]
+fn a_long_checks_card_request_reaches_the_writer_with_the_change_so_far_and_the_command() {
     let data = tempfile::tempdir().unwrap();
     let store = Mutex::new(CardStore::open(data.path().join("cards.json")).unwrap());
     let writer = Recording::default();
     let mut studio = Studio::default();
-    for line in log {
-        let changes: BTreeMap<String, Change> = studio
-            .fingerprint_folders(&line)
-            .into_iter()
-            .filter(|look| look.purpose != Purpose::Base)
-            .map(|look| {
-                let base = Base::default();
-                let change = Change {
-                    base,
-                    diff: DIFF.into(),
-                    head: None,
-                };
-                (look.key, change)
-            })
-            .collect();
+    for line in long_check_log() {
+        let changes = changed(&studio, &line);
         for output in studio.apply_with_changes(&line, changes) {
             if let Output::Card(request) = output
                 && request.check.is_some()
@@ -153,7 +161,8 @@ fn the_checks_result_settles_a_guess_made_while_it_ran() {
     store.guess("a@1", 1, 1_793_264_010_000).unwrap();
     store.guess("a@2", 0, 1_793_264_011_000).unwrap();
     // A running check settles nothing.
-    assert_eq!(store.cards()[0].check, None);
+    assert_eq!(store.cards()[0].check_result, None);
+    assert_eq!(store.cards()[0].guess.unwrap().right, None);
 
     store.settle("a@1", Some(false)).unwrap();
     store.settle("a@2", Some(false)).unwrap();
@@ -164,14 +173,14 @@ fn the_checks_result_settles_a_guess_made_while_it_ran() {
     let settled: Vec<_> = reopened
         .cards()
         .iter()
-        .map(|kept| (kept.check, kept.guess.map(|g| g.right)))
+        .map(|kept| (kept.check_result, kept.guess.map(|g| g.right)))
         .collect();
     use studio_understanding::CheckResult::Failed;
     assert_eq!(
         settled,
         [
-            (Some(Failed), Some(true)),
-            (Some(Failed), Some(false)),
+            (Some(Failed), Some(Some(true))),
+            (Some(Failed), Some(Some(false))),
             (None, None)
         ]
     );
@@ -195,10 +204,53 @@ fn a_tap_after_the_result_or_on_a_check_whose_exit_code_does_not_count_is_no_gue
     let reopened = CardStore::open(path).unwrap();
     use studio_understanding::CheckResult::{NotCounted, Passed};
     let cards = reopened.cards();
-    assert_eq!((cards[0].check, cards[0].guess), (Some(Passed), None));
-    assert_eq!(cards[1].check, Some(NotCounted));
+    assert_eq!(
+        (cards[0].check_result, cards[0].guess),
+        (Some(Passed), None)
+    );
+    assert_eq!(cards[1].check_result, Some(NotCounted));
     // Its tap stays, but the weekly rates leave it out.
     assert!(cards[1].guess.is_some());
     let week = week(cards, 1_793_264_100_000);
     assert_eq!(week.surprise, Rate { count: 0, of: 0 });
+}
+
+#[test]
+fn a_card_stored_after_its_check_ended_settles_at_once_so_a_later_tap_is_no_guess() {
+    let mut studio = Studio::default();
+    let mut requests = Vec::new();
+    for line in long_check_log() {
+        let changes = changed(&studio, &line);
+        for output in studio.apply_with_changes(&line, changes) {
+            if let Output::Card(request) = output
+                && request.check.is_some()
+            {
+                requests.push(request);
+            }
+        }
+    }
+    // The writer is slow: the check ended before its card is stored.
+    let [request] = &requests[..] else {
+        panic!("one check card: {requests:?}");
+    };
+    let data = tempfile::tempdir().unwrap();
+    let store = Mutex::new(CardStore::open(data.path().join("cards.json")).unwrap());
+    let session = studio.session(SESSION).unwrap();
+    let log = |line| panic!("{line}");
+    assert!(write_stop(
+        &store,
+        &FakeWriter,
+        request.clone(),
+        session,
+        || {},
+        log
+    ));
+    let mut store = store.lock().unwrap();
+
+    store.settle_checks(session).unwrap();
+    store.guess(&request.id, 0, 1_793_264_500_000).unwrap();
+
+    use studio_understanding::CheckResult::Passed;
+    let kept = &store.cards()[0];
+    assert_eq!((kept.check_result, kept.guess), (Some(Passed), None));
 }

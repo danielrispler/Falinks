@@ -43,7 +43,7 @@ pub struct StoredCard {
     /// The result of the check whose start requested the card (#461, decision 15), which settles
     /// its guess; `None` while it runs, and on a card no check requested.
     #[serde(default)]
-    pub check: Option<CheckResult>,
+    pub check_result: Option<CheckResult>,
 }
 
 /// What a check's result says about the guess on its card: it passed, it failed, or its exit code
@@ -83,14 +83,16 @@ pub enum Reason {
     TooEasy,
 }
 
-/// Daniel's tap on a card's quiz, graded by the writer's key (#369, decision 13).
+/// Daniel's tap on a card's quiz, graded by the writer's key (#369, decision 13), or on a check's card
+/// by the check's result (#461, decision 15).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Guess {
     /// The option he tapped, counting from 0.
     pub option: usize,
-    /// Whether it is the key. On a check's card, whether it called the check's result, `false` until
-    /// the result settles it (`StoredCard::check`).
-    pub right: bool,
+    /// Whether it is the key. On a check's card, whether it called the check's result: `None` until
+    /// the result settles it, and for good when the result does not say (`StoredCard::check_result`).
+    /// A store from before #476 holds a plain `true` or `false`, which loads as `Some`.
+    pub right: Option<bool>,
     /// When, in Unix milliseconds.
     pub at: u64,
 }
@@ -138,7 +140,7 @@ struct ShownCard<'a> {
     key_wrong: bool,
     more: &'a Option<String>,
     rating: &'a Option<Rating>,
-    check: Option<CheckResult>,
+    check_result: Option<CheckResult>,
 }
 
 #[derive(Serialize)]
@@ -170,7 +172,7 @@ fn without_diffs<S: serde::Serializer>(cards: &[StoredCard], s: S) -> Result<S::
         key_wrong: kept.key_wrong,
         more: &kept.more,
         rating: &kept.rating,
-        check: kept.check,
+        check_result: kept.check_result,
     }))
 }
 
@@ -353,7 +355,7 @@ impl CardStore {
             key_wrong: false,
             more: None,
             rating: None,
-            check: None,
+            check_result: None,
         });
         self.save()
     }
@@ -382,11 +384,11 @@ impl CardStore {
     pub fn guess(&mut self, id: &str, option: usize, at: u64) -> io::Result<()> {
         if let Some(kept) = self.card_mut(id)
             && kept.guess.is_none()
-            && kept.check.is_none()
+            && kept.check_result.is_none()
             && let Some(quiz) = &kept.card.quiz
             && option < quiz.options.len()
         {
-            let right = kept.request.check.is_none() && option == quiz.key;
+            let right = kept.request.check.is_none().then_some(option == quiz.key);
             kept.guess = Some(Guess { option, right, at });
             return self.save();
         }
@@ -401,12 +403,16 @@ impl CardStore {
         let Some(kept) = self.card_mut(id) else {
             return Ok(());
         };
-        if kept.request.check.is_none() || kept.check.is_some() {
+        if kept.request.check.is_none() || kept.check_result.is_some() {
             return Ok(());
         }
-        kept.check = Some(match passed {
+        kept.check_result = Some(match passed {
             Some(true) => CheckResult::Passed,
             Some(false) => CheckResult::Failed,
+            // shortcut: an exit code that does not say leaves the guess not counted, where #343 let
+            // the writer's `passed` settle it: the core skips a check's output (#410), and the
+            // check's card took the change, so often no later card comes to read it. Ask the writer
+            // on the output at the check's end if `cargo test 2>&1 | tail` checks leave many unscored.
             None => CheckResult::NotCounted,
         });
         if let Some(passed) = passed
@@ -414,10 +420,21 @@ impl CardStore {
         {
             quiz.key = usize::from(!passed);
             if let Some(guess) = &mut kept.guess {
-                guess.right = guess.option == quiz.key;
+                guess.right = Some(guess.option == quiz.key);
             }
         }
         self.save()
+    }
+
+    /// Settles the cards of `session`'s checks that ended (`settle`). The shell calls it after each
+    /// log read, once a card is stored and before a tap, so a tap after the result never counts.
+    pub fn settle_checks(&mut self, session: &Session) -> io::Result<()> {
+        for line in session.checks.iter().filter(|l| l.ended_at.is_some()) {
+            if let Some(card) = &line.card {
+                self.settle(card, line.passed)?;
+            }
+        }
+        Ok(())
     }
 
     /// Records Daniel's flag that the key of card `id`'s quiz is wrong, and saves the store.

@@ -124,8 +124,9 @@ export type Card = {
   architecture: string | null;
   quiz: Quiz | null;
 };
-// Daniel's tap on a quiz, graded by the writer's key.
-export type Guess = { option: number; right: boolean; at: number };
+// Daniel's tap on a quiz, graded by the writer's key; on a check's card by its result, so `right`
+// is null until the result settles it, and stays null when the result does not say (#476).
+export type Guess = { option: number; right: boolean | null; at: number };
 // Daniel's rating of a card's explanation. His fifth reason, "the key is wrong", is `key_wrong`, the
 // one record the quiz's flag also sets.
 export type Level = "good" | "fair" | "poor";
@@ -140,7 +141,7 @@ export type StoredCard = {
   key_wrong: boolean;
   more: string | null;
   rating: Rating | null;
-  check: CheckResult | null;
+  check_result: CheckResult | null;
 };
 // The selected session's brief, and its cards, split at 30 minutes by the shell's tick, each oldest
 // first.

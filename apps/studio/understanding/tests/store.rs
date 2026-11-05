@@ -68,12 +68,12 @@ fn a_tap_records_the_guess_and_its_verdict_and_only_the_first_counts() {
         [
             Some(Guess {
                 option: 2,
-                right: false,
+                right: Some(false),
                 at: 1_761_744_000_000
             }),
             Some(Guess {
                 option: 0,
-                right: true,
+                right: Some(true),
                 at: 1_761_744_010_000
             }),
         ]
