@@ -197,6 +197,32 @@ fn explain_more(id: String, cards: State<Cards>, writer: State<Writer>) -> Optio
     studio_understanding::explain_more(&cards, &**writer, &id, log)
 }
 
+/// Daniel's side `question` on `item`, a response, card or intention of session `session` (#461,
+/// decision 20): the writer's answer, read with the turn's intentions, or why there is none, which
+/// the window shows with a retry. It takes seconds, so it runs off the main thread; nothing reaches
+/// the session.
+#[tauri::command(async)]
+fn ask(
+    session: String,
+    item: String,
+    question: String,
+    studio: State<Mutex<Studio>>,
+    writer: State<Writer>,
+) -> Result<String, String> {
+    // The lock ends with the statement, before the writer runs.
+    let story = studio
+        .lock()
+        .unwrap()
+        .session(&session)
+        .map(|s| s.story.clone());
+    let answer =
+        studio_understanding::ask_about(&**writer, &story.unwrap_or_default(), &item, &question);
+    if let Err(line) = &answer {
+        eprintln!("studio: no answer on {session}: {line}");
+    }
+    answer
+}
+
 /// Daniel renamed session `id`: a `StudioRename` line in the event log, which the log thread then
 /// applies and a restart replays (#469). An empty `name` gives the row its folder's again.
 #[tauri::command(async)]
@@ -286,6 +312,7 @@ fn main() {
             key_wrong,
             rate,
             explain_more,
+            ask,
             rename,
             closed,
             usage,

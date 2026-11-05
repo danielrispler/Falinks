@@ -1386,11 +1386,20 @@ struct Event {
     /// On the studio's own `StudioRename` line, the session's new name; empty for none.
     #[serde(default)]
     studio_name: String,
+    /// On the answer hook's `StudioAnswer` line, Daniel's answer from the card: `answers` for a
+    /// question, `decision` for a plan or a permission.
+    #[serde(default)]
+    studio_answer: Value,
 }
 
 /// The event the shell appends to the log when Daniel renames a session (#469). The log is what a
 /// restart replays, so the name survives it.
 pub const RENAME: &str = "StudioRename";
+
+/// The line the answer hook appends when Daniel answers from the studio card (#478): the call's hook
+/// payload under this name, with `studio_asked_by` (the event that asked) and `studio_answer`. An
+/// answer in the terminal leaves none.
+pub const STUDIO_ANSWER: &str = "StudioAnswer";
 
 /// Whether the turn's final message asks Daniel something: a sentence ending in `?`, after removing
 /// fenced code, inline code, blockquotes, headings and table rows (#321's evidence, "Transcripts").
@@ -2167,6 +2176,15 @@ impl Studio {
                 }
             }
             "Elicitation" => session.block("Elicitation".into(), Value::Null, event.agent_id, at),
+            // Daniel decided a plan or a permission from the studio card (#478): it waits on him no
+            // more, though its result comes only when the call ends, or for a denial maybe never. A
+            // question's result carries its answer, so its block waits for it.
+            STUDIO_ANSWER if event.studio_answer.get("decision").is_some() => {
+                let input = &event.tool_input;
+                let decided =
+                    |w: &Block| w.tool == tool && w.input == *input && w.agent == event.agent_id;
+                session.blocks.retain(|w| !decided(w));
+            }
             "PostToolUse" | "PostToolUseFailure" => {
                 session.running.retain(|c| c.id != id);
                 session.resolve(|(call, _)| Some(call) == id.as_ref());

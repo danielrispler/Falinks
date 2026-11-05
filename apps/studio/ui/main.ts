@@ -41,8 +41,8 @@ window.addEventListener("keydown", (event) => {
 element("rail-toggle").addEventListener("click", () => toggle("rail-open"));
 element("wide").addEventListener("click", () => document.body.classList.add("wide"));
 // Every block in the story opens or closes, except a card's "explain more", whose first open asks the
-// writer.
-const blocks = () => element("story").querySelectorAll<HTMLDetailsElement>("details:not(.more)");
+// writer, and the "ask about this" boxes.
+const blocks = () => element("story").querySelectorAll<HTMLDetailsElement>("details:not(.more):not(.ask-about)");
 element("open-all").addEventListener("click", () => blocks().forEach((block) => (block.open = true)));
 element("close-all").addEventListener("click", () => blocks().forEach((block) => (block.open = false)));
 
