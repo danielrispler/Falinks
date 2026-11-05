@@ -25,6 +25,9 @@ pub struct Studio {
     ended: Vec<Backfill>,
     /// How long each check ran when it did not fail, by `check_key`, oldest first (#461, decision 13).
     durations: HashMap<String, Vec<u64>>,
+    /// The row of each session that continues another after a `/clear`, by its own id (#461,
+    /// decision 18). A session not here is its own row.
+    rows: HashMap<String, String>,
 }
 
 type FindRoot = dyn Fn(&str) -> Option<String> + Send;
@@ -76,6 +79,15 @@ pub struct Session {
     /// Daniel's name for it, from the studio's latest rename line in the log (#469); `None` for its
     /// folder's.
     pub name: Option<String>,
+    /// The id `claude --resume` takes: its latest conversation's, which a `/clear` changes while the
+    /// row keeps its first id (#461, decision 18).
+    pub resume_id: String,
+    /// When each `/clear` continued it, oldest first: the "cleared" markers in its history.
+    pub cleared: Vec<u64>,
+    /// Its latest `SessionEnd` was a `/clear`, so the next `SessionStart` from `clear` on its
+    /// terminal, or in its folder, continues it.
+    #[serde(skip)]
+    clearing: bool,
     pub state: State,
     /// Whether closing its terminal asks first: it is in a turn, or its latest `Stop` listed
     /// background tasks (#469).
@@ -1331,6 +1343,9 @@ struct Event {
     /// The start of a session: `startup`, `resume`, `clear` or `compact`.
     #[serde(default)]
     source: String,
+    /// The end of a session: `clear`, `logout`, `prompt_input_exit`, `other` and the like.
+    #[serde(default)]
+    reason: String,
     #[serde(default)]
     studio_received_ms: u64,
     /// On a tool's result, how long its call took.
@@ -1533,7 +1548,32 @@ impl Studio {
     pub fn fingerprint_folders(&self, line: &str) -> Vec<Fingerprint> {
         let event = serde_json::from_str::<Event>(line);
         let event = event.ok().filter(|e| e.hook_event_name != RENAME);
-        event.map_or_else(Vec::new, |event| self.looks(&event))
+        event.map_or_else(Vec::new, |mut event| {
+            event.session_id = self.row(&event);
+            self.looks(&event)
+        })
+    }
+
+    /// The row `event` belongs to: its session's, or for a start from `/clear`, the cleared session's
+    /// on the same terminal, or in the same folder outside studio terminals (#461, decision 18).
+    // shortcut: a start that lands before its clear's `SessionEnd` makes a new row; match both ways
+    // if the async hooks show it.
+    fn row(&self, event: &Event) -> String {
+        if let Some(row) = self.rows.get(&event.session_id) {
+            return row.clone();
+        }
+        let fresh = !self.sessions.contains_key(&event.session_id);
+        if fresh && event.hook_event_name == "SessionStart" && event.source == "clear" {
+            let same = |s: &&Session| match &event.studio_terminal_id {
+                Some(terminal) => s.terminal.as_ref() == Some(terminal),
+                None => s.terminal.is_none() && s.cwd == event.cwd,
+            };
+            let cleared = self.sessions.values().filter(|s| s.clearing).filter(same);
+            if let Some(s) = cleared.max_by_key(|s| s.agent.last_event_at) {
+                return s.agent.id.clone();
+            }
+        }
+        event.session_id.clone()
     }
 
     /// The fingerprints before `event`: its own (`look`), and the end of each worker with cards that
@@ -1752,9 +1792,15 @@ impl Studio {
         mut changes: BTreeMap<String, Change>,
         replay: bool,
     ) -> Vec<Output> {
-        let Ok(event) = serde_json::from_str::<Event>(line) else {
+        let Ok(mut event) = serde_json::from_str::<Event>(line) else {
             return Vec::new();
         };
+        let own_id = event.session_id.clone();
+        event.session_id = self.row(&event);
+        let continues = event.session_id != own_id && !self.rows.contains_key(&own_id);
+        if event.session_id != own_id {
+            self.rows.insert(own_id.clone(), event.session_id.clone());
+        }
         // A rename names a known session and is none of its events.
         if event.hook_event_name == RENAME {
             if let Some(session) = self.sessions.get_mut(&event.session_id) {
@@ -1781,6 +1827,10 @@ impl Studio {
         session.agent.last_event_at = session.agent.last_event_at.max(event.studio_received_ms);
         // Every event of a `claude` process carries its terminal, so a resume elsewhere moves it.
         session.terminal.clone_from(&event.studio_terminal_id);
+        session.resume_id = own_id;
+        if continues {
+            session.cleared.push(event.studio_received_ms);
+        }
         let failed_before = session.failed_workers();
         let in_turn = session.in_turn();
         let ends_early = session.ends_turn_early(&event);
@@ -1996,10 +2046,12 @@ impl Studio {
                 }
                 session.turn_ended = true;
                 session.ended = true;
+                session.clearing = event.reason == "clear";
             }
             // A resumed session keeps its id; a compaction keeps the turn it happens in.
             "SessionStart" => {
                 session.ended = false;
+                session.clearing = false;
                 session.turn_ended |= event.source != "compact";
             }
             "PreToolUse" => {
@@ -2292,7 +2344,7 @@ impl Studio {
                 cwd: t.cwd.clone(),
                 argv: t.argv.clone(),
                 session: (!t.argv.is_empty())
-                    .then(|| latest.map(|s| s.agent.id.clone()))
+                    .then(|| latest.map(|s| s.resume_id.clone()))
                     .flatten(),
                 busy,
             }
@@ -2307,8 +2359,10 @@ impl Studio {
         median(self.durations.get(&check_key(command))?)
     }
 
+    /// Session `id`'s row: its own, or the row it continues after a `/clear`.
     pub fn session(&self, id: &str) -> Option<&Session> {
-        self.sessions.get(id)
+        self.sessions
+            .get(self.rows.get(id).map_or(id, String::as_str))
     }
 
     /// The session list: every session, grouped in `State` order, the newest first in each group.

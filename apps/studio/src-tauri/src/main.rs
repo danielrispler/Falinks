@@ -94,6 +94,14 @@ fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> SessionCards {
     }
 }
 
+/// The plan's 5-hour and weekly usage from the status line's newest snapshot in the `usage` folder
+/// beside the event log, `null` when there is none (#481).
+#[tauri::command]
+fn usage() -> Option<serde_json::Value> {
+    let log = studio_hook::event_log(&std::env::home_dir()?);
+    studio_workbench::plan_usage(&log.with_file_name("usage"))
+}
+
 /// What the read loop last sent the window, so it sends each again only when it changes.
 #[derive(Default)]
 struct Sent {
@@ -213,7 +221,7 @@ fn closed(terminal: String, studio: State<Mutex<Studio>>) -> Result<(), String> 
         .filter(|s| s.terminal.as_deref() == Some(&terminal) && s.state != Ended)
         .map(|s| {
             serde_json::json!({
-                "session_id": s.agent.id,
+                "session_id": s.resume_id,
                 "hook_event_name": "SessionEnd",
                 "reason": "studio_close",
                 "studio_received_ms": millis(),
@@ -279,6 +287,7 @@ fn main() {
             explain_more,
             rename,
             closed,
+            usage,
             terminal::terminal_connect,
             terminal::terminal_send,
             terminal::open_link,

@@ -12,6 +12,7 @@ import { show } from "./selection.js";
 import { startPanes } from "./panes.js";
 import { showPicker } from "./picker.js";
 import type { Selection, Session, SessionCards } from "./types.js";
+import { type Limits, usageText } from "./usage.js";
 
 // The terminal's cell, measured from a probe in its font, sets the columns' layout.
 function layout() {
@@ -59,3 +60,12 @@ listen<string>("notice", (notice) => {
   element("notice").hidden = false;
 });
 invoke<SessionCards>("cards").then(showCards);
+
+// The plan's usage, from the status line's snapshot (#481). The status line runs after each message.
+// shortcut: polls every 10 s; push from the shell if the delay matters.
+const showUsage = () =>
+  invoke<Limits | null>("usage").then((limits) => {
+    element("usage").textContent = usageText(limits, Date.now() / 1000);
+  });
+showUsage();
+setInterval(showUsage, 10_000);
