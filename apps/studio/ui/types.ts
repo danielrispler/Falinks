@@ -2,8 +2,17 @@
 
 export type Step = { tool: string; detail: string | null };
 export type SessionState = "needs_you" | "running" | "your_turn" | "idle" | "ended";
-// A check that ran: a pass or fail line, oldest first. `passed` is null when its exit code is masked.
-export type CheckLine = { command: string; passed: boolean | null };
+// When something started and ended, in Unix milliseconds; `end` is null while it runs.
+export type Span = { start: number; end: number | null };
+// A check that runs or ran, oldest first: a pass or fail line once it ends. `passed` is null when its
+// exit code is masked, and while it runs. `typical_ms` is its typical duration when it started (#473).
+export type CheckLine = {
+  command: string;
+  passed: boolean | null;
+  started_at: number;
+  ended_at: number | null;
+  typical_ms: number | null;
+};
 // Who spawned a subagent: the session's own agent, another subagent, or no known spawn.
 export type Parent = "session" | "unattached" | { agent: string };
 export type Subagent = {
@@ -18,6 +27,7 @@ export type Subagent = {
   started_at: number;
   ended_at: number | null;
   last_step: Step | null;
+  step_span: Span | null;
   result: string | null;
   // It ended with a status other than "completed", such as "killed": the core's one rule for failed.
   failed: boolean;
@@ -50,6 +60,11 @@ export type Session = {
   // Closing its terminal asks first: it is in a turn or has background tasks (#469).
   asks_before_closing: boolean;
   last_step: Step | null;
+  // When its first and latest events came, its latest turn's and its last step's times (#473).
+  started_at: number;
+  last_event_at: number;
+  turn_span: Span | null;
+  step_span: Span | null;
   state: SessionState;
   checks: CheckLine[];
   agents: Subagent[];
