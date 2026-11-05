@@ -1,9 +1,10 @@
 // An agent's question, laid out as its choices, the one Daniel chose marked. While the answer hook
 // waits for it (#461, decision 16), its choices are buttons, chosen by click or Enter, and "Answer in
-// the terminal" hands it back to the TUI; otherwise answering stays in the terminal.
+// the terminal" hands it back to the TUI; otherwise answering stays in the terminal. A plan or a
+// permission the hook waits on gets the same card with allow and deny (#478).
 
 import { askFor, sendAnswer, type Ask } from "./answer.js";
-import { pressable, text } from "./dom.js";
+import { code, pressable, prose, text } from "./dom.js";
 import type { Question } from "./types.js";
 
 // Whether a question is open, answered in the terminal, or not answered: its call failed, or its turn
@@ -27,7 +28,7 @@ export function questionElement(question: Question): HTMLElement {
     const answers = Object.fromEntries(
       questions.map((asked) => [asked.question, asked.multiSelect ? picked.get(asked.question)! : picked.get(asked.question)![0]]),
     );
-    sendAnswer(ask, answers);
+    sendAnswer(ask, { answers });
   };
   // One single-choice question is sent by its click; anything more by "Send".
   const sendButton = ask !== null && (questions.length > 1 || questions.some((asked) => asked.multiSelect));
@@ -69,12 +70,41 @@ export function questionElement(question: Question): HTMLElement {
     block.append(text("p", asked.header ?? "", "header"), text("p", asked.question, "asked"), choices);
     if (chosen !== null) block.append(text("p", `Your answer: ${chosen}`));
   }
-  if (ask !== null) block.append(answerButtons(ask, sendButton ? send : null));
+  if (ask !== null) block.append(answerButtons(ask, sendButton ? [["Send", send, "send"]] : []));
   return block;
 }
 
-// "Send" when the card needs more than one click, and "Answer in the terminal".
-function answerButtons(ask: Ask, send: (() => void) | null): HTMLElement {
+// A plan or a permission the answer hook waits on (#478): what it asks, then allow or deny.
+export function decisionElement(ask: Ask): HTMLElement {
+  const block = document.createElement("article");
+  block.className = "question decision";
+  const state = text("p", answerLabels.open, "state");
+  state.dataset.state = "needs_you";
+  block.append(state);
+  const decide = (decision: "allow" | "deny") => () => sendAnswer(ask, { decision });
+  const input = ask.tool_input;
+  if (ask.tool_name === "ExitPlanMode") {
+    block.append(text("p", "Plan", "header"), text("p", "Approve this plan?", "asked"));
+    const plan = prose("div", String(input.plan ?? ""));
+    plan.className = "plan";
+    block.append(plan);
+    block.append(answerButtons(ask, [["Approve", decide("allow")], ["Reject", decide("deny")]]));
+  } else {
+    // What the call does: a command, a path or a link; otherwise its whole input.
+    const detail = input.command ?? input.file_path ?? input.url ?? JSON.stringify(input);
+    block.append(text("p", "Permission", "header"), text("p", `Allow ${ask.tool_name}?`, "asked"));
+    const shown = document.createElement("p");
+    shown.append(code(String(detail)));
+    if (typeof input.description === "string") shown.append(text("span", ` ${input.description}`, "description"));
+    block.append(shown);
+    block.append(answerButtons(ask, [["Allow", decide("allow")], ["Deny", decide("deny")]]));
+  }
+  return block;
+}
+
+// The card's own buttons, each a label, its click and a class, then "Answer in the terminal". "Send"
+// starts disabled, until every question has a choice.
+function answerButtons(ask: Ask, buttons: [string, () => void, string?][]): HTMLElement {
   const row = document.createElement("p");
   row.className = "answer-buttons";
   const button = (label: string, click: () => void, className = "") => {
@@ -83,7 +113,7 @@ function answerButtons(ask: Ask, send: (() => void) | null): HTMLElement {
     node.addEventListener("click", click);
     return node;
   };
-  if (send !== null) row.append(button("Send", send, "send"));
+  row.append(...buttons.map(([label, click, className]) => button(label, click, className)));
   row.querySelector<HTMLButtonElement>(".send")?.toggleAttribute("disabled", true);
   row.append(button("Answer in the terminal", () => sendAnswer(ask, null)));
   return row;

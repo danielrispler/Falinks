@@ -28,16 +28,25 @@ pub fn watch(session: Option<String>) -> Result<Option<Value>, String> {
     Ok(ask.and_then(|text| serde_json::from_str(&text).ok()))
 }
 
-/// Daniel answered `session`'s request `nonce` from its card: `answers` maps each question to a label,
-/// or a multi-select's to its labels; `None` answers in the terminal.
+/// Daniel answered `session`'s request `nonce` from its card: for a question, `answers` maps each
+/// question to a label, or a multi-select's to its labels; for a plan or a permission, `decision` is
+/// `allow` or `deny` (#478). Neither answers in the terminal.
 #[tauri::command]
-pub fn answer(session: String, nonce: String, answers: Option<Value>) -> Result<(), String> {
+pub fn answer(
+    session: String,
+    nonce: String,
+    answers: Option<Value>,
+    decision: Option<String>,
+) -> Result<(), String> {
     if !answer::plain(&session) {
         return Err("not a session id".into());
     }
     let mut reply = json!({ "nonce": nonce });
     if let Some(answers) = answers {
         reply["answers"] = answers;
+    }
+    if let Some(decision) = decision {
+        reply["decision"] = decision.into();
     }
     answer::write_private(&answer::answer_file(&data()?, &session), &reply)
         .map_err(|e| e.to_string())

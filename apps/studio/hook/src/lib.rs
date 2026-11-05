@@ -14,6 +14,17 @@ pub fn event_log(home: &Path) -> PathBuf {
     home.join("Library/Application Support/dev.falinks.studio/events.jsonl")
 }
 
+/// Appends `event` to the log at `log` as one line, with one write under an exclusive lock, so hooks
+/// that fire together never interleave their lines.
+pub fn append(log: &Path, event: &serde_json::Value) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut line = serde_json::to_vec(event)?;
+    line.push(b'\n');
+    let mut log = fs::OpenOptions::new().create(true).append(true).open(log)?;
+    log.lock()?;
+    log.write_all(&line)
+}
+
 /// What the hook knows of a session's latest turn, kept between its runs (#486): its prompt id, the
 /// worktrees it recorded a start tree of, and whether it ended. It follows the core's turn rules
 /// (#434, decisions 3 to 5).
