@@ -404,16 +404,16 @@
     "scope": "#205's research (its resolution, \"Budget (B1)\"): engine waves, pilots, smoke runs and the scored batch. It never draws on the setup budget above or on track T's. Each session charges run wall time (including the usage drain) and harness preparation, with complete-only usage; implementation is recorded but not charged, as in track T. Hard stop: stop and ask before exceeding cap_seconds; re-estimated after the smoke runs, when git-1 is dropped first if the batch at n = 8 does not fit.",
     "cap_seconds": 43200,
     "totals": {
-      "implementation_seconds": 87057,
-      "run_seconds": 14222,
-      "preparation_seconds": 301,
-      "charged_seconds": 14523,
+      "implementation_seconds": 163849,
+      "run_seconds": 23345,
+      "preparation_seconds": 350,
+      "charged_seconds": 23695,
       "complete_usage": {
-        "runs": 25,
-        "input_tokens": 2858,
-        "output_tokens": 741297,
-        "cache_read_input_tokens": 55620231,
-        "cache_creation_input_tokens": 2896795
+        "runs": 45,
+        "input_tokens": 4720,
+        "output_tokens": 1568799,
+        "cache_read_input_tokens": 97690656,
+        "cache_creation_input_tokens": 5560382
       }
     },
     "sessions": [
@@ -682,6 +682,25 @@
         },
         "measurement": "From the claim (14:23:00Z) to the end of the git-1 smoke run (16:06:32Z). preparation_seconds is measured, 246 s in seven segments: the 2.1.309 runtime copy downloaded again (/private/tmp had been cleared; sha256 matches) with a clone in /private/tmp/f338, release builds, configuration and verify 14:28:01-14:30:09Z (128 s); rebuild at v58 15:02:37-15:02:47Z (10 s); the pilot configuration 15:21:54-15:21:59Z (5 s); rebuild at v59 with the smoke configuration and verify 15:32:04-15:33:26Z (82 s); and three smoke configurations (3, 8 and 10 s). run_seconds is measured, 3,871 s: batch --schedule confirm at v57 14:30:09-14:40:05Z (596 s, the gate and one run invalidated by the nested-agent false positive); confirm at v58 15:02:47-15:19:39Z (1,012 s, the gate and two runs); pilot 1 15:21:59-15:27:22Z (323 s); an aborted git-2 start 15:33:26-15:33:43Z (17 s, stopped by the operator: the git-1 configuration did not deny it); the git-2 run invalidated by that start's leftover session 15:33:46-15:35:57Z (131 s); git-2 15:36:30-16:01:02Z (1,472 s: completion at 332 s, then the host waited out a 19-minute model stall in B's turn); git-1 16:01:12-16:06:32Z (320 s). Usage is from the four complete runs (confirm-v58's two, git-2 and git-1), one usage per message.id from the archived sessions; pilot 1 is partial (#355 A3) and the invalid runs and gates are excluded. implementation_seconds is the rest: the detector fix and both freezes, diagnosis and waiting; it is not charged.",
         "work": "#338: confirm at v57 then v58 (the nested-agent heredoc fix, #338), pilot 1 on go-invoice (success, 317 s, Split gate met, no revision), #205's final freeze (v59, 654c68c), and the git-2 (332 s) and git-1 (318 s) smoke runs, all successful. Re-estimate: about 14,523 s charged of 43,200, so the batch at n = 8 fits with git-1 (local-evidence/2026-11-03-pilots-338)."
+      },
+      {
+        "issue": 339,
+        "start_utc": "2026-11-04T14:29:55Z",
+        "stop_utc": "2026-11-05T14:22:39Z",
+        "measured_seconds": 85964,
+        "implementation_seconds": 76792,
+        "run_seconds": 9123,
+        "preparation_seconds": 49,
+        "charged_seconds": 9172,
+        "complete_usage": {
+          "runs": 20,
+          "input_tokens": 1862,
+          "output_tokens": 827502,
+          "cache_read_input_tokens": 42070425,
+          "cache_creation_input_tokens": 2663587
+        },
+        "measurement": "From the clone of 8730138 into /private/tmp/f339 (14:29:55Z) to this entry. preparation_seconds is measured, 49 s: the clone, release builds and the run configuration (/private/tmp/eval-config-339.json, the checked-in config.json with only its REQUIRED fields filled) 14:29:55-14:30:44Z. run_seconds is measured, 9,123 s: batch --schedule large-spec, invocation 1 14:32:19-16:07:25Z (5,706 s: gate 1 and 18 runs, paused after go-invoice-6-git-2 with the five-hour usage window at 92%), invocation 2 2026-11-04T17:41:25-18:16:08Z (2,083 s: gate 2 and the last 6 runs), and quality --judge 2026-11-05T07:40:17-08:02:31Z (1,334 s). Usage is from the 20 complete runs, one usage per message.id from the archived sessions; four falinks-2 runs (4, 5, 7, 8) are partial (#355 A3) and excluded, as are the gates and the judge's calls. implementation_seconds is the rest: the overnight wait for the usage window and for Daniel, his blind duplicate classification (73 pairs), report, #205's decision and this entry; it is not charged.",
+        "work": "#339: #205's scored batch, 24 runs at 8730138 (manifest v59), all successful, no replacement; quality --judge; Daniel's blind classification (1 of 73 pairs duplicate work); report --schedule large-spec: no payback (P3 passes for git-2, p 0.0035; mechanism no evidence). Decision on #205; next step #490 (local-evidence/2026-11-04-large-spec-339)."
       }
     ]
   }
