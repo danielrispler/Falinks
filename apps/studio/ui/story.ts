@@ -7,7 +7,8 @@ import { askElement } from "./ask.js";
 import { encode, request } from "./daemon.js";
 import { agentState } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
-import { questionElement } from "./questions.js";
+import { openDecision } from "./answer.js";
+import { decisionElement, questionElement } from "./questions.js";
 import { checkTime, counts, timesText } from "./times.js";
 import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Story } from "./types.js";
 
@@ -102,13 +103,15 @@ function askClose(session: Session) {
 }
 
 // The questions the viewed agent asked: an open one docked under the story, the rest in it, newest
-// first.
+// first. A plan or a permission the answer hook waits on docks too, whichever agent asks (#478).
 function showQuestions(questions: Question[]) {
   const newest = [...questions].reverse();
   const open = newest.filter((question) => question.answer === "open");
   const past = newest.filter((question) => question.answer !== "open");
-  element("dock").replaceChildren(...open.map(questionElement));
-  element("dock").hidden = open.length === 0;
+  const decision = openDecision();
+  const docked = [...(decision ? [decisionElement(decision)] : []), ...open.map(questionElement)];
+  element("dock").replaceChildren(...docked);
+  element("dock").hidden = docked.length === 0;
   element("questions").replaceChildren(...past.map(questionElement));
   element("questions-title").hidden = past.length === 0;
 }

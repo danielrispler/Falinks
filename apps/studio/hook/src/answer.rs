@@ -8,8 +8,12 @@
 //! - `watching.json`, by the studio every second: `{"session_id", "pid", "heartbeat_ms"}`.
 //! - `asks/<session>.json`, by the hook: `{"nonce", "hook_event_name", "tool_name", "tool_use_id",
 //!   "tool_input", "asked_ms"}`.
-//! - `asks/<session>.answer.json`, by the studio: `{"nonce", "answers"}`, each answer a label or, for a
-//!   multi-select, a list of labels; with no `answers`, Daniel answers in the terminal.
+//! - `asks/<session>.answer.json`, by the studio: for a question `{"nonce", "answers"}`, each answer a
+//!   label or, for a multi-select, a list of labels; for a plan or a permission (#478)
+//!   `{"nonce", "decision"}`, `allow` or `deny`. With neither, Daniel answers in the terminal.
+//!
+//! A card answer that decides the call is also appended to the event log as a `StudioAnswer` line
+//! (`answered_line`), so the core and the decision history see it.
 //!
 //! Trust boundary: a process that could write the answer file could approve a call, so the hook takes
 //! only a file of its own user with mode 0600 that echoes this request's nonce.
@@ -89,14 +93,27 @@ pub fn watched(data: &Path, session: &str) -> bool {
         && pid.is_some_and(|pid| pid > 0 && unsafe { libc::kill(pid, 0) } == 0)
 }
 
-/// Whether the hook answers this call. #478 adds `ExitPlanMode` and `PermissionRequest` here and in
-/// `reply`.
+/// Whether the hook answers this call: a question or a plan at its `PreToolUse`, or any other call's
+/// permission request. A question or a plan asked already, so its permission request needs no second
+/// wait.
 fn handled(payload: &Value) -> bool {
-    payload["hook_event_name"] == "PreToolUse" && payload["tool_name"] == "AskUserQuestion"
+    let asks = matches!(
+        payload["tool_name"].as_str(),
+        Some("AskUserQuestion" | "ExitPlanMode")
+    );
+    match payload["hook_event_name"].as_str() {
+        Some("PreToolUse") => asks,
+        Some("PermissionRequest") => !asks,
+        _ => false,
+    }
 }
 
-/// The hook's output for the studio's `answer` to `payload`, or `None` for no decision.
+/// The hook's output for the studio's `answer` to `payload`, or `None` for no decision: a question
+/// takes `answers`, a plan or a permission a `decision` of `allow` or `deny`.
 pub fn reply(payload: &Value, answer: &Value) -> Option<Value> {
+    if payload["tool_name"] != "AskUserQuestion" {
+        return decide(payload, answer["decision"].as_str()?);
+    }
     let answers = answer.get("answers")?.as_object()?;
     let mut joined = Map::new();
     for (question, chosen) in answers {
@@ -121,6 +138,51 @@ pub fn reply(payload: &Value, answer: &Value) -> Option<Value> {
         "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": input } }))
 }
 
+/// A plan's or a permission's output for `decision`.
+fn decide(payload: &Value, decision: &str) -> Option<Value> {
+    let allow = match decision {
+        "allow" => true,
+        "deny" => false,
+        _ => return None,
+    };
+    let out = if payload["hook_event_name"] == "PermissionRequest" {
+        let decision = match allow {
+            true => json!({ "behavior": "allow" }),
+            false => json!({ "behavior": "deny",
+                "message": "Daniel denied this from the studio card." }),
+        };
+        json!({ "hookEventName": "PermissionRequest", "decision": decision })
+    } else if allow {
+        // A plan needs its input back with `allow`.
+        json!({ "hookEventName": "PreToolUse", "permissionDecision": "allow",
+            "updatedInput": payload["tool_input"] })
+    } else {
+        json!({ "hookEventName": "PreToolUse", "permissionDecision": "deny",
+            "permissionDecisionReason":
+                "Daniel rejected this plan from the studio card. Ask him what to change." })
+    };
+    Some(json!({ "hookSpecificOutput": out }))
+}
+
+/// The event log line that records Daniel's card answer to `payload` (#461, decision 17): the
+/// payload as `StudioAnswer`, with the event that asked, the answer without its nonce, the terminal
+/// and the time, as the logging hook adds them. An answer in the terminal leaves no such line.
+pub fn answered_line(payload: &Value, answer: &Value) -> Value {
+    let mut line = payload.clone();
+    let mut answer = answer.clone();
+    if let Some(answer) = answer.as_object_mut() {
+        answer.remove("nonce");
+    }
+    line["studio_asked_by"] = payload["hook_event_name"].clone();
+    line["hook_event_name"] = "StudioAnswer".into();
+    line["studio_answer"] = answer;
+    line["studio_received_ms"] = now_ms().into();
+    if let Ok(terminal) = std::env::var("STUDIO_TERMINAL_ID") {
+        line["studio_terminal_id"] = terminal.into();
+    }
+    line
+}
+
 /// Runs the hook for `payload` with the studio's data directory `data`: the output to print, if any.
 pub fn run(payload: &Value, data: &Path, timeout: Duration) -> io::Result<Option<Value>> {
     let session = payload["session_id"].as_str().unwrap_or_default();
@@ -139,7 +201,7 @@ pub fn run(payload: &Value, data: &Path, timeout: Duration) -> io::Result<Option
         "asked_ms": now_ms(),
     });
     write_private(&ask, &request)?;
-    let out = wait(payload, data, session, &nonce, timeout);
+    let given = wait(data, session, &nonce, timeout);
     // shortcut: one ask per session at a time; a second ask meanwhile replaces the request, so this
     // one only times out. Key the files by tool_use_id if parallel subagent questions show up.
     let mine = fs::read_to_string(&ask).is_ok_and(|text| text.contains(&nonce));
@@ -147,21 +209,27 @@ pub fn run(payload: &Value, data: &Path, timeout: Duration) -> io::Result<Option
         let _ = fs::remove_file(&ask);
         let _ = fs::remove_file(&answer);
     }
+    let Some(given) = given else {
+        return Ok(None);
+    };
+    let out = reply(payload, &given);
+    if out.is_some() {
+        // The decision stands even if its line cannot be logged.
+        let line = answered_line(payload, &given);
+        if let Err(e) = crate::append(&data.join("events.jsonl"), &line) {
+            eprintln!("studio-answer: log the answer: {e}");
+        }
+    }
     Ok(out)
 }
 
-fn wait(
-    payload: &Value,
-    data: &Path,
-    session: &str,
-    nonce: &str,
-    timeout: Duration,
-) -> Option<Value> {
+/// The answer file that echoes `nonce`, once it comes; `None` when watching stops or time runs out.
+fn wait(data: &Path, session: &str, nonce: &str, timeout: Duration) -> Option<Value> {
     let until = Instant::now() + timeout;
     loop {
         if let Some(answer) = take(&answer_file(data, session)) {
             if answer["nonce"] == nonce {
-                return reply(payload, &answer);
+                return Some(answer);
             }
             eprintln!("studio-answer: an answer with a wrong nonce was refused");
         }
