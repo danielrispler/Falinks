@@ -17,7 +17,7 @@ use std::{
 
 /// What the transcript says of the session's latest turn, which the session view shows.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct Story {
+pub struct Transcript {
     /// The intention: the last line of the agent's latest text in the turn.
     pub intention: Option<String>,
     /// The steps (tool calls) the agent made since that text.
@@ -40,7 +40,7 @@ pub struct Context {
     pub window: u64,
 }
 
-impl Story {
+impl Transcript {
     /// Takes in transcript line `line`, or says why it cannot.
     pub fn read(&mut self, line: &str) -> Result<(), String> {
         let line: Value =
@@ -103,45 +103,45 @@ impl Story {
     }
 
     fn new_turn(&mut self) {
-        *self = Story {
+        *self = Transcript {
             context: self.context.take(),
             branch: self.branch.take(),
-            ..Story::default()
+            ..Transcript::default()
         };
     }
 }
 
 /// Where a session's transcript is, and how far it was read.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Transcript {
+pub(crate) struct TranscriptFile {
     pub(crate) path: String,
     read_to: u64,
 }
 
-impl Transcript {
-    /// Reads the complete lines added to the transcript since the last read into `story`. Returns
-    /// `story.unavailable`'s new reason when it changed to one, for one stderr line.
-    pub(crate) fn follow(&mut self, story: &mut Story) -> Option<String> {
-        let before = story.unavailable.clone();
+impl TranscriptFile {
+    /// Reads the complete lines added to the transcript since the last read into `transcript`. Returns
+    /// `transcript.unavailable`'s new reason when it changed to one, for one stderr line.
+    pub(crate) fn follow(&mut self, transcript: &mut Transcript) -> Option<String> {
+        let before = transcript.unavailable.clone();
         // A corrupted transcript stays so; a gone file may come back.
         if before.as_deref().is_some_and(|why| why != GONE) {
             return None;
         }
-        match self.read(story) {
-            Ok(()) => story.unavailable = None,
+        match self.read(transcript) {
+            Ok(()) => transcript.unavailable = None,
             Err(why) => {
-                *story = Story::default();
-                story.unavailable = Some(why);
+                *transcript = Transcript::default();
+                transcript.unavailable = Some(why);
                 // From the start again, once a gone file comes back.
                 self.read_to = 0;
             }
         }
-        (story.unavailable != before)
-            .then(|| story.unavailable.clone())
+        (transcript.unavailable != before)
+            .then(|| transcript.unavailable.clone())
             .flatten()
     }
 
-    fn read(&mut self, story: &mut Story) -> Result<(), String> {
+    fn read(&mut self, transcript: &mut Transcript) -> Result<(), String> {
         let path = Path::new(&self.path);
         if path.extension().is_none_or(|e| e != "jsonl") {
             return Err("the transcript path is not a .jsonl file".into());
@@ -159,7 +159,7 @@ impl Transcript {
             && line.ends_with(b"\n")
         {
             self.read_to += line.len() as u64;
-            story.read(&String::from_utf8_lossy(&line))?;
+            transcript.read(&String::from_utf8_lossy(&line))?;
             line.clear();
         }
         Ok(())

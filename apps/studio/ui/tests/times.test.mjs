@@ -26,7 +26,7 @@ test("the times line counts running spans to now and stops an ended session at i
   assert.equal(timesText(ended, null, 999 * MIN), "Session 30m · Turn 10m");
 });
 
-test("the estimate line names the phase, then a range marked as an estimate, no estimate, or depends on you", () => {
+test("the estimate line names the phase, then a range marked as an estimate, no estimate, or depends on you in place of a time", () => {
   const work = (phase, range, depends_on_you = false) => ({
     phases: phase ? [{ phase, at: 0, agent_ms: 0 }] : [],
     estimate: { range, depends_on_you },
@@ -34,7 +34,7 @@ test("the estimate line names the phase, then a range marked as an estimate, no 
   assert.equal(estimateText(work(null, null)), "");
   assert.equal(estimateText(work("implementing", [16 * MIN, 29 * MIN])), "Implementing · est. 16m–29m left");
   assert.equal(estimateText(work("waiting_on_ci", null)), "Waiting on CI · no estimate");
-  assert.equal(estimateText(work("opening_pr", [MIN, 5 * MIN], true)), "Opening the PR · est. 1m–5m left · depends on you");
-  assert.equal(estimateText(work("orienting", null, true)), "Orienting · no estimate · depends on you");
+  assert.equal(estimateText(work("opening_pr", [MIN, 5 * MIN], true)), "Opening the PR · depends on you");
+  assert.equal(estimateText(work("orienting", null, true)), "Orienting · depends on you");
   assert.equal(estimateText(work("merged", [0, 0])), "Merged");
 });

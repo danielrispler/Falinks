@@ -55,7 +55,16 @@ function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCa
   node.className = "card";
   const quiz = card.quiz;
   if (quiz) node.append(...quizElements(request.id, quiz, guess));
-  if (quiz && !guess) return node;
+  // Every card offers "ask about this" (#482), a quiz card before its guess too.
+  // shortcut: the ask sends the session's current turn's intentions, not the card's own turn's; the
+  // core keeps only the current turn's responses. Keep each turn's intentions by its prompt if asks
+  // on older cards mislead.
+  const item = [card.summary, card.explanation, card.code].filter(Boolean).join("\n\n");
+  const ask = askElement(request.session_id, item);
+  if (quiz && !guess) {
+    node.append(ask);
+    return node;
+  }
   const explanation = prose("p", card.explanation);
   explanation.className = "explanation";
   const paths = document.createElement("p");
@@ -73,9 +82,7 @@ function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCa
     prose("p", card.not_checked),
   );
   if (quiz) node.append(keyWrongButton(request.id, key_wrong));
-  node.append(moreElement(request.id, more), ratingElement(request.id, rating, quiz ? key_wrong : null));
-  const item = [card.summary, card.explanation, card.code].filter(Boolean).join("\n\n");
-  node.append(askElement(request.session_id, item));
+  node.append(moreElement(request.id, more), ratingElement(request.id, rating, quiz ? key_wrong : null), ask);
   return node;
 }
 

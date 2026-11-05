@@ -71,32 +71,38 @@ fn the_intention_is_the_agents_latest_line_and_ages_with_each_step_after_it() {
     let mut studio = session_at(&path);
 
     assert_eq!(follow(&mut studio), Vec::<String>::new());
-    let story = &studio.session(SESSION).unwrap().story;
-    assert_eq!(story.intention.as_deref(), Some("Reading the probe first."));
-    assert_eq!(story.steps_ago, 2);
+    let transcript = &studio.session(SESSION).unwrap().transcript;
+    assert_eq!(
+        transcript.intention.as_deref(),
+        Some("Reading the probe first.")
+    );
+    assert_eq!(transcript.steps_ago, 2);
 
     std::fs::write(&path, first(13)).unwrap();
     follow(&mut studio);
-    let story = &studio.session(SESSION).unwrap().story;
-    assert_eq!(story.intention.as_deref(), Some("Reading the probe first."));
-    assert_eq!(story.steps_ago, 3);
+    let transcript = &studio.session(SESSION).unwrap().transcript;
+    assert_eq!(
+        transcript.intention.as_deref(),
+        Some("Reading the probe first.")
+    );
+    assert_eq!(transcript.steps_ago, 3);
 
     std::fs::write(&path, first(14)).unwrap();
     follow(&mut studio);
-    let story = &studio.session(SESSION).unwrap().story;
+    let transcript = &studio.session(SESSION).unwrap().transcript;
     assert_eq!(
-        story.intention.as_deref(),
+        transcript.intention.as_deref(),
         Some("The probe now reads right.")
     );
-    assert_eq!(story.steps_ago, 0);
+    assert_eq!(transcript.steps_ago, 0);
     assert_eq!(
-        story.responses,
+        transcript.responses,
         [
             "Reading the probe first.",
             "Fixed the typo.\n\nThe probe now reads right."
         ]
     );
-    assert_eq!(story.unavailable, None);
+    assert_eq!(transcript.unavailable, None);
 }
 
 #[test]
@@ -106,10 +112,10 @@ fn a_new_prompt_starts_the_turn_with_no_intention() {
 
     follow(&mut studio);
 
-    let story = &studio.session(SESSION).unwrap().story;
-    assert_eq!(story.intention, None);
-    assert_eq!(story.responses, Vec::<String>::new());
-    assert_eq!(story.unavailable, None);
+    let transcript = &studio.session(SESSION).unwrap().transcript;
+    assert_eq!(transcript.intention, None);
+    assert_eq!(transcript.responses, Vec::<String>::new());
+    assert_eq!(transcript.unavailable, None);
 }
 
 /// The fallback: no intention and no responses, a reason, one stderr line however often the file is
@@ -119,9 +125,9 @@ fn assert_fallback(studio: &mut Studio, logged: Vec<String>) {
     assert_eq!(logged.len(), 1, "{logged:?}");
     assert!(logged[0].contains(SESSION), "{logged:?}");
     let session = studio.session(SESSION).unwrap();
-    assert_eq!(session.story.intention, None);
-    assert_eq!(session.story.responses, Vec::<String>::new());
-    assert!(session.story.unavailable.is_some());
+    assert_eq!(session.transcript.intention, None);
+    assert_eq!(session.transcript.responses, Vec::<String>::new());
+    assert!(session.transcript.unavailable.is_some());
     assert_eq!(
         session
             .agent

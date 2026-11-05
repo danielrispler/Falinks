@@ -50,7 +50,7 @@ fn the_context_share_follows_the_last_assistant_messages_token_counts() {
     let (mut studio, path) = session("context", TASK, &first(3), "gh issue view 480");
 
     follow(&mut studio);
-    let context = |studio: &Studio| studio.session(SESSION).unwrap().story.context.clone();
+    let context = |studio: &Studio| studio.session(SESSION).unwrap().transcript.context.clone();
     // 2 + 30,000 + 70,000 input tokens of the 1M model's window.
     assert_eq!(
         context(&studio),
@@ -81,7 +81,7 @@ fn a_model_without_the_1m_mark_has_a_200k_window() {
     let (mut studio, _) = session("200k", TASK, &lines, "gh issue view 480");
 
     follow(&mut studio);
-    let context = studio.session(SESSION).unwrap().story.context.clone();
+    let context = studio.session(SESSION).unwrap().transcript.context.clone();
     assert_eq!(context.map(|c| c.window), Some(200_000));
 }
 

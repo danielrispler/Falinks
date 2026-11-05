@@ -104,8 +104,7 @@ fn cards(studio: State<Mutex<Studio>>, cards: State<Cards>) -> SessionCards {
 /// beside the event log, `null` when there is none (#481).
 #[tauri::command]
 fn usage() -> Option<serde_json::Value> {
-    let log = studio_hook::event_log(&std::env::home_dir()?);
-    studio_workbench::plan_usage(&log.with_file_name("usage"))
+    studio_workbench::plan_usage(&studio_hook::data_dir(&std::env::home_dir()?).join("usage"))
 }
 
 /// What the read loop last sent the window, so it sends each again only when it changes.
@@ -215,13 +214,17 @@ fn ask(
     writer: State<Writer>,
 ) -> Result<String, String> {
     // The lock ends with the statement, before the writer runs.
-    let story = studio
+    let transcript = studio
         .lock()
         .unwrap()
         .session(&session)
-        .map(|s| s.story.clone());
-    let answer =
-        studio_understanding::ask_about(&**writer, &story.unwrap_or_default(), &item, &question);
+        .map(|s| s.transcript.clone());
+    let answer = studio_understanding::ask_about(
+        &**writer,
+        &transcript.unwrap_or_default(),
+        &item,
+        &question,
+    );
     if let Err(line) = &answer {
         eprintln!("studio: no answer on {session}: {line}");
     }
@@ -466,9 +469,9 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
         }
         // Reads the transcripts' lines and nothing else (`apps/studio/AGENTS.md`).
         let log = |line: String| eprintln!("studio: {line}");
-        let told = state.lock().unwrap().follow_transcripts(log);
-        let named = NAMES_CHANGED.swap(false, Ordering::AcqRel);
-        if state.lock().unwrap().tick(millis()) || read || told || named {
+        let transcripts_changed = state.lock().unwrap().follow_transcripts(log);
+        let names_changed = NAMES_CHANGED.swap(false, Ordering::AcqRel);
+        if state.lock().unwrap().tick(millis()) || read || transcripts_changed || names_changed {
             sent.list(app);
         }
         // Asking for focus waits on the main thread, which never takes this lock.

@@ -344,6 +344,38 @@ fn an_answer_with_a_wrong_nonce_or_open_to_others_is_refused() {
         fs::set_permissions(&temp, fs::Permissions::from_mode(0o644)).unwrap();
         fs::rename(&temp, &path).unwrap();
         assert_eq!(finish(child, since).0, "", "{kind}");
+
+        // So is a link to a private file, which could point anywhere.
+        let since = Instant::now();
+        let child = start(&home, 1_500, &payload);
+        let mut linked = answer_with(&payload);
+        linked["nonce"] = request(&home)["nonce"].clone();
+        let target = path.with_extension("target");
+        answer::write_private(&target, &linked).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert_eq!(finish(child, since).0, "", "{kind}");
+        let _ = fs::remove_file(&path);
+    }
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// The card's answer that decides `payload`, as `kinds` gives it.
+fn answer_with(payload: &Value) -> Value {
+    let (_, _, answer) = kinds().into_iter().find(|(_, p, _)| p == payload).unwrap();
+    answer
+}
+
+#[test]
+fn a_request_names_the_agent_that_asks_so_the_studio_can_tell_whose_card_it_is() {
+    let home = scratch("agent");
+    let mut subagent = asked();
+    subagent["agent_id"] = "a-7".into();
+    for (payload, agent) in [(subagent, json!("a-7")), (asked(), Value::Null)] {
+        watch(&home, SESSION, std::process::id(), 0);
+        let since = Instant::now();
+        let child = start(&home, 1_000, &payload);
+        assert_eq!(request(&home)["agent_id"], agent);
+        finish(child, since);
     }
     let _ = fs::remove_dir_all(&home);
 }

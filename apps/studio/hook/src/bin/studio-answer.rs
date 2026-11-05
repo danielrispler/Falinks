@@ -17,12 +17,11 @@ fn run() -> Result<Option<serde_json::Value>, Box<dyn Error>> {
     let mut payload = Vec::new();
     std::io::stdin().read_to_end(&mut payload)?;
     let payload = serde_json::from_slice(&payload)?;
-    let log = studio_hook::event_log(&env::home_dir().ok_or("no home directory")?);
-    let data = log.parent().ok_or("no data directory")?;
+    let data = studio_hook::data_dir(&env::home_dir().ok_or("no home directory")?);
     // Tests shorten the 120 seconds.
     let timeout = env::var("STUDIO_ANSWER_TIMEOUT_MS")
         .ok()
         .and_then(|ms| ms.parse().ok());
     let timeout = Duration::from_millis(timeout.unwrap_or(answer::TIMEOUT_MS));
-    Ok(answer::run(&payload, data, timeout)?)
+    Ok(answer::run(&payload, &data, timeout)?)
 }

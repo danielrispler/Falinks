@@ -3,7 +3,7 @@
 // with the cards, from the store; the markers come with the selection.
 
 import { code, element, prose, text } from "./dom.js";
-import type { Decision } from "./types.js";
+import { askKind, type Decision } from "./types.js";
 
 let decisions: Decision[] = [];
 let cleared: number[] = [];
@@ -22,14 +22,15 @@ export function showCleared(times: number[]) {
 export function answerText(decision: Decision): string {
   const { tool, answer } = decision;
   if (typeof answer !== "string") return Object.values(answer).join(" · ");
-  if (tool === "ExitPlanMode") return answer === "allow" ? "Approved" : "Rejected";
+  if (askKind(tool) === "plan") return answer === "allow" ? "Approved" : "Rejected";
   return answer === "allow" ? "Allowed" : "Denied";
 }
 
 // What kind of decision it was.
 export function kindText(decision: Decision): string {
-  if (decision.tool === "AskUserQuestion") return "Question";
-  return decision.tool === "ExitPlanMode" ? "Plan" : `Permission · ${decision.tool}`;
+  const kind = askKind(decision.tool);
+  if (kind === "question") return "Question";
+  return kind === "plan" ? "Plan" : `Permission · ${decision.tool}`;
 }
 
 export const sourceText = (decision: Decision) => (decision.source === "card" ? "on the card" : "in the terminal");
@@ -59,7 +60,8 @@ function entry(decision: Decision): HTMLElement {
   const item = document.createElement("li");
   item.append(text("p", `${kindText(decision)} · ${when(decision.at)} · ${sourceText(decision)}`, "kind"));
   const input = decision.input;
-  if (decision.tool === "AskUserQuestion") {
+  const kind = askKind(decision.tool);
+  if (kind === "question") {
     const answers = typeof decision.answer === "string" ? {} : decision.answer;
     for (const asked of input.questions ?? []) {
       const options = asked.options.map((o) => o.label).join(" / ");
@@ -68,7 +70,7 @@ function entry(decision: Decision): HTMLElement {
     }
     return item;
   }
-  if (decision.tool === "ExitPlanMode") {
+  if (kind === "plan") {
     const plan = document.createElement("details");
     const body = prose("div", String(input.plan ?? ""));
     body.className = "plan";

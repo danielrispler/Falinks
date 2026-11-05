@@ -41,16 +41,20 @@ const phaseNames: Record<Phase, string> = {
   merged: "Merged",
 };
 
-// The phase and the estimate (#475), such as "Implementing · est. 16m–29m left · depends on you";
-// empty before the first phase.
+// The phase and the estimate (#475), such as "Implementing · est. 16m–29m left", or
+// "Implementing · depends on you" in place of a time while the session waits on Daniel; empty
+// before the first phase.
 export function estimateText(work: Pick<Work, "phases" | "estimate">): string {
   const phase = work.phases.at(-1)?.phase;
   if (phase === undefined) return "";
   if (phase === "merged") return phaseNames.merged;
   const range = work.estimate.range;
-  const parts = [phaseNames[phase], range === null ? "no estimate" : `est. ${duration(range[0])}–${duration(range[1])} left`];
-  if (work.estimate.depends_on_you) parts.push("depends on you");
-  return parts.join(" · ");
+  const time = work.estimate.depends_on_you
+    ? "depends on you"
+    : range === null
+      ? "no estimate"
+      : `est. ${duration(range[0])}–${duration(range[1])} left`;
+  return `${phaseNames[phase]} · ${time}`;
 }
 
 // The elements whose text counts up, each with how to draw it at a time.

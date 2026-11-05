@@ -5,18 +5,24 @@
 
 import { askFor, sendAnswer, type Ask } from "./answer.js";
 import { code, pressable, prose, text } from "./dom.js";
-import type { Question } from "./types.js";
+import { askKind, type Question } from "./types.js";
 
 // Whether a question is open, answered in the terminal, or not answered: its call failed, or its turn
 // or its agent ended first. An open one needs Daniel, so only it takes the colour.
 const answerLabels = { open: "Needs you", not_answered: "Not answered", answered: "Answered" };
 
+// The labels picked on the card so far, by question text, for the open request `nonce`. They outlast
+// the view's redraws; a new request, once this one is answered, starts afresh.
+let picks = { nonce: "", picked: new Map<string, string[]>() };
+const pickedFor = (nonce: string) => {
+  if (picks.nonce !== nonce) picks = { nonce, picked: new Map() };
+  return picks.picked;
+};
+
 export function questionElement(question: Question): HTMLElement {
   const { questions, answer } = question;
   const ask = answer === "open" ? askFor(question) : null;
-  // The labels picked on the card so far, by question text.
-  // shortcut: a redraw of the view while Daniel picks clears them; keep them by nonce if that bites.
-  const picked = new Map<string, string[]>();
+  const picked = ask === null ? new Map<string, string[]>() : pickedFor(ask.nonce);
   const block = document.createElement("article");
   block.className = "question";
   const status = typeof answer === "string" ? answer : "answered";
@@ -40,9 +46,10 @@ export function questionElement(question: Question): HTMLElement {
       ...asked.options.map((choice) => {
         const item = document.createElement("li");
         const content = [text("span", choice.label, "label"), text("span", choice.description ?? "", "description")];
+        const pickedNow = picked.get(asked.question)?.includes(choice.label) ?? false;
         if (ask !== null) {
           // A button, so Tab and Enter choose as a click does.
-          const button = pressable(document.createElement("button"), false, () => {
+          const button = pressable(document.createElement("button"), pickedNow, () => {
             const labels = picked.get(asked.question) ?? [];
             const on = !labels.includes(choice.label);
             const next = asked.multiSelect ? labels.filter((l) => l !== choice.label) : [];
@@ -63,7 +70,7 @@ export function questionElement(question: Question): HTMLElement {
         } else item.append(...content);
         // A label may hold a comma, so only a multi-select answer is split (#434, decision 41).
         const labels = asked.multiSelect ? chosen?.split(", ") : [chosen];
-        item.classList.toggle("chosen", labels?.includes(choice.label) ?? false);
+        item.classList.toggle("chosen", pickedNow || (labels?.includes(choice.label) ?? false));
         return item;
       }),
     );
@@ -71,6 +78,7 @@ export function questionElement(question: Question): HTMLElement {
     if (chosen !== null) block.append(text("p", `Your answer: ${chosen}`));
   }
   if (ask !== null) block.append(answerButtons(ask, sendButton ? [["Send", send, "send"]] : []));
+  block.querySelector<HTMLButtonElement>(".send")?.toggleAttribute("disabled", picked.size < questions.length);
   return block;
 }
 
@@ -83,7 +91,7 @@ export function decisionElement(ask: Ask): HTMLElement {
   block.append(state);
   const decide = (decision: "allow" | "deny") => () => sendAnswer(ask, { decision });
   const input = ask.tool_input;
-  if (ask.tool_name === "ExitPlanMode") {
+  if (askKind(ask.tool_name) === "plan") {
     block.append(text("p", "Plan", "header"), text("p", "Approve this plan?", "asked"));
     const plan = prose("div", String(input.plan ?? ""));
     plan.className = "plan";

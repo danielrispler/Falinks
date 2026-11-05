@@ -14,7 +14,7 @@ use std::{
 
 mod transcript;
 mod work;
-pub use transcript::{Context, Story};
+pub use transcript::{Context, Transcript};
 pub use work::{Estimate, MIN_HISTORY, Phase, PhaseStart, Work, range};
 
 #[derive(Default)]
@@ -170,9 +170,9 @@ pub struct Session {
     pub returned: Option<String>,
     /// What its transcript says of its latest turn: the intention, the agent's texts, or why it
     /// cannot be read (#461, decision 12).
-    pub story: Story,
+    pub transcript: Transcript,
     #[serde(skip)]
-    transcript: transcript::Transcript,
+    transcript_file: transcript::TranscriptFile,
     /// Its issue, PR and worktree, which name it unless Daniel renamed it (#461, decision 19).
     pub identity: Identity,
     /// Its work on its ticket: its kind, its phases and how long its agent worked (#461, decision
@@ -1992,11 +1992,14 @@ impl Studio {
         // A resume or `/clear` may move it to another transcript, read from its start.
         if own
             && !event.transcript_path.is_empty()
-            && session.transcript.path != event.transcript_path
+            && session.transcript_file.path != event.transcript_path
         {
-            session.transcript = transcript::Transcript::default();
-            session.transcript.path.clone_from(&event.transcript_path);
-            session.story = Story::default();
+            session.transcript_file = transcript::TranscriptFile::default();
+            session
+                .transcript_file
+                .path
+                .clone_from(&event.transcript_path);
+            session.transcript = Transcript::default();
         }
         let failed = session.failed_workers().into_iter();
         let mut outputs: Vec<Output> = failed
@@ -2433,7 +2436,7 @@ impl Studio {
     }
 
     /// Sets session `id`'s estimate from the start of its phase, from the sessions of its kind that
-    /// started before it and are between turns or ended (#461, decision 14).
+    /// started before it and have ended (#461, decision 14): a paused session's time may be cut short.
     fn estimate(&mut self, id: &str) {
         let Some(session) = self.sessions.get(id) else {
             return;
@@ -2446,7 +2449,7 @@ impl Studio {
                 s.agent.started_at < session.agent.started_at
                     && work.kind.is_some()
                     && s.work.kind == work.kind
-                    && matches!(s.state, State::YourTurn | State::Idle | State::Ended)
+                    && s.ended
             })
             .map(|s| &s.work)
             .collect();
@@ -2590,7 +2593,7 @@ impl Studio {
     /// Reads what was added to the transcripts of the sessions that have not ended, and of the
     /// selected one, since the last call (#461, decision 12). `log` gets one line when a session's
     /// transcript becomes unavailable. A session is read only from its first step or `Stop`, as its
-    /// transcript may not exist before. Returns whether any session's story changed.
+    /// transcript may not exist before. Returns whether any session's transcript changed.
     pub fn follow_transcripts(&mut self, mut log: impl FnMut(String)) -> bool {
         let mut changed = false;
         for session in self.sessions.values_mut() {
@@ -2599,24 +2602,29 @@ impl Studio {
             // gone for one poll (one stderr line); track a step per transcript if that shows.
             let started = session.agent.last_step.is_some() || session.stopped.is_some();
             if !started
-                || session.transcript.path.is_empty()
+                || session.transcript_file.path.is_empty()
                 || session.state == State::Ended && !shown
             {
                 continue;
             }
-            let before = session.story.clone();
-            if let Some(why) = session.transcript.follow(&mut session.story) {
+            let before = session.transcript.clone();
+            if let Some(why) = session.transcript_file.follow(&mut session.transcript) {
                 log(format!(
                     "session {}: transcript unavailable, showing steps only: {why}",
                     session.agent.id
                 ));
             }
-            if session.story.branch.is_some() && session.story.branch != session.identity.branch {
-                session.identity.branch.clone_from(&session.story.branch);
+            if session.transcript.branch.is_some()
+                && session.transcript.branch != session.identity.branch
+            {
+                session
+                    .identity
+                    .branch
+                    .clone_from(&session.transcript.branch);
                 session.identity.pr = None;
                 session.identity.named();
             }
-            changed |= session.story != before;
+            changed |= session.transcript != before;
         }
         changed
     }

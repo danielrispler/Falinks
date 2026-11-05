@@ -74,7 +74,7 @@ impl Work {
     /// Daniel's or a wake-up's prompt at `at`.
     pub(crate) fn prompt(&mut self, prompt: &str, at: u64) {
         if self.phases.is_empty() {
-            self.kind = slash_command(prompt).map(|c| plain(c).into());
+            self.kind = slash_command(prompt).map(|c| without_plugin(c).into());
             self.start(Phase::Orienting, at);
         }
     }
@@ -85,13 +85,13 @@ impl Work {
         if let Some(skill) = skill
             && self.kind.is_none()
         {
-            self.kind = Some(plain(skill).into());
+            self.kind = Some(without_plugin(skill).into());
         }
         let Some(current) = self.phase() else {
             return;
         };
         let next = match (tool, skill) {
-            (_, Some(skill)) => skill_phase(plain(skill)),
+            (_, Some(skill)) => skill_phase(without_plugin(skill)),
             ("Bash", _) => command_phase(input["command"].as_str().unwrap_or_default(), current),
             _ => None,
         };
@@ -143,7 +143,7 @@ fn slash_command(prompt: &str) -> Option<&str> {
 }
 
 /// A skill's or command's name without its plugin.
-fn plain(name: &str) -> &str {
+fn without_plugin(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
 }
 

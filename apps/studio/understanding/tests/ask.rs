@@ -2,7 +2,7 @@
 //! by the card writer's own call with the turn's intentions; the session never sees it.
 
 use std::cell::RefCell;
-use studio_core::{CardRequest, Story};
+use studio_core::{CardRequest, Transcript};
 use studio_understanding::{Card, CardWriter, ClaudeWriter, ask_about};
 
 /// What a writer was asked: the item, the turn's intentions and the question.
@@ -43,8 +43,8 @@ impl CardWriter for Asked {
     }
 }
 
-fn story() -> Story {
-    Story {
+fn transcript() -> Transcript {
+    Transcript {
         intention: Some("Now I run the tests.".into()),
         steps_ago: 2,
         responses: vec![
@@ -52,7 +52,7 @@ fn story() -> Story {
             "The writer is fine.\n\nNow I run the tests.".into(),
         ],
         unavailable: None,
-        ..Story::default()
+        ..Transcript::default()
     }
 }
 
@@ -60,7 +60,7 @@ fn story() -> Story {
 fn the_request_carries_the_item_the_question_and_the_turns_intentions_and_the_answer_comes_back() {
     let writer = Asked::replying(Ok(r#"{"answer": "It checks the writer first."}"#));
 
-    let answer = ask_about(&writer, &story(), "The writer is fine.", "Why first?");
+    let answer = ask_about(&writer, &transcript(), "The writer is fine.", "Why first?");
 
     assert_eq!(answer, Ok("It checks the writer first.".into()));
     let intentions = vec![
@@ -86,7 +86,7 @@ fn a_reply_that_does_not_parse_or_a_failed_call_gives_an_error() {
     ];
     for reply in replies {
         let writer = Asked::replying(reply);
-        let answer = ask_about(&writer, &story(), "item", "question");
+        let answer = ask_about(&writer, &transcript(), "item", "question");
         assert!(answer.is_err(), "{reply:?} gave {answer:?}");
     }
 }

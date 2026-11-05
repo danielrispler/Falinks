@@ -18,6 +18,7 @@
 //! Trust boundary: a process that could write the answer file could approve a call, so the hook takes
 //! only a file of its own user with mode 0600 that echoes this request's nonce.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
     fs::{self, File, OpenOptions},
@@ -33,6 +34,33 @@ pub const STALE_MS: u64 = 5_000;
 /// With no answer by then, the terminal asks (decision 22).
 pub const TIMEOUT_MS: u64 = 120_000;
 
+/// What a call asks Daniel: a question, a plan to approve, or a permission for any other tool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Question,
+    Plan,
+    Permission,
+}
+
+impl Kind {
+    /// The kind of a call to `tool`.
+    pub fn of(tool: &str) -> Self {
+        match tool {
+            "AskUserQuestion" => Self::Question,
+            "ExitPlanMode" => Self::Plan,
+            _ => Self::Permission,
+        }
+    }
+}
+
+/// Daniel's verdict on a plan or a permission from its card (#478), `allow` or `deny` in JSON.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verdict {
+    Allow,
+    Deny,
+}
+
 pub fn watching_file(data: &Path) -> PathBuf {
     data.join("watching.json")
 }
@@ -45,8 +73,8 @@ pub fn answer_file(data: &Path, session: &str) -> PathBuf {
     data.join("asks").join(format!("{session}.answer.json"))
 }
 
-/// Whether a session id may name a file: a plain one.
-pub fn plain(session: &str) -> bool {
+/// Whether a session id may name a file: letters, digits, `-` and `_` only.
+pub fn is_file_safe(session: &str) -> bool {
     let plain = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     !session.is_empty() && session.chars().all(plain)
 }
@@ -90,20 +118,24 @@ pub fn watched(data: &Path, session: &str) -> bool {
     watching["session_id"] == session
         && now_ms().saturating_sub(heartbeat) <= STALE_MS
         // Signal 0 only checks that the process exists and is the user's own.
+        // SAFETY: `kill` takes plain integers and touches no memory; `pid > 0` keeps it to one
+        // process, never a process group.
         && pid.is_some_and(|pid| pid > 0 && unsafe { libc::kill(pid, 0) } == 0)
 }
 
-/// Whether the hook answers this call: a question or a plan at its `PreToolUse`, or any other call's
-/// permission request. A question or a plan asked already, so its permission request needs no second
-/// wait.
-fn handled(payload: &Value) -> bool {
-    let asks = matches!(
-        payload["tool_name"].as_str(),
-        Some("AskUserQuestion" | "ExitPlanMode")
-    );
+/// The kind of `payload`'s call.
+fn kind(payload: &Value) -> Kind {
+    Kind::of(payload["tool_name"].as_str().unwrap_or_default())
+}
+
+/// Whether the hook waits for the card on this call: a question or a plan at its `PreToolUse`, or
+/// a permission request. A question or a plan asked already, so its permission request needs no
+/// second wait.
+fn waits_for(payload: &Value) -> bool {
+    let permission = kind(payload) == Kind::Permission;
     match payload["hook_event_name"].as_str() {
-        Some("PreToolUse") => asks,
-        Some("PermissionRequest") => !asks,
+        Some("PreToolUse") => !permission,
+        Some("PermissionRequest") => permission,
         _ => false,
     }
 }
@@ -111,8 +143,10 @@ fn handled(payload: &Value) -> bool {
 /// The hook's output for the studio's `answer` to `payload`, or `None` for no decision: a question
 /// takes `answers`, a plan or a permission a `decision` of `allow` or `deny`.
 pub fn reply(payload: &Value, answer: &Value) -> Option<Value> {
-    if payload["tool_name"] != "AskUserQuestion" {
-        return decide(payload, answer["decision"].as_str()?);
+    let kind = kind(payload);
+    if kind != Kind::Question {
+        let verdict = Verdict::deserialize(answer.get("decision")?).ok()?;
+        return Some(decide(payload, kind, verdict));
     }
     let answers = answer.get("answers")?.as_object()?;
     let mut joined = Map::new();
@@ -138,21 +172,16 @@ pub fn reply(payload: &Value, answer: &Value) -> Option<Value> {
         "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": input } }))
 }
 
-/// A plan's or a permission's output for `decision`.
-fn decide(payload: &Value, decision: &str) -> Option<Value> {
-    let allow = match decision {
-        "allow" => true,
-        "deny" => false,
-        _ => return None,
-    };
-    let out = if payload["hook_event_name"] == "PermissionRequest" {
-        let decision = match allow {
-            true => json!({ "behavior": "allow" }),
-            false => json!({ "behavior": "deny",
+/// A plan's or a permission's output for `verdict`.
+fn decide(payload: &Value, kind: Kind, verdict: Verdict) -> Value {
+    let out = if kind == Kind::Permission {
+        let decision = match verdict {
+            Verdict::Allow => json!({ "behavior": "allow" }),
+            Verdict::Deny => json!({ "behavior": "deny",
                 "message": "Daniel denied this from the studio card." }),
         };
         json!({ "hookEventName": "PermissionRequest", "decision": decision })
-    } else if allow {
+    } else if verdict == Verdict::Allow {
         // A plan needs its input back with `allow`.
         json!({ "hookEventName": "PreToolUse", "permissionDecision": "allow",
             "updatedInput": payload["tool_input"] })
@@ -161,7 +190,7 @@ fn decide(payload: &Value, decision: &str) -> Option<Value> {
             "permissionDecisionReason":
                 "Daniel rejected this plan from the studio card. Ask him what to change." })
     };
-    Some(json!({ "hookSpecificOutput": out }))
+    json!({ "hookSpecificOutput": out })
 }
 
 /// The event log line that records Daniel's card answer to `payload` (#461, decision 17): the
@@ -186,36 +215,38 @@ pub fn answered_line(payload: &Value, answer: &Value) -> Value {
 /// Runs the hook for `payload` with the studio's data directory `data`: the output to print, if any.
 pub fn run(payload: &Value, data: &Path, timeout: Duration) -> io::Result<Option<Value>> {
     let session = payload["session_id"].as_str().unwrap_or_default();
-    if !handled(payload) || !plain(session) || !watched(data, session) {
+    if !waits_for(payload) || !is_file_safe(session) || !watched(data, session) {
         return Ok(None);
     }
     let nonce = nonce()?;
-    let (ask, answer) = (ask_file(data, session), answer_file(data, session));
-    let _ = fs::remove_file(&answer);
+    let (ask, answer_path) = (ask_file(data, session), answer_file(data, session));
+    let _ = fs::remove_file(&answer_path);
+    // `agent_id` (absent for the session's own agent) tells the studio whose card shows it.
     let request = json!({
         "nonce": nonce,
         "hook_event_name": payload["hook_event_name"],
         "tool_name": payload["tool_name"],
         "tool_use_id": payload["tool_use_id"],
         "tool_input": payload["tool_input"],
+        "agent_id": payload["agent_id"],
         "asked_ms": now_ms(),
     });
     write_private(&ask, &request)?;
-    let given = wait(data, session, &nonce, timeout);
+    let answer = wait(data, session, &nonce, timeout);
     // shortcut: one ask per session at a time; a second ask meanwhile replaces the request, so this
     // one only times out. Key the files by tool_use_id if parallel subagent questions show up.
-    let mine = fs::read_to_string(&ask).is_ok_and(|text| text.contains(&nonce));
-    if mine {
+    let request_still_ours = fs::read_to_string(&ask).is_ok_and(|text| text.contains(&nonce));
+    if request_still_ours {
         let _ = fs::remove_file(&ask);
-        let _ = fs::remove_file(&answer);
+        let _ = fs::remove_file(&answer_path);
     }
-    let Some(given) = given else {
+    let Some(answer) = answer else {
         return Ok(None);
     };
-    let out = reply(payload, &given);
+    let out = reply(payload, &answer);
     if out.is_some() {
         // The decision stands even if its line cannot be logged.
-        let line = answered_line(payload, &given);
+        let line = answered_line(payload, &answer);
         if let Err(e) = crate::append(&data.join("events.jsonl"), &line) {
             eprintln!("studio-answer: log the answer: {e}");
         }
@@ -227,7 +258,7 @@ pub fn run(payload: &Value, data: &Path, timeout: Duration) -> io::Result<Option
 fn wait(data: &Path, session: &str, nonce: &str, timeout: Duration) -> Option<Value> {
     let until = Instant::now() + timeout;
     loop {
-        if let Some(answer) = take(&answer_file(data, session)) {
+        if let Some(answer) = take_private_answer(&answer_file(data, session)) {
             if answer["nonce"] == nonce {
                 return Some(answer);
             }
@@ -240,18 +271,38 @@ fn wait(data: &Path, session: &str, nonce: &str, timeout: Duration) -> Option<Va
     }
 }
 
-/// The answer file's content, removed as it is read; `None` when there is none, or when it is not the
-/// user's own with mode 0600, which is refused.
-fn take(path: &Path) -> Option<Value> {
-    let meta = fs::symlink_metadata(path).ok()?;
-    let text = fs::read_to_string(path);
-    let _ = fs::remove_file(path);
-    let own = meta.is_file() && meta.uid() == unsafe { libc::getuid() } && meta.mode() & 0o077 == 0;
-    if !own {
-        eprintln!("studio-answer: an answer file not private to its user was refused");
+/// The answer file's content, removed as it is read; `None` when there is none, or when it is not a
+/// regular file of the user's own with mode 0600, which is refused. The checks and the read use one
+/// handle, opened without following a link, so the file cannot be swapped between them.
+fn take_private_answer(path: &Path) -> Option<Value> {
+    // O_NONBLOCK: opening a planted FIFO must not hang the hook.
+    let opened = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path);
+    if opened
+        .as_ref()
+        .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+    {
         return None;
     }
-    serde_json::from_str(&text.ok()?).ok()
+    let _ = fs::remove_file(path);
+    let refuse = || eprintln!("studio-answer: an answer file not private to its user was refused");
+    // A link fails to open (ELOOP), so it is refused too.
+    let Ok(mut file) = opened else {
+        refuse();
+        return None;
+    };
+    let meta = file.metadata().ok()?;
+    // SAFETY: `getuid` takes no arguments, always succeeds and touches no memory.
+    let uid = unsafe { libc::getuid() };
+    if !meta.is_file() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+        refuse();
+        return None;
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 /// A one-time nonce: 16 random bytes in hex.

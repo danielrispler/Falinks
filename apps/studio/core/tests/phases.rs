@@ -123,7 +123,8 @@ fn bash(id: &str, call: &str, at: u64, command: &str) -> [String; 2] {
 }
 
 /// A made-up `/implement` session `n`, starting at `start` minutes: it orients for 1 minute, tests for
-/// `implementing` minutes, runs the full checks for 2, then opens its PR and stops 1 minute later.
+/// `implementing` minutes, runs the full checks for 2, then opens its PR, stops 1 minute later and
+/// ends.
 fn ticket(n: usize, start: u64, implementing: u64) -> Vec<String> {
     let id = format!("5e1f0c2a-0000-4a00-8000-{n:012}");
     let at = |m: u64| (start + m) * MIN;
@@ -145,6 +146,12 @@ fn ticket(n: usize, start: u64, implementing: u64) -> Vec<String> {
     ));
     lines.extend(bash(&id, "b3", at(3 + implementing), "gh pr create --fill"));
     lines.push(event(&id, "Stop", at(4 + implementing), ""));
+    lines.push(event(
+        &id,
+        "SessionEnd",
+        at(5 + implementing),
+        r#""reason":"other""#,
+    ));
     lines
 }
 
@@ -168,6 +175,19 @@ fn with_20_past_sessions_of_its_kind_a_session_shows_a_range_that_updates_as_pha
     assert_eq!(shown(&past, 5), Some((3 * MIN, 3 * MIN)));
     // With one past session less, no estimate.
     assert_eq!(shown(&past[ticket(0, 0, 10).len()..], 3), None);
+}
+
+#[test]
+fn past_sessions_that_have_not_ended_do_not_count_toward_the_estimate() {
+    // The same 20 past sessions, but each only paused between turns: their times may be cut short.
+    let past: Vec<String> = (0..20)
+        .flat_map(|n| ticket(n, 100 * n as u64, 10 + n as u64))
+        .filter(|line| !line.contains("SessionEnd"))
+        .collect();
+    let now = ticket(99, 5_000, 15);
+    let studio = Studio::replayed(past.iter().chain(&now[..3]));
+    let id = "5e1f0c2a-0000-4a00-8000-000000000099";
+    assert_eq!(studio.session(id).unwrap().work.estimate.range, None);
 }
 
 #[test]

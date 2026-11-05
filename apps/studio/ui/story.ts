@@ -11,7 +11,7 @@ import { openDecision } from "./answer.js";
 import { showCleared } from "./decisions.js";
 import { decisionElement, questionElement } from "./questions.js";
 import { checkTime, counts, estimateText, timesText } from "./times.js";
-import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Story } from "./types.js";
+import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Transcript } from "./types.js";
 
 export function showView(selected: Selection | null) {
   element("empty").hidden = selected !== null;
@@ -33,7 +33,7 @@ export function showView(selected: Selection | null) {
   estimate.textContent = agent === null ? estimateText(session.work) : "";
   element("times").replaceChildren(counts(document.createElement("span"), (now) => timesText(session, stepSpan, now)), estimate);
   element("view").toggleAttribute("data-agent", agent !== null);
-  const share = contextText(session.story.context);
+  const share = contextText(session.transcript.context);
   element("identity").textContent =
     agent === null
       ? [sessionName(session), share && `context ${share}`].filter(Boolean).join(" · ")
@@ -53,7 +53,7 @@ export function showView(selected: Selection | null) {
   element("command").textContent = step?.command ?? "";
   element("step").classList.toggle("has-command", Boolean(step?.command));
   // A subagent's transcript is its own, which the studio does not read.
-  showStory(session.id, agent === null ? session.story : null);
+  showStory(session.id, agent === null ? session.transcript : null);
   showQuestions(session.questions.filter((question) => question.agent === (agent?.id ?? null)));
   showChecks(session.checks);
   showCleared(agent === null ? session.cleared : []);
@@ -64,7 +64,7 @@ const FRESH_STEPS = 5;
 
 // The intention, its age, the turn's full responses, each with "ask about this" (#482), and the mark
 // when the transcript is unreadable.
-function showStory(session: string, story: Story | null) {
+function showStory(session: string, story: Transcript | null) {
   const steps = story?.steps_ago ?? 0;
   element("intention-text").textContent = story?.intention ?? "";
   element("intention-ask").replaceChildren(...(story?.intention ? [askElement(session, story.intention)] : []));

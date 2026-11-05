@@ -1,20 +1,28 @@
 // Answering from the card (#461, decision 16). While a session's view shows and the window is
 // visible, the window tells the shell every second, so the answer hook waits for the card; the shell
-// returns the session's open request, whose nonce the answer echoes.
+// returns the session's open request, whose nonce the answer echoes. The hook waits only while the
+// request's card shows: a question asked in a view that is not shown is handed to the terminal.
 
 import { invoke } from "./dom.js";
 import { studio } from "./state.js";
-import type { Question } from "./types.js";
+import { askKind, type Question } from "./types.js";
 
 // The answer hook's request (`hook/src/answer.rs`): a question or a plan at its `PreToolUse`, or a
-// permission request, which names no call (#478).
+// permission request, which names no call (#478). `agent_id` is the asking subagent's, null for the
+// session's own agent.
 export type Ask = {
   nonce: string;
   hook_event_name: string;
   tool_name: string;
   tool_use_id: string | null;
   tool_input: Record<string, unknown>;
+  agent_id: string | null;
 };
+
+// Whether `ask`'s card shows in the view of `agent` (null: the session's own): a question docks only
+// in its asker's view, a plan or a permission in every view of its session (`story.ts`).
+export const cardShown = (ask: Ask, agent: string | null) =>
+  askKind(ask.tool_name) !== "question" || (ask.agent_id ?? null) === agent;
 // A question's answer: each question's text to its label, or a multi-select's to its labels. A plan's
 // or a permission's: allow or deny. Null answers in the terminal.
 export type Reply = { answers: Record<string, string | string[]> } | { decision: "allow" | "deny" } | null;
@@ -30,15 +38,24 @@ export const askFor = (question: Question) =>
 
 // The open plan or permission request, if any (#478): the core keeps no question for either.
 export const openDecision = () =>
-  current !== null && current.ask.tool_name !== "AskUserQuestion" ? current.ask : null;
+  current !== null && askKind(current.ask.tool_name) !== "question" ? current.ask : null;
+
+const watch = (session: string | null) =>
+  invoke<Ask | null>("watch", { session }).catch((e) => (console.warn(e), null));
 
 export function startWatching(draw: () => void) {
   redraw = draw;
   setInterval(async () => {
-    const selected = document.visibilityState === "visible" ? studio.selection?.session : undefined;
+    const selection = document.visibilityState === "visible" ? studio.selection : null;
+    const selected = selection?.session;
     // The hook's payload names the latest conversation, which a `/clear` changes, not the row (#474).
     const session = selected ? selected.resume_id || selected.id : null;
-    const ask = await invoke<Ask | null>("watch", { session }).catch((e) => (console.warn(e), null));
+    let ask = await watch(session);
+    if (ask !== null && !cardShown(ask, selection?.agent ?? null)) {
+      // Its card is not shown, so stop watching: the hook hands the call to the terminal at once.
+      await watch(null);
+      ask = null;
+    }
     const next = session !== null && ask !== null && ask.nonce !== sent ? { session, ask } : null;
     if (next?.ask.nonce === current?.ask.nonce) return;
     current = next;

@@ -8,8 +8,9 @@ use std::{fs, path::PathBuf};
 use studio_hook::answer;
 
 fn data() -> Result<PathBuf, String> {
-    let log = studio_hook::event_log(&std::env::home_dir().ok_or("no home directory")?);
-    Ok(log.parent().ok_or("no data directory")?.to_owned())
+    Ok(studio_hook::data_dir(
+        &std::env::home_dir().ok_or("no home directory")?,
+    ))
 }
 
 /// The window shows `session`'s view, or none (`None`, also while the window is hidden). Returns the
@@ -18,7 +19,7 @@ fn data() -> Result<PathBuf, String> {
 pub fn watch(session: Option<String>) -> Result<Option<Value>, String> {
     let data = data()?;
     let watching = answer::watching_file(&data);
-    let Some(session) = session.filter(|s| answer::plain(s)) else {
+    let Some(session) = session.filter(|s| answer::is_file_safe(s)) else {
         let _ = fs::remove_file(watching);
         return Ok(None);
     };
@@ -36,9 +37,9 @@ pub fn answer(
     session: String,
     nonce: String,
     answers: Option<Value>,
-    decision: Option<String>,
+    decision: Option<answer::Verdict>,
 ) -> Result<(), String> {
-    if !answer::plain(&session) {
+    if !answer::is_file_safe(&session) {
         return Err("not a session id".into());
     }
     let mut reply = json!({ "nonce": nonce });
@@ -46,7 +47,7 @@ pub fn answer(
         reply["answers"] = answers;
     }
     if let Some(decision) = decision {
-        reply["decision"] = decision.into();
+        reply["decision"] = json!(decision);
     }
     answer::write_private(&answer::answer_file(&data()?, &session), &reply)
         .map_err(|e| e.to_string())

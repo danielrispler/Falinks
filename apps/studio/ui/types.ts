@@ -6,7 +6,7 @@ export type Step = { tool: string; detail: string | null; command?: string | nul
 // its full texts, and why the transcript cannot be read, when it cannot.
 // `context`: the input tokens of the agent's latest message out of its model's window (#480).
 export type Context = { tokens: number; window: number };
-export type Story = {
+export type Transcript = {
   intention: string | null;
   steps_ago: number;
   responses: string[];
@@ -92,7 +92,7 @@ export type Session = {
   questions: Question[];
   // "worker <name> returned", after a wake-up until its next step or Daniel's next prompt.
   returned: string | null;
-  story: Story;
+  transcript: Transcript;
   identity: Identity;
   // Its phases and the estimate (#475).
   work: Work;
@@ -152,6 +152,11 @@ export type Decision = {
   source: "card" | "terminal";
 };
 export type SessionCards = { brief: string | null; recent: StoredCard[]; older: StoredCard[]; decisions: Decision[] };
+// What a call asks Daniel, by its tool, as the answer hook's `Kind`: a question, a plan, or any other
+// tool's permission.
+export type AskKind = "question" | "plan" | "permission";
+export const askKind = (tool: string): AskKind =>
+  tool === "AskUserQuestion" ? "question" : tool === "ExitPlanMode" ? "plan" : "permission";
 // The selection is the core's: the session Daniel selected and the subagent of it he opened, whose
 // view then shows its own line.
 export type Selection = { session: Session; agent: string | null };

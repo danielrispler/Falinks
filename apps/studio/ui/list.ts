@@ -94,7 +94,7 @@ function row(session: Session, children: Children): HTMLElement {
     button,
     session.state,
     stateLabels[session.state],
-    [Object.assign(text("span", sessionName(session), "name"), { title: sessionName(session) }), contextNode(session.story.context)],
+    [Object.assign(text("span", sessionName(session), "name"), { title: sessionName(session) }), contextNode(session.transcript.context)],
     [...done(children, children.get("session")), rowLine(session.line ?? "")],
   );
   button.append(counts(text("span", "", "l3"), (now) => timesText(session, session.step_span, now)));

@@ -13,7 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use studio_core::{CardRequest, Kind, Session, Status, Story};
+use studio_core::{CardRequest, Kind, Session, Status, Transcript};
 
 mod drift;
 mod fingerprint;
@@ -357,15 +357,15 @@ fn rebrief(
 }
 
 /// The answer to Daniel's side `question` on `item` (#461, decision 20), from one call to `writer`
-/// with the intentions of `story`'s turn, one per response. It stays in the studio: the session
+/// with the intentions of `transcript`'s turn, one per response. It stays in the studio: the session
 /// never sees it. Why there is none when the call failed or its reply holds no answer.
 pub fn ask_about(
     writer: &(impl CardWriter + ?Sized),
-    story: &Story,
+    transcript: &Transcript,
     item: &str,
     question: &str,
 ) -> Result<String, String> {
-    let intentions: Vec<String> = story
+    let intentions: Vec<String> = transcript
         .responses
         .iter()
         .filter_map(|text| text.lines().map(str::trim).rfind(|l| !l.is_empty()))

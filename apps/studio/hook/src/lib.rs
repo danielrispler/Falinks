@@ -8,10 +8,15 @@ use std::{
     process::{self, Command},
 };
 
-/// The log in the studio's data directory, which is Tauri's app data directory for the identifier
-/// in `src-tauri/tauri.conf.json`. The hook writes it; the app reads it.
+/// The studio's data directory, which is Tauri's app data directory for the identifier in
+/// `src-tauri/tauri.conf.json`.
+pub fn data_dir(home: &Path) -> PathBuf {
+    home.join("Library/Application Support/dev.falinks.studio")
+}
+
+/// The log in the studio's data directory. The hook writes it; the app reads it.
 pub fn event_log(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/dev.falinks.studio/events.jsonl")
+    data_dir(home).join("events.jsonl")
 }
 
 /// Appends `event` to the log at `log` as one line, with one write under an exclusive lock, so hooks

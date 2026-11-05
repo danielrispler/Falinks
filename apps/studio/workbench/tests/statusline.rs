@@ -2,7 +2,9 @@
 //! status line's stdin as the session's usage snapshot and leaves what the status line prints as it
 //! was. Needs `bash` and `jq`, as the script does.
 
-use std::{fs, io::Write, path::Path, process::Command, process::Stdio};
+use std::{
+    fs, io::Write, os::unix::fs::PermissionsExt, path::Path, process::Command, process::Stdio,
+};
 use studio_workbench::plan_usage;
 
 const LINE: &str = include_str!("../statusline-usage.sh");
@@ -57,6 +59,12 @@ fn the_line_saves_the_snapshot_and_leaves_the_output_unchanged() {
         .collect();
     assert_eq!(names, ["9e0b5f13-d72a-4c6e-b8f4-61a3c2d9e807.json"]);
     assert_eq!(fs::read_to_string(dir.join(&names[0])).unwrap(), STDIN);
+    // Private to its user, like the studio's other files.
+    let mode = fs::metadata(dir.join(&names[0]))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
     assert_eq!(
         plan_usage(&dir).unwrap()["five_hour"]["used_percentage"],
         23.5
