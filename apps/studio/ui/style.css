@@ -246,3 +246,15 @@ body.wide .choices { grid-template-columns: repeat(3, 1fr); }
 .ask-buttons { display: flex; flex-direction: row-reverse; gap: 8px; margin-top: 12px; }
 .ask-buttons button { font: inherit; padding: 4px 12px; background: var(--raised); color: var(--fg);
                       border: 1px solid var(--line); border-radius: var(--radius); }
+/* The decision history (#479), collapsed above the turns: one muted entry per answer, newest first. */
+.decisions { margin: 10px 0 8px; }
+.decisions > summary { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+                     color: var(--muted); cursor: pointer; }
+.decisions ol { list-style: none; margin: 6px 0 0; padding: 0; }
+.decisions li { border-left: 2px solid var(--line); padding: 2px 0 6px 10px; margin: 0 0 6px; }
+.decisions li p { margin: 2px 0 0; overflow-wrap: anywhere; }
+.decisions .kind, .decisions .when, .decisions .options { color: var(--muted); font-size: 12px; }
+.decisions .asked, .decisions .answer { font-size: var(--size-read); }
+.decisions .answer { font-weight: 600; }
+.decisions .cleared { border-left-style: dashed; }
+.decisions .plan { white-space: pre-wrap; max-height: 30vh; overflow-y: auto; font-size: var(--size-read); }

@@ -131,6 +131,13 @@ pub struct Session {
     tasks: BTreeSet<String>,
     /// The questions its agents asked, oldest first (#369, decision 21).
     pub questions: Vec<Question>,
+    /// Its answered questions, plans and permissions, oldest first: its decision history (#461,
+    /// decision 17). The card store keeps them across restarts and gives them to the pane.
+    #[serde(skip)]
+    pub decisions: Vec<Decision>,
+    /// The questions answered on the studio card, by call, whose result has not landed yet.
+    #[serde(skip)]
+    carded: BTreeSet<String>,
     /// When its latest turn started and ended (#461, decision 13).
     pub turn_span: Option<Span>,
     /// Its latest `Stop`, until its next prompt (#369, decision 19).
@@ -283,6 +290,32 @@ pub enum Answer {
     Answered(Value),
     /// Its call failed or was interrupted, or its turn or its agent ended first.
     NotAnswered,
+}
+
+/// An answered question, plan or permission in its session's decision history (#461, decision 17).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Decision {
+    /// The call it decided, which keys it in the store.
+    pub call: String,
+    /// The subagent that asked, `None` for the session's own agent.
+    pub agent: Option<String>,
+    /// `AskUserQuestion`, `ExitPlanMode`, or the tool a permission was asked for.
+    pub tool: String,
+    /// What it asked: the call's input, with a question's questions and options or a plan's text.
+    pub input: Value,
+    /// A question's answers by question text; `"allow"` or `"deny"` for a plan or a permission.
+    pub answer: Value,
+    /// When it was answered, in Unix milliseconds.
+    pub at: u64,
+    pub source: Source,
+}
+
+/// Where Daniel answered: the studio card, through the answer hook, or the terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    Card,
+    Terminal,
 }
 
 /// A subagent of a session (#369, decisions 5, 6 and 8).
@@ -2173,13 +2206,54 @@ impl Studio {
                 let input = &event.tool_input;
                 let decided =
                     |w: &Block| w.tool == tool && w.input == *input && w.agent == event.agent_id;
+                if let Some(block) = session.blocks.iter().find(|w| decided(w)) {
+                    let call = block.calls.first().map(|(call, _)| call.clone());
+                    session.decisions.push(Decision {
+                        call: call.unwrap_or(event.tool_use_id),
+                        agent: block.agent.clone(),
+                        tool: tool.clone(),
+                        input: block.input.clone(),
+                        answer: event.studio_answer["decision"].clone(),
+                        at,
+                        source: Source::Card,
+                    });
+                }
                 session.blocks.retain(|w| !decided(w));
+            }
+            // A question answered on the card: its result, which carries the answer, is the card's.
+            STUDIO_ANSWER => {
+                session.carded.insert(event.tool_use_id);
             }
             "PostToolUse" | "PostToolUseFailure" => {
                 session.running.retain(|c| c.id != id);
+                let failed = event.hook_event_name == "PostToolUseFailure";
+                // A plan or a permission that still waited on Daniel was decided in the terminal:
+                // allowed if its call went on, denied if Daniel rejected it.
+                // shortcut: a call that failed for another reason, such as an Edit whose text was
+                // not found, records no decision; read its error if that loses real ones.
+                let held = session.blocks.iter().find(|w| {
+                    w.tool == tool && w.calls.iter().any(|(call, _)| Some(call) == id.as_ref())
+                });
+                let answer = match failed {
+                    false => Some("allow"),
+                    true if event.error.contains("doesn't want to proceed") => Some("deny"),
+                    true => None,
+                };
+                if let (Some(block), Some(answer), Some(call)) = (held, answer, &id)
+                    && tool != "AskUserQuestion"
+                {
+                    session.decisions.push(Decision {
+                        call: call.clone(),
+                        agent: block.agent.clone(),
+                        tool: tool.clone(),
+                        input: block.input.clone(),
+                        answer: answer.into(),
+                        at,
+                        source: Source::Terminal,
+                    });
+                }
                 session.resolve(|(call, _)| Some(call) == id.as_ref());
                 let input = &event.tool_input;
-                let failed = event.hook_event_name == "PostToolUseFailure";
                 // The hooks are async, so an answer that lands after its turn's `Stop` still counts.
                 let mut asked = session.questions.iter_mut();
                 if !failed
@@ -2194,6 +2268,18 @@ impl Studio {
                         true => Answer::Answered(answers.clone()),
                         false => Answer::NotAnswered,
                     };
+                    if strings {
+                        let card = session.carded.remove(&event.tool_use_id);
+                        session.decisions.push(Decision {
+                            call: event.tool_use_id.clone(),
+                            agent: question.agent.clone(),
+                            tool: tool.clone(),
+                            input: input.clone(),
+                            answer: answers.clone(),
+                            at,
+                            source: if card { Source::Card } else { Source::Terminal },
+                        });
+                    }
                 }
                 // A denied or interrupted call, or a failed Edit or Write, changed nothing: only a
                 // command that ran and failed has its exit code in its error.
