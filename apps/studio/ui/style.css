@@ -123,8 +123,20 @@ body.wide .rail { width: min(var(--wide), calc(100vw - var(--strip))); }
 .state { font-size: var(--size); font-weight: 600; margin: 0 0 6px; }
 .state[data-state="needs_you"] { color: var(--needs-you); background: var(--needs-you-bg); border-radius: var(--radius);
                                  padding: 2px 8px; display: inline-block; }
-.step { margin: 0; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
-.tool-name { font-weight: 600; flex: none; }
+/* The intention and step line (#472): the agent's latest line, dim once it is over 5 steps old. */
+.intention { margin: 0 0 4px; font-size: var(--size-read); overflow-wrap: anywhere; }
+.intention.old { color: var(--muted); }
+.intention:has(#intention-text:empty) { display: none; }
+.age { color: var(--muted); font-size: var(--size-small); }
+.unavailable { color: var(--muted); font-size: var(--size-small); margin: 0 0 4px; }
+.step { margin: 0; min-width: 0; }
+.step summary { overflow-wrap: anywhere; }
+.step:not(.has-command) summary { list-style: none; pointer-events: none; }
+.step code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; }
+.tool-name { font-weight: 600; }
+.responses { margin: 8px 0 0; }
+.responses pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: var(--size-read); margin: 6px 0 0;
+                 padding-top: 6px; border-top: 1px solid var(--line-soft); }
 .cards-title { margin-top: 20px; }
 /* The session's brief, above its cards; its code wraps as a card's does. */
 .brief { margin: 14px 0 0; font-size: var(--size-read); }
