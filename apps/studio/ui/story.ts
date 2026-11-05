@@ -13,7 +13,7 @@ import { decisionElement, questionElement } from "./questions.js";
 import { worktreeOf } from "./paths.js";
 import { checkTime, counts, estimateText, timesText } from "./times.js";
 import { studio } from "./state.js";
-import { stateLabels, type CheckLine, type Losses, type Question, type Selection, type Session, type Transcript } from "./types.js";
+import { stateLabels, type CheckLine, type Losses, type Places, type Question, type Selection, type Session, type Transcript } from "./types.js";
 
 export function showView(selected: Selection | null) {
   element("empty").hidden = selected !== null;
@@ -146,11 +146,15 @@ async function askDelete(session: Session) {
   element("delete-shared").hidden = worktree === null || others.length === 0;
   if ((await choice(dialog)) !== "delete") return;
   if (session.terminal !== null) await closePane(session.terminal);
-  if (worktree !== null && ticked.checked) await removeWorktree(worktree, session.identity.branch);
+  if (worktree !== null && ticked.checked) await removeWorktree(worktree);
   await invoke("delete_session", { id: session.id });
 }
 
-async function removeWorktree(worktree: string, branch: string | null) {
+// The branch is git's, read before the worktree goes: a session with no turn yet has none in its
+// transcript.
+async function removeWorktree(worktree: string) {
+  const { tasks } = await invoke<Places>("places");
+  const branch = tasks.find((task) => task.path === worktree)?.branch ?? null;
   const losses = await invoke<Losses | null>("remove_task", { path: worktree, confirmed: false });
   if (losses) {
     const list = (title: string, lines: string[]) => {
