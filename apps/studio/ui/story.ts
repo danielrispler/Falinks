@@ -4,7 +4,7 @@
 
 import { code, element, invoke, text } from "./dom.js";
 import { encode, request } from "./daemon.js";
-import { agentState } from "./list.js";
+import { agentState, contextText, sessionName } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
 import { questionElement } from "./questions.js";
 import { checkTime, counts, timesText } from "./times.js";
@@ -26,8 +26,11 @@ export function showView(selected: Selection | null) {
   const stepSpan = (agent ?? session).step_span;
   element("times").replaceChildren(counts(document.createElement("span"), (now) => timesText(session, stepSpan, now)));
   element("view").toggleAttribute("data-agent", agent !== null);
+  const share = contextText(session.story.context);
   element("identity").textContent =
-    agent === null ? `${session.name ?? session.folder_name} · ${session.id.slice(0, 8)}` : `${session.folder_name} · ${agent.name}`;
+    agent === null
+      ? [sessionName(session), share && `context ${share}`].filter(Boolean).join(" · ")
+      : `${sessionName(session)} · ${agent.name}`;
   element("state").textContent = label;
   element("state").dataset.state = state;
   // "Open" resumes an ended session in a new terminal, in its folder, where Claude Code keeps it.
@@ -90,7 +93,7 @@ function askClose(session: Session) {
   const close = () => closePane(session.terminal!).catch((e) => console.warn(e));
   if (!session.asks_before_closing) return close();
   const dialog = element("close-dialog") as HTMLDialogElement;
-  element("close-name").textContent = session.name ?? session.folder_name;
+  element("close-name").textContent = sessionName(session);
   dialog.onclose = () => dialog.returnValue === "close" && close();
   dialog.returnValue = "";
   dialog.showModal();

@@ -13,7 +13,7 @@ use std::{
 };
 
 mod transcript;
-pub use transcript::Story;
+pub use transcript::{Context, Story};
 
 #[derive(Default)]
 pub struct Studio {
@@ -164,6 +164,57 @@ pub struct Session {
     pub story: Story,
     #[serde(skip)]
     transcript: transcript::Transcript,
+    /// Its issue, PR and worktree, which name it unless Daniel renamed it (#461, decision 19).
+    pub identity: Identity,
+}
+
+/// What names a session (#461, decision 19): the issue of its `issue-<n>-…` branch, else the one
+/// it claimed with `wayfinder-startup --claim <n>`, the PR the shell finds for its branch, and its
+/// worktree's folder.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Identity {
+    pub issue: Option<u64>,
+    /// Its folder's branch, from its transcript.
+    pub branch: Option<String>,
+    pub pr: Option<u64>,
+    /// The last segment of its folder's worktree root.
+    pub worktree: String,
+    /// The derived name: "#480 · PR #490 · agent-a1b2", "fix-typo · agent-a1b2" or "main · Falinks".
+    pub name: String,
+    #[serde(skip)]
+    claim: Option<u64>,
+}
+
+impl Identity {
+    fn named(&mut self) {
+        let branch = self.branch.as_deref();
+        let from_branch = branch
+            .and_then(|b| b.strip_prefix("issue-"))
+            .and_then(|rest| {
+                let digits = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+                digits.parse().ok()
+            });
+        self.issue = from_branch.or(self.claim);
+        let shown = branch.filter(|_| from_branch.is_none());
+        let parts = [
+            self.issue.map(|n| format!("#{n}")),
+            shown.map(String::from),
+            self.pr.map(|n| format!("PR #{n}")),
+            // A task's worktree is often named after its branch.
+            Some(self.worktree.clone()).filter(|w| !w.is_empty() && Some(w.as_str()) != shown),
+        ];
+        self.name = parts.into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    }
+}
+
+/// The issue a `wayfinder-startup … --claim <n>` command claims.
+fn claimed(command: &str) -> Option<u64> {
+    if !command.contains("wayfinder-startup") {
+        return None;
+    }
+    let mut words = command.split_whitespace();
+    words.find(|w| *w == "--claim")?;
+    words.next()?.parse().ok()
 }
 
 /// A terminal of the daemon, as its `list` gives it, or as its record of the terminals it ran gives
@@ -1879,6 +1930,14 @@ impl Studio {
             session.cwd.clone_from(&event.cwd);
             let last = event.cwd.rsplit('/').next().unwrap_or_default();
             session.folder_name = if last.is_empty() { &event.cwd } else { last }.into();
+            let root = roots.of(&event.cwd);
+            let last = root.rsplit('/').next().unwrap_or_default();
+            session.identity.worktree = if last.is_empty() { &root } else { last }.into();
+            let command = event.tool_input["command"].as_str().unwrap_or_default();
+            if let Some(issue) = claimed(command) {
+                session.identity.claim = Some(issue);
+            }
+            session.identity.named();
         }
         // A resume or `/clear` may move it to another transcript, read from its start.
         if own
@@ -2409,7 +2468,43 @@ impl Studio {
                     session.agent.id
                 ));
             }
+            if session.story.branch.is_some() && session.story.branch != session.identity.branch {
+                session.identity.branch.clone_from(&session.story.branch);
+                session.identity.pr = None;
+                session.identity.named();
+            }
             changed |= session.story != before;
+        }
+        changed
+    }
+
+    /// The folder and branch of each session that has not ended, and of the selected one, one per
+    /// branch: what the shell asks `gh pr view` about, off the poll (#461, decision 19).
+    pub fn branches(&self) -> Vec<(String, String)> {
+        let mut seen = BTreeMap::new();
+        for session in self.sessions.values() {
+            let shown = self.selected.as_ref() == Some(&session.agent.id);
+            if let Some(branch) = &session.identity.branch
+                && (session.state != State::Ended || shown)
+            {
+                seen.entry(branch.clone()).or_insert(session.cwd.clone());
+            }
+        }
+        seen.into_iter()
+            .map(|(branch, cwd)| (cwd, branch))
+            .collect()
+    }
+
+    /// The shell found `pr` for `branch`; returns whether any session's name changed.
+    pub fn set_pr(&mut self, branch: &str, pr: Option<u64>) -> bool {
+        let mut changed = false;
+        for session in self.sessions.values_mut() {
+            let identity = &mut session.identity;
+            if identity.branch.as_deref() == Some(branch) && identity.pr != pr {
+                identity.pr = pr;
+                identity.named();
+                changed = true;
+            }
         }
         changed
     }
