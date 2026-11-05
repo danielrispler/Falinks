@@ -1,7 +1,7 @@
 // Times (#473): how long a session, its turn, its step and its checks have run, from the core's
 // timestamps. Running times count up once a second.
 
-import type { CheckLine, Session, Span } from "./types.js";
+import type { CheckLine, Phase, Session, Span, Work } from "./types.js";
 
 // A duration, such as "45s", "12m" or "2h 05m".
 export function duration(ms: number): string {
@@ -28,6 +28,29 @@ export function timesText(session: Session, step: Span | null, now: number): str
 export function checkTime(line: CheckLine, now: number): string {
   const took = duration((line.ended_at ?? now) - line.started_at);
   return line.ended_at === null && line.typical_ms !== null ? `${took} of usually ${duration(line.typical_ms)}` : took;
+}
+
+const phaseNames: Record<Phase, string> = {
+  orienting: "Orienting",
+  designing: "Designing",
+  implementing: "Implementing",
+  checking: "Checking",
+  reviewing: "Reviewing",
+  opening_pr: "Opening the PR",
+  waiting_on_ci: "Waiting on CI",
+  merged: "Merged",
+};
+
+// The phase and the estimate (#475), such as "Implementing · est. 16m–29m left · depends on you";
+// empty before the first phase.
+export function estimateText(work: Pick<Work, "phases" | "estimate">): string {
+  const phase = work.phases.at(-1)?.phase;
+  if (phase === undefined) return "";
+  if (phase === "merged") return phaseNames.merged;
+  const range = work.estimate.range;
+  const parts = [phaseNames[phase], range === null ? "no estimate" : `est. ${duration(range[0])}–${duration(range[1])} left`];
+  if (work.estimate.depends_on_you) parts.push("depends on you");
+  return parts.join(" · ");
 }
 
 // The elements whose text counts up, each with how to draw it at a time.

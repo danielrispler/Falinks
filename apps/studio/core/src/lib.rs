@@ -13,7 +13,9 @@ use std::{
 };
 
 mod transcript;
+mod work;
 pub use transcript::{Context, Story};
+pub use work::{Estimate, MIN_HISTORY, Phase, PhaseStart, Work, range};
 
 #[derive(Default)]
 pub struct Studio {
@@ -166,6 +168,9 @@ pub struct Session {
     transcript: transcript::Transcript,
     /// Its issue, PR and worktree, which name it unless Daniel renamed it (#461, decision 19).
     pub identity: Identity,
+    /// Its work on its ticket: its kind, its phases and how long its agent worked (#461, decision
+    /// 14).
+    pub work: Work,
 }
 
 /// What names a session (#461, decision 19): the issue of its `issue-<n>-…` branch, else the one
@@ -1914,6 +1919,9 @@ impl Studio {
         session.agent.last_event_at = session.agent.last_event_at.max(event.studio_received_ms);
         // Every event of a `claude` process carries its terminal, so a resume elsewhere moves it.
         session.terminal.clone_from(&event.studio_terminal_id);
+        let working = session.state == State::Running;
+        session.work.passes(event.studio_received_ms, working);
+        let phases_before = session.work.phases.len();
         session.resume_id = own_id;
         if continues {
             session.cleared.push(event.studio_received_ms);
@@ -2094,6 +2102,7 @@ impl Studio {
                         }
                     }
                 }
+                session.work.prompt(&event.prompt, at);
                 let prompt = Prompt {
                     at,
                     sender,
@@ -2163,6 +2172,7 @@ impl Studio {
                     session.returned = None;
                     let step = Step::new(&tool, &event.tool_input, &event.cwd);
                     session.agent.step(step, &event.tool_use_id, at);
+                    session.work.call(&tool, &event.tool_input, at);
                     // A check's line runs from its start (#461, decision 13).
                     let command = event.tool_input["command"].as_str().unwrap_or_default();
                     let known = session.checks.iter().any(|l| l.call == event.tool_use_id);
@@ -2318,17 +2328,46 @@ impl Studio {
             State::Running
         };
         session.asks_before_closing = session.in_turn() || !session.ended && session.background;
+        session.work.estimate.depends_on_you = session.state == State::NeedsYou;
         session.asker = session.blocks.first().map(|block| Asker {
             agent: block.asker(),
             since: block.at,
         });
+        let phase_started = session.work.phases.len() != phases_before;
         if !blocked_before && session.state == State::NeedsYou {
             outputs.push(Output::NeedsYou {
-                session_id: event.session_id,
+                session_id: event.session_id.clone(),
                 agent: session.asker.as_ref().and_then(|w| w.agent.clone()),
             });
         }
+        if phase_started {
+            self.estimate(&event.session_id);
+        }
         outputs
+    }
+
+    /// Sets session `id`'s estimate from the start of its phase, from the sessions of its kind that
+    /// started before it and are between turns or ended (#461, decision 14).
+    fn estimate(&mut self, id: &str) {
+        let Some(session) = self.sessions.get(id) else {
+            return;
+        };
+        let work = &session.work;
+        let past: Vec<&Work> = self
+            .sessions
+            .values()
+            .filter(|s| {
+                s.agent.started_at < session.agent.started_at
+                    && work.kind.is_some()
+                    && s.work.kind == work.kind
+                    && matches!(s.state, State::YourTurn | State::Idle | State::Ended)
+            })
+            .map(|s| &s.work)
+            .collect();
+        let range = work.phase().and_then(|p| range(&past, p, MIN_HISTORY));
+        if let Some(session) = self.sessions.get_mut(id) {
+            session.work.estimate.range = range;
+        }
     }
 
     /// A new studio with `lines` replayed into it, in order.

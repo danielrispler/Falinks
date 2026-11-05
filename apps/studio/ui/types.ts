@@ -94,6 +94,8 @@ export type Session = {
   returned: string | null;
   story: Story;
   identity: Identity;
+  // Its phases and the estimate (#475).
+  work: Work;
   // In the session list only: what its row says, built by the card store.
   line?: string;
 };
@@ -155,4 +157,25 @@ export const stateLabels: Record<SessionState, string> = {
   your_turn: "Your turn",
   idle: "Idle",
   ended: "Ended",
+};
+
+// A phase of a session's work on a ticket, in the usual order (#475).
+export type Phase =
+  | "orienting"
+  | "designing"
+  | "implementing"
+  | "checking"
+  | "reviewing"
+  | "opening_pr"
+  | "waiting_on_ci"
+  | "merged";
+
+// A session's work: its kind (`implement`), its phases with when each started (Unix ms) and after how
+// much of the agent's time, and the estimate set as its latest phase started: the range of the
+// remaining agent time in ms, null for "no estimate", and whether it waits on Daniel now.
+export type Work = {
+  kind: string | null;
+  phases: { phase: Phase; at: number; agent_ms: number }[];
+  agent_ms: number;
+  estimate: { range: [number, number] | null; depends_on_you: boolean };
 };

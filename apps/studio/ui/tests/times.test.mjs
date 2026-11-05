@@ -2,7 +2,7 @@
 // in apps/studio.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkTime, duration, timesText } from "../../dist/times.js";
+import { checkTime, duration, estimateText, timesText } from "../../dist/times.js";
 
 const MIN = 60_000;
 
@@ -24,4 +24,17 @@ test("the times line counts running spans to now and stops an ended session at i
   assert.equal(timesText(session, { start: 61 * MIN, end: null }, 61 * MIN + 45_000), "Session 1h 01m · Turn 11m · Step 45s");
   const ended = { ...session, state: "ended", turn_span: { start: 10 * MIN, end: 20 * MIN } };
   assert.equal(timesText(ended, null, 999 * MIN), "Session 30m · Turn 10m");
+});
+
+test("the estimate line names the phase, then a range marked as an estimate, no estimate, or depends on you", () => {
+  const work = (phase, range, depends_on_you = false) => ({
+    phases: phase ? [{ phase, at: 0, agent_ms: 0 }] : [],
+    estimate: { range, depends_on_you },
+  });
+  assert.equal(estimateText(work(null, null)), "");
+  assert.equal(estimateText(work("implementing", [16 * MIN, 29 * MIN])), "Implementing · est. 16m–29m left");
+  assert.equal(estimateText(work("waiting_on_ci", null)), "Waiting on CI · no estimate");
+  assert.equal(estimateText(work("opening_pr", [MIN, 5 * MIN], true)), "Opening the PR · est. 1m–5m left · depends on you");
+  assert.equal(estimateText(work("orienting", null, true)), "Orienting · no estimate · depends on you");
+  assert.equal(estimateText(work("merged", [0, 0])), "Merged");
 });
