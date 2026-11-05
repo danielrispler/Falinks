@@ -52,6 +52,7 @@ fn story() -> Story {
             "The writer is fine.\n\nNow I run the tests.".into(),
         ],
         unavailable: None,
+        ..Story::default()
     }
 }
 
