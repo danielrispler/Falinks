@@ -7,12 +7,14 @@ import { encode, request } from "./daemon.js";
 import { agentState } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
 import { questionElement } from "./questions.js";
+import { checkTime, counts, timesText } from "./times.js";
 import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Story } from "./types.js";
 
 export function showView(selected: Selection | null) {
   element("empty").hidden = selected !== null;
   element("view").hidden = selected === null;
   element("identity").textContent = "";
+  element("times").replaceChildren();
   if (selected === null) {
     showQuestions([]);
     return;
@@ -21,6 +23,8 @@ export function showView(selected: Selection | null) {
   const agent = session.agents.find((a) => a.id === selected.agent) ?? null;
   const [label, state] = agent === null ? [stateLabels[session.state], session.state] : agentState(session, agent);
   const step = (agent ?? session).last_step;
+  const stepSpan = (agent ?? session).step_span;
+  element("times").replaceChildren(counts(document.createElement("span"), (now) => timesText(session, stepSpan, now)));
   element("view").toggleAttribute("data-agent", agent !== null);
   element("identity").textContent =
     agent === null ? `${session.name ?? session.folder_name} · ${session.id.slice(0, 8)}` : `${session.folder_name} · ${agent.name}`;
@@ -110,12 +114,15 @@ function outcome(passed: boolean | null): string {
   return passed ? "Passed" : "Failed";
 }
 
-// The checks that ran, newest first, one line each.
+// The checks, newest first, one line each, with how long each took or, while it runs, its time against
+// its typical time.
 function showChecks(checks: CheckLine[]) {
   element("checks").replaceChildren(
     ...[...checks].reverse().map((line) => {
       const item = document.createElement("li");
-      item.append(text("span", outcome(line.passed), "outcome"), code(line.command));
+      const label = line.ended_at === null ? "Running" : outcome(line.passed);
+      const time = counts(text("span", "", "check-time"), (now) => checkTime(line, now));
+      item.append(text("span", label, "outcome"), code(line.command), time);
       return item;
     }),
   );

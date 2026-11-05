@@ -63,6 +63,8 @@ h1 { margin: 0 0 8px; }
 .row .l1 { display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; }
 .row .l2 { display: flex; gap: 6px; font-size: var(--size-small); color: var(--muted); white-space: nowrap; overflow: hidden; }
 .row .l2:empty { display: none; }
+.row .l3 { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden;
+           text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .row .id { color: var(--muted); flex: none; font-size: var(--size-small); }
 .row .row-state { margin-inline-start: auto; font-size: var(--size-small); color: var(--muted); flex: none; }
@@ -178,6 +180,7 @@ body.wide .rail { width: min(var(--wide), calc(100vw - var(--strip))); }
 .checks { list-style: none; margin: 0; padding: 0; }
 .checks li { display: flex; gap: 8px; align-items: baseline; min-width: 0; margin: 0 0 4px; }
 .checks .outcome { font-weight: 600; flex: none; min-width: 52px; }
+.checks .check-time { flex: none; margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* An agent's question, laid out as its choices; the chosen one is marked by its border, since colour is
    only for "needs you". */
 .question p { margin: 6px 0 0; }
