@@ -27,6 +27,7 @@ use studio_understanding::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
+mod answer;
 mod restart;
 mod terminal;
 
@@ -289,7 +290,9 @@ fn main() {
             terminal::terminal_lost,
             terminal::terminal_upgrade,
             restart::revival,
-            restart::restart_into
+            restart::restart_into,
+            answer::watch,
+            answer::answer
         ])
         .setup(move |app| {
             let app = app.handle().clone();

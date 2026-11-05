@@ -184,6 +184,14 @@ body.wide .choices { grid-template-columns: repeat(3, 1fr); }
 .dock .question { background: none; border: 0; padding: 0; margin: 0; }
 .dock .asked { font-size: 16px; }
 .dock .choices li { border-color: var(--needs-you-line); }
+/* A question the card can answer (#477): each choice a button that fills its box. */
+.choices li:has(button) { padding: 0; }
+.choices li button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 6px 10px;
+                     background: none; border: 0; text-align: start; cursor: pointer; }
+.answer-buttons { display: flex; gap: 8px; }
+.answer-buttons button { padding: 4px 12px; background: var(--raised); border: 1px solid var(--line);
+                         border-radius: var(--radius); cursor: pointer; }
+.answer-buttons button:disabled { cursor: default; opacity: .5; }
 /* A subagent's view: its session's checks are not its own; its brief and cards are. */
 #view[data-agent] .own { display: none; }
 

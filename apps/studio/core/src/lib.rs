@@ -239,7 +239,7 @@ impl Sender {
 /// An `AskUserQuestion` call, which Daniel answers in the terminal (#369, decision 21).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Question {
-    #[serde(skip)]
+    /// The call's id, which the answer hook's request names (#461, decision 16).
     tool_use_id: String,
     /// The subagent that asks, `None` for the session's own agent.
     pub agent: Option<String>,

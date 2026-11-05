@@ -37,7 +37,7 @@ export type Choice = { label: string; description?: string };
 // A multi-select answer joins its labels with ", "; a single-choice answer is one whole label.
 export type Asked = { question: string; header?: string; multiSelect?: boolean; options: Choice[] };
 export type Answer = "open" | "not_answered" | { answered: Record<string, string> };
-export type Question = { agent: string | null; questions: Asked[]; answer: Answer };
+export type Question = { tool_use_id: string; agent: string | null; questions: Asked[]; answer: Answer };
 export type Session = {
   id: string;
   // The folder it works in, from its latest event; `folder_name` is its last segment.

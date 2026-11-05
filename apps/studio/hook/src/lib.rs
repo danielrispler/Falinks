@@ -1,5 +1,7 @@
 //! The event log (#328, module 2): one append-only JSON Lines file, the only source of session state.
 
+pub mod answer;
+
 use std::{
     env, fs,
     path::{Path, PathBuf},

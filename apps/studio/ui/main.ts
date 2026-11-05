@@ -4,6 +4,7 @@
 // decides what the window shows; this file wires the shell's events to the regions and lays the
 // columns out by the width rule in `layout.ts`.
 
+import { startWatching } from "./answer.js";
 import { markShown, showCards } from "./cards.js";
 import { element, invoke, listen } from "./dom.js";
 import { layoutMode } from "./layout.js";
@@ -11,6 +12,8 @@ import { showSessions } from "./list.js";
 import { show } from "./selection.js";
 import { startPanes } from "./panes.js";
 import { showPicker } from "./picker.js";
+import { studio } from "./state.js";
+import { showView } from "./story.js";
 import type { Selection, Session, SessionCards } from "./types.js";
 
 // The terminal's cell, measured from a probe in its font, sets the columns' layout.
@@ -59,3 +62,5 @@ listen<string>("notice", (notice) => {
   element("notice").hidden = false;
 });
 invoke<SessionCards>("cards").then(showCards);
+// The answer hook waits for the card only while its session shows (#461, decision 16).
+startWatching(() => showView(studio.selection));
