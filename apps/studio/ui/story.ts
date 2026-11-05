@@ -28,7 +28,7 @@ export function showView(selected: Selection | null) {
   element("state").dataset.state = state;
   // "Open" resumes an ended session in a new terminal, in its folder, where Claude Code keeps it.
   element("reopen").hidden = agent !== null || session.state !== "ended";
-  element("reopen").onclick = () => startClaude(session.cwd, session.id).catch((e) => console.warn(e));
+  element("reopen").onclick = () => startClaude(session.cwd, session.resume_id).catch((e) => console.warn(e));
   element("rename").hidden = agent !== null;
   element("rename").onclick = () => askName(session);
   // Only a terminal the studio runs can be closed from here.

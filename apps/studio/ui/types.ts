@@ -47,6 +47,10 @@ export type Session = {
   terminal: string | null;
   // Daniel's name for it from the studio (#469); null for its folder's.
   name: string | null;
+  // The id `claude --resume` takes: its latest conversation's; a `/clear` changes it, not `id` (#474).
+  resume_id: string;
+  // When each `/clear` continued the row, in Unix ms: its "cleared" markers.
+  cleared: number[];
   // Closing its terminal asks first: it is in a turn or has background tasks (#469).
   asks_before_closing: boolean;
   last_step: Step | null;
