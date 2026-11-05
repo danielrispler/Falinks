@@ -15,6 +15,7 @@ import { showPicker } from "./picker.js";
 import { studio } from "./state.js";
 import { showView } from "./story.js";
 import type { Selection, Session, SessionCards } from "./types.js";
+import { type Limits, usageText } from "./usage.js";
 
 // The terminal's cell, measured from a probe in its font, sets the columns' layout.
 function layout() {
@@ -64,3 +65,12 @@ listen<string>("notice", (notice) => {
 invoke<SessionCards>("cards").then(showCards);
 // The answer hook waits for the card only while its session shows (#461, decision 16).
 startWatching(() => showView(studio.selection));
+
+// The plan's usage, from the status line's snapshot (#481). The status line runs after each message.
+// shortcut: polls every 10 s; push from the shell if the delay matters.
+const showUsage = () =>
+  invoke<Limits | null>("usage").then((limits) => {
+    element("usage").textContent = usageText(limits, Date.now() / 1000);
+  });
+showUsage();
+setInterval(showUsage, 10_000);

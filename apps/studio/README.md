@@ -111,6 +111,10 @@ The hooks are async, so Claude Code never waits for them, and they append whethe
 
 The log is never rotated. It holds tool inputs and results, file contents included.
 
+## Plan usage
+
+Claude Code gives the plan's 5-hour and weekly usage only to the status line command, on its stdin. The line in `workbench/statusline-usage.sh`, added to your status line script right after it reads stdin into `$input`, saves that stdin as `usage/<session_id>.json` beside the event log, by temp file and rename, and prints nothing. The top bar shows the newest snapshot's `rate_limits`, or "no usage". Snapshots are never deleted; remove the folder at any time.
+
 ## Recorded logs
 
 Two fixtures in `core/tests/fixtures/` are real event logs, scrubbed by `scrub` (`core/src/bin/scrub.rs`). Each event keeps its shape and loses its content: text becomes `…`, and lists and objects become empty, except for what stays. What stays: ids, event names, `cwd`, the permission mode, a session's start source and end reason, agent ids and types, the `description` of a spawn or a Bash command, `isolation`, the paths of the files a tool reads or writes, skill names, the types and statuses in tool results, background tasks without their commands, exit codes, numbers, flags and timings. An MCP tool keeps no text. Transcript and output paths become `…`. A prompt keeps only the markup Claude Code adds, with its ids and statuses, so a wake-up stays one; any other tag becomes `<…>`. A last message that asks Daniel something becomes `…?`.

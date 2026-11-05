@@ -3421,6 +3421,7 @@ name = "studio-workbench"
 version = "0.0.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tempfile",
 ]
 
