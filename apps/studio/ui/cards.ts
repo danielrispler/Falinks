@@ -6,7 +6,7 @@ import { code, element, prose, invoke, pressable, text } from "./dom.js";
 import { refreshCards } from "./selection.js";
 import { studio } from "./state.js";
 import { showDecisions } from "./decisions.js";
-import type { CardRequest, Guess, Level, Quiz, Rating, Reason, SessionCards, StoredCard } from "./types.js";
+import type { CardRequest, CheckResult, Guess, Level, Quiz, Rating, Reason, SessionCards, StoredCard } from "./types.js";
 
 // Records Daniel's tap, his flag on the key or his rating, and draws the cards again at once.
 async function record(command: "guess" | "key_wrong" | "rate", args: Record<string, unknown>) {
@@ -14,10 +14,28 @@ async function record(command: "guess" | "key_wrong" | "rate", args: Record<stri
   await refreshCards();
 }
 
+// The verdict on a check's card (#476): the check's result settles the guess, so until it ends the
+// card says only that it runs. Null on a card that waits for the tap.
+export function checkVerdict(check: CheckResult | null, guess: Guess | null): string | null {
+  if (check === null) return guess ? "The check still runs; its result settles your guess." : null;
+  if (check === "not_counted") return "The check ended, but its exit code does not say whether it passed, so no guess counts.";
+  const result = check === "passed" ? "It passed." : "It failed.";
+  if (!guess) return result;
+  return `${result} ${guess.right ? "You were right." : "You were wrong."}`;
+}
+
+// Whether a card is past its quiz: Daniel tapped, or on a check's card, the check ended.
+const answered = ({ request, guess, check }: StoredCard) => guess !== null || (request.check !== null && check !== null);
+
 // A card's quiz and its options, one tap each. Once Daniel taps, it shows whether he was right and,
 // under each option, why it is right or wrong, with the right one named; a tapped option stays
-// marked, with no colour, as colour is only for "needs you".
-function quizElements(id: string, quiz: Quiz, guess: Guess | null): HTMLElement[] {
+// marked, with no colour, as colour is only for "needs you". On a check's card the check's result
+// is the key, so the reasons and the verdict wait for it.
+function quizElements(stored: StoredCard, quiz: Quiz): HTMLElement[] {
+  const { request, guess, check } = stored;
+  const id = request.id;
+  const checked = request.check !== null;
+  const reasons = checked ? check !== null : guess !== null;
   const options = document.createElement("ol");
   options.className = "options";
   options.append(
@@ -26,12 +44,13 @@ function quizElements(id: string, quiz: Quiz, guess: Guess | null): HTMLElement[
       const button = pressable(prose("button", option.text) as HTMLButtonElement, guess?.option === i, () =>
         record("guess", { id, option: i }),
       );
-      button.disabled = guess !== null;
+      button.disabled = answered(stored);
       item.append(button);
-      if (guess) {
+      if (reasons) {
         const why = prose("p", option.why);
         // A left-to-right label, which `dir="auto"` skips, so a Hebrew reason keeps its direction.
-        if (i === quiz.key) why.prepend(Object.assign(text("span", "The right answer. "), { dir: "ltr" }));
+        const keyed = !checked || check !== "not_counted";
+        if (keyed && i === quiz.key) why.prepend(Object.assign(text("span", "The right answer. "), { dir: "ltr" }));
         item.append(why);
       }
       return item;
@@ -39,8 +58,9 @@ function quizElements(id: string, quiz: Quiz, guess: Guess | null): HTMLElement[
   );
   const title = prose("p", quiz.text);
   title.className = "quiz";
-  if (!guess) return [title, options];
-  const verdict = prose("p", guess.right ? "You were right." : "You were wrong.");
+  const said = checked ? checkVerdict(check, guess) : guess && (guess.right ? "You were right." : "You were wrong.");
+  if (!said) return [title, options];
+  const verdict = prose("p", said);
   verdict.className = "verdict";
   return [title, verdict, options];
 }
@@ -50,18 +70,19 @@ function quizElements(id: string, quiz: Quiz, guess: Guess | null): HTMLElement[
 // structural, why the change matters, what was not checked, his flag on the key, "explain more" and
 // his rating. A card with no quiz shows the explanation at once. The shell keeps each tap in the card
 // store, so after a restart a guessed card is drawn guessed and rated.
-function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCard): HTMLElement {
+function cardElement(stored: StoredCard): HTMLElement {
+  const { request, card, key_wrong, more, rating } = stored;
   const node = document.createElement("article");
   node.className = "card";
   const quiz = card.quiz;
-  if (quiz) node.append(...quizElements(request.id, quiz, guess));
+  if (quiz) node.append(...quizElements(stored, quiz));
   // Every card offers "ask about this" (#482), a quiz card before its guess too.
   // shortcut: the ask sends the session's current turn's intentions, not the card's own turn's; the
   // core keeps only the current turn's responses. Keep each turn's intentions by its prompt if asks
   // on older cards mislead.
   const item = [card.summary, card.explanation, card.code].filter(Boolean).join("\n\n");
   const ask = askElement(request.session_id, item);
-  if (quiz && !guess) {
+  if (quiz && !answered(stored)) {
     node.append(ask);
     return node;
   }
@@ -81,8 +102,10 @@ function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCa
     prose("h2", "Not checked"),
     prose("p", card.not_checked),
   );
-  if (quiz) node.append(keyWrongButton(request.id, key_wrong));
-  node.append(moreElement(request.id, more), ratingElement(request.id, rating, quiz ? key_wrong : null), ask);
+  // A check's result is its card's key, so its key cannot be wrong.
+  const keyed = quiz && request.check === null;
+  if (keyed) node.append(keyWrongButton(request.id, key_wrong));
+  node.append(moreElement(request.id, more), ratingElement(request.id, rating, keyed ? key_wrong : null), ask);
   return node;
 }
 

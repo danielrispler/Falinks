@@ -464,6 +464,13 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 let mut store = app.state::<Cards>().inner().lock().unwrap();
                 for session in studio.sessions() {
                     unsaved(store.keep_decisions(&session.agent.id, &session.decisions));
+                    // A check's result settles the guess on its card (#461, decision 15).
+                    let ended = session.checks.iter().filter(|l| l.ended_at.is_some());
+                    for line in ended {
+                        if let Some(card) = &line.card {
+                            unsaved(store.settle(card, line.passed));
+                        }
+                    }
                 }
             }
         }

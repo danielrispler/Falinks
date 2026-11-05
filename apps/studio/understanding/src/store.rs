@@ -40,6 +40,20 @@ pub struct StoredCard {
     /// Daniel's rating of the explanation (#369, decision 15); `None` until he rates it.
     #[serde(default)]
     pub rating: Option<Rating>,
+    /// The result of the check whose start requested the card (#461, decision 15), which settles
+    /// its guess; `None` while it runs, and on a card no check requested.
+    #[serde(default)]
+    pub check: Option<CheckResult>,
+}
+
+/// What a check's result says about the guess on its card: it passed, it failed, or its exit code
+/// does not say (`CheckLine::passed`), so the guess is not counted.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckResult {
+    Passed,
+    Failed,
+    NotCounted,
 }
 
 /// Daniel's rating of a card's explanation: a level and the reasons he picked. His fifth reason, "the
@@ -74,7 +88,8 @@ pub enum Reason {
 pub struct Guess {
     /// The option he tapped, counting from 0.
     pub option: usize,
-    /// Whether it is the key.
+    /// Whether it is the key. On a check's card, whether it called the check's result, `false` until
+    /// the result settles it (`StoredCard::check`).
     pub right: bool,
     /// When, in Unix milliseconds.
     pub at: u64,
@@ -123,6 +138,7 @@ struct ShownCard<'a> {
     key_wrong: bool,
     more: &'a Option<String>,
     rating: &'a Option<Rating>,
+    check: Option<CheckResult>,
 }
 
 #[derive(Serialize)]
@@ -133,6 +149,7 @@ struct ShownRequest<'a> {
     agent: &'a Option<String>,
     changed_by: &'a BTreeMap<String, BTreeSet<String>>,
     workers: &'a [String],
+    check: &'a Option<String>,
 }
 
 fn without_diffs<S: serde::Serializer>(cards: &[StoredCard], s: S) -> Result<S::Ok, S::Error> {
@@ -144,6 +161,7 @@ fn without_diffs<S: serde::Serializer>(cards: &[StoredCard], s: S) -> Result<S::
             agent: &kept.request.agent,
             changed_by: &kept.request.changed_by,
             workers: &kept.request.workers,
+            check: &kept.request.check,
         },
         card: &kept.card,
         added_at: kept.added_at,
@@ -152,6 +170,7 @@ fn without_diffs<S: serde::Serializer>(cards: &[StoredCard], s: S) -> Result<S::
         key_wrong: kept.key_wrong,
         more: &kept.more,
         rating: &kept.rating,
+        check: kept.check,
     }))
 }
 
@@ -334,6 +353,7 @@ impl CardStore {
             key_wrong: false,
             more: None,
             rating: None,
+            check: None,
         });
         self.save()
     }
@@ -357,18 +377,47 @@ impl CardStore {
 
     /// Records Daniel's tap on option `option` of card `id`'s quiz at `at`, in Unix milliseconds,
     /// graded by its key, and saves the store. The first tap counts; a card with no quiz, or no such
-    /// option, records none.
+    /// option, records none. On a check's card only a tap before the check's result counts, which
+    /// the result grades (`settle`).
     pub fn guess(&mut self, id: &str, option: usize, at: u64) -> io::Result<()> {
         if let Some(kept) = self.card_mut(id)
             && kept.guess.is_none()
+            && kept.check.is_none()
             && let Some(quiz) = &kept.card.quiz
             && option < quiz.options.len()
         {
-            let right = option == quiz.key;
+            let right = kept.request.check.is_none() && option == quiz.key;
             kept.guess = Some(Guess { option, right, at });
             return self.save();
         }
         Ok(())
+    }
+
+    /// Settles the guess on card `id`, a check's, with the check's result (#461, decision 15):
+    /// `passed`, or `None` when its exit code does not say. Its quiz's key becomes the option the
+    /// result names, "It passes" or "It fails", and saves the store. A card no check requested, or
+    /// one settled before, is left as it is.
+    pub fn settle(&mut self, id: &str, passed: Option<bool>) -> io::Result<()> {
+        let Some(kept) = self.card_mut(id) else {
+            return Ok(());
+        };
+        if kept.request.check.is_none() || kept.check.is_some() {
+            return Ok(());
+        }
+        kept.check = Some(match passed {
+            Some(true) => CheckResult::Passed,
+            Some(false) => CheckResult::Failed,
+            None => CheckResult::NotCounted,
+        });
+        if let Some(passed) = passed
+            && let Some(quiz) = &mut kept.card.quiz
+        {
+            quiz.key = usize::from(!passed);
+            if let Some(guess) = &mut kept.guess {
+                guess.right = guess.option == quiz.key;
+            }
+        }
+        self.save()
     }
 
     /// Records Daniel's flag that the key of card `id`'s quiz is wrong, and saves the store.

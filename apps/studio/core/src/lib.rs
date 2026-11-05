@@ -285,6 +285,10 @@ struct Since {
 /// 20 minutes, a starting guess (#369, decision 11 and Further Notes).
 const FALLBACK_MS: u64 = 20 * 60 * 1000;
 
+/// 2 minutes, a starting guess (#461, decision 22): a check that usually runs longer gets a card at
+/// its start (decision 15).
+const LONG_CHECK_MS: u64 = 2 * 60 * 1000;
+
 /// A prompt of a session (#369, decision 7), received at `at`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Prompt {
@@ -908,6 +912,7 @@ impl Session {
             agent: worker.then(|| owner.into()),
             changed_by: since.by,
             workers: since.cards,
+            check: None,
         }
     }
 
@@ -1232,6 +1237,10 @@ pub struct CardRequest {
     /// A session's workers' cards since its last card, at any depth.
     #[serde(default)]
     pub workers: Vec<String>,
+    /// The command of the check whose start requested it, which the card is on (#461, decision 15);
+    /// `None` for any other card.
+    #[serde(default)]
+    pub check: Option<String>,
 }
 
 /// A turn that ended with no card, as the replay saw it (#486): its card request with no change,
@@ -1285,6 +1294,9 @@ pub struct CheckLine {
     pub ended_at: Option<u64>,
     /// Its typical duration when it started, from the checks that ran before (`Studio::typical`).
     pub typical_ms: Option<u64>,
+    /// The card its start requested, when it usually takes over 2 minutes (#461, decision 15),
+    /// whose guess its result settles.
+    pub card: Option<String>,
     /// Its call's `tool_use_id`, and its background task's id once it moved to the background.
     #[serde(skip)]
     call: String,
@@ -1303,6 +1315,7 @@ impl CheckLine {
             started_at: at,
             ended_at: None,
             typical_ms,
+            card: None,
             call: call.into(),
             task: None,
             counts: exit_code_counts(command),
@@ -1783,8 +1796,9 @@ impl Studio {
             }
             let purpose = match ends {
                 true => Some(Purpose::TurnEnd),
-                false => session
-                    .is_some_and(session_due)
+                // A long check's start cards the change so far, as a fallback would (#461,
+                // decision 15).
+                false => (session.is_some_and(session_due) || self.long_check(event).is_some())
                     .then_some(Purpose::Fallback),
             };
             let mut looks: Vec<Fingerprint> = purpose
@@ -1934,6 +1948,7 @@ impl Studio {
             return Vec::new();
         }
         let looks = self.looks(&event);
+        let check = self.long_check(&event).map(String::from);
         let touches = self.touches(&event);
         let typical = self.typical(event.tool_input["command"].as_str().unwrap_or_default());
         let roots = &self.roots;
@@ -2094,7 +2109,11 @@ impl Studio {
                 }
             }
             if !worker || session.has_cards(&look.key) {
-                let request = session.card(&look.key, Some(found), at);
+                let mut request = session.card(&look.key, Some(found), at);
+                // At a long check's start, the session's own look is the check's card.
+                if !worker {
+                    request.check.clone_from(&check);
+                }
                 if worker {
                     session.agent.since.cards.push(request.id.clone());
                 }
@@ -2213,12 +2232,13 @@ impl Studio {
                     let command = event.tool_input["command"].as_str().unwrap_or_default();
                     let known = session.checks.iter().any(|l| l.call == event.tool_use_id);
                     if tool == "Bash" && is_check(command) && !known {
-                        session.checks.push(CheckLine::new(
-                            command,
-                            &event.tool_use_id,
-                            at,
-                            typical,
-                        ));
+                        let mut line = CheckLine::new(command, &event.tool_use_id, at, typical);
+                        let carded = outputs.iter().find_map(|output| match output {
+                            Output::Card(request) if request.check.is_some() => Some(&request.id),
+                            _ => None,
+                        });
+                        line.card = carded.cloned();
+                        session.checks.push(line);
                     }
                 }
                 let call = Call {
@@ -2665,6 +2685,18 @@ impl Studio {
     /// `None` when it never ran. Runs group by `check_key`.
     pub fn typical(&self, command: &str) -> Option<u64> {
         median(self.durations.get(&check_key(command))?)
+    }
+
+    /// The command of the check `event` starts, when it is its session's own agent's, new, and
+    /// usually takes over 2 minutes (#461, decision 15).
+    fn long_check<'a>(&self, event: &'a Event) -> Option<&'a str> {
+        let command = event.tool_input["command"].as_str()?;
+        let session = self.sessions.get(&event.session_id);
+        let known = session.is_some_and(|s| s.checks.iter().any(|l| l.call == event.tool_use_id));
+        let long = self.typical(command).is_some_and(|ms| ms > LONG_CHECK_MS);
+        let start = event.hook_event_name == "PreToolUse" && event.agent_id.is_none();
+        (start && event.tool_name.as_deref() == Some("Bash") && is_check(command) && !known && long)
+            .then_some(command)
     }
 
     /// Session `id`'s row: its own, or the row it continues after a `/clear`.

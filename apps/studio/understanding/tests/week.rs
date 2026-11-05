@@ -41,6 +41,7 @@ fn record(days: u64, shown: Option<u64>, answered: Option<(u64, bool)>) -> Store
         key_wrong: false,
         more: None,
         rating: None,
+        check: None,
     }
 }
 

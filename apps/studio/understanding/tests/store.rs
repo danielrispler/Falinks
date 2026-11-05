@@ -597,6 +597,7 @@ fn the_payload_without_diffs() {
         [
             "agent",
             "changed_by",
+            "check",
             "id",
             "prompt",
             "session_id",
