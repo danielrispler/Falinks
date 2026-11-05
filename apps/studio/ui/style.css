@@ -115,6 +115,8 @@ body.wide .rail { width: min(var(--wide), calc(100vw - var(--strip))); }
 .rail-h { padding: 8px 14px; border-bottom: 1px solid var(--line-soft); font-size: var(--size-small); }
 .times { display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: baseline; }
 .times:empty { display: none; }
+.times .estimate { color: var(--muted); }
+.times .estimate:empty { display: none; }
 .tools { display: flex; gap: 6px; }
 .tool { white-space: nowrap; border: 1px solid var(--line); background: var(--raised); color: var(--muted);
         border-radius: var(--radius); padding: 2px 9px; cursor: pointer; font-size: 12px; }

@@ -7,7 +7,7 @@ import { encode, request } from "./daemon.js";
 import { agentState } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
 import { questionElement } from "./questions.js";
-import { checkTime, counts, timesText } from "./times.js";
+import { checkTime, counts, estimateText, timesText } from "./times.js";
 import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Story } from "./types.js";
 
 export function showView(selected: Selection | null) {
@@ -24,7 +24,10 @@ export function showView(selected: Selection | null) {
   const [label, state] = agent === null ? [stateLabels[session.state], session.state] : agentState(session, agent);
   const step = (agent ?? session).last_step;
   const stepSpan = (agent ?? session).step_span;
-  element("times").replaceChildren(counts(document.createElement("span"), (now) => timesText(session, stepSpan, now)));
+  const estimate = document.createElement("span");
+  estimate.className = "estimate";
+  estimate.textContent = agent === null ? estimateText(session.work) : "";
+  element("times").replaceChildren(counts(document.createElement("span"), (now) => timesText(session, stepSpan, now)), estimate);
   element("view").toggleAttribute("data-agent", agent !== null);
   element("identity").textContent =
     agent === null ? `${session.name ?? session.folder_name} · ${session.id.slice(0, 8)}` : `${session.folder_name} · ${agent.name}`;
