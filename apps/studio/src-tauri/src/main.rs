@@ -11,7 +11,12 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Seek, SeekFrom, Write},
     path::Path,
-    sync::{Arc, LazyLock, Mutex, mpsc},
+    process::Command,
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -197,6 +202,32 @@ fn explain_more(id: String, cards: State<Cards>, writer: State<Writer>) -> Optio
     studio_understanding::explain_more(&cards, &**writer, &id, log)
 }
 
+/// Daniel's side `question` on `item`, a response, card or intention of session `session` (#461,
+/// decision 20): the writer's answer, read with the turn's intentions, or why there is none, which
+/// the window shows with a retry. It takes seconds, so it runs off the main thread; nothing reaches
+/// the session.
+#[tauri::command(async)]
+fn ask(
+    session: String,
+    item: String,
+    question: String,
+    studio: State<Mutex<Studio>>,
+    writer: State<Writer>,
+) -> Result<String, String> {
+    // The lock ends with the statement, before the writer runs.
+    let story = studio
+        .lock()
+        .unwrap()
+        .session(&session)
+        .map(|s| s.story.clone());
+    let answer =
+        studio_understanding::ask_about(&**writer, &story.unwrap_or_default(), &item, &question);
+    if let Err(line) = &answer {
+        eprintln!("studio: no answer on {session}: {line}");
+    }
+    answer
+}
+
 /// Daniel renamed session `id`: a `StudioRename` line in the event log, which the log thread then
 /// applies and a restart replays (#469). An empty `name` gives the row its folder's again.
 #[tauri::command(async)]
@@ -286,6 +317,7 @@ fn main() {
             key_wrong,
             rate,
             explain_more,
+            ask,
             rename,
             closed,
             usage,
@@ -306,6 +338,8 @@ fn main() {
         .setup(move |app| {
             let app = app.handle().clone();
             restart::watch_build(app.clone());
+            let prs_app = app.clone();
+            thread::spawn(move || prs(&prs_app));
             thread::spawn(move || follow(&app, &log, &writer));
             Ok(())
         })
@@ -433,7 +467,8 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
         // Reads the transcripts' lines and nothing else (`apps/studio/AGENTS.md`).
         let log = |line: String| eprintln!("studio: {line}");
         let told = state.lock().unwrap().follow_transcripts(log);
-        if state.lock().unwrap().tick(millis()) || read || told {
+        let named = NAMES_CHANGED.swap(false, Ordering::AcqRel);
+        if state.lock().unwrap().tick(millis()) || read || told || named {
             sent.list(app);
         }
         // Asking for focus waits on the main thread, which never takes this lock.
@@ -459,6 +494,53 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
         live = true;
         restart::REPLAYED.store(true, std::sync::atomic::Ordering::Release);
         thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// A session's name changed since the read loop last sent the list: a PR was found.
+static NAMES_CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Finds the PR of each session's branch with `gh pr view` (#461, decision 19), on its own thread so
+/// the read loop never waits on the network, and asks again after 5 minutes. `gh` runs as Daniel
+/// with its own login; no credential file is read.
+fn prs(app: &AppHandle) {
+    // An app started from the Dock gets launchd's `PATH`, which lacks Homebrew's folder.
+    let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/zsh".into());
+    let found = Command::new(shell).args(["-lc", "command -v gh"]).output();
+    let found = found.ok().filter(|o| o.status.success()).map(|o| o.stdout);
+    let gh = found
+        .as_deref()
+        .map(String::from_utf8_lossy)
+        .and_then(|out| out.lines().last().map(str::to_owned))
+        .filter(|path| path.starts_with('/'))
+        .unwrap_or_else(|| "gh".into());
+    let mut asked = HashMap::<String, Instant>::new();
+    loop {
+        let branches = app.state::<Mutex<Studio>>().lock().unwrap().branches();
+        for (cwd, branch) in branches {
+            if asked
+                .get(&branch)
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(300))
+            {
+                continue;
+            }
+            asked.insert(branch.clone(), Instant::now());
+            let output = Command::new(&gh)
+                .args(["pr", "view", &branch, "--json", "number", "--jq", ".number"])
+                .current_dir(&cwd)
+                .output();
+            let output = output.ok().filter(|o| o.status.success());
+            let pr = output.and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok());
+            if app
+                .state::<Mutex<Studio>>()
+                .lock()
+                .unwrap()
+                .set_pr(&branch, pr)
+            {
+                NAMES_CHANGED.store(true, Ordering::Release);
+            }
+        }
+        thread::sleep(Duration::from_secs(5));
     }
 }
 

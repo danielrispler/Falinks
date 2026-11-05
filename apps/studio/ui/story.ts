@@ -3,8 +3,9 @@
 // questions, brief and cards; the checks are its session's.
 
 import { code, element, invoke, text } from "./dom.js";
+import { askElement } from "./ask.js";
 import { encode, request } from "./daemon.js";
-import { agentState } from "./list.js";
+import { agentState, contextText, sessionName } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
 import { openDecision } from "./answer.js";
 import { showCleared } from "./decisions.js";
@@ -29,8 +30,11 @@ export function showView(selected: Selection | null) {
   const stepSpan = (agent ?? session).step_span;
   element("times").replaceChildren(counts(document.createElement("span"), (now) => timesText(session, stepSpan, now)));
   element("view").toggleAttribute("data-agent", agent !== null);
+  const share = contextText(session.story.context);
   element("identity").textContent =
-    agent === null ? `${session.name ?? session.folder_name} · ${session.id.slice(0, 8)}` : `${session.folder_name} · ${agent.name}`;
+    agent === null
+      ? [sessionName(session), share && `context ${share}`].filter(Boolean).join(" · ")
+      : `${sessionName(session)} · ${agent.name}`;
   element("state").textContent = label;
   element("state").dataset.state = state;
   // "Open" resumes an ended session in a new terminal, in its folder, where Claude Code keeps it.
@@ -46,7 +50,7 @@ export function showView(selected: Selection | null) {
   element("command").textContent = step?.command ?? "";
   element("step").classList.toggle("has-command", Boolean(step?.command));
   // A subagent's transcript is its own, which the studio does not read.
-  showStory(agent === null ? session.story : null);
+  showStory(session.id, agent === null ? session.story : null);
   showQuestions(session.questions.filter((question) => question.agent === (agent?.id ?? null)));
   showChecks(session.checks);
   showCleared(agent === null ? session.cleared : []);
@@ -55,10 +59,12 @@ export function showView(selected: Selection | null) {
 // After this many steps the intention dims, as it may no longer say what the agent does (#472).
 const FRESH_STEPS = 5;
 
-// The intention, its age, the turn's full responses, and the mark when the transcript is unreadable.
-function showStory(story: Story | null) {
+// The intention, its age, the turn's full responses, each with "ask about this" (#482), and the mark
+// when the transcript is unreadable.
+function showStory(session: string, story: Story | null) {
   const steps = story?.steps_ago ?? 0;
   element("intention-text").textContent = story?.intention ?? "";
+  element("intention-ask").replaceChildren(...(story?.intention ? [askElement(session, story.intention)] : []));
   element("intention-age").textContent = steps === 0 ? "" : `· ${steps} ${steps === 1 ? "step" : "steps"} ago`;
   element("intention").classList.toggle("old", steps > FRESH_STEPS);
   element("unavailable").hidden = !story?.unavailable;
@@ -66,7 +72,9 @@ function showStory(story: Story | null) {
   const responses = story?.responses ?? [];
   element("responses").hidden = responses.length === 0;
   element("responses-title").textContent = `Responses (${responses.length})`;
-  element("responses-body").replaceChildren(...responses.map((response) => text("pre", response)));
+  element("responses-body").replaceChildren(
+    ...responses.flatMap((response) => [text("pre", response), askElement(session, response)]),
+  );
 }
 
 // Rename (#469): the row's name, kept in the event log, and `/rename` typed into the session while
@@ -94,7 +102,7 @@ function askClose(session: Session) {
   const close = () => closePane(session.terminal!).catch((e) => console.warn(e));
   if (!session.asks_before_closing) return close();
   const dialog = element("close-dialog") as HTMLDialogElement;
-  element("close-name").textContent = session.name ?? session.folder_name;
+  element("close-name").textContent = sessionName(session);
   dialog.onclose = () => dialog.returnValue === "close" && close();
   dialog.returnValue = "";
   dialog.showModal();

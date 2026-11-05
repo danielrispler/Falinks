@@ -26,6 +26,18 @@ pub struct Story {
     pub responses: Vec<String>,
     /// Why the transcript cannot be read, `None` while it can.
     pub unavailable: Option<String>,
+    /// How full the context is, from the agent's latest message (#461, decision 19); kept across
+    /// turns.
+    pub context: Option<Context>,
+    /// The git branch of the session's folder, from its latest line; kept across turns.
+    pub branch: Option<String>,
+}
+
+/// The input tokens of the agent's latest message, out of its model's context window.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Context {
+    pub tokens: u64,
+    pub window: u64,
 }
 
 impl Story {
@@ -40,6 +52,27 @@ impl Story {
             || line["isMeta"] == true
         {
             return Ok(());
+        }
+        if let Some(branch) = line["gitBranch"].as_str().filter(|b| !b.is_empty()) {
+            self.branch = Some(branch.into());
+        }
+        let usage = &line["message"]["usage"];
+        if kind == "assistant" && usage.is_object() {
+            let tokens = [
+                "input_tokens",
+                "cache_creation_input_tokens",
+                "cache_read_input_tokens",
+            ]
+            .iter()
+            .map(|k| usage[k].as_u64().unwrap_or(0))
+            .sum();
+            // shortcut: the window from the `[1m]` mark Claude Code puts on the requested model, else
+            // 200k; take it from the status line's snapshot (#481) if a model differs.
+            let long = line["requestedModel"]
+                .as_str()
+                .is_some_and(|m| m.ends_with("[1m]"));
+            let window = if long { 1_000_000 } else { 200_000 };
+            self.context = Some(Context { tokens, window });
         }
         let content = &line["message"]["content"];
         let blocks = match content {
@@ -70,7 +103,11 @@ impl Story {
     }
 
     fn new_turn(&mut self) {
-        *self = Story::default();
+        *self = Story {
+            context: self.context.take(),
+            branch: self.branch.take(),
+            ..Story::default()
+        };
     }
 }
 

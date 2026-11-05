@@ -1,6 +1,7 @@
 // The cards, in the story rail: the session's brief, then its cards, the last 30 minutes' and the
 // older ones. The writer writes them in English (#487); cards stored in Hebrew keep their direction.
 
+import { askElement } from "./ask.js";
 import { code, element, prose, invoke, pressable, text } from "./dom.js";
 import { refreshCards } from "./selection.js";
 import { studio } from "./state.js";
@@ -73,6 +74,8 @@ function cardElement({ request, card, guess, key_wrong, more, rating }: StoredCa
   );
   if (quiz) node.append(keyWrongButton(request.id, key_wrong));
   node.append(moreElement(request.id, more), ratingElement(request.id, rating, quiz ? key_wrong : null));
+  const item = [card.summary, card.explanation, card.code].filter(Boolean).join("\n\n");
+  node.append(askElement(request.session_id, item));
   return node;
 }
 

@@ -166,6 +166,16 @@ body.wide .rail { width: min(var(--wide), calc(100vw - var(--strip))); }
 /* "Explain more" opens the writer's longer explanation under the card; the rating's levels and reasons
    are small taps, marked by their border like the options. */
 .more summary { margin-top: 12px; font-size: 14px; font-weight: 600; color: var(--muted); cursor: pointer; }
+/* "Ask about this" (#482): a side question under a response, card or intention. An error has no colour,
+   as colour is only for "needs you". */
+.ask-about summary { margin-top: 6px; font-size: var(--size-small); color: var(--muted); cursor: pointer; }
+.ask-about textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 6px; font: inherit; font-size: var(--size);
+                background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; }
+.ask-about button { margin-top: 6px; font-size: var(--size); padding: 2px 12px; border: 1px solid var(--line);
+              border-radius: var(--radius); background: var(--raised); color: var(--fg); cursor: pointer; }
+.ask-about button:disabled { opacity: .45; cursor: default; }
+.ask-reply p { font-size: var(--size-read); margin: 8px 0 0; }
+.ask-reply .asking, .ask-reply .ask-error { color: var(--muted); font-style: italic; }
 .rating p { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 .rating span { font-size: 14px; color: var(--muted); }
 .rating button { font-size: 14px; padding: 2px 10px; margin: 0; }

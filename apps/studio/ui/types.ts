@@ -4,7 +4,18 @@
 export type Step = { tool: string; detail: string | null; command?: string | null };
 // What the transcript says of the latest turn (#472): the agent's latest line, the steps since it,
 // its full texts, and why the transcript cannot be read, when it cannot.
-export type Story = { intention: string | null; steps_ago: number; responses: string[]; unavailable: string | null };
+// `context`: the input tokens of the agent's latest message out of its model's window (#480).
+export type Context = { tokens: number; window: number };
+export type Story = {
+  intention: string | null;
+  steps_ago: number;
+  responses: string[];
+  unavailable: string | null;
+  context: Context | null;
+  branch: string | null;
+};
+// What names a session (#480): its issue, branch, PR and worktree, and the name derived from them.
+export type Identity = { issue: number | null; branch: string | null; pr: number | null; worktree: string; name: string };
 export type SessionState = "needs_you" | "running" | "your_turn" | "idle" | "ended";
 // When something started and ended, in Unix milliseconds; `end` is null while it runs.
 export type Span = { start: number; end: number | null };
@@ -82,6 +93,7 @@ export type Session = {
   // "worker <name> returned", after a wake-up until its next step or Daniel's next prompt.
   returned: string | null;
   story: Story;
+  identity: Identity;
   // In the session list only: what its row says, built by the card store.
   line?: string;
 };
