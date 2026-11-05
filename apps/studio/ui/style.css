@@ -189,6 +189,10 @@ body.wide .choices { grid-template-columns: repeat(3, 1fr); }
 .choices li button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 6px 10px;
                      background: none; border: 0; text-align: start; cursor: pointer; }
 .answer-buttons { display: flex; gap: 8px; }
+/* A plan the card can approve (#478): its text, scrolled within the dock. */
+.decision .plan { white-space: pre-wrap; max-height: 30vh; overflow-y: auto; margin: 6px 0 0; padding: 6px 10px;
+                  background: var(--bg); border: 1px solid var(--needs-you-line); border-radius: var(--radius); }
+.decision .description { color: var(--muted); }
 .answer-buttons button { padding: 4px 12px; background: var(--raised); border: 1px solid var(--line);
                          border-radius: var(--radius); cursor: pointer; }
 .answer-buttons button:disabled { cursor: default; opacity: .5; }
