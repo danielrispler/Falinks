@@ -456,6 +456,12 @@ fn follow(app: &AppHandle, log: &Path, writer: &Writer) {
                 let keys = state.lock().unwrap().live_keys();
                 fingerprints.retain(|key, _| keys.contains(key));
                 queues.retain(|key, _| keys.contains(key));
+                // The decision history goes to the store, which keeps it across restarts (#479).
+                let studio = state.lock().unwrap();
+                let mut store = app.state::<Cards>().inner().lock().unwrap();
+                for session in studio.sessions() {
+                    unsaved(store.keep_decisions(&session.agent.id, &session.decisions));
+                }
             }
         }
         // Reads the transcripts' lines and nothing else (`apps/studio/AGENTS.md`).

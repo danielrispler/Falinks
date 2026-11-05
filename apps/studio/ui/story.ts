@@ -8,6 +8,7 @@ import { encode, request } from "./daemon.js";
 import { agentState, contextText, sessionName } from "./list.js";
 import { closePane, startClaude } from "./panes.js";
 import { openDecision } from "./answer.js";
+import { showCleared } from "./decisions.js";
 import { decisionElement, questionElement } from "./questions.js";
 import { checkTime, counts, estimateText, timesText } from "./times.js";
 import { stateLabels, type CheckLine, type Question, type Selection, type Session, type Story } from "./types.js";
@@ -19,6 +20,7 @@ export function showView(selected: Selection | null) {
   element("times").replaceChildren();
   if (selected === null) {
     showQuestions([]);
+    showCleared([]);
     return;
   }
   const session = selected.session;
@@ -54,6 +56,7 @@ export function showView(selected: Selection | null) {
   showStory(session.id, agent === null ? session.story : null);
   showQuestions(session.questions.filter((question) => question.agent === (agent?.id ?? null)));
   showChecks(session.checks);
+  showCleared(agent === null ? session.cleared : []);
 }
 
 // After this many steps the intention dims, as it may no longer say what the agent does (#472).
@@ -108,12 +111,12 @@ function askClose(session: Session) {
   dialog.showModal();
 }
 
-// The questions the viewed agent asked: an open one docked under the story, the rest in it, newest
-// first. A plan or a permission the answer hook waits on docks too, whichever agent asks (#478).
+// The questions the viewed agent asked: an open one docked under the story, newest first, and those
+// never answered in the story; an answered one is in the decision history (#479). A plan or a permission the answer hook waits on docks too, whichever agent asks (#478).
 function showQuestions(questions: Question[]) {
   const newest = [...questions].reverse();
   const open = newest.filter((question) => question.answer === "open");
-  const past = newest.filter((question) => question.answer !== "open");
+  const past = newest.filter((question) => question.answer === "not_answered");
   const decision = openDecision();
   const docked = [...(decision ? [decisionElement(decision)] : []), ...open.map(questionElement)];
   element("dock").replaceChildren(...docked);

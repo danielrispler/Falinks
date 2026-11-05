@@ -140,7 +140,18 @@ export type StoredCard = {
 };
 // The selected session's brief, and its cards, split at 30 minutes by the shell's tick, each oldest
 // first.
-export type SessionCards = { brief: string | null; recent: StoredCard[]; older: StoredCard[] };
+// An answered question, plan or permission in the session's decision history (#479): the call's input,
+// Daniel's answers by question text or "allow"/"deny", when, and where he answered.
+export type Decision = {
+  call: string;
+  agent: string | null;
+  tool: string;
+  input: { questions?: Asked[]; plan?: string; command?: string; file_path?: string; url?: string };
+  answer: Record<string, string> | "allow" | "deny";
+  at: number;
+  source: "card" | "terminal";
+};
+export type SessionCards = { brief: string | null; recent: StoredCard[]; older: StoredCard[]; decisions: Decision[] };
 // The selection is the core's: the session Daniel selected and the subagent of it he opened, whose
 // view then shows its own line.
 export type Selection = { session: Session; agent: string | null };

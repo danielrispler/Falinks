@@ -5,6 +5,7 @@ import { askElement } from "./ask.js";
 import { code, element, prose, invoke, pressable, text } from "./dom.js";
 import { refreshCards } from "./selection.js";
 import { studio } from "./state.js";
+import { showDecisions } from "./decisions.js";
 import type { CardRequest, Guess, Level, Quiz, Rating, Reason, SessionCards, StoredCard } from "./types.js";
 
 // Records Daniel's tap, his flag on the key or his rating, and draws the cards again at once.
@@ -196,8 +197,9 @@ function showBrief(brief: string | null) {
   element("brief").hidden = brief === null;
 }
 
-export function showCards({ brief, recent, older }: SessionCards) {
+export function showCards({ brief, recent, older, decisions }: SessionCards) {
   showBrief(brief);
+  showDecisions(decisions);
   const ids = new Set([...recent, ...older].map(({ request }) => request.id));
   for (const id of drawn.keys()) {
     if (ids.has(id)) continue;
