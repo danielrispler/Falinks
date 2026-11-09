@@ -684,6 +684,74 @@ fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
 }
 
 #[test]
+fn batch_pins_its_setup_and_refuses_a_changed_item_before_any_run() {
+    let tmp = tmp("falinks-pin-test-");
+    // A copy of the runtime, so its bytes can change while the configuration stays the same.
+    let runtime = tmp.path().join("runtime");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let runtime = runtime.to_string_lossy().into_owned();
+    let mut config = read(config(tmp.path(), SCRIPTED, json!(["{worker}"]), &runtime));
+    // A failing gate ends each invocation before any run, so the test stays cheap.
+    config["gate_command"] = json!(["/usr/bin/false", runtime]);
+    let path = tmp.path().join("pinned.json");
+    let runs = tmp.path().join("runs");
+    let invoke = |config: &Value| {
+        fs::write(&path, config.to_string()).unwrap();
+        let output = batch(tmp.path(), &path, &runs).output().unwrap();
+        (output, read(runs.join("batch.json")))
+    };
+    let (first, ledger) = invoke(&config);
+    assert_eq!(first.status.code(), Some(3), "{}", text(&first));
+    let setup = &ledger["setup"];
+    assert_eq!(setup["claude_code_version"], "scripted-v1");
+    assert_eq!(setup["runtime_sha256"], hash(&runtime));
+    assert_eq!(setup["model"], "scripted");
+    assert_eq!(setup["reasoning_effort"], "none");
+    assert_eq!(setup["config_sha256"], hash(&path.to_string_lossy()));
+
+    for (item, key, value) in [
+        (
+            "claude_code_version",
+            "runtime_version",
+            json!("scripted-v2"),
+        ),
+        ("model", "model", json!("other")),
+        ("reasoning_effort", "reasoning", json!("high")),
+        ("config_sha256", "timeout_seconds", json!(299)),
+    ] {
+        let mut changed = config.clone();
+        changed[key] = value;
+        let (refused, ledger) = invoke(&changed);
+        assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+        assert!(text(&refused).contains(item), "{item}: {}", text(&refused));
+        // Refused before the gate, so no run could start.
+        assert_eq!(ledger["gates"].as_array().unwrap().len(), 1, "{item}");
+        assert_eq!(ledger["invocations"].as_array().unwrap().len(), 1, "{item}");
+    }
+    let original = fs::read(&runtime).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&runtime)
+        .unwrap()
+        .write_all(b"\0")
+        .unwrap();
+    let (refused, _) = invoke(&config);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("runtime_sha256"),
+        "{}",
+        text(&refused)
+    );
+    fs::write(&runtime, original).unwrap();
+
+    // The same setup resumes as before: it reaches the gate again.
+    let (resumed, ledger) = invoke(&config);
+    assert_eq!(resumed.status.code(), Some(3), "{}", text(&resumed));
+    assert_eq!(ledger["gates"].as_array().unwrap().len(), 2);
+    assert_eq!(ledger["setup"], *setup);
+}
+
+#[test]
 fn fixture_shard_runs_only_its_slots_denies_siblings_and_records_concurrency() {
     let tmp = tmp("falinks-shard-test-");
     let base = fs::canonicalize(tmp.path()).unwrap();

@@ -7,7 +7,7 @@ use crate::authorship::Authorship;
 use crate::{
     FIXTURES, LARGE_SPEC_FIXTURE, Result, bail, collisions, git, read,
     report::{large_spec_report, report, step_6_report, track_t_report, wave_report},
-    root, schedule, sha256, timing, tokens, utc_now, verify, write,
+    resolve, root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -340,6 +340,32 @@ pub fn batch(
         );
     }
     let config_sha = sha256(&fs::read(config_path)?);
+    // The pinned setup (#490): recorded at the first invocation, and any change means a new batch.
+    let binary = resolve(Path::new(
+        runtime.as_str().ok_or("runtime_binary must be a path")?,
+    ));
+    let setup = json!({"claude_code_version": config["runtime_version"],
+        "runtime_sha256": sha256(&fs::read(&binary).map_err(|e| format!("{}: {e}", binary.display()))?),
+        "model": config["model"], "reasoning_effort": config["reasoning"], "config_sha256": config_sha});
+    // The configuration hash last: a changed model or effort also changes it, so name those first.
+    if ledger["setup"].is_null() {
+        ledger["setup"] = setup;
+    } else if let Some(item) = [
+        "claude_code_version",
+        "runtime_sha256",
+        "model",
+        "reasoning_effort",
+        "config_sha256",
+    ]
+    .into_iter()
+    .find(|item| ledger["setup"][item] != setup[item])
+    {
+        bail!(
+            "Pinned setup changed inside this batch: {item} was {}, now {}; start a new batch directory",
+            ledger["setup"][item],
+            setup[item]
+        );
+    }
     // Limits change only between recorded batches: one configuration per batch directory.
     if let Some(first) = ledger["invocations"].as_array().unwrap().first()
         && first["config_sha256"] != config_sha.as_str()
