@@ -848,7 +848,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   schedule
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
-  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2] [--variant announce]
+  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2] [--variant announce|notify]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6|large-spec|step-a-qualify|step-a|wave-1..wave-4|sweep|confirm] [--fixtures NAME[,NAME]]
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]

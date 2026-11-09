@@ -1817,6 +1817,88 @@ fn announce_variant_adds_its_line_and_unknown_variants_are_refused() {
     assert!(!refused.exists());
 }
 
+/// #503: with `notify`, A's share adding exported `lib.Changed`, which B's `app` imports, sends
+/// B one host `peer_message` naming both, also when B's draft does not parse. B's shares change
+/// nothing A imports, so A gets none. A failing `go list` is logged and the run goes on.
+#[test]
+fn notify_variant_tells_the_peer_which_of_its_packages_import_changed_names() {
+    let tmp = tmp("falinks-notify-test-");
+    let lib = "package lib\n\nfunc Changed() int { return 1 }\n";
+    let message = "Host notice: A's share changed exported names your packages import: \
+        fixture/lib (Changed) is imported by your fixture/app.";
+    for (case, app, broken_workspace) in [
+        ("parses", "lib.Changed()", false),
+        ("unparseable", "lib.Changed(", false),
+        ("go list fails", "lib.Changed()", true),
+    ] {
+        let app = format!("package app\n\nimport \"fixture/lib\"\n\nfunc Use() {{ {app} }}\n");
+        // B writes its importer first; A shares `lib` only once B's draft exists.
+        let mut setup = format!(
+            "if [ \"$FALINKS_AGENT\" = B ]; then mkdir app && printf '%s' '{app}' > app/app.go; \
+            else while [ ! -f ../B/app/app.go ]; do sleep 0.05; done; \
+            mkdir lib && printf '%s' '{lib}' > lib/lib.go; fi; "
+        );
+        // A broken workspace file, never shared, fails B's `go list` but not the checks.
+        if broken_workspace {
+            setup = "[ \"$FALINKS_AGENT\" = B ] && echo /go.work >> .gitignore && echo broken > go.work; "
+                .to_string()
+                + &setup;
+        }
+        let config = config(
+            tmp.path(),
+            SCRIPTED,
+            json!([
+                "/bin/sh",
+                "-c",
+                setup + "/usr/bin/tee scratch/host.jsonl | \"$0\" relationships",
+                "{worker}"
+            ]),
+            SCRIPTED,
+        );
+        let run = tmp.path().join(case.replace(' ', "-"));
+        let mut args = vec![OsStr::new("baseline"), OsStr::new("go-relationships")];
+        args.extend([OsStr::new("--config"), config.as_os_str()]);
+        args.extend([OsStr::new("--output"), run.as_os_str()]);
+        args.extend([OsStr::new("--variant"), OsStr::new("notify")]);
+        let output = cli(args);
+        let evidence = read(run.join("controller/result.json"));
+        // Only the unparseable draft fails the checks; every run reaches its final validation.
+        let outcome = if case == "unparseable" {
+            "task_failure"
+        } else {
+            "success"
+        };
+        assert_eq!(evidence["outcome"], outcome, "{case}: {}", text(&output));
+        let notices = |agent: &str| {
+            host_messages(&run.join(format!("agents/{agent}/scratch/host.jsonl")))["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["type"] == "peer_message" && e["sender"] == "host")
+                .map(|e| e["text"].clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(notices("A"), Vec::<Value>::new(), "{case}");
+        let failures: Vec<Value> = fs::read_to_string(run.join("controller/events.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|e| e["kind"] == "notice_failure")
+            .collect();
+        if broken_workspace {
+            assert_eq!(notices("B"), Vec::<Value>::new(), "{case}");
+            assert!(!failures.is_empty(), "{case}");
+            assert!(
+                failures.iter().all(|f| f["agent"] == "B"
+                    && f["error"].as_str().unwrap().contains("go list failed"))
+            );
+        } else {
+            assert_eq!(notices("B"), [json!(message)], "{case}");
+            assert_eq!(failures, Vec::<Value>::new(), "{case}");
+        }
+    }
+}
+
 /// C7 (#178), Git arm: a scripted `claude` or `node` launch through Bash invalidates the run.
 /// Both arms: hits are counted per arm and the batch stops at the first.
 #[test]
