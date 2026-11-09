@@ -507,10 +507,14 @@ it; the runtime's own `<synthetic>` replies carry no effort and are skipped. A
     - `report` prints, per fixture and arm, `collisions`: waste lines, collisions per class
       and premature checks, the `handling` cost per class and `rereads` (round-trips and model
       seconds summed over agents), with `note`, `handling_note` and #205's three `sentences`.
-    - Step A (#506): `report`'s `mechanism` classes each two-agent Git run's duplicate or
-      divergent pair by the second agent's choice, `blind`, `seen-duplicated` or `reused`
-      (rules in its `note`), and `best_variant` applies #490's rule to `git-2`,
-      `git-2+announce` and `git-2+notify`, printing the chosen `arm` and the `rule` that chose it.
+    - Step A (#506, #516): `report`'s `mechanism` classes each two-agent Git run's duplicate
+      or divergent pair by the second agent's choice, `blind` or `seen-duplicated`. It also
+      counts `replaced` pairs (the second agent's copy discarded for the peer's, which its final
+      lines call), a flag that keeps the class and decides nothing, and `reused` helpers:
+      shared helpers of the final tree (`helpers`) one agent defined and the other calls without
+      ever having its own version (rules in its `note`). `best_variant` applies #490's rule to
+      `git-2`, `git-2+announce` and `git-2+notify`, printing the chosen `arm` and the `rule`
+      that chose it.
 
 Run the pilot and batch in a session **outside auto mode**, because they launch nested
 agents:

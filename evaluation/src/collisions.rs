@@ -143,7 +143,7 @@ fn measure(
         .filter_map(|p| Some((p["id"].as_str()?, class(p)?)))
         .collect();
     let requirements = requirements(result);
-    let (mut events, premature, candidates, unclassified) = match result["arm"].as_str() {
+    let (mut events, premature, candidates, unclassified, reused) = match result["arm"].as_str() {
         Some("falinks") => {
             let ledger = Ledger::read(authorship)?;
             let mut used = BTreeSet::new();
@@ -154,7 +154,7 @@ fn measure(
             let none = BTreeMap::new();
             let unclassified =
                 duplicate_events(&pairs, &functions, &verdicts, &none, discard, &mut events)?;
-            (events, premature, pairs.len(), unclassified)
+            (events, premature, pairs.len(), unclassified, Value::Null)
         }
         Some("git") => {
             let mut repo = Repo::read(run, result, authorship)?;
@@ -169,6 +169,10 @@ fn measure(
                     mechanisms.insert(id.to_string(), repo.mechanism(run, result, a, b)?);
                 }
             }
+            let reused = repo.reused(run, result, &functions, &pairs, &verdicts);
+            let reused = reused
+                .map(|helpers| json!({"count": helpers.len(), "helpers": helpers}))
+                .unwrap_or_else(|e| json!({"unavailable": e.to_string()}));
             let discard = |f: &Function| repo.discard(f);
             let unclassified = duplicate_events(
                 &pairs,
@@ -178,7 +182,7 @@ fn measure(
                 discard,
                 &mut events,
             )?;
-            (events, premature, pairs.len(), unclassified)
+            (events, premature, pairs.len(), unclassified, reused)
         }
         other => bail!("unknown arm {other:?}"),
     };
@@ -200,11 +204,14 @@ fn measure(
         })
         .collect();
     events.sort_by_key(|e| CLASSES.iter().position(|c| e["class"] == *c));
-    Ok(
-        json!({"status": status, "events": events, "by_class": by_class,
+    let mut out = json!({"status": status, "events": events, "by_class": by_class,
         "premature_checks": premature, "lines": lines,
-        "duplicates": {"candidates": candidates, "unclassified": unclassified}}),
-    )
+        "duplicates": {"candidates": candidates, "unclassified": unclassified}});
+    // `report`'s `reused` (#516): Git's helpers used without an own copy.
+    if !reused.is_null() {
+        out["reused"] = reused;
+    }
+    Ok(out)
 }
 
 /// The run's `discarded_or_rewritten_work` from its collisions: the waste in lines, unknown
@@ -922,14 +929,15 @@ fn named_by(requirements: &[String], path: &str) -> BTreeSet<usize> {
         .collect()
 }
 
-/// When `f`'s agent first wrote its definition, in run seconds: its transcript's first tool use
-/// whose input holds `func Name(` (`) Name(` for a method; `[` for a generic). None without.
-fn written(run: &Path, result: &Value, f: &Function) -> Option<f64> {
+/// When `agent` first wrote a definition of `function` (`Name` or `Type.Name`), in run seconds:
+/// its transcript's first tool use whose input holds `func Name(` (`) Name(` for a method; `[`
+/// for a generic). None without.
+fn written(run: &Path, result: &Value, agent: &str, function: &str) -> Option<f64> {
     let start = result["timing"]["start_unix"].as_f64()?;
-    let name = f.name.rsplit('.').next()?;
-    let head = if f.name.contains('.') { ")" } else { "func" };
+    let name = function.rsplit('.').next()?;
+    let head = if function.contains('.') { ")" } else { "func" };
     let needles = ["(", "["].map(|open| format!("{head} {name}{open}"));
-    let transcript = run.join(format!("agents/{}/scratch/claude-events.jsonl", f.agent));
+    let transcript = run.join(format!("agents/{agent}/scratch/claude-events.jsonl"));
     let events = jsonl(&transcript).ok()?;
     let defines = |e: &&Value| {
         let blocks = e["message"]["content"].as_array().into_iter().flatten();
@@ -994,12 +1002,13 @@ fn pairs(
 /// Adds a duplicate-work collision per pair classified as duplicate or divergent (#498: C1
 /// prices both alike) and returns how many pairs are unclassified. Waste: the later copy's lines
 /// when the final tree holds both, else the lines of each copy written and then discarded; a
-/// gate-stopped copy wastes nothing. A pair in `mechanisms` (Git's) also carries its mechanism.
+/// gate-stopped copy wastes nothing. A pair in `mechanisms` (Git's) also carries its mechanism
+/// and its `replaced` flag.
 fn duplicate_events(
     pairs: &[(Value, usize, usize)],
     functions: &[Function],
     verdicts: &BTreeMap<&str, &str>,
-    mechanisms: &BTreeMap<String, &'static str>,
+    mechanisms: &BTreeMap<String, (&'static str, bool)>,
     mut discard: impl FnMut(&Function) -> Result<BTreeMap<String, u64>>,
     events: &mut Vec<Value>,
 ) -> Result<usize> {
@@ -1027,8 +1036,11 @@ fn duplicate_events(
                 // `report` counts final-tree pairs per class (#505).
                 event["pair_class"] = (*verdict).into();
                 event["final_tree"] = final_tree.into();
-                if let Some(mechanism) = mechanisms.get(pair["id"].as_str().unwrap_or_default()) {
+                if let Some((mechanism, replaced)) =
+                    mechanisms.get(pair["id"].as_str().unwrap_or_default())
+                {
                     event["mechanism"] = (*mechanism).into();
+                    event["replaced"] = (*replaced).into();
                 }
                 events.push(event);
             }
@@ -1821,45 +1833,117 @@ impl<'a> Repo<'a> {
         Ok(found.into_values().collect())
     }
 
-    /// The second agent's choice for a duplicate or divergent pair (#506): `reused` when the
-    /// final tree keeps only the peer's copy and a final line of the second agent's calls it;
-    /// else `blind` when its copy was written before the peer's defining share (its first share
+    /// The second agent's choice for a duplicate or divergent pair (#506, as #516 redefines it):
+    /// `blind` when its copy was written before the peer's defining share (its first share
     /// holding the copy) presented it, else `seen-duplicated`. The second agent is the one whose
     /// copy was shared later. The defining share's `peer_diff` goes out with it, and a notify
     /// notice only with a share, so none presents the copy earlier. A copy is written at its
-    /// agent's first tool use holding the definition (`written`), else at its first share.
-    // shortcut: a helper reused with no own copy ever shared forms no pair and is not counted, a
-    // call is matched as `Name(` text, and presentation is the host's send, not the agent's
-    // read; read call sites by syntax or delivery from the transcript if that matters.
+    /// agent's first tool use holding the definition (`written`), else at its first share. With
+    /// the class, `replaced` (#516, report-only): the second agent's copy is discarded, the
+    /// final tree keeps the peer's, and a final line of the second agent's calls it.
+    // shortcut: a call is matched as `Name(` text, and presentation is the host's send, not the
+    // agent's read; read call sites by syntax or delivery from the transcript if that matters.
     fn mechanism(
         &mut self,
         run: &Path,
         result: &Value,
         a: &Function,
         b: &Function,
-    ) -> Result<&'static str> {
+    ) -> Result<(&'static str, bool)> {
         let (peer, second) = if b.first >= a.first { (a, b) } else { (b, a) };
         let last = result["final_snapshot"].as_str().map(String::from);
-        if let Some(last) = last.filter(|_| second.state == "discarded" && peer.state == "final") {
-            let call = format!("{}(", peer.name.rsplit('.').next().unwrap_or_default());
-            for path in self.paths(&[&last])? {
-                let (text, ids) = (self.text(&last, &path)?, self.line_ids(&last, &path)?);
-                let own = |id: &Line| id.agent().is_some_and(|(x, _)| x == second.agent);
-                if lines(&text)
-                    .iter()
-                    .zip(&ids)
-                    .any(|(l, id)| own(id) && l.contains(&call))
-                {
-                    return Ok("reused");
-                }
-            }
-        }
-        let chosen = written(run, result, second).map_or(second.first, |t| t.min(second.first));
-        Ok(if chosen < peer.first {
+        let replaced = match last.filter(|_| second.state == "discarded" && peer.state == "final") {
+            Some(last) => self.calls(&last, &second.agent, &peer.name)?,
+            None => false,
+        };
+        let chosen = written(run, result, &second.agent, &second.name)
+            .map_or(second.first, |t| t.min(second.first));
+        let class = if chosen < peer.first {
             "blind"
         } else {
             "seen-duplicated"
-        })
+        };
+        Ok((class, replaced))
+    }
+
+    /// Whether a line of `agent`'s at `commit` calls `function`, matched as `Name(` text.
+    fn calls(&mut self, commit: &str, agent: &str, function: &str) -> Result<bool> {
+        let call = format!("{}(", function.rsplit('.').next().unwrap_or_default());
+        for path in self.paths(&[commit])? {
+            let (text, ids) = (self.text(commit, &path)?, self.line_ids(commit, &path)?);
+            let own = |id: &Line| id.agent().is_some_and(|(x, _)| x == agent);
+            if lines(&text)
+                .iter()
+                .zip(&ids)
+                .any(|(l, id)| own(id) && l.contains(&call))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// `reused` (#516): the shared helpers in the final tree, by `falinks-eval helpers`'s rule,
+    /// that agent X defined and a final line of the other agent Y calls, when Y never had its own
+    /// version: a function of Y's forming a duplicate or divergent pair with the helper, or with
+    /// the helper's name, at any share of Y's or tool use (`written`). Each helper once.
+    // shortcut: an own copy Y wrote under another name and deleted before any share forms no
+    // pair, so the helper still counts; read Y's transcript edits for such copies if that matters.
+    fn reused(
+        &mut self,
+        run: &Path,
+        result: &Value,
+        functions: &[Function],
+        pairs: &[(Value, usize, usize)],
+        verdicts: &BTreeMap<&str, &str>,
+    ) -> Result<Vec<String>> {
+        let last = (result["final_snapshot"].as_str()).ok_or("the run has no final snapshot")?;
+        let mut tree = BTreeMap::new();
+        for path in self
+            .paths(&[last])?
+            .into_iter()
+            .filter(|p| p.ends_with(".go"))
+        {
+            let text = self.text(last, &path)?;
+            tree.insert(path, text.into_bytes());
+        }
+        let fixture = fixture(result["fixture"].as_str().unwrap_or_default())?;
+        let helpers = crate::qualify::shared_helpers(&fixture, &tree)?;
+        let shown = |f: &Function| {
+            let dir = f.file.rsplit_once('/').map_or("", |(d, _)| d);
+            format!("{dir}.{}", f.name)
+        };
+        let agents: Vec<String> = self.shares.keys().cloned().collect();
+        let mut out = vec![];
+        for helper in helpers.as_array().into_iter().flatten() {
+            let name = helper["function"].as_str().unwrap_or_default();
+            // A helper the initial tree held is no agent's.
+            let Some(h) = (functions.iter()).position(|f| f.state == "final" && shown(f) == name)
+            else {
+                continue;
+            };
+            let defined = &functions[h];
+            for y in agents.iter().filter(|y| **y != defined.agent) {
+                let paired = pairs.iter().any(|(pair, i, j)| {
+                    let other = match (*i == h, *j == h) {
+                        (true, _) => *j,
+                        (_, true) => *i,
+                        _ => return false,
+                    };
+                    let id = pair["id"].as_str().unwrap_or_default();
+                    functions[other].agent == *y && verdicts.get(id).is_some_and(|v| *v != "no")
+                });
+                let named = functions
+                    .iter()
+                    .any(|f| f.agent == *y && f.name == defined.name);
+                let own = paired || named || written(run, result, y, &defined.name).is_some();
+                if !own && self.calls(last, y, &defined.name)? {
+                    out.push(name.to_string());
+                    break;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The lines of a discarded function at its last commit, by agent, once per run.
@@ -2488,7 +2572,7 @@ mod tests {
             );
             let event = json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4,
                 "waste": {"B": 4}, "detected": [], "pair_class": class, "final_tree": true,
-                "mechanism": "seen-duplicated"}]);
+                "mechanism": "seen-duplicated", "replaced": false}]);
             assert_eq!(found["status"], "complete");
             assert_eq!(found["events"], event);
             assert_eq!(waste(&found)["lines"], 4);

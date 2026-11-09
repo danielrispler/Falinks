@@ -1495,6 +1495,7 @@ fn git_collision(to: &Path, extra: [&[(&str, &str)]; 2], b2: &[(&str, &str)]) ->
     };
     let commit = |files: &[(&str, &str)], message: &str| {
         for (name, content) in files {
+            fs::create_dir_all(repo.join(name).parent().unwrap()).unwrap();
             fs::write(repo.join(name), content).unwrap();
         }
         git(&["add", "."]);
@@ -1644,11 +1645,14 @@ fn report_prices_c1_and_counts_final_tree_pairs_per_class() {
     assert!(cell["note"].as_str().unwrap().contains("decides nothing"));
 }
 
-/// Mechanism (#506) over the recorded Git collision run, with three classified pairs of A's
-/// copies (a1, at 2.25) and B's (b1, at 3.0): B wrote HelperB at 1.0, before A's share
-/// presented HelperA (blind); B's SumB has no earlier write than its share (seen-duplicated);
-/// B's b2 drops PickB and calls PickA (reused). The report counts each class once and prints
-/// the best variant, with its rule, between two arms.
+/// Mechanism (#506, as #516 redefines it) over the recorded Git collision run, read against
+/// the Step A fixture's requirements, with three classified pairs of A's copies (a1, at 2.25)
+/// and B's (b1, at 3.0): B wrote HelperB at 1.0, before A's share presented HelperA (blind);
+/// B's SumB has no earlier write than its share (seen-duplicated); B's b2 drops PickB and calls
+/// PickA (seen-duplicated, and also replaced). A's DueDate (T4) and B's final CanBorrow (T7)
+/// call three helpers A defined: inRange, which B never had (reused); clamp, which B's b1 had a
+/// copy of under the same name; and span, which B's transcript wrote. The report counts each
+/// and prints the best variant, with its rule, between two arms.
 #[test]
 fn report_classes_each_helper_choice_and_prints_the_best_variant() {
     let tmp = tmp("falinks-report-mechanism-");
@@ -1666,28 +1670,63 @@ fn report_classes_each_helper_choice_and_prints_the_best_variant() {
     };
     let call =
         |name: &str| format!("func Use(ys []string) bool {{\n    return {name}(ys) != \"\"\n}}\n");
-    let file = |parts: &[String]| format!("package p\n\n{}", parts.join("\n"));
-    let a = file(&[helper("HelperA"), sum("SumA"), pick("PickA")]);
-    let b1 = file(&[helper("HelperB"), sum("SumB"), pick("PickB"), call("PickB")]);
-    let b2 = file(&[helper("HelperB"), sum("SumB"), call("PickA")]);
+    let entry = |name: &str| {
+        format!("func {name}(v int) int {{\n    return inRange(v) + clamp(v) + span(v)\n}}\n")
+    };
+    let in_range = "func inRange(v int) int {\n    if v < 0 || v > 9 {\n        return 0\n    }\n    return 1\n}\n".to_string();
+    let clamp = |limit: &str| {
+        format!(
+            "func clamp(v int) int {{\n    if v > {limit} {{\n        v = {limit}\n    }}\n    return v\n}}\n"
+        )
+    };
+    let span = "func span(v int) int {\n    return v * 7 / 3\n}\n".to_string();
+    let file = |parts: &[String]| format!("package loan\n\n{}", parts.join("\n"));
+    let a = file(&[
+        helper("HelperA"),
+        sum("SumA"),
+        pick("PickA"),
+        entry("DueDate"),
+        in_range,
+        clamp("100"),
+        span,
+    ]);
+    let b1 = file(&[
+        helper("HelperB"),
+        sum("SumB"),
+        pick("PickB"),
+        call("PickB"),
+        clamp("50"),
+    ]);
+    let b2 = file(&[
+        helper("HelperB"),
+        sum("SumB"),
+        call("PickA"),
+        entry("CanBorrow"),
+    ]);
     let run = git_collision(
         &tmp.path().join("run"),
-        [&[("a.go", &a[..])], &[("b.go", &b1[..])]],
-        &[("b.go", &b2[..])],
+        [&[("loan/a.go", &a[..])], &[("loan/b.go", &b1[..])]],
+        &[("loan/b.go", &b2[..])],
     );
     let mut result = read(run.join("controller/result.json"));
     result["outcome"] = json!("success");
+    // The Step A fixture's requirements: DueDate is A's T4, CanBorrow B's T7.
+    result["fixture"] = json!("library-loans");
     fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
-    // B's first write of HelperB, at 1.0 s, before A's share.
+    // B's first write of HelperB and of its own span, at 1.0 s, before A's share.
+    let written = file(&[
+        helper("HelperB"),
+        "func span(v int) int { return v }\n".into(),
+    ]);
     let write = json!({"type": "assistant", "timestamp": "2026-10-21T10:00:01.000Z",
         "message": {"id": "n0", "content": [{"type": "tool_use", "id": "u0", "name": "Write",
-            "input": {"file_path": "/w/agents/B/b.go", "content": file(&[helper("HelperB")])}}]}});
+            "input": {"file_path": "/w/agents/B/loan/b.go", "content": written}}]}});
     let transcript = run.join("agents/B/scratch/claude-events.jsonl");
     let appended = fs::read_to_string(&transcript).unwrap() + &format!("{write}\n");
     fs::write(&transcript, appended).unwrap();
     // The same run twice, as git-2 and git-2+announce: they tie, so git-2 stands.
     let entry = |id: &str, variant: Value| {
-        json!({"run_dir": run, "run_id": id, "pair": id, "fixture": "go-relationships",
+        json!({"run_dir": run, "run_id": id, "pair": id, "fixture": "library-loans",
             "arm": "git", "team_size": 2, "variant": variant, "scored": true})
     };
     let ledger =
@@ -1704,6 +1743,7 @@ fn report_classes_each_helper_choice_and_prints_the_best_variant() {
             .iter()
             .map(|s| s["name"].as_str().unwrap())
             .collect();
+        // The two clamps are `no`: the shared name alone keeps clamp from counting as reused.
         pair["class"] = match names[..] {
             ["HelperA", "HelperB"] | ["PickA", "PickB"] => "duplicate",
             ["SumA", "SumB"] => "divergent",
@@ -1715,19 +1755,20 @@ fn report_classes_each_helper_choice_and_prints_the_best_variant() {
     let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]);
     assert!(output.status.success(), "{}", text(&output));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let cell = &report["mechanism"]["go-relationships"]["git-2"];
-    let once = json!({"blind": 1, "seen-duplicated": 1, "reused": 1});
+    let cell = &report["mechanism"]["library-loans"]["git-2"];
+    let once = json!({"blind": 1, "seen-duplicated": 2, "replaced": 1, "reused": 1});
     assert_eq!(cell["runs"]["plain"], once, "{cell}");
     assert_eq!(
         (
             &cell["blind"],
             &cell["seen-duplicated"],
+            &cell["replaced"],
             &cell["reused"],
             &cell["missing_runs"]
         ),
-        (&json!(1), &json!(1), &json!(1), &json!(0))
+        (&json!(1), &json!(2), &json!(1), &json!(1), &json!(0))
     );
-    let best = &report["best_variant"]["go-relationships"];
+    let best = &report["best_variant"]["library-loans"];
     assert_eq!(best["arm"], "git-2", "{best}");
     assert_eq!(
         best["rule"],

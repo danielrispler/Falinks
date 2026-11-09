@@ -704,13 +704,14 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
     })
 }
 
-/// The mechanism classes (#506), as `collisions` marks a Git pair's duplicate-work event.
-const MECHANISMS: [&str; 3] = ["blind", "seen-duplicated", "reused"];
+/// The mechanism classes (#506, #516), as `collisions` marks a Git pair's duplicate-work event.
+const MECHANISMS: [&str; 2] = ["blind", "seen-duplicated"];
 
 /// Printed with the mechanism cells.
-const MECHANISM_NOTE: &str = "Mechanism (#490, #506): each duplicate or divergent pair of a two-agent Git run, by the second agent's choice (the agent whose copy was shared later). blind: its copy was written before the peer's defining share (the first share holding the peer's copy, whose peer_diff, and any notify notice, goes out with it) presented it; seen-duplicated: written after, and it kept its own copy; reused: the final tree keeps only the peer's copy and a final line of the second agent's calls it (matched as `Name(` text). A copy is written at its agent's first tool use holding its definition, else at its first share. A helper reused with no own copy ever shared forms no pair and is not counted. Counted per run and over the arm's runs; missing_runs lack complete collisions (classify with `falinks-eval duplicates`).";
+const MECHANISM_NOTE: &str = "Mechanism (#490, #506, #516): each duplicate or divergent pair of a two-agent Git run, by the second agent's choice (the agent whose copy was shared later). blind: its copy was written before the peer's defining share (the first share holding the peer's copy, whose peer_diff, and any notify notice, goes out with it) presented it; seen-duplicated: written after. A copy is written at its agent's first tool use holding its definition, else at its first share. replaced: pairs also flagged because the second agent's copy is discarded, the final tree keeps the peer's and a final line of the second agent's calls it (matched as `Name(` text); each keeps its class, its cost is already in C1, and it decides nothing. reused counts helpers, not pairs: each shared helper of the final tree (`falinks-eval helpers`) that one agent defined and a final line of the other agent's calls, when that other agent never had its own version (a function of its own forming a duplicate or divergent pair with the helper, or with the helper's name, at any of its tool uses or shares); an own copy under another name deleted before any share forms no pair, so the helper still counts. Counted per run and over the arm's runs; missing_runs lack complete collisions (classify with `falinks-eval duplicates`) or a reused count.";
 
-/// The mechanism classes per fixture and two-agent Git arm: each run's counts and their sums.
+/// The mechanism classes per fixture and two-agent Git arm, with `replaced` and `reused`: each
+/// run's counts and their sums.
 fn mechanism_cells(runs: &[&Value]) -> Value {
     let mut cells = json!({});
     let git = |r: &&&Value| r["arm"] == "git" && r["team_size"] == 2 && !replaceable(r);
@@ -722,12 +723,21 @@ fn mechanism_cells(runs: &[&Value]) -> Value {
         let events = collisions["events"]
             .as_array()
             .filter(|_| collisions["status"] == "complete");
-        for class in MECHANISMS {
+        let count = |class: &str| {
             let n = events.map(|e| e.iter().filter(|e| e["mechanism"] == class).count());
+            n.map(|n| n as u64)
+        };
+        let replaced = events.map(|e| e.iter().filter(|e| e["replaced"] == true).count() as u64);
+        let reused = events.and(collisions["reused"]["count"].as_u64());
+        let counts = MECHANISMS
+            .map(|class| (class, count(class)))
+            .into_iter()
+            .chain([("replaced", replaced), ("reused", reused)]);
+        for (class, n) in counts {
             cell["runs"][id][class] = n.into();
-            cell[class] = (cell[class].as_u64().unwrap_or(0) + n.unwrap_or(0) as u64).into();
+            cell[class] = (cell[class].as_u64().unwrap_or(0) + n.unwrap_or(0)).into();
         }
-        let missing = cell["missing_runs"].as_u64().unwrap_or(0) + u64::from(events.is_none());
+        let missing = cell["missing_runs"].as_u64().unwrap_or(0) + u64::from(reused.is_none());
         cell["missing_runs"] = missing.into();
         cell["note"] = MECHANISM_NOTE.into();
     }
@@ -3349,20 +3359,23 @@ mod tests {
     }
 
     /// Three Step A runs of a Git arm `variant`: their completion seconds (infinite: a failure),
-    /// the mechanism classes of their pairs (all in the first run) and their C2 readings.
+    /// the mechanism classes of their pairs (all in the first run; each `reused` a reused helper,
+    /// not a pair) and their C2 readings.
     fn step_a(variant: &str, seconds: [f64; 3], mechanisms: &[&str], c2: [bool; 3]) -> Vec<Value> {
         (0..3)
             .map(|k| {
-                let events: Vec<Value> = mechanisms
-                    .iter()
-                    .filter(|_| k == 0)
-                    .map(|m| json!({"class": "duplicate_work", "mechanism": m}))
+                let first = mechanisms.iter().filter(|_| k == 0);
+                let events: Vec<Value> = (first.clone())
+                    .filter(|m| **m != "reused")
+                    .map(|m| json!({"class": "duplicate_work", "mechanism": m, "replaced": false}))
                     .collect();
+                let reused = first.filter(|m| **m == "reused").count();
                 let outcome = if seconds[k].is_finite() { "success" } else { "task_failure" };
                 json!({"run_id": format!("{variant}-{k}"), "fixture": "go-emergent", "arm": "git",
                     "team_size": 2, "variant": if variant.is_empty() { Value::Null } else { json!(variant) },
                     "outcome": outcome, "timing": {"elapsed_seconds": seconds[k]},
-                    "collisions": {"status": "complete", "events": events},
+                    "collisions": {"status": "complete", "events": events,
+                        "reused": {"count": reused}},
                     "trap_reached": {"c2": c2[k], "side_failures": 0}})
             })
             .collect()
