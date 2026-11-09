@@ -1,7 +1,7 @@
 //! One or two concurrent worker processes in Git worktrees, mediated by JSON lines on stdin/stdout.
 use crate::{
-    Result, Sandbox, bail, check, command, fixture, frozen, git, git_env, initial, kill_group,
-    protected_roots, read, resolve, root, sha256, strings, unix_now, utc_now, write,
+    Result, Sandbox, bail, check, check_env, command, fixture, frozen, git, git_env, initial,
+    kill_group, protected_roots, read, resolve, root, sha256, strings, unix_now, utc_now, write,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -130,8 +130,10 @@ pub fn baseline(
     }
     match variant {
         None => {}
-        Some("announce") if team_size == 2 => {}
-        Some("announce") => bail!("the announce variant needs a team of two"),
+        Some("announce" | "notify") if team_size == 2 => {}
+        Some(variant @ ("announce" | "notify")) => {
+            bail!("the {variant} variant needs a team of two")
+        }
         Some(other) => bail!("unknown Git arm variant: {other}"),
     }
     let (started, start_unix) = (Instant::now(), unix_now());
@@ -413,7 +415,11 @@ fn execute(
                 (parts.join("\n").into(), "instructions/git-solo.md")
             }
         };
-        let announce = if run.evidence["variant"] == "announce" {
+        // `notify` is announce plus the host's dependents notice on each share.
+        let announce = if matches!(
+            run.evidence["variant"].as_str(),
+            Some("announce" | "notify")
+        ) {
             ANNOUNCE
         } else {
             ""
@@ -593,7 +599,7 @@ fn execute(
                     ],
                 )?;
                 let commit = public_git(&work, &["rev-parse", "HEAD"])?;
-                shares.insert(agent, Some(commit.clone()));
+                let previous = shares.insert(agent, Some(commit.clone())).flatten();
                 *sequence.get_mut(agent).unwrap() += 1;
                 let patch = public_git(&work, &["diff", "--binary", &sha, &commit])?;
                 run.event(
@@ -606,6 +612,27 @@ fn execute(
                         peer,
                         json!({"type": "peer_diff", "sender": agent, "commit": commit, "diff": patch}),
                     )?;
+                    if run.evidence["variant"] == "notify" {
+                        // Only this share's changes, so an unchanged name is not announced again.
+                        let base = previous.as_deref().unwrap_or(&sha);
+                        let changes =
+                            public_git(&work, &["diff", "-U0", base, &commit, "--", "*.go"])?;
+                        match notice(public, agent, peer, &changes, &denied) {
+                            Ok(Some(text)) => {
+                                run.event("notice", json!({"agent": peer, "text": text}))?;
+                                run.send(
+                                    peer,
+                                    json!({"type": "peer_message", "sender": "host", "text": text}),
+                                )?
+                            }
+                            Ok(None) => {}
+                            // The run goes on without this notice.
+                            Err(error) => run.event(
+                                "notice_failure",
+                                json!({"agent": peer, "commit": commit, "error": error.to_string()}),
+                            )?,
+                        }
+                    }
                 }
                 // Every agent in the team has shared since the last development; alone, its own share.
                 if awaiting_ack.is_empty()
@@ -729,6 +756,147 @@ fn drain_usage(
     Ok(())
 }
 
+/// The exported `func` and `type` names a `-U0` Go diff changes, by package directory: each
+/// changed declaration line, and the declaration Git names in each hunk's header, which
+/// for a changed body is its function (and between declarations, the one before: a harmless
+/// extra name). Test files are skipped: no package imports them.
+/// shortcut: declarations inside a `type (` group are missed; parse the source if a fixture uses them.
+fn changed_exports(diff: &str) -> BTreeMap<String, BTreeSet<String>> {
+    let mut changed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut directory = None;
+    for line in diff.lines() {
+        if let Some(header) = line.strip_prefix("diff --git ") {
+            let file = header.rsplit_once(" b/").map_or("", |(_, file)| file);
+            directory = (file.ends_with(".go") && !file.ends_with("_test.go")).then(|| {
+                Path::new(file)
+                    .parent()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            continue;
+        }
+        let Some(directory) = &directory else {
+            continue;
+        };
+        let declaration = match line.split_once(' ') {
+            Some(("@@", rest)) => rest.split_once(" @@ ").map_or("", |(_, context)| context),
+            _ if line.starts_with("+++") || line.starts_with("---") => "",
+            _ => line.strip_prefix(['+', '-']).unwrap_or(""),
+        };
+        let name = if let Some(rest) = declaration.strip_prefix("func ") {
+            // A method is named with its receiver's type: `(s *Store) Get` is `Store.Get`.
+            match rest.strip_prefix('(').and_then(|r| r.split_once(')')) {
+                Some((receiver, rest)) => {
+                    let kind = receiver.split_whitespace().last().unwrap_or("");
+                    let kind = kind.trim_start_matches('*').split('[').next().unwrap();
+                    Some(format!("{kind}.{}", identifier(rest.trim_start())))
+                }
+                None => Some(identifier(rest).to_string()),
+            }
+        } else {
+            declaration
+                .strip_prefix("type ")
+                .map(|rest| identifier(rest).to_string())
+        };
+        // Exported when the declared name, after any receiver, starts upper case.
+        if let Some(name) = name
+            && name
+                .rsplit('.')
+                .next()
+                .unwrap()
+                .starts_with(|c: char| c.is_uppercase())
+        {
+            changed.entry(directory.clone()).or_default().insert(name);
+        }
+    }
+    changed
+}
+
+fn identifier(text: &str) -> &str {
+    let end = text
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+/// The `notify` variant's notice to `peer` about `agent`'s share (`diff`, for
+/// `changed_exports`): the changed names, and the peer's packages that import their
+/// packages, as `go list -e` finds them in the peer's worktree. It lists imports even when
+/// function bodies do not parse. Offline, read-only on modules, writing only a scratch
+/// cache, under the host's sandbox without network. `None` when no peer package imports one.
+fn notice(
+    public: &Path,
+    agent: &str,
+    peer: &str,
+    diff: &str,
+    denied: &[PathBuf],
+) -> Result<Option<String>> {
+    let changed = changed_exports(diff);
+    if changed.is_empty() {
+        return Ok(None);
+    }
+    let work = public.join(peer);
+    // shortcut: only the root module's packages; walk nested go.mod files if a fixture has them.
+    let module = fs::read_to_string(work.join("go.mod"))?
+        .lines()
+        .find_map(|line| line.strip_prefix("module "))
+        .map(|module| module.trim().trim_matches('"').to_string())
+        .ok_or("the peer's go.mod names no module")?;
+    let scratch = tempfile::tempdir()?;
+    for name in ["home", "tmp", "cache"] {
+        fs::create_dir(scratch.path().join(name))?;
+    }
+    let guard = Sandbox {
+        writable: vec![scratch.path().to_path_buf()],
+        denied: denied.to_vec(),
+        reopened: Vec::new(),
+        network: false,
+    };
+    let argv = guard.wrap(strings(&[
+        "go",
+        "list",
+        "-e",
+        "-f",
+        "{{.ImportPath}} {{join .Imports \",\"}}",
+        "./...",
+    ]))?;
+    let mut env = check_env(scratch.path());
+    env.push(("GOFLAGS".into(), "-mod=readonly".into()));
+    let listed = command(&argv, &work, &env, Duration::from_secs(120))?;
+    if !listed.success {
+        bail!("go list failed: {}", listed.text());
+    }
+    let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
+    let mut clauses = Vec::new();
+    for (directory, names) in &changed {
+        let package = match directory.as_str() {
+            "" => module.clone(),
+            directory => format!("{module}/{directory}"),
+        };
+        let importers: Vec<&str> = listed
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(_, imports)| imports.split(',').any(|i| i == package))
+            .map(|(importer, _)| importer)
+            .collect();
+        if !importers.is_empty() {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            clauses.push(format!(
+                "{package} ({}) is imported by your {}",
+                names.join(", "),
+                importers.join(", ")
+            ));
+        }
+    }
+    Ok((!clauses.is_empty()).then(|| {
+        format!(
+            "Host notice: {agent}'s share changed exported names your packages import: {}.",
+            clauses.join("; ")
+        )
+    }))
+}
+
 /// The exact commit an agent's resolved ID names: a full or an unambiguous short commit ID,
 /// never a ref name (#335: the instructions do not ask for the full ID, and agents give 7).
 fn resolved_commit(integration: &Path, resolved: &str, guard: Option<&Sandbox>) -> Result<String> {
@@ -840,6 +1008,30 @@ fn combine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_exports_names_exported_declarations_and_changed_bodies_by_package() {
+        let diff = "diff --git a/lib/lib.go b/lib/lib.go
+--- a/lib/lib.go
++++ b/lib/lib.go
+@@ -3 +3 @@ func Changed() int {
+-\treturn 1
++\treturn 2
+@@ -9,0 +10,3 @@ type Store struct{}
++func (s *Store[K]) Get() {}
++func hidden() {}
++type Kind int
+diff --git a/lib/lib_test.go b/lib/lib_test.go
++func TestChanged(t *testing.T) {}
+diff --git a/root.go b/root.go
+-func Gone() {}
+";
+        let changed = changed_exports(diff);
+        let names = |d: &str| changed[d].iter().cloned().collect::<Vec<_>>();
+        assert_eq!(names("lib"), ["Changed", "Kind", "Store", "Store.Get"]);
+        assert_eq!(names(""), ["Gone"]);
+        assert_eq!(changed.len(), 2);
+    }
 
     #[test]
     fn a_resolved_commit_may_be_named_by_a_short_id_but_never_by_a_ref() {
