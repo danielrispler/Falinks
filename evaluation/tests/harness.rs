@@ -1413,7 +1413,7 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
 
     // Git: A shares a1 at 2.25 and B shares b1 at 3.0, each from the initial commit; A's
     // merge of b1 in agents/integration conflicts at 5.5.
-    let run = git_collision(&tmp.path().join("git-collision"), [&[], &[]]);
+    let run = git_collision(&tmp.path().join("git-collision"), [&[], &[]], &[]);
     let git = figures(&run);
     let a = &git["agents"]["A"];
     // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75), beside their
@@ -1454,8 +1454,9 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
 
 /// `tests/timing/git-collision` copied to `to`, with its `agents/repo`: A's a1 and B's b1 each
 /// change `consumer.go`'s return line from the initial commit, adding `extra`'s files (A's,
-/// B's), and the final snapshot merges b1 into a1 keeping a1's side of the conflict.
-fn git_collision(to: &Path, extra: [&[(&str, &str)]; 2]) -> PathBuf {
+/// B's), and the final snapshot merges b1 into a1 keeping a1's side of the conflict. With
+/// `b2`'s files, B shares b2 on b1 at 4.0, and the final snapshot merges b2 in its place.
+fn git_collision(to: &Path, extra: [&[(&str, &str)]; 2], b2: &[(&str, &str)]) -> PathBuf {
     let copied = Command::new("cp")
         .arg("-R")
         .arg(root().join("tests/timing/git-collision"))
@@ -1517,14 +1518,27 @@ fn git_collision(to: &Path, extra: [&[(&str, &str)]; 2]) -> PathBuf {
         &[&[("consumer.go", &ours[..])], extra[1]].concat(),
         "B draft 1",
     );
+    let mut shares = vec![("A", a1.clone(), 2.25), ("B", b1.clone(), 3.0)];
+    if !b2.is_empty() {
+        shares.push(("B", commit(b2, "B draft 2"), 4.0));
+    }
     git(&["checkout", "-q", "-b", "integration", &a1]);
-    git(&["merge", "-q", "--no-edit", "-X", "ours", &b1]);
+    git(&[
+        "merge",
+        "-q",
+        "--no-edit",
+        "-X",
+        "ours",
+        &shares.last().unwrap().1,
+    ]);
     let merged = git(&["rev-parse", "HEAD"]);
-    let events = [("A", &a1, 2.25), ("B", &b1, 3.0)]
+    let events = shares
+        .iter()
         .map(|(agent, commit, elapsed)| {
             json!({"kind": "draft_shared", "agent": agent, "commit": commit, "elapsed": elapsed})
                 .to_string()
         })
+        .collect::<Vec<_>>()
         .join("\n");
     fs::write(run.join("controller/events.jsonl"), events).unwrap();
     let mut result = read(run.join("controller/result.json"));
@@ -1560,6 +1574,7 @@ fn report_prices_c1_and_counts_final_tree_pairs_per_class() {
             &[("a.go", &net_a[..]), ("c.go", &join_a[..])],
             &[("b.go", &net_b[..]), ("d.go", &join_b[..])],
         ],
+        &[],
     );
     let id = "go-relationships-1-git-2";
     let mut result = read(run.join("controller/result.json"));
@@ -1626,6 +1641,98 @@ fn report_prices_c1_and_counts_final_tree_pairs_per_class() {
         (&json!([1.0]), &json!([1.0]))
     );
     assert!(cell["note"].as_str().unwrap().contains("decides nothing"));
+}
+
+/// Mechanism (#506) over the recorded Git collision run, with three classified pairs of A's
+/// copies (a1, at 2.25) and B's (b1, at 3.0): B wrote HelperB at 1.0, before A's share
+/// presented HelperA (blind); B's SumB has no earlier write than its share (seen-duplicated);
+/// B's b2 drops PickB and calls PickA (reused). The report counts each class once and prints
+/// the best variant, with its rule, between two arms.
+#[test]
+fn report_classes_each_helper_choice_and_prints_the_best_variant() {
+    let tmp = tmp("falinks-report-mechanism-");
+    let helper = |name: &str| {
+        format!(
+            "func {name}(xs []int) int {{\n    n := 0\n    for _, x := range xs {{\n        n += x\n    }}\n    return n\n}}\n"
+        )
+    };
+    let sum =
+        |name: &str| format!("func {name}(q, p int) int {{\n    n := q * p\n    return n\n}}\n");
+    let pick = |name: &str| {
+        format!(
+            "func {name}(xs []string) string {{\n    if len(xs) == 0 {{\n        return \"\"\n    }}\n    return xs[0]\n}}\n"
+        )
+    };
+    let call =
+        |name: &str| format!("func Use(ys []string) bool {{\n    return {name}(ys) != \"\"\n}}\n");
+    let file = |parts: &[String]| format!("package p\n\n{}", parts.join("\n"));
+    let a = file(&[helper("HelperA"), sum("SumA"), pick("PickA")]);
+    let b1 = file(&[helper("HelperB"), sum("SumB"), pick("PickB"), call("PickB")]);
+    let b2 = file(&[helper("HelperB"), sum("SumB"), call("PickA")]);
+    let run = git_collision(
+        &tmp.path().join("run"),
+        [&[("a.go", &a[..])], &[("b.go", &b1[..])]],
+        &[("b.go", &b2[..])],
+    );
+    let mut result = read(run.join("controller/result.json"));
+    result["outcome"] = json!("success");
+    fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+    // B's first write of HelperB, at 1.0 s, before A's share.
+    let write = json!({"type": "assistant", "timestamp": "2026-10-21T10:00:01.000Z",
+        "message": {"id": "n0", "content": [{"type": "tool_use", "id": "u0", "name": "Write",
+            "input": {"file_path": "/w/agents/B/b.go", "content": file(&[helper("HelperB")])}}]}});
+    let transcript = run.join("agents/B/scratch/claude-events.jsonl");
+    let appended = fs::read_to_string(&transcript).unwrap() + &format!("{write}\n");
+    fs::write(&transcript, appended).unwrap();
+    // The same run twice, as git-2 and git-2+announce: they tie, so git-2 stands.
+    let entry = |id: &str, variant: Value| {
+        json!({"run_dir": run, "run_id": id, "pair": id, "fixture": "go-relationships",
+            "arm": "git", "team_size": 2, "variant": variant, "scored": true})
+    };
+    let ledger =
+        json!({"runs": [entry("plain", Value::Null), entry("announce", json!("announce"))]});
+    fs::write(tmp.path().join("batch.json"), ledger.to_string()).unwrap();
+    let proposed = cli(["duplicates", "--runs", tmp.path().to_str().unwrap()]);
+    assert!(proposed.status.success(), "{}", text(&proposed));
+    let path = tmp.path().join("duplicates.json");
+    let mut duplicates = read(&path);
+    for pair in duplicates["pairs"].as_array_mut().unwrap() {
+        let names: Vec<&str> = pair["sides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        pair["class"] = match names[..] {
+            ["HelperA", "HelperB"] | ["PickA", "PickB"] => "duplicate",
+            ["SumA", "SumB"] => "divergent",
+            _ => "no",
+        }
+        .into();
+    }
+    fs::write(&path, duplicates.to_string()).unwrap();
+    let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]);
+    assert!(output.status.success(), "{}", text(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cell = &report["mechanism"]["go-relationships"]["git-2"];
+    let once = json!({"blind": 1, "seen-duplicated": 1, "reused": 1});
+    assert_eq!(cell["runs"]["plain"], once, "{cell}");
+    assert_eq!(
+        (
+            &cell["blind"],
+            &cell["seen-duplicated"],
+            &cell["reused"],
+            &cell["missing_runs"]
+        ),
+        (&json!(1), &json!(1), &json!(1), &json!(0))
+    );
+    let best = &report["best_variant"]["go-relationships"];
+    assert_eq!(best["arm"], "git-2", "{best}");
+    assert_eq!(
+        best["rule"],
+        "git-2+announce against git-2: ties within 15% and wins on neither mechanism nor C2, so the simpler arm stands"
+    );
+    assert_eq!(best["arms"]["git-2+announce"]["reused"], 1);
 }
 
 /// A team of one (#178 C1) has no agent B: `timing` reads agent A alone.
