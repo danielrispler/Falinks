@@ -851,7 +851,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec|wave-1..wave-4|sweep|confirm] [--show-code]
   timing RUN_DIR
   collisions RUN_DIR
-  duplicates --runs DIR";
+  duplicates --runs DIR [--answers FILE --seed SEED]";
 
 struct Args {
     positional: Vec<String>,
@@ -1011,11 +1011,16 @@ fn run() -> Result<i32> {
         Some("known-answer") => {
             known_answer::known_answer(args.get("judge").map(Path::new), args.get("fixtures"))
         }
-        Some("duplicates") => collisions::classify(
-            Path::new(args.required("runs")?),
-            std::io::stdin().lock(),
-            std::io::stdout(),
-        ),
+        Some("duplicates") => {
+            let runs = Path::new(args.required("runs")?);
+            let (input, out) = (std::io::stdin().lock(), std::io::stdout());
+            match args.get("answers") {
+                Some(answers) => {
+                    collisions::audit(runs, Path::new(answers), args.required("seed")?, input, out)
+                }
+                None => collisions::classify(runs, input, out),
+            }
+        }
         Some("collisions") => {
             let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
             let result = read(run.join("controller/result.json"))?;
