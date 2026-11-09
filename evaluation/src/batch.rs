@@ -503,6 +503,9 @@ pub fn batch(
         if let Some(size) = slot["team_size"].as_u64() {
             command.args(["--team-size", &size.to_string()]);
         }
+        if let Some(variant) = slot["variant"].as_str() {
+            command.args(["--variant", variant]);
+        }
         eprintln!("Running {run_id}");
         let status = command.status()?;
         let concurrency = json!({"start": concurrent_at_start, "stop": active_siblings(&runs)?});
@@ -619,8 +622,8 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
         for key in ["run_id", "pair", "fixture", "arm", "scored", "concurrency"] {
             result[key] = entry[key].clone();
         }
-        // Track-T slots name their team size, which a run without a result lacks.
-        for key in ["replaces", "team_size"] {
+        // Track-T slots name their team size, and Step A slots their variant, which a run without a result lacks.
+        for key in ["replaces", "team_size", "variant"] {
             if !entry[key].is_null() {
                 result[key] = entry[key].clone();
             }

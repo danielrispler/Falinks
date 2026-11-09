@@ -1584,6 +1584,60 @@ fn a_team_of_one_completes_and_developments_fire_on_its_own_shares() {
     assert_eq!(evidence["rejected_operations"], 1);
 }
 
+/// #499: the `announce` variant adds #490's line to each agent's workflow text; plain `git.md`
+/// lacks it. An unknown variant is refused before the run directory exists.
+#[test]
+fn announce_variant_adds_its_line_and_unknown_variants_are_refused() {
+    let tmp = tmp("falinks-announce-test-");
+    let config = config(
+        tmp.path(),
+        SCRIPTED,
+        json!([
+            "/bin/sh",
+            "-c",
+            "/usr/bin/tee scratch/host.jsonl | \"$0\" relationships",
+            "{worker}"
+        ]),
+        SCRIPTED,
+    );
+    let line =
+        "There are other agents; announce the files you change; if you overlap, talk and plan.\n";
+    let plain = fs::read_to_string(root().join("instructions/git.md")).unwrap();
+    assert!(!plain.contains("announce the files"));
+    // Step A's test policy holds in every Git arm (#490).
+    let policy = "Test policy: mid-run, test your own packages; run one full check after the final combination.";
+    for workflow in ["git.md", "git-solo.md"] {
+        let text = fs::read_to_string(root().join("instructions").join(workflow)).unwrap();
+        assert!(text.contains(policy), "{workflow}");
+    }
+    let with_variant = |run: &Path, variant: &str| {
+        let mut args = vec![OsStr::new("baseline"), OsStr::new("go-relationships")];
+        args.extend([OsStr::new("--config"), config.as_os_str()]);
+        args.extend([OsStr::new("--output"), run.as_os_str()]);
+        args.extend([OsStr::new("--variant"), OsStr::new(variant)]);
+        cli(args)
+    };
+    let run = tmp.path().join("run");
+    let evidence = successful_evidence(&with_variant(&run, "announce"), &run);
+    assert_eq!(evidence["variant"], "announce");
+    for agent in ["A", "B"] {
+        let host = host_messages(&run.join(format!("agents/{agent}/scratch/host.jsonl")));
+        assert_eq!(
+            host["start"]["workflow"].as_str().unwrap(),
+            plain.clone() + line
+        );
+    }
+    let refused = tmp.path().join("refused");
+    let output = with_variant(&refused, "shout");
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("unknown Git arm variant: shout"),
+        "{}",
+        text(&output)
+    );
+    assert!(!refused.exists());
+}
+
 /// C7 (#178), Git arm: a scripted `claude` or `node` launch through Bash invalidates the run.
 /// Both arms: hits are counted per arm and the batch stops at the first.
 #[test]
