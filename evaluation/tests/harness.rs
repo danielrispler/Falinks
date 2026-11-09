@@ -1413,7 +1413,62 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
 
     // Git: A shares a1 at 2.25 and B shares b1 at 3.0, each from the initial commit; A's
     // merge of b1 in agents/integration conflicts at 5.5.
-    let run = copy("git-collision");
+    let run = git_collision(&tmp.path().join("git-collision"), [&[], &[]]);
+    let git = figures(&run);
+    let a = &git["agents"]["A"];
+    // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75), beside their
+    // categories, native and edit.
+    assert_eq!(
+        a["integration"],
+        json!({"round_trips": 2, "model_seconds": 1.75})
+    );
+    assert!(a["round_trips"].get("integration").is_none());
+    assert_eq!(
+        a["runtime_refusals"],
+        json!({"round_trips": 0, "model_seconds": 0.0})
+    );
+    // From m4, the first input at the CONFLICT's 5.5, to m6's passing check: 1.0, 0.75, 0.25.
+    assert_eq!(
+        a["collision_handling"],
+        json!({"line_conflict": cost(3, 2.0), "rework": idle, "no_fault": idle})
+    );
+    // m4's `cat consumer.go`.
+    assert_eq!(
+        a["rereads"],
+        json!({"round_trips": 1, "model_seconds": 1.0})
+    );
+    // Coordination m2 0.25, m6 0.25, m7 0.5; integration 1.75; the reread 1.0.
+    assert_eq!(
+        a["coordination_overhead"],
+        json!({"round_trips": 6, "model_seconds": 3.75})
+    );
+    assert!(a.get("review_estimate").is_none());
+    let b = &git["agents"]["B"];
+    assert_eq!(b["collision_handling"], unhandled);
+    // Share 0.5 and ready 0.5.
+    assert_eq!(
+        b["coordination_overhead"],
+        json!({"round_trips": 2, "model_seconds": 1.0})
+    );
+}
+
+/// `tests/timing/git-collision` copied to `to`, with its `agents/repo`: A's a1 and B's b1 each
+/// change `consumer.go`'s return line from the initial commit, adding `extra`'s files (A's,
+/// B's), and the final snapshot merges b1 into a1 keeping a1's side of the conflict.
+fn git_collision(to: &Path, extra: [&[(&str, &str)]; 2]) -> PathBuf {
+    let copied = Command::new("cp")
+        .arg("-R")
+        .arg(root().join("tests/timing/git-collision"))
+        .arg(to)
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    let consume = |body: &str| {
+        format!("package fixture\n\nfunc Consume(records []string) []string {{\n{body}}}\n")
+    };
+    let theirs = consume("    return records\n");
+    let ours = consume("    return append(records[:0:0], records...)\n");
+    let run = to.to_path_buf();
     let repo = run.join("agents/repo");
     fs::create_dir_all(&repo).unwrap();
     let git = |args: &[&str]| {
@@ -1453,11 +1508,17 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
         .map(|(name, text)| (name.as_str(), text.as_str().unwrap()))
         .collect();
     let base = commit(&files, "Frozen initial task");
-    let a1 = commit(&[("consumer.go", &theirs)], "A draft 1");
+    let a1 = commit(
+        &[&[("consumer.go", &theirs[..])], extra[0]].concat(),
+        "A draft 1",
+    );
     git(&["checkout", "-q", "-b", "B", &base]);
-    let b1 = commit(&[("consumer.go", &ours)], "B draft 1");
+    let b1 = commit(
+        &[&[("consumer.go", &ours[..])], extra[1]].concat(),
+        "B draft 1",
+    );
     git(&["checkout", "-q", "-b", "integration", &a1]);
-    git(&["merge", "-q", "--no-edit", "-s", "ours", &b1]);
+    git(&["merge", "-q", "--no-edit", "-X", "ours", &b1]);
     let merged = git(&["rev-parse", "HEAD"]);
     let events = [("A", &a1, 2.25), ("B", &b1, 3.0)]
         .map(|(agent, commit, elapsed)| {
@@ -1470,42 +1531,101 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
     result["initial_snapshot"] = json!(base);
     result["final_snapshot"] = json!(merged);
     fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
-    let git = figures(&run);
-    let a = &git["agents"]["A"];
-    // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75), beside their
-    // categories, native and edit.
-    assert_eq!(
-        a["integration"],
-        json!({"round_trips": 2, "model_seconds": 1.75})
+    run
+}
+
+/// C1 (#490, #505) over the recorded Git collision run, with one duplicate and one divergent
+/// pair both standing in the final tree: each term and the sum match hand-computed values,
+/// and the final-tree pairs are counted per class.
+#[test]
+fn report_prices_c1_and_counts_final_tree_pairs_per_class() {
+    let tmp = tmp("falinks-report-c1-");
+    let net = |name: &str| {
+        format!("package p\nfunc {name}(q, p int) int {{\n    n := q * p\n    return n\n}}\n")
+    };
+    let join = |name: &str, sep: &str| {
+        format!(
+            "package p\nfunc {name}(xs []string) string {{\n    return strings.Join(xs, \"{sep}\")\n}}\n"
+        )
+    };
+    let (net_a, net_b, join_a, join_b) = (
+        net("NetA"),
+        net("NetB"),
+        join("JoinA", ","),
+        join("JoinB", ";"),
     );
-    assert!(a["round_trips"].get("integration").is_none());
-    assert_eq!(
-        a["runtime_refusals"],
-        json!({"round_trips": 0, "model_seconds": 0.0})
+    let run = git_collision(
+        &tmp.path().join("run"),
+        [
+            &[("a.go", &net_a[..]), ("c.go", &join_a[..])],
+            &[("b.go", &net_b[..]), ("d.go", &join_b[..])],
+        ],
     );
-    // From m4, the first input at the CONFLICT's 5.5, to m6's passing check: 1.0, 0.75, 0.25.
+    let id = "go-relationships-1-git-2";
+    let mut result = read(run.join("controller/result.json"));
+    result["outcome"] = json!("success");
+    fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+    fs::write(
+        tmp.path().join("batch.json"),
+        json!({"runs": [{"run_dir": run, "run_id": id, "pair": "go-relationships-1",
+            "fixture": "go-relationships", "arm": "git", "team_size": 2, "scored": true}]})
+        .to_string(),
+    )
+    .unwrap();
+    let metric = |value: f64| json!({"value": value});
+    fs::write(
+        tmp.path().join("quality.json"),
+        json!({"runs": {id: {"metrics": {"production_lines_changed": metric(40.0),
+            "test_lines_added": metric(15.0)}}}})
+        .to_string(),
+    )
+    .unwrap();
+    // Propose the pairs (no answers), then classify the Net pair duplicate, the Join pair
+    // divergent and any other no.
+    let proposed = cli(["duplicates", "--runs", tmp.path().to_str().unwrap()]);
+    assert!(proposed.status.success(), "{}", text(&proposed));
+    let path = tmp.path().join("duplicates.json");
+    let mut duplicates = read(&path);
+    for pair in duplicates["pairs"].as_array_mut().unwrap() {
+        let names: Vec<&str> = pair["sides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        pair["class"] = match names[..] {
+            ["NetA", "NetB"] => "duplicate",
+            ["JoinA", "JoinB"] => "divergent",
+            _ => "no",
+        }
+        .into();
+    }
+    fs::write(&path, duplicates.to_string()).unwrap();
+    let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]);
+    assert!(output.status.success(), "{}", text(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cell = &report["c1"]["go-relationships"]["git-2"];
+    let term = |name: &str| cell["terms"][name]["values"][0].as_f64().unwrap();
+    // A's integration, line-conflict handling and reread, as `timing` gives them.
     assert_eq!(
-        a["collision_handling"],
-        json!({"line_conflict": cost(3, 2.0), "rework": idle, "no_fault": idle})
+        ["integration", "line_conflict", "rework", "rereads"].map(term),
+        [1.75, 2.0, 0.0, 1.0]
     );
-    // m4's `cat consumer.go`.
+    // The later copies, B's NetB (4 lines) and JoinB (3), at edit model seconds A's m1 1.0
+    // and m5 0.75 plus B's n1 1.0, over 40 + 15 written lines: 7 × 2.75 / 55. B's dropped
+    // consumer.go line is line-conflict waste, not priced.
+    assert!((term("duplicate_work") - 0.35).abs() < 1e-9, "{cell}");
+    let c1 = cell["model_seconds"]["median"].as_f64().unwrap();
+    assert!((c1 - 5.1).abs() < 1e-9, "{cell}");
+    assert_eq!(cell["run_ids"], json!([id]));
     assert_eq!(
-        a["rereads"],
-        json!({"round_trips": 1, "model_seconds": 1.0})
+        (
+            &cell["final_tree_pairs"]["duplicate"]["values"],
+            &cell["final_tree_pairs"]["divergent"]["values"]
+        ),
+        (&json!([1.0]), &json!([1.0]))
     );
-    // Coordination m2 0.25, m6 0.25, m7 0.5; integration 1.75; the reread 1.0.
-    assert_eq!(
-        a["coordination_overhead"],
-        json!({"round_trips": 6, "model_seconds": 3.75})
-    );
-    assert!(a.get("review_estimate").is_none());
-    let b = &git["agents"]["B"];
-    assert_eq!(b["collision_handling"], unhandled);
-    // Share 0.5 and ready 0.5.
-    assert_eq!(
-        b["coordination_overhead"],
-        json!({"round_trips": 2, "model_seconds": 1.0})
-    );
+    assert!(cell["note"].as_str().unwrap().contains("decides nothing"));
 }
 
 /// A team of one (#178 C1) has no agent B: `timing` reads agent A alone.

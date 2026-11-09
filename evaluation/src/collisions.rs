@@ -693,10 +693,11 @@ fn duplicate_events(
         match verdicts.get(pair["id"].as_str().unwrap_or_default()) {
             None => unclassified += 1,
             Some(&"no") => {}
-            Some(_) => {
+            Some(verdict) => {
                 let (a, b) = (&functions[*i], &functions[*j]);
                 let mut waste = BTreeMap::new();
-                if a.state == "final" && b.state == "final" {
+                let final_tree = a.state == "final" && b.state == "final";
+                if final_tree {
                     let later = if b.first >= a.first { b } else { a };
                     waste.insert(later.agent.clone(), (later.end - later.start + 1) as u64);
                 } else {
@@ -707,7 +708,11 @@ fn duplicate_events(
                     }
                 }
                 let files = [a.file.clone(), b.file.clone()].into();
-                events.push(collision("duplicate_work", files, vec![], waste));
+                let mut event = collision("duplicate_work", files, vec![], waste);
+                // `report` counts final-tree pairs per class (#505).
+                event["pair_class"] = (*verdict).into();
+                event["final_tree"] = final_tree.into();
+                events.push(event);
             }
         }
     }
@@ -2101,15 +2106,19 @@ mod tests {
                 (&json!("B"), &json!("NetB"), &json!("final"), &json!(4))
             ]
         );
-        let event = json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4,
-            "waste": {"B": 4}, "detected": []}]);
         // #339's `duplicate: true` reads as duplicate; divergent is priced alike (#498).
-        for verdict in [json!(true), json!("duplicate"), json!("divergent")] {
+        for (verdict, class) in [
+            (json!(true), "duplicate"),
+            (json!("duplicate"), "duplicate"),
+            (json!("divergent"), "divergent"),
+        ] {
             let found = measured(
                 run.dir.path(),
                 &result,
                 &classified(run.dir.path(), &result, verdict),
             );
+            let event = json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4,
+                "waste": {"B": 4}, "detected": [], "pair_class": class, "final_tree": true}]);
             assert_eq!(found["status"], "complete");
             assert_eq!(found["events"], event);
             assert_eq!(waste(&found)["lines"], 4);
@@ -2323,7 +2332,7 @@ mod tests {
         assert_eq!(
             found["events"],
             json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4, "waste": {"agent-0": 4},
-                "detected": []}])
+                "detected": [], "pair_class": "duplicate", "final_tree": false}])
         );
     }
 
