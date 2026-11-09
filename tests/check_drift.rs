@@ -7,6 +7,7 @@
 //!   start artifacts for later steps (for example the research probes in
 //!   `sandbox-probes.yml`). Every other cargo subcommand in a workflow is a check
 //!   and must be in the list.
+//! - `studio.yml` is exempt: its cargo steps check the studio's workspace, not the engine's.
 
 use std::{collections::BTreeSet, fs, path::Path};
 
@@ -46,18 +47,29 @@ fn workflow_checks(text: &str) -> Vec<String> {
     checks
 }
 
+/// The studio's cargo steps check its own workspace (`apps/studio`), not the engine's.
+const EXEMPT_WORKFLOWS: &[&str] = &["studio.yml"];
+
+fn ci_checks<'a>(workflows: impl IntoIterator<Item = (&'a str, &'a str)>) -> BTreeSet<String> {
+    workflows
+        .into_iter()
+        .filter(|(name, _)| !EXEMPT_WORKFLOWS.contains(name))
+        .flat_map(|(_, text)| workflow_checks(text))
+        .collect()
+}
+
 #[test]
 fn check_list_matches_ci_workflows() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
-    let mut ci = BTreeSet::new();
+    let mut workflows = vec![];
     for entry in fs::read_dir(&dir).expect("workflow directory") {
         let path = entry.expect("workflow entry").path();
         if path.extension().is_some_and(|e| e == "yml" || e == "yaml") {
-            ci.extend(workflow_checks(
-                &fs::read_to_string(&path).expect("workflow"),
-            ));
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            workflows.push((name, fs::read_to_string(&path).expect("workflow")));
         }
     }
+    let ci = ci_checks(workflows.iter().map(|(n, t)| (n.as_str(), t.as_str())));
     let local: BTreeSet<String> = check_list::CHECKS
         .iter()
         .filter(|c| **c != check_list::ACTIONLINT)
@@ -114,6 +126,21 @@ fn evaluation_inputs_match_the_evaluation_workflow_filter() {
         .map(|i| i.to_string())
         .collect();
     assert_eq!(filters, BTreeSet::from([inputs]));
+}
+
+#[test]
+fn only_the_studio_workflow_is_exempt() {
+    let step = "      - run: cargo test --unlisted\n";
+    let checks = ci_checks([
+        ("studio.yml", step),
+        ("checks.yml", step),
+        ("new.yaml", step),
+    ]);
+    assert_eq!(
+        checks,
+        BTreeSet::from(["cargo test --unlisted".to_string()])
+    );
+    assert!(ci_checks([("studio.yml", step)]).is_empty());
 }
 
 #[test]
