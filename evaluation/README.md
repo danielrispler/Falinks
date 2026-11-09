@@ -44,7 +44,12 @@ workspace files. Visible tests cannot change the oracle's captured source.
 
 `fixtures/*.json` contain public initial source, allocation, dependency
 information, commands, requirements and host milestone definitions.
-`protected/*.json` contain host-only oracle and reference bytes. Do **not** give
+`protected/*.json` contain host-only oracle and reference bytes. An optional
+`"trap": {"milestone": ID, "cases": [TEST, ...], "side_cases": [TEST, ...]}` tags the oracle cases that depend on
+the milestone that changes a function's meaning (#490 C2). For each two-agent Git run,
+`report`'s `c2` says whether the first combined check after that development failed on a
+tagged case, and per arm whether C2 holds (at least 2 of 3 runs). `side_cases`, the trap
+developer's own dependents, are counted apart at that check and decide nothing. Do **not** give
 this checkout or a clone of it to task agents. `prepare` exports only the initial
 fixture repository. A future Falinks runner must use the same export, freeze,
 instructions, developments and `oracle` seam, with its engine/adapter controls and repeated `--deny-root` arguments for all prior runs or reference copies.
@@ -480,10 +485,20 @@ it; the runtime's own `<synthetic>` replies carry no effort and are skipped. A
     read; a team of one is `n/a`.
     - Duplicate work needs a classifier: after a batch, run `duplicates --runs DIR`. It
       proposes candidate pairs (one function per agent with one name, in files one
-      requirement names, or with token similarity at or above the frozen `SIMILARITY` in
-      `src/collisions.rs`), shows each unclassified pair without its run, arm or agent, in
-      hash order across runs, and saves each answer to `DIR/duplicates.json`
-      (`pairs[].duplicate`, null until classified). `collisions` and `report` read it.
+      requirement names, with token similarity at or above the frozen `SIMILARITY` in
+      `src/collisions.rs`, or, since #502, with the shorter body's tokens contained in the
+      longer at or above `CONTAINMENT`, so an inline duplicate is proposed), shows each
+      unclassified pair without its run, arm or agent, in hash order across runs, asks Step
+      A's three-way question (duplicate, divergent or no; #498's amendment) and saves each
+      answer to `DIR/duplicates.json` (`pairs[].class`, null until classified; #339's
+      `duplicate` true or false reads as duplicate or no). `collisions` and `report` read it,
+      pricing a divergent pair's waste as a duplicate's.
+    - Scored runs (#498's amendment, section 3): `duplicates --runs DIR --answers FILE --seed
+      SEED` takes a blind classifier's answers (a JSON array, one per pair in the order shown:
+      duplicate, divergent, no or unsure), asks Daniel the pairs to audit (every answer but no,
+      and a seeded random 20% of the no answers, rounded up) and records the `audit`. More than
+      1 disagreement (an unsure answer is never one) means Daniel classifies every pair;
+      otherwise the classifier's answers fill the pairs not audited.
     - `report` prints, per fixture and arm, `collisions`: waste lines, collisions per class
       and premature checks, the `handling` cost per class and `rereads` (round-trips and model
       seconds summed over agents), with `note`, `handling_note` and #205's three `sentences`.
