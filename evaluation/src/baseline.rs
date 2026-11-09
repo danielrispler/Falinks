@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
 const AGENTS: [&str; 2] = ["A", "B"];
+/// The `announce` variant's extra workflow line, #490's wording.
+const ANNOUNCE: &str =
+    "There are other agents; announce the files you change; if you overlap, talk and plan.\n";
 
 /// The other agent in a team of two; a team of one has no peer.
 fn peer(team: &[&'static str], agent: &str) -> Option<&'static str> {
@@ -111,6 +114,7 @@ impl Run {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // The CLI's flags, one call site.
 pub fn baseline(
     name: &str,
     config_path: &Path,
@@ -119,9 +123,16 @@ pub fn baseline(
     order: i64,
     scored: bool,
     team_size: usize,
+    variant: Option<&str>,
 ) -> Result<i32> {
     if !(1..=2).contains(&team_size) {
         bail!("team size must be 1 or 2");
+    }
+    match variant {
+        None => {}
+        Some("announce") if team_size == 2 => {}
+        Some("announce") => bail!("the announce variant needs a team of two"),
+        Some(other) => bail!("unknown Git arm variant: {other}"),
     }
     let (started, start_unix) = (Instant::now(), unix_now());
     let config = read(config_path)?;
@@ -134,7 +145,7 @@ pub fn baseline(
     fs::DirBuilder::new().mode(0o700).create(&private)?;
     let public = destination.join("agents");
     fs::create_dir(&public)?;
-    let evidence = json!({
+    let mut evidence = json!({
         "schema_version": 1, "run_id": destination.file_name().unwrap().to_string_lossy(), "arm": "git",
         "fixture": name, "fixture_version": fixture["version"], "freeze": manifest, "configuration": config,
         "order": order, "pair": pair, "scored": scored, "team_size": team_size, "outcome": "infrastructure_failure",
@@ -147,6 +158,9 @@ pub fn baseline(
         "timing": {"start_utc": utc_now(), "start_unix": start_unix, "endpoint": "clean preparation through exact candidate passing checks"},
         "tool_differences": read(root().join("config.json"))?["tool_differences"],
     });
+    if let Some(variant) = variant {
+        evidence["variant"] = variant.into();
+    }
     let timeout = config["timeout_seconds"].as_f64().unwrap_or(0.0);
     let mut run = Run {
         team: &AGENTS[..team_size],
@@ -397,11 +411,16 @@ fn execute(
                 (parts.join("\n").into(), "instructions/git-solo.md")
             }
         };
+        let announce = if run.evidence["variant"] == "announce" {
+            ANNOUNCE
+        } else {
+            ""
+        };
         let mut start = json!({
             "type": "start", "agent": agent, "workspace": public.join(agent),
             "peer_workspace": peer_workspace, "integration_workspace": public.join("integration"),
             "task": task, "development_count": milestones.len(), "allocation": allocation,
-            "workflow": fs::read_to_string(root().join(workflow))?,
+            "workflow": fs::read_to_string(root().join(workflow))? + announce,
             "runtime_binary": config["runtime_binary"], "runtime_version": config["runtime_version"],
             "runtime_home": config["runtime_home"],
             "model": {"model": config["model"], "model_version": config["model_version"], "reasoning": config["reasoning"]},
