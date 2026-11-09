@@ -1194,11 +1194,12 @@ const PAYBACK_ARMS: [&str; 2] = ["falinks-2", "git-2"];
 
 /// A run's arm and team size, as step 6 and large-spec key them.
 fn team(run: &Value) -> Option<String> {
-    Some(format!(
-        "{}-{}",
-        run["arm"].as_str()?,
-        run["team_size"].as_u64()?
-    ))
+    let team = format!("{}-{}", run["arm"].as_str()?, run["team_size"].as_u64()?);
+    // Step A's Git arm variants are arms of their own (#490).
+    Some(match run["variant"].as_str() {
+        Some(variant) => format!("{team}+{variant}"),
+        None => team,
+    })
 }
 
 /// Each arm's p of having more successes than the other, and the arm that passes at `LEVEL`.
@@ -3121,6 +3122,17 @@ mod tests {
         let out = report(&runs, false);
         assert_eq!(out["gaps"], json!([]), "{out}");
         assert_eq!(out["replaced_runs"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_git_arm_variant_is_an_arm_of_its_own() {
+        let run = |variant: Value| json!({"arm": "git", "team_size": 2, "variant": variant});
+        assert_eq!(team(&run(Value::Null)).as_deref(), Some("git-2"));
+        assert_eq!(
+            team(&run(json!("announce"))).as_deref(),
+            Some("git-2+announce")
+        );
+        assert_eq!(team(&run(json!("notify"))).as_deref(), Some("git-2+notify"));
     }
 
     #[test]
