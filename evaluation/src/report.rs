@@ -695,7 +695,36 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         "falinks_transitions": transitions,
         "regrouping_benefit": if transitions == 0 { "unestablished: no transitions" } else { "observed transitions; benefit needs review" },
         "replaced_runs": replaced,
+        "c2": c2_cells(&current),
     })
+}
+
+/// Printed with the C2 cells.
+const C2_SIDE_NOTE: &str = "side: failures on oracle cases of the trap developer's own dependents (side_cases) at the same check, per run and summed over the arm's runs; a side report, not part of C2, that decides nothing.";
+
+/// C2 (#490) per fixture with a trap, and per two-agent Git arm: each run's reading (batch's
+/// `trap_reached`), the count of true runs, and whether C2 holds, in at least 2 of 3 runs.
+fn c2_cells(runs: &[&Value]) -> Value {
+    let mut cells = json!({});
+    let read = |r: &&&Value| r["trap_reached"].is_object() && !replaceable(r);
+    for run in runs.iter().filter(read) {
+        let (reached, id) = (
+            &run["trap_reached"],
+            run["run_id"].as_str().unwrap_or_default(),
+        );
+        let fixture = run["fixture"].as_str().unwrap_or_default();
+        let cell = &mut cells[fixture][team(run).unwrap_or_default().as_str()];
+        cell["runs"][id] = reached["c2"].clone();
+        let count = cell["count"].as_u64().unwrap_or(0) + u64::from(reached["c2"] == true);
+        cell["n"] = (cell["n"].as_u64().unwrap_or(0) + 1).into();
+        cell["count"] = count.into();
+        cell["holds"] = (count >= 2).into();
+        let side = reached["side_failures"].as_u64().unwrap_or(0);
+        cell["side"]["runs"][id] = side.into();
+        cell["side"]["failures"] = (cell["side"]["failures"].as_u64().unwrap_or(0) + side).into();
+        cell["side"]["note"] = C2_SIDE_NOTE.into();
+    }
+    cells
 }
 
 /// Printed with the collision cells (#334).

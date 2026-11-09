@@ -146,6 +146,8 @@ pub fn baseline(
         "recommendations": 0, "transitions": 0,
         "timing": {"start_utc": utc_now(), "start_unix": start_unix, "endpoint": "clean preparation through exact candidate passing checks"},
         "tool_differences": read(root().join("config.json"))?["tool_differences"],
+        // C2's oracle cases (#490), for `report`; null for a fixture without a trap.
+        "trap": crate::protected(name)?["trap"],
     });
     let timeout = config["timeout_seconds"].as_f64().unwrap_or(0.0);
     let mut run = Run {

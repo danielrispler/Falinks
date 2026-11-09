@@ -1812,6 +1812,135 @@ fn report_prints_reverted_lines_only_with_show_code() {
     );
 }
 
+/// C2 (#490) over small recorded two-agent Git runs: a run reads true when the first combined
+/// check after the trap's development fails on a tagged case; a failure only on an untagged
+/// case, or only before the development, reads false. An arm holds C2 in 2 of 3 runs. Failures
+/// on side-tagged cases at that check are counted apart and do not make C2.
+#[test]
+fn report_reads_c2_from_cases_tagged_by_the_trap() {
+    let go_fail = |case: &str| format!("--- FAIL: {case} (0.00s)\nFAIL\tinvoice\t0.01s\n");
+    // Each run: its events, then each check's oracle output in order (None: no candidate).
+    let tagged = vec![
+        json!({"kind": "development", "milestone": {"id": "m1"}}),
+        json!({"kind": "development", "milestone": {"id": "m2"}}),
+        json!({"kind": "validation", "candidate": null}),
+        json!({"kind": "validation", "candidate": "c1"}),
+        json!({"kind": "final_validation", "candidate": "c2"}),
+    ];
+    let subtest = "    --- FAIL: TestTrap/rounding (0.00s)\n--- FAIL: TestTrap (0.00s)\n";
+    let runs = [
+        (
+            "tagged",
+            tagged.clone(),
+            vec![
+                None,
+                Some(go_fail("TestTrap") + &go_fail("TestTotals") + &go_fail("TestRender")),
+                Some(String::new()),
+            ],
+        ),
+        (
+            "subtest",
+            tagged.clone(),
+            vec![None, Some(subtest.into()), Some(String::new())],
+        ),
+        (
+            "untagged",
+            tagged,
+            vec![
+                None,
+                Some(go_fail("TestTrapped") + &go_fail("TestTotals")),
+                Some(String::new()),
+            ],
+        ),
+        (
+            "before",
+            vec![
+                json!({"kind": "validation", "candidate": "c1"}),
+                json!({"kind": "development", "milestone": {"id": "m2"}}),
+                json!({"kind": "final_validation", "candidate": "c2"}),
+            ],
+            vec![
+                Some(go_fail("TestTrap") + &go_fail("TestTotals")),
+                Some(String::new()),
+            ],
+        ),
+    ];
+    let tmp = tmp("falinks-report-c2-");
+    let trap = json!({"milestone": "m2", "cases": ["TestTrap", "TestRate"],
+        "side_cases": ["TestTotals", "TestRender"]});
+    let mut entries = vec![];
+    for (id, events, checks) in &runs {
+        let run = tmp.path().join(id);
+        fs::create_dir_all(run.join("controller")).unwrap();
+        let result = json!({"outcome": "success", "team_size": 2, "trap": trap});
+        fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+        let events: String = events.iter().map(|e| format!("{e}\n")).collect();
+        fs::write(run.join("controller/events.jsonl"), events).unwrap();
+        for (n, output) in checks.iter().enumerate() {
+            let check = match output {
+                None => json!({"candidate": null, "passed": false, "conflict": "CONFLICT"}),
+                Some(output) => json!({"oracle": {"passed": output.is_empty(),
+                    "checks": [{"command": ["go", "test"], "passed": output.is_empty(), "output": output}]}}),
+            };
+            let path = run.join(format!("controller/check-{}.json", n + 1));
+            fs::write(path, check.to_string()).unwrap();
+        }
+        entries.push(
+            json!({"run_dir": run, "run_id": id, "pair": id, "fixture": "go-invoice",
+            "arm": "git", "scored": true}),
+        );
+    }
+    // A run without a trap, as with every existing oracle: no reading.
+    let plain = tmp.path().join("plain");
+    fs::create_dir_all(plain.join("controller")).unwrap();
+    fs::write(
+        plain.join("controller/result.json"),
+        json!({"outcome": "success", "team_size": 2}).to_string(),
+    )
+    .unwrap();
+    entries.push(json!({"run_dir": plain, "run_id": "plain", "pair": "plain",
+        "fixture": "go-page", "arm": "git", "scored": true}));
+    let c2 = |ids: &[&str]| {
+        let chosen: Vec<&Value> = entries
+            .iter()
+            .filter(|e| ids.contains(&e["run_id"].as_str().unwrap()))
+            .collect();
+        let ledger = json!({"runs": chosen}).to_string();
+        fs::write(tmp.path().join("batch.json"), ledger).unwrap();
+        let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]);
+        assert!(output.status.success(), "{}", text(&output));
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["c2"].clone()
+    };
+    let mut all = c2(&["tagged", "subtest", "untagged", "plain"]);
+    let side = all["go-invoice"]["git-2"]
+        .as_object_mut()
+        .unwrap()
+        .remove("side")
+        .unwrap();
+    assert_eq!(
+        all,
+        json!({"go-invoice": {"git-2": {"runs": {"tagged": true, "subtest": true, "untagged": false},
+            "count": 2, "n": 3, "holds": true}}})
+    );
+    assert_eq!(
+        (&side["runs"], &side["failures"]),
+        (
+            &json!({"tagged": 2, "subtest": 0, "untagged": 1}),
+            &json!(3)
+        )
+    );
+    assert!(side["note"].as_str().unwrap().contains("decides nothing"));
+    let mut one = c2(&["tagged", "untagged", "before"])["go-invoice"]["git-2"].clone();
+    let side = one.as_object_mut().unwrap().remove("side").unwrap();
+    assert_eq!(
+        one,
+        json!({"runs": {"tagged": true, "untagged": false, "before": false}, "count": 1, "n": 3,
+            "holds": false})
+    );
+    assert_eq!(side["runs"]["before"], 0);
+    assert_eq!(c2(&["plain"]), json!({}));
+}
+
 /// #228 decision 27: every differential property quotes its requirement sentence verbatim
 /// from the frozen fixture definition, and the judge uses the run configuration's pins.
 #[test]
