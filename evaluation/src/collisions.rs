@@ -237,7 +237,7 @@ const QUESTION: &str = "Could one shared, reachable function serve both, so that
 
 /// A pair's class: `duplicate`, `divergent` or `no`, or None while unclassified. #339's
 /// `duplicate` verdicts read as duplicate (true) and no (false).
-fn class(pair: &Value) -> Option<&str> {
+pub(crate) fn class(pair: &Value) -> Option<&str> {
     pair["class"].as_str().or_else(|| {
         pair["duplicate"]
             .as_bool()

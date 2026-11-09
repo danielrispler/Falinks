@@ -534,6 +534,18 @@ fn execute(
                 bail!("{agent} launched a nested agent; run invalid");
             }
             "ready" => {
+                // The trap's fallback: no call released it before the first ready, so this does,
+                // and the ready is refused like any before an unacknowledged development.
+                if awaiting_ack.is_empty()
+                    && milestones
+                        .get(milestone_index)
+                        .is_some_and(|m| m["release_on_call"].is_object())
+                {
+                    let release = json!({"rule": "ready_fallback", "agent": agent});
+                    develop(run, &milestones, &mut milestone_index, release)?;
+                    awaiting_ack = team.iter().copied().collect();
+                    ready.clear();
+                }
                 if milestone_index != milestones.len() || awaiting_ack.contains(agent) {
                     refuse(run, "not every development is delivered and acknowledged")?;
                     continue;
@@ -634,24 +646,24 @@ fn execute(
                         }
                     }
                 }
-                // Every agent in the team has shared since the last development; alone, its own share.
-                if awaiting_ack.is_empty()
-                    && milestone_index < milestones.len()
-                    && team.iter().all(|a| sequence[a] > milestone_floor[a])
-                {
-                    let milestone = milestones[milestone_index].clone();
-                    milestone_index += 1;
+                if !awaiting_ack.is_empty() || milestone_index == milestones.len() {
+                    continue;
+                }
+                let milestone = &milestones[milestone_index];
+                // The trap (#509) waits for a call to its function; every other development for
+                // every agent in the team to have shared since the last one (alone, its own share).
+                let release = if milestone["release_on_call"].is_object() {
+                    added_call(&work, &sha, &commit, fixture, &milestone["release_on_call"], &public_guard)?
+                        .map(|file| json!({"rule": "call", "agent": agent, "commit": commit, "file": file}))
+                } else if team.iter().all(|a| sequence[a] > milestone_floor[a]) {
+                    Some(Value::Null)
+                } else {
+                    None
+                };
+                if let Some(release) = release {
+                    develop(run, &milestones, &mut milestone_index, release)?;
                     awaiting_ack = team.iter().copied().collect();
                     ready.clear();
-                    run.event("development", json!({"milestone": milestone}))?;
-                    let mut development = json!({"type": "development"});
-                    development
-                        .as_object_mut()
-                        .unwrap()
-                        .extend(milestone.as_object().unwrap().clone());
-                    for member in team {
-                        run.send(member, development.clone())?;
-                    }
                 }
             }
             _ => refuse(run, "unknown action")?,
@@ -680,6 +692,139 @@ fn execute(
     run.evidence["timing"]["elapsed_seconds"] = run.started.elapsed().as_secs_f64().into();
     run.evidence["timing"]["stop_utc"] = utc_now().into();
     drain_usage(run, &incoming, drain)
+}
+
+/// Delivers the next development to every agent. A trap's `release` (rule, agent, and for a
+/// call the share and file) is recorded with its time; its host-only fields are not sent.
+fn develop(
+    run: &mut Run,
+    milestones: &[Value],
+    index: &mut usize,
+    mut release: Value,
+) -> Result<()> {
+    let milestone = milestones[*index].clone();
+    *index += 1;
+    let mut development = json!({"type": "development"});
+    development
+        .as_object_mut()
+        .unwrap()
+        .extend(milestone.as_object().unwrap().clone());
+    if release.is_null() {
+        run.event("development", json!({"milestone": milestone}))?;
+    } else {
+        release["elapsed"] = run.started.elapsed().as_secs_f64().into();
+        release["utc"] = utc_now().into();
+        run.evidence["trap_release"] = release.clone();
+        run.event(
+            "development",
+            json!({"milestone": milestone, "release": release}),
+        )?;
+        for key in ["trigger", "release_on_call"] {
+            development.as_object_mut().unwrap().remove(key);
+        }
+    }
+    for member in run.team {
+        run.send(member, development.clone())?;
+    }
+    Ok(())
+}
+
+/// The first non-test `.go` file outside the trap's package whose diff from `base` to `commit`
+/// adds a call `<qualifier>.<function>(` (#509).
+fn added_call(
+    work: &Path,
+    base: &str,
+    commit: &str,
+    fixture: &Value,
+    call: &Value,
+    guard: &Sandbox,
+) -> Result<Option<String>> {
+    let (package, function) = (
+        call["package"].as_str().unwrap(),
+        call["function"].as_str().unwrap(),
+    );
+    let module = fixture["files"]["go.mod"]
+        .as_str()
+        .and_then(|m| m.lines().find_map(|l| l.strip_prefix("module ")))
+        .ok_or("the trap's fixture has no go.mod module")?
+        .trim();
+    let changed = git(
+        work,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=AM",
+            base,
+            commit,
+        ],
+        Some(guard),
+    )?;
+    for file in changed.lines() {
+        let source = git(work, &["show", &format!("{commit}:{file}")], Some(guard))?;
+        let diff = git(
+            work,
+            &["diff", "-U0", base, commit, "--", file],
+            Some(guard),
+        )?;
+        let added: Vec<&str> = diff
+            .lines()
+            .filter(|l| !l.starts_with("+++"))
+            .filter_map(|l| l.strip_prefix('+'))
+            .collect();
+        if adds_call(file, &source, &added, module, package, function) {
+            return Ok(Some(file.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether `added`, lines new in `file`, call `<qualifier>.<function>(`, where the qualifier
+/// is the name `source` imports `module/package` by: the package's name or an alias. Dot and
+/// blank imports, test files and the package's own files never match.
+/// shortcut: the default name is the directory's last element, and a line's `//` comment is
+/// cut but block comments and strings still count; revisit for a fixture where that matters.
+fn adds_call(
+    file: &str,
+    source: &str,
+    added: &[&str],
+    module: &str,
+    package: &str,
+    function: &str,
+) -> bool {
+    let directory = file.rsplit_once('/').map_or("", |(d, _)| d);
+    if !file.ends_with(".go") || file.ends_with("_test.go") || directory == package {
+        return false;
+    }
+    let path = format!("\"{module}/{package}\"");
+    let default = package.rsplit('/').next().unwrap();
+    let (mut block, mut qualifiers) = (false, vec![]);
+    for line in source.lines() {
+        let line = line.split("//").next().unwrap().trim();
+        let spec = if block {
+            block = line != ")";
+            line
+        } else if let Some(rest) = line.strip_prefix("import") {
+            block = rest.trim() == "(";
+            rest.trim()
+        } else {
+            continue;
+        };
+        match spec.split_whitespace().collect::<Vec<_>>()[..] {
+            [p] if p == path => qualifiers.push(default),
+            [name, p] if p == path && name != "_" && name != "." => qualifiers.push(name),
+            _ => {}
+        }
+    }
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
+    qualifiers.iter().any(|q| {
+        let call = format!("{q}.{function}(");
+        added.iter().any(|line| {
+            let line = line.split("//").next().unwrap();
+            line.match_indices(&call)
+                .any(|(at, _)| !line[..at].ends_with(ident))
+        })
+    })
 }
 
 /// After the clock stops (#179): refuse every request while waiting up to `window` for each
@@ -1008,6 +1153,70 @@ fn combine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #509: the trap's call trigger names the defining package by its import name.
+    #[test]
+    fn the_trap_releases_on_a_qualified_call_outside_its_package_only() {
+        let fires = |file: &str, imports: &str, line: &str| {
+            let source = format!("package x\n\n{imports}\n\nfunc f() {{\n\t{line}\n}}\n");
+            adds_call(
+                file,
+                &source,
+                &[line],
+                "example.com/lending",
+                "calendar",
+                "DaysBetween",
+            )
+        };
+        let block = "import (\n\t\"errors\"\n\n\t\"example.com/lending/calendar\"\n)";
+        let call = "n := calendar.DaysBetween(a, b) - 1";
+        // The default qualifier, in a block or alone, and an alias.
+        assert!(fires("loan/fee.go", block, call));
+        assert!(fires(
+            "loan/fee.go",
+            "import \"example.com/lending/calendar\"",
+            call
+        ));
+        let alias = "import (\n\tcal \"example.com/lending/calendar\" // dates\n)";
+        assert!(fires(
+            "report/overdue.go",
+            alias,
+            "x := cal.DaysBetween(a, b)"
+        ));
+        assert!(!fires("report/overdue.go", alias, call));
+        // A same-named function of another package, or a method or variable of that name.
+        let other = "import calendar \"example.com/lending/dates\"";
+        assert!(!fires("loan/fee.go", other, call));
+        assert!(!fires(
+            "loan/fee.go",
+            block,
+            "n := c.calendar.DaysBetween(a, b)"
+        ));
+        assert!(!fires(
+            "loan/fee.go",
+            block,
+            "n := mycalendar.DaysBetween(a, b)"
+        ));
+        // Test files, the defining package itself, dot and blank imports, non-Go files.
+        assert!(!fires("loan/fee_test.go", block, call));
+        assert!(!fires("calendar/days.go", block, call));
+        let dot = "import . \"example.com/lending/calendar\"";
+        assert!(!fires("loan/fee.go", dot, "n := DaysBetween(a, b)"));
+        assert!(!fires("loan/fee.go", dot, call));
+        assert!(!fires(
+            "loan/fee.go",
+            "import _ \"example.com/lending/calendar\"",
+            call
+        ));
+        assert!(!fires("loan/notes.md", block, call));
+        // A comment, or a reference without a call (a function value), does not count.
+        assert!(!fires(
+            "loan/fee.go",
+            block,
+            "// calendar.DaysBetween(a, b) counts days"
+        ));
+        assert!(!fires("loan/fee.go", block, "f := calendar.DaysBetween"));
+    }
 
     #[test]
     fn changed_exports_names_exported_declarations_and_changed_bodies_by_package() {

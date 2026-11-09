@@ -5,7 +5,7 @@
 //! directory). A usage-limited run is also replaced on resume, with its evidence kept.
 use crate::authorship::Authorship;
 use crate::{
-    FIXTURES, LARGE_SPEC_FIXTURE, Result, bail, collisions, git, read,
+    FIXTURES, LARGE_SPEC_FIXTURE, Result, STEP_A_FIXTURE, bail, collisions, git, read,
     report::{large_spec_report, report, step_6_report, track_t_report, wave_report},
     resolve, root, schedule, sha256, timing, tokens, utc_now, verify, write,
 };
@@ -119,6 +119,55 @@ pub fn step_6_slots() -> Vec<Value> {
 /// rotating the same way, so each arm runs first two or three times. Scored, with no pilot pair.
 pub fn large_spec_slots() -> Vec<Value> {
     rotations(LARGE_SPEC_FIXTURE, 8, true)
+}
+
+/// Step A's slot on its fixture: a Git team of `size`, with an arm `variant` (#499, #503).
+fn step_a_slot(
+    repetition: usize,
+    size: u64,
+    variant: Option<&str>,
+    order: usize,
+    scored: bool,
+) -> Value {
+    let arm = format!(
+        "git-{size}{}",
+        variant.map_or(String::new(), |v| format!("+{v}"))
+    );
+    let pair = format!("{STEP_A_FIXTURE}-{repetition}");
+    let mut slot = json!({"slot": format!("{pair}-{}", arm.replace('+', "-")), "pair": pair,
+        "fixture": STEP_A_FIXTURE, "arm": "git", "order": order, "scored": scored, "team_size": size});
+    if let Some(variant) = variant {
+        slot["variant"] = variant.into();
+    }
+    slot
+}
+
+/// Step A's qualification runs (frozen qualification rule, step 2): `git-1` twice, then `git-2`
+/// three times. Unscored.
+pub fn step_a_qualify_slots() -> Vec<Value> {
+    (1..=5)
+        .map(|r| step_a_slot(r, if r <= 2 { 1 } else { 2 }, None, 0, false))
+        .collect()
+}
+
+/// Step A's scored runs (#490): `git-1` twice and `git-2`, `git-2+announce` and `git-2+notify`
+/// three times each, in three rotations whose order shifts by one, the last without `git-1`.
+pub fn step_a_slots() -> Vec<Value> {
+    let mut arms = [
+        (1, None),
+        (2, None),
+        (2, Some("announce")),
+        (2, Some("notify")),
+    ];
+    let mut slots = vec![];
+    for repetition in 1..=3 {
+        let rotation = arms.iter().filter(|(size, _)| repetition < 3 || *size == 2);
+        for (order, (size, variant)) in rotation.enumerate() {
+            slots.push(step_a_slot(repetition, *size, *variant, order, true));
+        }
+        arms.rotate_left(1);
+    }
+    slots
 }
 
 /// #205's engine waves (#335), unscored, one batch directory each: `wave-1` to `wave-4` (the
@@ -377,6 +426,8 @@ pub fn batch(
         Some("track-t") => track_t_slots(),
         Some("step-6") => step_6_slots(),
         Some("large-spec") => large_spec_slots(),
+        Some("step-a-qualify") => step_a_qualify_slots(),
+        Some("step-a") => step_a_slots(),
         Some(other) => wave_slots(other).ok_or(format!("Unknown schedule {other}"))?,
     }
     .into_iter()
@@ -623,6 +674,8 @@ pub fn batch(
         Some("track-t") => track_t_report(&results),
         Some("large-spec") => large_spec_report(&results),
         Some("step-6") => step_6_report(&results),
+        // Step A's own report is #515's; until then, the plain one.
+        Some("step-a-qualify" | "step-a") => report(&results, false),
         // A wave or the sweep: the slots above refused any other name.
         Some(_) => wave_report(&results),
         None => report(&results, false),
@@ -995,6 +1048,70 @@ mod tests {
         assert_eq!(runs("sweep"), falinks(&small));
         // A regression the sweep finds gets a fix and two confirming dev runs.
         assert_eq!(runs("confirm"), falinks(&["go-tasks", "go-tasks"]));
+    }
+
+    /// #509: Step A's qualification runs, then its scored runs interleaved by rotation.
+    #[test]
+    fn step_a_qualifies_on_git_runs_then_rotates_four_git_arms() {
+        let names = |slots: Vec<Value>| -> Vec<String> {
+            slots
+                .iter()
+                .map(|s| s["slot"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let qualify = step_a_qualify_slots();
+        assert!(
+            qualify
+                .iter()
+                .all(|s| s["scored"] == false && s["fixture"] == "library-loans")
+        );
+        assert_eq!(
+            names(qualify),
+            [
+                "library-loans-1-git-1",
+                "library-loans-2-git-1",
+                "library-loans-3-git-2",
+                "library-loans-4-git-2",
+                "library-loans-5-git-2"
+            ]
+        );
+        let scored = step_a_slots();
+        assert!(
+            scored
+                .iter()
+                .all(|s| s["scored"] == true && s["arm"] == "git")
+        );
+        assert_eq!(
+            names(scored.clone()),
+            [
+                "library-loans-1-git-1",
+                "library-loans-1-git-2",
+                "library-loans-1-git-2-announce",
+                "library-loans-1-git-2-notify",
+                "library-loans-2-git-2",
+                "library-loans-2-git-2-announce",
+                "library-loans-2-git-2-notify",
+                "library-loans-2-git-1",
+                "library-loans-3-git-2-announce",
+                "library-loans-3-git-2-notify",
+                "library-loans-3-git-2",
+            ]
+        );
+        let count = |size: u64, variant: Value| {
+            (scored.iter())
+                .filter(|s| s["team_size"] == size && s["variant"] == variant)
+                .count()
+        };
+        assert_eq!(
+            [
+                count(1, Value::Null),
+                count(2, Value::Null),
+                count(2, json!("announce")),
+                count(2, json!("notify"))
+            ],
+            [2, 3, 3, 3]
+        );
+        assert_eq!(scored[10]["order"], 2);
     }
 
     /// #205: eight scored rotations on go-invoice, each arm first two or three times.

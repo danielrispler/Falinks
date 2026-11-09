@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "source": "https://github.com/danielrispler/Falinks/issues/228",
   "scope": "The scored batch's rust-errors, go-page and go-relationships fixtures, Git and Falinks arms (#228 decision 4); and #205's go-invoice in its three arms, one agent, two Git agents and two Falinks agents (#336). A team of one's final snapshot is measured as a two-agent team's: the same metrics, properties and ratings.",
   "amendments": [
@@ -37,6 +37,11 @@
       "version": 8,
       "ticket": 382,
       "reason": "The Claude Code pin moves from 2.1.308 to 2.1.309 (#382), before #205's final freeze (#338) and before any #205 value was computed. falinks-arm requires the run configuration's runtime_version to equal the adapter's pin, and the judge requires judge.runtime_version to equal the run configuration's, so the judge pin moves with them (Daniel, 2026-10-31, on #382). The judge model, prompt, anchors, k, material and rules are unchanged. The calibration records stand and were not re-run: calibration/v2.json, v4.json and v6.json were made on 2.1.308, and only the CLI version the calls go through changed."
+    },
+    {
+      "version": 9,
+      "ticket": 509,
+      "reason": "Step A's fixture library-loans (#498) gets its protected properties L1-L9, one per ticket in go-invoice's style, with one broken copy each in protected/properties/broken.json. They use the frozen seed and input count. T2's DaysBetween is read as the trap's correction fixes it (both ends counted), as the oracle reads it. library-loans is not a judged fixture, so no calibration record or judge setting changes; the other fixtures' properties are unchanged."
     }
   ],
   "normalization": "The pinned gofmt and rustfmt run on copies of the initial tree, the final snapshot and the reference. Every other metric, and the judge's material, uses those copies. Formatter drift is not a metric. (#228 decision 6)",
@@ -247,6 +252,78 @@
         "requirement": {"at": "/requirements/8", "text": "Statement(inv core.Invoice, rules []discount.Rule, taxes tax.Table, rates fx.Table, currency string) (Summary, string, error) returns inv.Validate()'s error, and otherwise any error from converting with rates, with a zero Summary and \"\". Otherwise its Summary is Totals(inv, rules, taxes) with two fields added to Summary: Currency string, set to currency, and Converted core.Money, set to rates.Convert(Total, inv.Currency, currency). Its text is \"Invoice ID for CUSTOMER (CURRENCY)\" with inv's ID, Customer and Currency, then \\n, then a render.Table with the columns SKU, Qty, Unit, Discount, Tax and Amount, all but SKU aligned right and none with a Max. Each line of inv gives a row, in order: its SKU, its Qty in decimal, its Unit, the amount rules take off it, its tax taxes.Line(line, Gross minus that amount), and its amount, Gross minus the discount plus the tax, with money by Money.String. The footer rows are Subtotal, Discount, Tax and Total, each with its label in the SKU column, the Summary's value in the Amount column and the cells between empty; when currency differs from inv.Currency, a last footer row \"Total in CURRENCY\" holds Converted. The statement's printed line amounts sum to its printed total."},
         "domain": "invoices as I2 draws them, valid three times in four, with valid rules texts, tax tables and exchange tables as I3-I5 draw them, converted to their own currency a third of the time and otherwise to one of the five codes or NOK",
         "excluded": ["error messages", "the type of a conversion error", "arithmetic outside int64"]
+      },
+      {
+        "id": "L1",
+        "fixture": "library-loans",
+        "checks": "Format over int64, its extremes included, Parse's values and ErrInvalidAmount on near and malformed amounts, and Parse of Format",
+        "requirement": {"at": "/requirements/0", "text": "Package `money` (bottom layer). Provides `type Cents int64` (an amount in hundredths of the currency unit), `func Format(c Cents) string`, `func Parse(s string) (Cents, error)` and `var ErrInvalidAmount` (message `invalid amount`). Format writes a leading `-` for negative amounts, then the whole units with no leading zeros (`0` when under one unit) and no thousands separators, then `.` and exactly two digits. Examples: 0 gives `0.00`, 5 gives `0.05`, 1250 gives `12.50`, -75 gives `-0.75`, 123456789 gives `1234567.89`. It must be correct across the whole int64 range, including the minimum value (`-92233720368547758.08`). Parse accepts an optional leading `-`, then one or more ASCII digits, then optionally a `.` followed by one or two digits, and nothing else: no spaces, no `+`, no separators. Examples: `12` gives 1200, `12.5` gives 1250, `007.05` gives 705, `-3.10` gives -310, `-0` gives 0. Inputs such as the empty string, `-`, `.5`, `12.`, `12.345`, `+1`, ` 1` and `1,000`, and any value outside the int64 range, return 0 and `ErrInvalidAmount` itself."},
+        "domain": "any int64, its extremes and amounts up to ±1000.00; amounts as an optional -, 1-20 digits and an optional . with 0-3 digits, strings of 0-7 characters from digits, '-', '.', '+', ' ' and ',', and edge strings at the int64 limits",
+        "excluded": []
+      },
+      {
+        "id": "L2",
+        "fixture": "library-loans",
+        "checks": "Parse's values and ErrInvalidDate, and String, AddDays, Weekday and DaysBetween (both ends counted, as corrected) on valid dates",
+        "requirement": {"at": "/requirements/1", "text": "Package `calendar` (bottom layer). Provides `type Date struct { Year, Month, Day int }` (Month is 1 to 12), `func Parse(s string) (Date, error)`, `func (d Date) String() string`, `func (d Date) AddDays(n int) Date`, `func (d Date) Weekday() time.Weekday`, `func DaysBetween(from, to Date) int` and `var ErrInvalidDate` (message `invalid date`). Parse accepts exactly the form `YYYY-MM-DD`: ten characters, ASCII digits, with `-` at the 5th and 8th positions. The year must be 1900 to 2999, and the date must exist in the Gregorian calendar. A leap year is divisible by 4, except century years not divisible by 400. `2024-02-29` parses. `2026-02-29`, `2026-13-01`, `2026-1-05`, `2026-01-05 ` (trailing space) and `1899-12-31` each return the zero Date and `ErrInvalidDate` itself. String renders a date as `YYYY-MM-DD` with zero padding, for example `2026-03-07`. AddDays moves forward (positive n) or backward (negative n) by n calendar days, crossing month and year boundaries: 2026-12-31 plus 1 is 2027-01-01, and 2024-03-01 minus 1 is 2024-02-29. The result is not range-checked. Weekday gives the day of the week; 2026-11-09 is a Monday. DaysBetween returns the number of days from `from` to `to`, negative when `to` is earlier: 2026-11-09 to 2026-11-30 is 21, the reverse is -21, and a date to itself is 0. Inputs to AddDays, Weekday and DaysBetween are assumed to be valid dates; behaviour for invalid ones is unspecified."},
+        "domain": "strings in the YYYY-MM-DD shape with years 1890-3010, months 0-13 and days 0-32, valid dates and edge strings; valid dates in years 1900-2999, mostly 2025-2028, moved by -2000 to 2000 days",
+        "excluded": ["AddDays, Weekday and DaysBetween on invalid dates"]
+      },
+      {
+        "id": "L3",
+        "fixture": "library-loans",
+        "checks": "ParseKind's values and ErrUnknownKind on spellings near the three names, and String on any Kind",
+        "requirement": {"at": "/requirements/2", "text": "Package `item` (bottom layer). Provides `type Kind int` with constants `Book` (1), `DVD` (2) and `Magazine` (3), `func ParseKind(s string) (Kind, error)`, `func (k Kind) String() string` and `var ErrUnknownKind` (message `unknown item kind`). The zero Kind, and any value other than 1 to 3, is not a valid kind. ParseKind ignores leading and trailing spaces and tabs. It matches `book`, `dvd` or `magazine` regardless of ASCII letter case, so `Book`, ` DVD ` and `MAGAZINE` all parse. Anything else, including the empty string and `books`, returns 0 and `ErrUnknownKind` itself. String returns `book`, `dvd` or `magazine` for the three kinds and `unknown` for any other value."},
+        "domain": "the three names and near misses, letters upper-cased at random, padded with spaces, tabs, a line feed or a carriage return; kinds -2 to 5",
+        "excluded": []
+      },
+      {
+        "id": "L4",
+        "fixture": "library-loans",
+        "checks": "DueDate's date, the Sunday rule included, and ErrInvalidKind",
+        "requirement": {"at": "/requirements/3", "text": "Package `loan` (middle layer). Provides `func DueDate(kind item.Kind, checkout calendar.Date) (calendar.Date, error)`. The loan period is 21 days for a book, 7 days for a DVD and 14 days for a magazine. The due date is the checkout date plus the loan period. The library is closed on Sundays, so a due date that falls on a Sunday moves to the following Monday. Examples: a book checked out 2026-11-09 is due 2026-11-30. A DVD checked out on Sunday 2026-11-08 is due 2026-11-16, because 2026-11-15 is a Sunday. A magazine checked out 2026-11-01 is due 2026-11-16. A kind other than Book, DVD or Magazine returns the zero Date and `loan.ErrInvalidKind` itself (message `invalid item kind`)."},
+        "domain": "valid kinds five times in six, else 0, 4, -1 or 9; valid checkout dates as L2 draws them",
+        "excluded": []
+      },
+      {
+        "id": "L5",
+        "fixture": "library-loans",
+        "checks": "LateFee's fee, its caps and ErrInvalidKind",
+        "requirement": {"at": "/requirements/4", "text": "Package `loan` (middle layer). Provides `func LateFee(kind item.Kind, due, returned calendar.Date) (money.Cents, error)`. An item returned on or before its due date owes no fee. Otherwise the fee is the number of days late (calendar days from the due date to the return date) times the daily rate, capped at a maximum for each kind. A book costs 25 cents a day, up to 1000. A DVD costs 100 a day, up to 2000. A magazine costs 10 a day, up to 300. Examples: a book due 2026-11-30 and returned 2026-12-03 owes 75. A DVD due 2026-10-01 and returned 2026-11-09 (39 days late) owes 2000. A magazine returned one day late owes 10. Anything returned on or before its due date owes 0. A kind other than Book, DVD or Magazine returns 0 and `loan.ErrInvalidKind` itself, whatever the dates."},
+        "domain": "kinds as L4 draws them; valid due dates; returns from 10 days early to 90 days late",
+        "excluded": []
+      },
+      {
+        "id": "L6",
+        "fixture": "library-loans",
+        "checks": "Renew's new due date and the first sentinel in its check order",
+        "requirement": {"at": "/requirements/5", "text": "Package `loan` (middle layer). Provides `func Renew(kind item.Kind, due, today calendar.Date, renewals int) (calendar.Date, error)`, where `renewals` is how many times the loan has already been renewed. Checks are made in the following order, and the first failure is returned as the sentinel itself, together with the zero Date. (1) A kind other than Book, DVD or Magazine gives `ErrInvalidKind`. (2) A negative renewals count gives `ErrInvalidRenewals` (message `invalid renewal count`). (3) A today later than due gives `ErrOverdue` (message `loan is overdue`). (4) A renewals count already at the maximum for the kind gives `ErrRenewalLimit` (message `renewal limit reached`). The maximum is 2 for a book, 1 for a DVD and 0 for a magazine. Renewing on the due date itself is allowed. On success, the new due date is the current due date plus the kind's loan period (book 21 days, DVD 7, magazine 14), moved to the following Monday if it falls on a Sunday. The new due date counts from the current due date, not from today. Examples: a book due 2026-11-30, renewed on 2026-11-20 with 0 prior renewals, is now due 2026-12-21. The same book with 2 prior renewals gives `ErrRenewalLimit`. A DVD due 2026-11-16 renewed on 2026-11-17 gives `ErrOverdue`. A magazine renewed on or before its due date gives `ErrRenewalLimit`."},
+        "domain": "kinds as L4 draws them; valid due dates; today from 6 days before to 4 days after; renewal counts -1 to 3",
+        "excluded": []
+      },
+      {
+        "id": "L7",
+        "fixture": "library-loans",
+        "checks": "CanBorrow's sentinel in its check order",
+        "requirement": {"at": "/requirements/6", "text": "Package `loan` (middle layer). Provides `type Category int` with constants `Adult` (1) and `Child` (2), and `func CanBorrow(cat Category, current []item.Kind, next item.Kind) error`. It says whether a member who already holds the items in `current` may borrow one more item of kind `next`. An adult may hold 10 items in total, of which at most 3 may be DVDs. A child may hold 5 items in total, of which at most 1 may be a DVD. Books and magazines count only toward the total. Checks are made in the following order, and the first failure is returned as the sentinel itself. (1) A category other than Adult or Child gives `ErrInvalidCategory` (message `invalid member category`). (2) A `next`, or any element of `current`, that is not a valid kind gives `ErrInvalidKind`. (3) If holding `current` plus `next` would exceed the total limit, it gives `ErrTotalLimit` (message `total loan limit reached`). (4) If `next` is a DVD and the DVDs in `current` plus this one would exceed the DVD limit, it gives `ErrKindLimit` (message `dvd loan limit reached`). Otherwise it returns nil. A nil or empty `current` means nothing is held. Examples: an adult holding 9 books may borrow a 10th item but not an 11th. An adult holding 3 DVDs may borrow a book but not a DVD. A child holding 1 DVD and 4 books gets `ErrTotalLimit` when asking for a further DVD."},
+        "domain": "categories Adult and Child seven times in eight, else 0, 3 or -1; nil holdings one time in ten, else 0-12 valid kinds with an occasional invalid one; next a valid kind nine times in ten",
+        "excluded": []
+      },
+      {
+        "id": "L8",
+        "fixture": "library-loans",
+        "checks": "ParseLoan's values, errors.Is ErrMalformedLine and its error message",
+        "requirement": {"at": "/requirements/7", "text": "Package `report` (top layer). Provides `type Loan struct { ItemID string; Kind item.Kind; Checkout calendar.Date; Returned calendar.Date; IsReturned bool }`, `func ParseLoan(line string) (Loan, error)` and `var ErrMalformedLine` (message `malformed loan line`). A loan line has four comma-separated fields: item ID, kind, checkout date and return date. Examples are `BK-0042,book,2026-10-01,` and `DVD-0001,dvd,2026-10-19,2026-10-25`. Before parsing, one trailing line feed is removed if present, and then one trailing carriage return is removed if present. There is no quoting or escaping. Leading and trailing spaces and tabs are removed from each field. The item ID must be 1 to 20 characters long, each an uppercase ASCII letter, an ASCII digit or `-`. The kind must be `book`, `dvd` or `magazine`, in any ASCII letter case. The checkout date, and the return date when present, use the form `YYYY-MM-DD` with a real Gregorian date in years 1900 to 2999. An empty return field means the item is still out: `IsReturned` is false and `Returned` is the zero Date. A return date earlier than the checkout date is an error; a return on the checkout date is fine. Validation stops at the first problem, checked in the following order, and the error message names the problem. (1) A wrong number of fields gives `malformed loan line: field count`. (2) A bad item ID gives `malformed loan line: item id`. (3) A bad kind gives `malformed loan line: kind`. (4) A bad checkout date gives `malformed loan line: checkout`. (5) A bad return date gives `malformed loan line: returned`. (6) A return before checkout gives `malformed loan line: returned before checkout`. Every error is returned with the zero Loan and satisfies `errors.Is(err, report.ErrMalformedLine)`."},
+        "domain": "lines of 0-5 comma-separated fields from valid and invalid IDs, kinds and dates, padded with spaces and tabs, returns from 3 days before to 30 days after checkout, ending in nothing, \\n, \\r\\n, \\r, \\n\\n or \\r\\r\\n",
+        "excluded": []
+      },
+      {
+        "id": "L9",
+        "fixture": "library-loans",
+        "checks": "OverdueReport's text and errors.Is ErrInvalidKind",
+        "requirement": {"at": "/requirements/8", "text": "Package `report` (top layer). Provides `func OverdueReport(loans []Loan, today calendar.Date) (string, error)`. A loan is overdue when it has not been returned and `today` is strictly later than its due date. The due date is the checkout date plus 21 days for a book, 7 for a DVD or 14 for a magazine, moved to the following Monday if it falls on a Sunday. Days overdue is the number of calendar days from the due date to today. The fee is days overdue times the daily rate, capped: a book costs 0.25 a day up to 10.00, a DVD 1.00 a day up to 20.00, and a magazine 0.10 a day up to 3.00. Returned loans are ignored entirely. The report is plain text. Every line, including the last, ends with a single line feed. Fields within a line are separated by a single tab character. The first line is `Overdue loans as of ` followed by today in the form YYYY-MM-DD. Next comes one line per overdue loan, with five fields: the item ID; the kind (`book`, `dvd` or `magazine`); the due date as YYYY-MM-DD; the days overdue, written `1 day` or `N days`; and the fee, written with exactly two decimal places and no currency symbol. Lines are ordered by days overdue, most first. Ties are ordered by item ID in ascending byte order, and any remaining ties keep their input order. Duplicate item IDs are all listed. The last line is `Total: `, then the count written as `1 item` or `N items` (`0 items` when there are none), then a comma and a space, then the sum of the listed fees in the same two-decimal form. Example: today is 2026-11-09, and three loans are unreturned. `DVD-0001` is a dvd checked out 2026-10-19. `BK-0042` is a book checked out 2026-10-01. `MAG-7` is a magazine checked out 2026-10-26, which is due today and so is not overdue. The report is these four lines: `Overdue loans as of 2026-11-09`, then `BK-0042<TAB>book<TAB>2026-10-22<TAB>18 days<TAB>4.50`, then `DVD-0001<TAB>dvd<TAB>2026-10-26<TAB>14 days<TAB>14.00`, then `Total: 2 items, 18.50`. With nothing overdue, the report is the two lines `Overdue loans as of 2026-11-09` and `Total: 0 items, 0.00`. If an unreturned loan has a kind other than book, dvd or magazine, the function returns the empty string and an error satisfying `errors.Is(err, loan.ErrInvalidKind)`."},
+        "domain": "0-6 loans from five IDs, repeated, valid kinds with an occasional invalid one, checkouts up to 60 days before today, often shared with the previous loan, a quarter returned",
+        "excluded": []
       }
     ]
   },

@@ -649,6 +649,48 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/wave-1 --sc
   agent or control failure; then the gaps, safety failures and replaced runs. It computes no
   comparison: single runs check "not broken", never "faster".
 
+Step A (#498, #509) runs Git arms only on its fixture `library-loans`, whose one milestone is
+the meaning-change trap:
+
+```sh
+evaluation/target/release/falinks-eval static-checks
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/step-a-qualify --schedule step-a-qualify
+evaluation/target/release/falinks-eval helpers /private/tmp/ev/step-a-qualify/library-loans-1-git-1
+evaluation/target/release/falinks-eval qualify --runs /private/tmp/ev/step-a-qualify
+evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/step-a --schedule step-a
+```
+
+- **The trap** (`release_on_call` names `calendar.DaysBetween`) is released by the first
+  accepted share whose diff adds `<qualifier>.DaysBetween(` in a non-test `.go` file outside
+  `calendar`, the qualifier being that file's import name for `calendar`; failing that, by the
+  first `ready`, which it refuses. `result.json`'s `trap_release` records the rule (`call` or
+  `ready_fallback`), the agent, the share's commit and file, and the time. The agents receive
+  the development without `trigger` or `release_on_call`.
+- **`static-checks`**: the frozen qualification rule's step 1. A cross-developer dependency on
+  the trap's function, the reference calling it from every user the dependency list names, and
+  the reference swap: the corrected reference passes every oracle case, and the old reference
+  (`old_reference` in the protected file) with only `calendar/` corrected fails at least one
+  case in the protected file's `trap.cases` (C2's tags, T5 and T9). Failures in
+  `trap.side_cases` (T6 and T8, the defining developer's own callers) are reported apart.
+- **Schedules**: `step-a-qualify` runs `git-1` twice, then `git-2` three times, unscored.
+  `step-a` runs `git-1` twice and `git-2`, `git-2+announce` and `git-2+notify` three times
+  each, scored, in three rotations whose order shifts by one; the third has no `git-1`. A
+  variant slot passes `--variant` to `baseline` (#499, #503).
+- **`helpers RUN_DIR`**: the shared helpers in a run's final tree: functions the spec does not
+  name that requirements of both developers reach in the call graph from the functions the
+  spec names for them, each path avoiding the functions other requirements name. `_test.go`
+  files are ignored. The call graph is syntactic (`qualify.rs` says where it over-approximates),
+  so each helper comes with one path per requirement, hop by hop with each call's `file:line`,
+  for Daniel to confirm (#512's amendment).
+- **`reverse-swap RUN_DIR`**: qualification step 5's side report, which decides nothing and
+  `qualify` never reads. In a `git-1` final tree, only `calendar.DaysBetween`'s body goes back
+  to the old reference's; the oracle's failures in `trap.cases` and `trap.side_cases` are
+  listed, or `not_applicable` with the reason when the tree has no `DaysBetween` with the
+  spec's signature or does not compile after the swap.
+- **`qualify --runs DIR`**: the decision, step by step. Step 4 reads each pair's `run_id` and
+  `class` (`duplicate`, `divergent` or `no`) from the batch's `duplicates.json`; until every
+  pair has one the decision is open (`qualifies: null`).
+
 Keep run roots short: the adapter's host socket lives in each run directory, and macOS
 limits socket paths to 104 bytes. The first real Git-arm runs will show whether login and
 session state need more `runtime_writable` paths under the host sandbox. Record any such
