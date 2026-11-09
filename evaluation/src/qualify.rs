@@ -79,6 +79,7 @@ fn header_key(dir: &str, header: &str) -> Key {
 }
 
 /// `source` with comments blanked and strings and runes emptied, so nothing inside them counts.
+/// Line breaks stay, so a position keeps its line.
 fn code(source: &str) -> String {
     let (mut out, mut chars) = (String::new(), source.chars().peekable());
     while let Some(c) = chars.next() {
@@ -102,14 +103,16 @@ fn code(source: &str) -> String {
                 out.push(' ');
             }
             '"' | '\'' | '`' => {
-                let mut escaped = false;
+                let (mut escaped, mut breaks) = (false, 0);
                 for d in chars.by_ref() {
                     if d == c && (c == '`' || !escaped) {
                         break;
                     }
+                    breaks += usize::from(d == '\n');
                     escaped = c != '`' && d == '\\' && !escaped;
                 }
                 out.push_str("\"\"");
+                out.push_str(&"\n".repeat(breaks));
             }
             _ => out.push(c),
         }
@@ -124,11 +127,14 @@ enum Target {
     Method(String),
 }
 
-/// Each non-test Go file's top-level functions and methods, with what their bodies reference:
-/// `name` (the own package's), `q.name` (the package `q` imports, when `q` is an import name
-/// for a package of `module`) and any other `.name` (a method).
-fn declarations(tree: &BTreeMap<String, Vec<u8>>, module: &str) -> BTreeMap<Key, BTreeSet<Target>> {
-    let mut functions: BTreeMap<Key, BTreeSet<Target>> = BTreeMap::new();
+/// Each non-test Go file's top-level functions and methods, with what their bodies reference
+/// and where (`file:line`): `name` (the own package's), `q.name` (the package `q` imports,
+/// when `q` is an import name for a package of `module`) and any other `.name` (a method).
+fn declarations(
+    tree: &BTreeMap<String, Vec<u8>>,
+    module: &str,
+) -> BTreeMap<Key, Vec<(Target, String)>> {
+    let mut functions: BTreeMap<Key, Vec<(Target, String)>> = BTreeMap::new();
     for (path, bytes) in tree {
         if !path.ends_with(".go") || path.ends_with("_test.go") {
             continue;
@@ -155,8 +161,12 @@ fn declarations(tree: &BTreeMap<String, Vec<u8>>, module: &str) -> BTreeMap<Key,
                     depth == 0
                 })
                 .map_or(rest.len(), |(i, _)| open + i);
+            let start = code.len() - rest.len() + open;
+            let line = |at: usize| code[..start + at].matches('\n').count() + 1;
             let targets = functions.entry(key).or_default();
-            targets.extend(references(&rest[open..end], dir, &imports));
+            for (target, at) in references(&rest[open..end], dir, &imports) {
+                targets.push((target, format!("{path}:{}", line(at))));
+            }
             rest = &rest[end..];
         }
     }
@@ -198,10 +208,11 @@ fn import_names(source: &str, module: &str) -> BTreeMap<String, String> {
     names
 }
 
-fn references(body: &str, dir: &str, imports: &BTreeMap<String, String>) -> Vec<Target> {
+/// The references in `body`, each with its byte offset there.
+fn references(body: &str, dir: &str, imports: &BTreeMap<String, String>) -> Vec<(Target, usize)> {
     let ident = |c: char| c.is_alphanumeric() || c == '_';
-    // Identifiers as themselves, `.` as ".", anything else as "".
-    let mut tokens: Vec<&str> = vec![];
+    // Identifiers as themselves, `.` as ".", anything else as "", each with its offset.
+    let mut tokens: Vec<(&str, usize)> = vec![];
     let mut at = 0;
     for (i, c) in body.char_indices() {
         if i < at {
@@ -211,21 +222,21 @@ fn references(body: &str, dir: &str, imports: &BTreeMap<String, String>) -> Vec<
             at = body[i..]
                 .find(|c: char| !ident(c))
                 .map_or(body.len(), |n| i + n);
-            tokens.push(&body[i..at]);
+            tokens.push((&body[i..at], i));
         } else if c == '.' {
-            tokens.push(".");
+            tokens.push((".", i));
         } else if !c.is_whitespace() {
-            tokens.push("");
+            tokens.push(("", i));
         }
     }
     let word = |t: &str| t.starts_with(ident);
     let mut out = vec![];
-    for (i, &t) in tokens.iter().enumerate() {
+    for (i, &(t, offset)) in tokens.iter().enumerate() {
         if !word(t) {
             continue;
         }
-        let before = |n: usize| i.checked_sub(n).map(|j| tokens[j]);
-        out.push(match (before(1), before(2), before(3)) {
+        let before = |n: usize| i.checked_sub(n).map(|j| tokens[j].0);
+        let target = match (before(1), before(2), before(3)) {
             (Some("."), Some(q), third)
                 if word(q) && third != Some(".") && imports.contains_key(q) =>
             {
@@ -233,60 +244,84 @@ fn references(body: &str, dir: &str, imports: &BTreeMap<String, String>) -> Vec<
             }
             (Some("."), _, _) => Target::Method(t.into()),
             _ => Target::Function(dir.into(), t.into()),
-        });
+        };
+        out.push((target, offset));
     }
     out
 }
 
-/// The call graph: each function's edges to the declared functions its references can reach.
+/// The call graph: each function's edges to the declared functions its references can reach,
+/// each with the first reference's `file:line`.
 /// shortcut: syntactic, so a method reference reaches every method of that name and a local
-/// shadowing a function name counts; upgrade to go/types if a qualification turns on it.
-fn graph(tree: &BTreeMap<String, Vec<u8>>, module: &str) -> BTreeMap<Key, BTreeSet<Key>> {
+/// shadowing a function name counts; `helpers` prints every hop for Daniel to confirm (#512).
+type Graph = BTreeMap<Key, BTreeMap<Key, String>>;
+
+fn graph(tree: &BTreeMap<String, Vec<u8>>, module: &str) -> Graph {
     let functions = declarations(tree, module);
     let keys: Vec<Key> = functions.keys().cloned().collect();
     functions
         .iter()
         .map(|(key, targets)| {
-            let edges = keys
-                .iter()
-                .filter(|k| *k != key)
-                .filter(|(d, ty, name)| {
-                    targets.iter().any(|t| match t {
+            let mut edges = BTreeMap::new();
+            for (target, site) in targets {
+                for k @ (d, ty, name) in keys.iter().filter(|k| *k != key) {
+                    let hit = match target {
                         Target::Function(td, tn) => ty.is_empty() && td == d && tn == name,
                         Target::Method(tn) => !ty.is_empty() && tn == name,
-                    })
-                })
-                .cloned()
-                .collect();
+                    };
+                    if hit {
+                        edges.entry(k.clone()).or_insert_with(|| site.clone());
+                    }
+                }
+            }
             (key.clone(), edges)
         })
         .collect()
 }
 
-/// What each requirement reaches from its entry functions without passing through a function
-/// another requirement names, and the edges it crosses: (reached, edges).
-fn reach(
-    graph: &BTreeMap<Key, BTreeSet<Key>>,
-    requirements: &[Requirement],
-    index: usize,
-) -> (BTreeSet<Key>, BTreeSet<(Key, Key)>) {
+/// What a requirement reaches, breadth first from its entry functions, without passing through
+/// a function another requirement names: each reached function's first hop to it (`from` and
+/// the call's `file:line`; none for an entry function), and every edge crossed.
+struct Reach {
+    parents: BTreeMap<Key, Option<(Key, String)>>,
+    edges: BTreeSet<(Key, Key)>,
+}
+
+impl Reach {
+    /// The hops from an entry function to `key`, in order.
+    fn path(&self, key: &Key) -> Vec<Value> {
+        let mut hops = vec![];
+        let mut at = key;
+        while let Some(Some((from, site))) = self.parents.get(at) {
+            hops.push(json!({"from": show(from), "to": show(at), "at": site}));
+            at = from;
+        }
+        hops.reverse();
+        hops
+    }
+}
+
+fn reach(graph: &Graph, requirements: &[Requirement], index: usize) -> Reach {
     let own = &requirements[index].entries;
     let others: BTreeSet<&Key> = (requirements.iter().enumerate())
         .filter(|(i, _)| *i != index)
         .flat_map(|(_, r)| &r.entries)
         .filter(|k| !own.contains(*k))
         .collect();
-    let (mut seen, mut edges) = (own.clone(), BTreeSet::new());
-    let mut queue: Vec<Key> = own.iter().cloned().collect();
-    while let Some(from) = queue.pop() {
-        for to in graph.get(&from).into_iter().flatten() {
+    let mut parents: BTreeMap<Key, Option<(Key, String)>> =
+        own.iter().map(|k| (k.clone(), None)).collect();
+    let mut edges = BTreeSet::new();
+    let mut queue: std::collections::VecDeque<Key> = own.iter().cloned().collect();
+    while let Some(from) = queue.pop_front() {
+        for (to, site) in graph.get(&from).into_iter().flatten() {
             edges.insert((from.clone(), to.clone()));
-            if !others.contains(to) && seen.insert(to.clone()) {
-                queue.push(to.clone());
+            if !others.contains(to) && !parents.contains_key(to) {
+                parents.insert(to.clone(), Some((from.clone(), site.clone())));
+                queue.push_back(to.clone());
             }
         }
     }
-    (seen, edges)
+    Reach { parents, edges }
 }
 
 fn module(fixture: &Value) -> Result<String> {
@@ -299,23 +334,35 @@ fn module(fixture: &Value) -> Result<String> {
 }
 
 /// Qualification step 3: the functions the spec does not name that requirements of different
-/// developers reach, each with the requirements that reach it.
+/// developers reach, each with the requirements that reach it and, for each, the path from one
+/// of its entry functions hop by hop, for Daniel to confirm (#512's amendment).
 pub fn shared_helpers(fixture: &Value, tree: &BTreeMap<String, Vec<u8>>) -> Result<Value> {
     let requirements = requirements(fixture)?;
     let graph = graph(tree, &module(fixture)?);
     let named: BTreeSet<&Key> = requirements.iter().flat_map(|r| &r.entries).collect();
-    let mut reached: BTreeMap<Key, Vec<&Requirement>> = BTreeMap::new();
-    for (index, requirement) in requirements.iter().enumerate() {
-        for key in reach(&graph, &requirements, index).0 {
-            if !named.contains(&key) {
-                reached.entry(key).or_default().push(requirement);
-            }
+    let reaches: Vec<Reach> = (0..requirements.len())
+        .map(|i| reach(&graph, &requirements, i))
+        .collect();
+    let mut reached: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
+    for (index, reach) in reaches.iter().enumerate() {
+        for key in reach.parents.keys().filter(|k| !named.contains(k)) {
+            reached.entry(key.clone()).or_default().push(index);
         }
     }
     let helpers: Vec<Value> = reached
         .into_iter()
-        .filter(|(_, by)| by.iter().any(|r| r.owner != by[0].owner))
-        .map(|(key, by)| json!({"function": show(&key), "requirements": by.iter().map(|r| &r.id).collect::<Vec<_>>()}))
+        .filter(|(_, by)| {
+            by.iter()
+                .any(|&i| requirements[i].owner != requirements[by[0]].owner)
+        })
+        .map(|(key, by)| {
+            let paths: Vec<Value> = (by.iter())
+                .map(|&i| json!({"requirement": requirements[i].id, "hops": reaches[i].path(&key)}))
+                .collect();
+            json!({"function": show(&key),
+                "requirements": by.iter().map(|&i| &requirements[i].id).collect::<Vec<_>>(),
+                "paths": paths})
+        })
         .collect();
     Ok(json!(helpers))
 }
@@ -349,7 +396,7 @@ fn trap_callers(fixture: &Value, tree: &BTreeMap<String, Vec<u8>>) -> Result<Vec
             .iter()
             .position(|r| r.id == user)
             .ok_or(format!("{dependency}: no such requirement"))?;
-        let edges = reach(&graph, &requirements, index).1;
+        let edges = reach(&graph, &requirements, index).edges;
         out.push((user.to_string(), edges.iter().any(|(_, to)| *to == target)));
     }
     Ok(out)
@@ -460,6 +507,146 @@ fn final_tree(run: &Path) -> Result<(Value, BTreeMap<String, Vec<u8>>)> {
         .ok_or("the run has no final snapshot")?;
     let tree = blobs(&run.join("controller/retained"), snapshot)?;
     Ok((result, tree))
+}
+
+/// The trap function's declaration in a file: the header line (through its `{`), the body's
+/// lines and the parameter names, when it has the spec's signature `(a, b Date) int`.
+/// shortcut: the body ends at the first line that is `}` alone, as gofmt writes a top-level
+/// function; an unformatted tree is reported not applicable.
+fn declaration<'a>(source: &'a str, function: &str) -> Option<(usize, usize, Vec<&'a str>)> {
+    let lines: Vec<&str> = source.split_inclusive('\n').collect();
+    let header = lines
+        .iter()
+        .position(|l| l.starts_with(&format!("func {function}(")))?;
+    let line = lines[header].trim_end();
+    let inside = line.strip_prefix(&format!("func {function}("))?;
+    let (params, result) = inside.split_once(')')?;
+    if result.trim() != "int {" {
+        return None;
+    }
+    let parts: Vec<Vec<&str>> = params
+        .split(',')
+        .map(|p| p.split_whitespace().collect())
+        .collect();
+    let typed = |p: &Vec<&str>| p.len() == 2 && p[1] == "Date";
+    let names: Vec<&str> = parts.iter().filter_map(|p| p.first().copied()).collect();
+    let fits = match &parts[..] {
+        [a, b] => (a.len() == 1 && typed(b)) || (typed(a) && typed(b)),
+        _ => false,
+    };
+    let end = header + lines[header..].iter().position(|l| l.trim_end() == "}")?;
+    (fits && names.len() == 2).then_some((header, end, names))
+}
+
+/// Qualification step 5's side report (#512's amendments): the protected oracle on `tree`
+/// with only the trap function's body replaced by the old reference's, its signature and every
+/// other declaration kept. The failing tests, those in `trap.cases` and those in
+/// `trap.side_cases`; or `not_applicable`, with the reason, when the tree has no such function
+/// with the spec's signature or does not compile after the swap.
+fn reverse_swapped(
+    fixture: &Value,
+    protected: &Value,
+    mut tree: BTreeMap<String, Vec<u8>>,
+) -> Result<Value> {
+    let call = trap(fixture)?;
+    let (package, function) = (
+        call["package"].as_str().unwrap(),
+        call["function"].as_str().unwrap(),
+    );
+    let old = (protected["old_reference"].as_object().into_iter().flatten())
+        .filter(|(f, _)| f.starts_with(&format!("{package}/")))
+        .find_map(|(_, text)| {
+            let text = text.as_str()?;
+            let (header, end, _) = declaration(text, function)?;
+            let lines: Vec<&str> = text.split_inclusive('\n').collect();
+            Some(lines[header + 1..end].concat())
+        })
+        .ok_or("the old reference has no trap function")?;
+    let not_applicable = |reason: String| Ok(json!({"not_applicable": reason}));
+    let found = tree.iter().find_map(|(file, bytes)| {
+        let in_package = file.rsplit_once('/').is_some_and(|(d, _)| d == package);
+        if !in_package || !file.ends_with(".go") || file.ends_with("_test.go") {
+            return None;
+        }
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        let (header, end, names) = declaration(&text, function)?;
+        let lines: Vec<&str> = text.split_inclusive('\n').collect();
+        // The old body names its parameters `from` and `to`.
+        let rename = match names[..] {
+            ["from", "to"] => String::new(),
+            [a, b] => format!("\tfrom, to := {a}, {b}\n"),
+            _ => return None,
+        };
+        let swapped = [
+            lines[..=header].concat(),
+            rename,
+            old.clone(),
+            lines[end..].concat(),
+        ]
+        .concat();
+        Some((file.clone(), swapped))
+    });
+    let Some((file, swapped)) = found else {
+        return not_applicable(format!(
+            "no {package}.{function} with the spec's signature in a gofmt-formatted non-test file"
+        ));
+    };
+    tree.insert(file, swapped.into_bytes());
+    let mut repo = fixture.clone();
+    repo["files"] = (tree.iter())
+        .map(|(f, b)| (f.clone(), String::from_utf8_lossy(b).into_owned().into()))
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    let tmp = tempfile::Builder::new()
+        .prefix("falinks-reverse-")
+        .tempdir()?;
+    initial(&tmp.path().join("repo"), &repo)?;
+    let private = tmp.path().join("private");
+    std::fs::create_dir(&private)?;
+    let result = check(
+        &tmp.path().join("repo"),
+        fixture,
+        &private,
+        Duration::from_secs(120),
+        &[],
+    )?;
+    let failed = failed_tests(&result);
+    if result["oracle"]["passed"] != true && failed.is_empty() {
+        // No test ran: the build failed. Its first error names a file and line.
+        let output: String = (result["oracle"]["checks"].as_array().into_iter().flatten())
+            .filter_map(|c| c["output"].as_str())
+            .collect();
+        let first = output
+            .lines()
+            .find(|l| l.contains(".go:"))
+            .or_else(|| output.lines().find(|l| !l.trim().is_empty()))
+            .unwrap_or_default();
+        return not_applicable(format!("does not compile after the swap: {}", first.trim()));
+    }
+    let listed = |key: &str| -> Vec<&String> {
+        let names = protected["trap"][key]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        failed
+            .iter()
+            .filter(|t| names.contains(&json!(t)))
+            .collect()
+    };
+    Ok(
+        json!({"visible_passed": result["visible"]["passed"], "failures": failed,
+        "c2_failures": listed("cases"), "side_failures": listed("side_cases")}),
+    )
+}
+
+/// `reverse-swap RUN_DIR`: qualification step 5's side report, as #512's amendment fixes it.
+/// It decides nothing and `qualify` does not read it.
+pub fn reverse_swap(run: &Path) -> Result<Value> {
+    let (result, tree) = final_tree(run)?;
+    let name = result["fixture"].as_str().unwrap_or_default();
+    let mut report = reverse_swapped(&fixture(name)?, &protected(name)?, tree)?;
+    report["decides"] = "nothing: qualification step 5's side report".into();
+    Ok(report)
 }
 
 /// `helpers RUN_DIR`: the shared helpers in a run's final tree.
@@ -644,7 +831,10 @@ mod tests {
         );
         assert_eq!(
             shared_helpers(&fixture, &tree).unwrap(),
-            json!([{"function": "loan.validKind", "requirements": ["T4", "T7"]}])
+            json!([{"function": "loan.validKind", "requirements": ["T4", "T7"], "paths": [
+                {"requirement": "T4", "hops": [{"from": "loan.DueDate", "to": "loan.validKind", "at": "loan/due.go:16"}]},
+                {"requirement": "T7", "hops": [{"from": "loan.CanBorrow", "to": "loan.validKind", "at": "loan/limit.go:27"}]},
+            ]}])
         );
         // The same helper in a test file, or reached by A's requirements alone, does not count.
         let mut tested = tree.clone();
@@ -696,7 +886,10 @@ mod tests {
         );
         assert_eq!(
             shared_helpers(&fixture, &direct).unwrap(),
-            json!([{"function": "calendar.Date.Time", "requirements": ["T2", "T5"]}])
+            json!([{"function": "calendar.Date.Time", "requirements": ["T2", "T5"], "paths": [
+                {"requirement": "T2", "hops": [{"from": "calendar.DaysBetween", "to": "calendar.Date.Time", "at": "calendar/calendar.go:60"}]},
+                {"requirement": "T5", "hops": [{"from": "loan.LateFee", "to": "calendar.Date.Time", "at": "loan/fee.go:21"}]},
+            ]}])
         );
     }
 
@@ -799,6 +992,130 @@ mod tests {
         assert_eq!(
             qualify(dir.path(), passed).unwrap()["decision"],
             json!({"qualifies": false, "failed_step": "emergence"})
+        );
+    }
+
+    /// A path of two hops, through an unnamed function that is not itself shared, keeps the
+    /// line of each call, past a multi-line string.
+    #[test]
+    fn helper_paths_print_every_hop_with_its_line() {
+        let (fixture, mut tree) = loans();
+        tree.insert(
+            "loan/kinds.go".into(),
+            b"package loan\n\nimport \"example.com/lending/item\"\n\nvar note = `two\nlines`\n\nfunc validKind(k item.Kind) bool { return inRange(k) }\n\nfunc inRange(k item.Kind) bool {\n\treturn k >= item.Book && k <= item.Magazine\n}\n".to_vec(),
+        );
+        let due = String::from_utf8(tree["loan/due.go"].clone()).unwrap();
+        let due = due.replacen(
+            "days, ok := periods[kind]\n\tif !ok {",
+            "days := periods[kind]\n\tif !validKind(kind) {",
+            1,
+        );
+        tree.insert("loan/due.go".into(), due.into_bytes());
+        let limit = String::from_utf8(tree["loan/limit.go"].clone()).unwrap();
+        let limit = limit.replacen(
+            "if k < item.Book || k > item.Magazine {",
+            "if !inRange(k) {",
+            1,
+        );
+        tree.insert("loan/limit.go".into(), limit.into_bytes());
+        let helpers = shared_helpers(&fixture, &tree).unwrap();
+        assert_eq!(helpers[0]["function"], "loan.inRange", "{helpers}");
+        assert_eq!(
+            helpers[0]["paths"][0],
+            json!({"requirement": "T4", "hops": [
+                {"from": "loan.DueDate", "to": "loan.validKind", "at": "loan/due.go:16"},
+                {"from": "loan.validKind", "to": "loan.inRange", "at": "loan/kinds.go:8"},
+            ]})
+        );
+        assert_eq!(helpers.as_array().unwrap().len(), 1);
+    }
+
+    /// Step 5's side report: only DaysBetween's body goes back to the old meaning, so a tree
+    /// whose callers rely on the correction fails their tagged cases, and an agent's own helper
+    /// in calendar, used elsewhere, survives. It decides nothing.
+    #[test]
+    fn the_reverse_swap_reports_tagged_failures_under_the_old_body() {
+        let (fixture, mut tree) = loans();
+        let protected = protected(crate::STEP_A_FIXTURE).unwrap();
+        tree.insert(
+            "calendar/span.go".into(),
+            b"package calendar\n\n// Span is the days from a to b, both counted.\nfunc Span(a, b Date) int { return DaysBetween(a, b) }\n".to_vec(),
+        );
+        let fee = String::from_utf8(tree["loan/fee.go"].clone()).unwrap();
+        let fee = fee.replacen(
+            "late := calendar.DaysBetween(due, returned) - 1",
+            "late := calendar.Span(due, returned) - 1",
+            1,
+        );
+        tree.insert("loan/fee.go".into(), fee.into_bytes());
+        // Parameters named otherwise than the old body's.
+        let calendar = String::from_utf8(tree["calendar/calendar.go"].clone()).unwrap();
+        let calendar = calendar
+            .replacen(
+                "func DaysBetween(from, to Date) int {",
+                "func DaysBetween(a, b Date) int {",
+                1,
+            )
+            .replacen(
+                "(to.time().Unix() - from.time().Unix())",
+                "(b.time().Unix() - a.time().Unix())",
+                1,
+            );
+        tree.insert("calendar/calendar.go".into(), calendar.into_bytes());
+        let report = reverse_swapped(&fixture, &protected, tree.clone()).unwrap();
+        assert_eq!(
+            report["c2_failures"],
+            json!(["TestLateFeeDays", "TestOverdueReport"]),
+            "{report}"
+        );
+        assert_eq!(report["side_failures"], json!(["TestRenewOverdue"]));
+        assert!(
+            report["failures"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("TestCalendarDaysBetween"))
+        );
+        // A tree whose callers kept the old meaning fails only DaysBetween's own case.
+        let mut old = loans().1;
+        old.extend(text_tree(&protected["old_reference"]));
+        let report = reverse_swapped(&fixture, &protected, old).unwrap();
+        assert_eq!(
+            report["failures"],
+            json!(["TestCalendarDaysBetween"]),
+            "{report}"
+        );
+        // No DaysBetween with the spec's signature, or a swap that does not compile.
+        let mut missing = tree.clone();
+        let calendar = String::from_utf8(missing["calendar/calendar.go"].clone()).unwrap();
+        missing.insert(
+            "calendar/calendar.go".into(),
+            calendar
+                .replacen(
+                    "func DaysBetween(a, b Date) int {",
+                    "func DaysBetween(a, b Date) int64 {",
+                    1,
+                )
+                .into_bytes(),
+        );
+        let report = reverse_swapped(&fixture, &protected, missing).unwrap();
+        assert!(
+            report["not_applicable"]
+                .as_str()
+                .unwrap()
+                .starts_with("no calendar.DaysBetween"),
+            "{report}"
+        );
+        // A tree that does not build once swapped gives the compiler's first error.
+        let mut broken = tree;
+        broken.insert(
+            "calendar/odd.go".into(),
+            b"package calendar\n\nvar odd int = \"x\"\n".to_vec(),
+        );
+        let report = reverse_swapped(&fixture, &protected, broken).unwrap();
+        let reason = report["not_applicable"].as_str().unwrap();
+        assert!(
+            reason.starts_with("does not compile after the swap: ") && reason.contains("odd.go:3"),
+            "{report}"
         );
     }
 

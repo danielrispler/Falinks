@@ -679,7 +679,14 @@ evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.j
 - **`helpers RUN_DIR`**: the shared helpers in a run's final tree: functions the spec does not
   name that requirements of both developers reach in the call graph from the functions the
   spec names for them, each path avoiding the functions other requirements name. `_test.go`
-  files are ignored. The call graph is syntactic (`qualify.rs` says where it over-approximates).
+  files are ignored. The call graph is syntactic (`qualify.rs` says where it over-approximates),
+  so each helper comes with one path per requirement, hop by hop with each call's `file:line`,
+  for Daniel to confirm (#512's amendment).
+- **`reverse-swap RUN_DIR`**: qualification step 5's side report, which decides nothing and
+  `qualify` never reads. In a `git-1` final tree, only `calendar.DaysBetween`'s body goes back
+  to the old reference's; the oracle's failures in `trap.cases` and `trap.side_cases` are
+  listed, or `not_applicable` with the reason when the tree has no `DaysBetween` with the
+  spec's signature or does not compile after the swap.
 - **`qualify --runs DIR`**: the decision, step by step. Step 4 reads each pair's `run_id` and
   `class` (`duplicate`, `divergent` or `no`) from the batch's `duplicates.json`; until every
   pair has one the decision is open (`qualifies: null`).

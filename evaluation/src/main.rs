@@ -855,6 +855,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec|step-a-qualify|step-a|wave-1..wave-4|sweep|confirm] [--show-code]
   static-checks
   helpers RUN_DIR
+  reverse-swap RUN_DIR
   qualify --runs DIR
   timing RUN_DIR
   collisions RUN_DIR
@@ -1053,6 +1054,12 @@ fn run() -> Result<i32> {
         Some("helpers") => {
             let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
             println!("{}", serde_json::to_string_pretty(&qualify::helpers(run)?)?);
+            Ok(0)
+        }
+        Some("reverse-swap") => {
+            let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
+            let report = qualify::reverse_swap(run)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(0)
         }
         Some("qualify") => {
