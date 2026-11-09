@@ -9,6 +9,7 @@ Add a rule when a review finding is a judgement call that will come up again. Ke
 - A scope rule stated in docs must match what the tests or tools enforce. If a doc says "only X is allowed", a test must reject the rest, or the doc must say the rule is not enforced.
 - A doc that describes a tool's behaviour must match the tool. When you change the tool, change the doc in the same change.
 - Do not claim more than you checked. "CI runs these commands" must be true word for word.
+- A script that measures or checks reports a failed run as failed. A failure never counts toward a result, such as a median, and an empty or partial output never reads as a pass. In #534, a timing median counted failed runs, and a footer check passed on a failed call's empty file.
 - Re-derive every number and budget figure in a spec from its cited source. Figures drift between drafts, and a spec's decisions rest on them.
 
 ## One source for configuration
