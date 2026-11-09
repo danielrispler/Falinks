@@ -23,9 +23,9 @@
 //!   it held were removed before the next passing check, it is rework; otherwise it is a
 //!   premature check (not a collision) when the peer of the agent that asked for it added work
 //!   before that pass (its half did not exist yet), else no fault.
-//! - **Duplicate work**: Daniel's classifications of the pairs `duplicates` proposes: one
-//!   function of each agent with one name, in files one requirement names, or with similar
-//!   bodies. A pair's waste is the later copy's lines when the final tree holds both, else the
+//! - **Duplicate work**: the pairs `duplicates` proposes and a classifier calls duplicate or
+//!   divergent: one function of each agent with one name, in files one requirement names, with
+//!   similar bodies, or with one body mostly contained in the other. A pair's waste is the later copy's lines when the final tree holds both, else the
 //!   lines of each copy written and then discarded; a copy only in a refused request counts 0.
 //!
 //! Each collision lists its files and where each agent detected it, for #337's handling cost.
@@ -33,11 +33,13 @@
 //! written line counts once per run.
 use crate::authorship::{self, Authorship, Blame, Line, agent_name, applied, lines, matches, text};
 use crate::{
-    Result, bail, command, fixture, git, git_env, jsonl, read, sha256, strings,
+    Result, SCRATCH_DIRS, Sandbox, bail, check_env, command, fixture, git, git_env, jsonl,
+    protected_roots, read, sha256, strings,
     timing::{self, unix},
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -48,6 +50,12 @@ use std::time::Duration;
 /// pairs, almost all tests of one table shape, and 0.9 dropped tests both agents wrote for
 /// one development (0.74 to 0.86).
 pub const SIMILARITY: f64 = 0.75;
+/// Step A (#502): a production body whose tokens, in order, reach this share inside a
+/// production body at least twice its token count is a candidate too, so a duplicate inline
+/// in a larger function is proposed (#338: the per-line net inline in Totals and Statement,
+/// similarity 0.27, containment 0.83). On #339's 24 runs it adds 8 pairs to 73; tests are
+/// left out, where shared setup alone reaches it in about 130 more.
+pub const CONTAINMENT: f64 = 0.75;
 pub const CLASSES: [&str; 4] = ["line_conflict", "duplicate_work", "rework", "no_fault"];
 /// The classes a signal reaches, with a handling cost (#337): duplicate work is never signalled.
 pub const HANDLED: [&str; 3] = [CLASSES[0], CLASSES[2], CLASSES[3]];
@@ -128,14 +136,14 @@ fn measure(
     classified: &Value,
     authorship: &mut Result<Authorship>,
 ) -> Result<Value> {
-    let verdicts: BTreeMap<&str, bool> = classified["pairs"]
+    let verdicts: BTreeMap<&str, &str> = classified["pairs"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|p| Some((p["id"].as_str()?, p["duplicate"].as_bool()?)))
+        .filter_map(|p| Some((p["id"].as_str()?, class(p)?)))
         .collect();
     let requirements = requirements(result);
-    let (mut events, premature, candidates, unclassified) = match result["arm"].as_str() {
+    let (mut events, premature, candidates, unclassified, reused) = match result["arm"].as_str() {
         Some("falinks") => {
             let ledger = Ledger::read(authorship)?;
             let mut used = BTreeSet::new();
@@ -143,19 +151,38 @@ fn measure(
             let functions = ledger.functions(result);
             let pairs = pairs(&functions, &requirements, result);
             let discard = |f: &Function| Ok(ledger.discard(f, &mut used));
+            let none = BTreeMap::new();
             let unclassified =
-                duplicate_events(&pairs, &functions, &verdicts, discard, &mut events)?;
-            (events, premature, pairs.len(), unclassified)
+                duplicate_events(&pairs, &functions, &verdicts, &none, discard, &mut events)?;
+            (events, premature, pairs.len(), unclassified, Value::Null)
         }
         Some("git") => {
             let mut repo = Repo::read(run, result, authorship)?;
             let (mut events, premature) = repo.collisions(run, result)?;
             let functions = repo.functions(result)?;
             let pairs = pairs(&functions, &requirements, result);
+            let mut mechanisms = BTreeMap::new();
+            for (pair, i, j) in &pairs {
+                let id = pair["id"].as_str().unwrap_or_default();
+                if verdicts.get(id).is_some_and(|v| *v != "no") {
+                    let (a, b) = (&functions[*i], &functions[*j]);
+                    mechanisms.insert(id.to_string(), repo.mechanism(run, result, a, b)?);
+                }
+            }
+            let reused = repo.reused(run, result, &functions, &pairs, &verdicts);
+            let reused = reused
+                .map(|helpers| json!({"count": helpers.len(), "helpers": helpers}))
+                .unwrap_or_else(|e| json!({"unavailable": e.to_string()}));
             let discard = |f: &Function| repo.discard(f);
-            let unclassified =
-                duplicate_events(&pairs, &functions, &verdicts, discard, &mut events)?;
-            (events, premature, pairs.len(), unclassified)
+            let unclassified = duplicate_events(
+                &pairs,
+                &functions,
+                &verdicts,
+                &mechanisms,
+                discard,
+                &mut events,
+            )?;
+            (events, premature, pairs.len(), unclassified, reused)
         }
         other => bail!("unknown arm {other:?}"),
     };
@@ -177,11 +204,14 @@ fn measure(
         })
         .collect();
     events.sort_by_key(|e| CLASSES.iter().position(|c| e["class"] == *c));
-    Ok(
-        json!({"status": status, "events": events, "by_class": by_class,
+    let mut out = json!({"status": status, "events": events, "by_class": by_class,
         "premature_checks": premature, "lines": lines,
-        "duplicates": {"candidates": candidates, "unclassified": unclassified}}),
-    )
+        "duplicates": {"candidates": candidates, "unclassified": unclassified}});
+    // `report`'s `reused` (#516): Git's helpers used without an own copy.
+    if !reused.is_null() {
+        out["reused"] = reused;
+    }
+    Ok(out)
 }
 
 /// The run's `discarded_or_rewritten_work` from its collisions: the waste in lines, unknown
@@ -224,28 +254,53 @@ pub fn candidates(run: &Path, result: &Value) -> Result<Vec<Value>> {
 }
 
 /// Kept in `duplicates.json` beside the pairs.
-const DUPLICATES_NOTE: &str = "Duplicate-work candidates (#334): functions both agents added, for one requirement, with one name or with bodies at or above the similarity threshold. `duplicate` is the classifier's verdict, null until classified; `report` reads it. Pairs were shown in hash order across runs, without run, arm, agent or state.";
+const DUPLICATES_NOTE: &str = "Duplicate-work candidates (#334, #502): functions both agents added, for one requirement, with one name, with bodies at or above the similarity threshold, or with the shorter body's tokens at or above the containment threshold in the longer one. `class` is the classifier's answer (duplicate, divergent or no; #339's `duplicate` true or false reads as duplicate or no), null until classified; `report` reads it. Pairs were shown in hash order across runs, without run, arm, agent or state. `audit`, when present, records a blind classifier's audit.";
 
-/// `duplicates --runs DIR`: proposes the candidate pairs of every scored run in the batch,
-/// keeps the verdicts `DIR/duplicates.json` already holds, and asks for the rest one at a time,
-/// in an order shuffled across runs, showing each side's file and body only. Each answer is
-/// saved at once, so quitting keeps it.
-pub fn classify(runs: &Path, mut input: impl BufRead, mut out: impl Write) -> Result<i32> {
+/// Step A's duplicate question (#498's amendment, section 2), frozen with the trap.
+const QUESTION: &str = "Could one shared, reachable function serve both, so that one copy is redundant (duplicate), or do they compute the same thing but differ on some input (divergent), or neither (no)?";
+
+/// A pair's class: `duplicate`, `divergent` or `no`, or None while unclassified. #339's
+/// `duplicate` verdicts read as duplicate (true) and no (false).
+pub(crate) fn class(pair: &Value) -> Option<&str> {
+    pair["class"].as_str().or_else(|| {
+        pair["duplicate"]
+            .as_bool()
+            .map(|d| if d { "duplicate" } else { "no" })
+    })
+}
+
+/// The order pairs are shown in, across runs.
+fn order(pair: &Value) -> String {
+    sha256(pair["id"].as_str().unwrap_or_default().as_bytes())
+}
+
+/// Whether a batch run's pairs are classified: every scored run, and every run of a Step A
+/// qualification batch, whose unscored runs are classified to decide qualification (#498).
+fn pairs_classified(ledger: &Value, entry: &Value) -> bool {
+    entry["scored"] == true
+        || ledger["invocations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|i| i["schedule"] == "step-a-qualify")
+}
+
+/// The candidate pairs of every scored run in the batch, in the order shown, each keeping the
+/// class `old` (the batch's `duplicates.json`) holds for it.
+fn proposed(runs: &Path, old: &Value, out: &mut impl Write) -> Result<Vec<Value>> {
     let ledger = read(runs.join("batch.json"))?;
-    let path = runs.join("duplicates.json");
-    let old = read(&path).unwrap_or(Value::Null);
-    let verdicts: BTreeMap<&str, &Value> = old["pairs"]
+    let classes: BTreeMap<&str, &str> = old["pairs"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|p| Some((p["id"].as_str()?, &p["duplicate"])))
+        .filter_map(|p| Some((p["id"].as_str()?, class(p)?)))
         .collect();
     let mut pairs = vec![];
     for entry in ledger["runs"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|e| e["scored"] == true)
+        .filter(|e| pairs_classified(&ledger, e))
     {
         let run = Path::new(entry["run_dir"].as_str().unwrap_or_default());
         let Ok(mut result) = read(run.join("controller/result.json")) else {
@@ -262,69 +317,483 @@ pub fn classify(runs: &Path, mut input: impl BufRead, mut out: impl Write) -> Re
         }
     }
     for pair in &mut pairs {
-        if let Some(verdict) = verdicts.get(pair["id"].as_str().unwrap_or_default()) {
-            pair["duplicate"] = (*verdict).clone();
+        if let Some(class) = classes.get(pair["id"].as_str().unwrap_or_default()) {
+            pair["class"] = (*class).into();
         }
     }
-    let hash = |pair: &Value| sha256(pair["id"].as_str().unwrap_or_default().as_bytes());
-    pairs.sort_by_key(hash);
-    let save = |pairs: &[Value]| {
-        crate::write(
-            &path,
-            &json!({"note": DUPLICATES_NOTE, "similarity_threshold": SIMILARITY, "pairs": pairs}),
-        )
+    pairs.sort_by_key(order);
+    Ok(pairs)
+}
+
+/// Writes `pairs` and, unless null, `audit` to `path`.
+fn save(path: &Path, pairs: &[Value], audit: &Value) -> Result<()> {
+    let mut saved = json!({"note": DUPLICATES_NOTE, "similarity_threshold": SIMILARITY,
+        "containment_threshold": CONTAINMENT, "pairs": pairs});
+    if !audit.is_null() {
+        saved["audit"] = audit.clone();
+    }
+    crate::write(path, &saved)
+}
+
+/// Shows pair `k` with each side's file and body only, then the divergence aid run in `work`,
+/// and reads one answer: a class, `skip`, or `quit` (also at the end of the input).
+fn ask(
+    pairs: &[Value],
+    k: usize,
+    work: &Path,
+    input: &mut impl BufRead,
+    out: &mut impl Write,
+) -> Result<&'static str> {
+    let done = pairs.iter().filter(|p| class(p).is_some()).count();
+    let mut sides = pairs[k]["sides"].as_array().cloned().unwrap_or_default();
+    // The hash orders the sides too, so agent A is not always first.
+    if order(&pairs[k]).ends_with(['1', '3', '5', '7', '9', 'b', 'd', 'f']) {
+        sides.reverse();
+    }
+    writeln!(
+        out,
+        "\nPair {} of {} ({done} classified)",
+        k + 1,
+        pairs.len()
+    )?;
+    for (label, side) in ["first", "second"].iter().zip(&sides) {
+        let body = side["body"]
+            .as_str()
+            .unwrap_or_default()
+            .replace('\t', "    ");
+        writeln!(
+            out,
+            "--- {label}: {}\n{body}",
+            side["file"].as_str().unwrap_or_default()
+        )?;
+    }
+    let aid = divergence(&sides, work).unwrap_or_else(|e| format!("not run: {e}"));
+    writeln!(
+        out,
+        "--- divergence aid, on generated inputs (an aid only; you decide): {aid}"
+    )?;
+    write!(
+        out,
+        "{QUESTION} [d]uplicate, di[v]ergent, [n]o, [s]kip, [q]uit: "
+    )?;
+    out.flush()?;
+    let mut answer = String::new();
+    if input.read_line(&mut answer)? == 0 {
+        return Ok("quit");
+    }
+    Ok(match answer.trim() {
+        "d" | "duplicate" => "duplicate",
+        "v" | "divergent" => "divergent",
+        "n" | "no" => "no",
+        "q" | "quit" => "quit",
+        _ => "skip",
+    })
+}
+
+/// The divergence aid's generated inputs (#504): a Go expression list per supported parameter
+/// type. Strings: empty, digits (with a leading zero, a sign, a fraction, an exponent, past
+/// int64), letters, a space, and non-ASCII. Integers: 0, ±1, 2, 10, 100 and the type's
+/// extremes (no negatives for unsigned). Bools: both. A function runs on every combination.
+fn generated(ty: &str) -> Option<Vec<String>> {
+    const STRINGS: [&str; 17] = [
+        "",
+        "0",
+        "1",
+        "7",
+        "42",
+        "007",
+        "-1",
+        "+3",
+        "1.5",
+        "1e3",
+        "abc",
+        "A",
+        "a1",
+        " 1",
+        "9223372036854775808",
+        "é",
+        "日本",
+    ];
+    const SIGNED: [(&str, &str); 6] = [
+        ("int", "Int"),
+        ("int8", "Int8"),
+        ("int16", "Int16"),
+        ("int32", "Int32"),
+        ("rune", "Int32"),
+        ("int64", "Int64"),
+    ];
+    const UNSIGNED: [(&str, &str); 6] = [
+        ("uint", "Uint"),
+        ("uint8", "Uint8"),
+        ("byte", "Uint8"),
+        ("uint16", "Uint16"),
+        ("uint32", "Uint32"),
+        ("uint64", "Uint64"),
+    ];
+    let mut values: Vec<String> = ["0", "1", "2", "10", "100"].map(String::from).to_vec();
+    if let Some((_, c)) = SIGNED.iter().find(|(t, _)| *t == ty) {
+        values.extend(["-1".into(), format!("math.Max{c}"), format!("math.Min{c}")]);
+    } else if let Some((_, c)) = UNSIGNED.iter().find(|(t, _)| *t == ty) {
+        values.push(format!("math.Max{c}"));
+    } else {
+        return match ty {
+            "string" => Some(STRINGS.iter().map(|s| format!("{s:?}")).collect()),
+            "bool" => Some(vec!["true".into(), "false".into()]),
+            _ => None,
+        };
+    }
+    Some(values.iter().map(|v| format!("{ty}({v})")).collect())
+}
+
+/// The parameter types a Go function's `body` declares, each one the aid generates.
+fn parameters(body: &str) -> Result<Vec<String>> {
+    let Some(header) = body.strip_prefix("func ") else {
+        bail!("not a function");
     };
-    save(&pairs)?;
-    let total = pairs.len();
-    for k in 0..total {
-        if pairs[k]["duplicate"].is_boolean() {
+    if header.starts_with('(') {
+        bail!("a method");
+    }
+    let open = header.find(['(', '[']).ok_or("no parameter list")?;
+    if header[open..].starts_with('[') {
+        bail!("a generic function");
+    }
+    let (mut parts, mut depth) = (vec![String::new()], 0);
+    for c in header[open + 1..].chars() {
+        match c {
+            ')' | ']' | '}' if depth == 0 => break,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(String::new());
+                continue;
+            }
+            _ => {}
+        }
+        parts.last_mut().unwrap().push(c);
+    }
+    let parts: Vec<&str> = parts
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+    // Named parameters (`a, b int`) take the type of the next one that states it.
+    let mut types = vec![];
+    if parts.iter().any(|p| p.contains(char::is_whitespace)) {
+        let mut ty = "";
+        for part in parts.iter().rev() {
+            if let Some((_, t)) = part.split_once(char::is_whitespace) {
+                ty = t.trim();
+            }
+            types.push(ty.to_string());
+        }
+        types.reverse();
+    } else {
+        types = parts.iter().map(|p| p.to_string()).collect();
+    }
+    if let Some(ty) = types.iter().find(|t| generated(t).is_none()) {
+        bail!("parameter type {ty} is not generated");
+    }
+    Ok(types)
+}
+
+/// The Go harness: both functions as `f0` and `f1` beside the standard packages a body may use,
+/// called on every input; a call that panics or runs past one second reports that as its result.
+const HARNESS: &str = r#"package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"math/big"
+	"os"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
+
+var _, _, _, _, _, _, _, _ = bytes.Equal, errors.New, math.Abs, big.NewInt, sort.Strings, strconv.Itoa, unicode.IsDigit, utf8.RuneLen
+
+FUNCTIONS
+
+func call(f any, args []reflect.Value) string {
+	args = append([]reflect.Value(nil), args...)
+	done := make(chan string, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Sprintf("panic: %v", r)
+			}
+		}()
+		var out []string
+		for _, v := range reflect.ValueOf(f).Call(args) {
+			out = append(out, fmt.Sprintf("%#v", v.Interface()))
+		}
+		done <- strings.Join(out, ", ")
+	}()
+	select {
+	case r := <-done:
+		return r
+	case <-time.After(time.Second):
+		return "timed out after 1s"
+	}
+}
+
+func main() {
+	inputs := [][]any{INPUTS}
+	out := json.NewEncoder(os.Stdout)
+	args := make([]reflect.Value, len(inputs))
+	var each func(i int)
+	each = func(i int) {
+		if i == len(inputs) {
+			shown := make([]string, len(args))
+			for k, a := range args {
+				shown[k] = fmt.Sprintf("%#v", a.Interface())
+			}
+			out.Encode([]string{strings.Join(shown, ", "), call(f0, args), call(f1, args)})
+			return
+		}
+		for _, v := range inputs[i] {
+			args[i] = reflect.ValueOf(v)
+			each(i + 1)
+		}
+	}
+	each(0)
+}
+"#;
+
+/// The divergence aid (#498's amendment, section 2; #504) for two sides, in the order shown:
+/// when both take the same parameter types, runs both on the generated inputs as a contained
+/// command in `work` (no network, no reads of the batch beside `work`, writes only under it,
+/// bounded run time) and says where their results differ. An aid only: it sets no answer, and
+/// says nothing of run, arm or agent.
+fn divergence(sides: &[Value], work: &Path) -> Result<String> {
+    let body = |k: usize| sides[k]["body"].as_str().unwrap_or_default();
+    let (first, second) = (parameters(body(0))?, parameters(body(1))?);
+    if first != second {
+        bail!(
+            "different parameter types, ({}) and ({})",
+            first.join(", "),
+            second.join(", ")
+        );
+    }
+    let inputs: Vec<Vec<String>> = first.iter().map(|t| generated(t).unwrap()).collect();
+    if inputs.iter().map(Vec::len).product::<usize>() > 5000 {
+        bail!("more than 5000 input combinations");
+    }
+    let functions: Vec<String> = (0..2)
+        .map(|k| {
+            let name = sides[k]["name"].as_str().unwrap_or_default();
+            body(k).replace(&format!("{name}("), &format!("f{k}("))
+        })
+        .collect();
+    let inputs: Vec<String> = inputs
+        .iter()
+        .map(|values| format!("{{{}}}", values.join(", ")))
+        .collect();
+    let source = HARNESS
+        .replace("FUNCTIONS", &functions.join("\n\n"))
+        .replace("INPUTS", &inputs.join(", "));
+    for name in SCRATCH_DIRS {
+        fs::create_dir_all(work.join(name))?;
+    }
+    fs::write(work.join("main.go"), source)?;
+    let mut denied = protected_roots()?;
+    denied.push(work.parent().unwrap().into());
+    let sandbox = Sandbox {
+        writable: vec![work.into()],
+        denied,
+        reopened: vec![work.into()],
+        network: false,
+    };
+    let argv = sandbox.wrap(strings(&["go", "run", "main.go"]))?;
+    let bound = Duration::from_secs(120);
+    // `command`'s own error names the sandbox profile, whose paths could name the run.
+    let output = command(&argv, work, &check_env(work), bound)
+        .map_err(|_| format!("did not finish within {bound:?}"))?;
+    let text = String::from_utf8_lossy(&output.stderr);
+    if !output.success {
+        let line = text.lines().find(|l| !l.starts_with('#')).unwrap_or("");
+        bail!("does not build or run on its own: {line}");
+    }
+    let results: Vec<Vec<String>> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?;
+    let differ: Vec<&Vec<String>> = results.iter().filter(|r| r[1] != r[2]).collect();
+    if differ.is_empty() {
+        return Ok(format!("no difference on {} inputs", results.len()));
+    }
+    let mut shown = format!(
+        "results differ on {} of {} inputs:",
+        differ.len(),
+        results.len()
+    );
+    // 20 shows every input of one parameter: results of different types differ on all of them.
+    for r in differ.iter().take(20) {
+        shown += &format!("\n  ({}): first {}; second {}", r[0], r[1], r[2]);
+    }
+    if differ.len() > 20 {
+        shown += &format!("\n  and {} more", differ.len() - 20);
+    }
+    Ok(shown)
+}
+
+/// Asks for each of `asked` still unclassified, saving each answer at once, until a quit.
+fn answer(
+    pairs: &mut [Value],
+    asked: &[usize],
+    save: impl Fn(&[Value]) -> Result<()>,
+    work: &Path,
+    input: &mut impl BufRead,
+    out: &mut impl Write,
+) -> Result<()> {
+    for &k in asked {
+        if class(&pairs[k]).is_some() {
             continue;
         }
-        let done = pairs.iter().filter(|p| p["duplicate"].is_boolean()).count();
-        let mut sides = pairs[k]["sides"].as_array().cloned().unwrap_or_default();
-        // The hash orders the sides too, so agent A is not always first.
-        if hash(&pairs[k]).ends_with(['1', '3', '5', '7', '9', 'b', 'd', 'f']) {
-            sides.reverse();
+        match ask(pairs, k, work, input, out)? {
+            "quit" => break,
+            "skip" => continue,
+            class => pairs[k]["class"] = class.into(),
         }
-        writeln!(out, "\nPair {} of {total} ({done} classified)", k + 1)?;
-        for (label, side) in ["first", "second"].iter().zip(&sides) {
-            let body = side["body"]
-                .as_str()
-                .unwrap_or_default()
-                .replace('\t', "    ");
-            writeln!(
-                out,
-                "--- {label}: {}\n{body}",
-                side["file"].as_str().unwrap_or_default()
-            )?;
-        }
-        write!(
-            out,
-            "Do both implement one requirement, so that one duplicates the other? [y]es, [n]o, [s]kip, [q]uit: "
-        )?;
-        out.flush()?;
-        let mut answer = String::new();
-        if input.read_line(&mut answer)? == 0 {
-            break;
-        }
-        pairs[k]["duplicate"] = match answer.trim() {
-            "y" | "yes" => true.into(),
-            "n" | "no" => false.into(),
-            "q" | "quit" => break,
-            _ => continue,
-        };
-        save(&pairs)?;
+        save(pairs)?;
     }
-    let left = pairs
-        .iter()
-        .filter(|p| !p["duplicate"].is_boolean())
-        .count();
+    Ok(())
+}
+
+/// `duplicates --runs DIR`: proposes the candidate pairs of every scored run in the batch,
+/// keeps the classes `DIR/duplicates.json` already holds, and asks for the rest one at a time,
+/// in an order shuffled across runs, showing each side's file and body only. Each answer is
+/// saved at once, so quitting keeps it.
+pub fn classify(runs: &Path, mut input: impl BufRead, mut out: impl Write) -> Result<i32> {
+    let path = runs.join("duplicates.json");
+    let old = read(&path).unwrap_or(Value::Null);
+    let mut pairs = proposed(runs, &old, &mut out)?;
+    let keep = |pairs: &[Value]| save(&path, pairs, &old["audit"]);
+    keep(&pairs)?;
+    let total = pairs.len();
+    let all: Vec<usize> = (0..total).collect();
+    let work = runs.join("divergence");
+    answer(&mut pairs, &all, keep, &work, &mut input, &mut out)?;
+    let left = pairs.iter().filter(|p| class(p).is_none()).count();
     writeln!(
         out,
         "\n{} of {total} classified, {left} left; saved to {}",
         total - left,
         path.display()
     )?;
+    Ok(0)
+}
+
+/// The pairs to audit (#498's amendment, section 3): every one `answers` does not call `no`,
+/// and a random 20% of the `no` ones, rounded up, ordered by a hash of `seed` and the pair.
+fn audited(pairs: &[Value], answers: &[&str], seed: &str) -> Vec<usize> {
+    let mut no: Vec<usize> = (0..pairs.len()).filter(|&k| answers[k] == "no").collect();
+    no.sort_by_key(|&k| sha256(format!("{seed}\0{}", pairs[k]["id"]).as_bytes()));
+    no.truncate(no.len().div_ceil(5));
+    let mut out: Vec<usize> = (0..pairs.len())
+        .filter(|&k| answers[k] != "no")
+        .chain(no)
+        .collect();
+    out.sort();
+    out
+}
+
+/// `duplicates --runs DIR --answers FILE --seed SEED`: audits a blind classifier's answers
+/// (#498's amendment, section 3). FILE is a JSON array with one answer per pair in the order
+/// `duplicates` shows them: `duplicate`, `divergent`, `no` or `unsure`. It names the pairs to
+/// audit and asks for each, blind as in `classify` and without the classifier's answer. Once
+/// all are answered it counts the audited pairs whose class differs from a classifier's answer
+/// other than `unsure`: more than 1 means Daniel classifies every pair (`duplicates --runs
+/// DIR` asks the rest), else the classifier's answers fill the pairs not audited.
+pub fn audit(
+    runs: &Path,
+    file: &Path,
+    seed: &str,
+    mut input: impl BufRead,
+    mut out: impl Write,
+) -> Result<i32> {
+    let path = runs.join("duplicates.json");
+    let old = read(&path).unwrap_or(Value::Null);
+    let mut pairs = proposed(runs, &old, &mut out)?;
+    let given = read(file)?;
+    let answers: Vec<&str> = given
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            a.as_str()
+                .filter(|a| ["duplicate", "divergent", "no", "unsure"].contains(a))
+        })
+        .collect();
+    let total = pairs.len();
+    if answers.len() != total || given.as_array().map(Vec::len) != Some(total) {
+        bail!(
+            "{} must be a JSON array of {total} answers, each duplicate, divergent, no or unsure",
+            file.display()
+        );
+    }
+    let picked = audited(&pairs, &answers, seed);
+    let no = answers.iter().filter(|a| **a == "no").count();
+    writeln!(
+        out,
+        "Audit {} of {total} pairs (seed {seed}): every duplicate, divergent and unsure answer, and {} of {no} no answers: {}",
+        picked.len(),
+        picked.iter().filter(|&&k| answers[k] == "no").count(),
+        picked
+            .iter()
+            .map(|k| (k + 1).to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )?;
+    let keep = |pairs: &[Value]| save(&path, pairs, &old["audit"]);
+    let work = runs.join("divergence");
+    answer(&mut pairs, &picked, keep, &work, &mut input, &mut out)?;
+    let left = picked
+        .iter()
+        .filter(|&&k| class(&pairs[k]).is_none())
+        .count();
+    if left > 0 {
+        writeln!(
+            out,
+            "\n{left} audited pairs left; run the audit again to finish"
+        )?;
+        return Ok(0);
+    }
+    let disagreements = picked
+        .iter()
+        .filter(|&&k| answers[k] != "unsure" && class(&pairs[k]) != Some(answers[k]))
+        .count();
+    let full = disagreements > 1;
+    if !full {
+        for k in (0..total).filter(|k| !picked.contains(k)) {
+            pairs[k]["class"] = answers[k].into();
+        }
+    }
+    let ids: Vec<&Value> = picked.iter().map(|&k| &pairs[k]["id"]).collect();
+    let record = json!({"seed": seed, "audited": ids, "disagreements": disagreements,
+        "full_classification": full});
+    save(&path, &pairs, &record)?;
+    if full {
+        writeln!(
+            out,
+            "\nDisagreements: {disagreements}, more than 1: a full classification by Daniel is needed; run `duplicates --runs {}`",
+            runs.display()
+        )?;
+    } else {
+        writeln!(
+            out,
+            "\nDisagreements: {disagreements}, so the classifier's answers stand for the {} pairs not audited; saved to {}",
+            total - picked.len(),
+            path.display()
+        )?;
+    }
     Ok(0)
 }
 
@@ -380,8 +849,10 @@ fn go_functions(path: &str, text: &str) -> Vec<(String, usize, usize)> {
     out
 }
 
-/// 2 × the longest common token subsequence over both token counts.
-fn similarity(a: &str, b: &str) -> f64 {
+/// The similarity of two bodies, 2 × their longest common token subsequence over both token
+/// counts, and their containment, that subsequence over the shorter body's token count when the
+/// longer has at least twice as many, else 0.
+fn similarity(a: &str, b: &str) -> (f64, f64) {
     let tokens = |s: &str| -> Vec<String> {
         let mut out: Vec<String> = vec![];
         let mut word = false;
@@ -398,7 +869,7 @@ fn similarity(a: &str, b: &str) -> f64 {
     };
     let (a, b) = (tokens(a), tokens(b));
     if a.is_empty() || b.is_empty() {
-        return 0.0;
+        return (0.0, 0.0);
     }
     let mut row = vec![0u32; b.len() + 1];
     for x in &a {
@@ -413,7 +884,14 @@ fn similarity(a: &str, b: &str) -> f64 {
             diagonal = above;
         }
     }
-    2.0 * f64::from(row[b.len()]) / (a.len() + b.len()) as f64
+    let common = f64::from(row[b.len()]);
+    let (short, long) = (a.len().min(b.len()), a.len().max(b.len()));
+    let contained = if long >= 2 * short {
+        common / short as f64
+    } else {
+        0.0
+    };
+    (2.0 * common / (a.len() + b.len()) as f64, contained)
 }
 
 /// The fixture's requirement entries, developments' included.
@@ -451,6 +929,30 @@ fn named_by(requirements: &[String], path: &str) -> BTreeSet<usize> {
         .collect()
 }
 
+/// When `agent` first wrote a definition of `function` (`Name` or `Type.Name`), in run seconds:
+/// its transcript's first tool use whose input holds `func Name(` (`) Name(` for a method; `[`
+/// for a generic). None without.
+fn written(run: &Path, result: &Value, agent: &str, function: &str) -> Option<f64> {
+    let start = result["timing"]["start_unix"].as_f64()?;
+    let name = function.rsplit('.').next()?;
+    let head = if function.contains('.') { ")" } else { "func" };
+    let needles = ["(", "["].map(|open| format!("{head} {name}{open}"));
+    let transcript = run.join(format!("agents/{agent}/scratch/claude-events.jsonl"));
+    let events = jsonl(&transcript).ok()?;
+    let defines = |e: &&Value| {
+        let blocks = e["message"]["content"].as_array().into_iter().flatten();
+        blocks.filter(|b| b["type"] == "tool_use").any(|b| {
+            let input = b["input"].to_string();
+            needles.iter().any(|n| input.contains(n))
+        })
+    };
+    let event = events
+        .iter()
+        .filter(|e| e["type"] == "assistant")
+        .find(defines)?;
+    Some(unix(event["timestamp"].as_str()?)? - start)
+}
+
 /// Candidate pairs, one function of each agent: the same name, one requirement naming both
 /// files, or similar bodies. Each with the indices of its two functions.
 fn pairs(
@@ -465,13 +967,15 @@ fn pairs(
             .enumerate()
             .filter(|(_, b)| b.agent > a.agent)
         {
-            let score = similarity(&a.body, &b.body);
+            let (score, contained) = similarity(&a.body, &b.body);
+            let tests = [a, b].iter().any(|f| f.file.ends_with("_test.go"));
             let shared =
                 !named_by(requirements, &a.file).is_disjoint(&named_by(requirements, &b.file));
             let reason = match () {
                 _ if a.name == b.name => "name",
                 _ if shared => "requirement",
                 _ if score >= SIMILARITY => "similarity",
+                _ if contained >= CONTAINMENT && !tests => "containment",
                 _ => continue,
             };
             let side = |f: &Function| {
@@ -486,21 +990,25 @@ fn pairs(
                 );
             let id = sha256(key.as_bytes())[..16].to_string();
             let pair = json!({"id": id, "run_id": result["run_id"], "reason": reason,
-                "similarity": (score * 100.0).round() / 100.0, "sides": [side(a), side(b)],
-                "duplicate": null});
+                "similarity": (score * 100.0).round() / 100.0,
+                "containment": (contained * 100.0).round() / 100.0, "sides": [side(a), side(b)],
+                "class": null});
             out.push((pair, i, j));
         }
     }
     out
 }
 
-/// Adds a duplicate-work collision per pair classified as duplicates and returns how many pairs
-/// are unclassified. Waste: the later copy's lines when the final tree holds both, else the
-/// lines of each copy written and then discarded; a gate-stopped copy wastes nothing.
+/// Adds a duplicate-work collision per pair classified as duplicate or divergent (#498: C1
+/// prices both alike) and returns how many pairs are unclassified. Waste: the later copy's lines
+/// when the final tree holds both, else the lines of each copy written and then discarded; a
+/// gate-stopped copy wastes nothing. A pair in `mechanisms` (Git's) also carries its mechanism
+/// and its `replaced` flag.
 fn duplicate_events(
     pairs: &[(Value, usize, usize)],
     functions: &[Function],
-    verdicts: &BTreeMap<&str, bool>,
+    verdicts: &BTreeMap<&str, &str>,
+    mechanisms: &BTreeMap<String, (&'static str, bool)>,
     mut discard: impl FnMut(&Function) -> Result<BTreeMap<String, u64>>,
     events: &mut Vec<Value>,
 ) -> Result<usize> {
@@ -508,11 +1016,12 @@ fn duplicate_events(
     for (pair, i, j) in pairs {
         match verdicts.get(pair["id"].as_str().unwrap_or_default()) {
             None => unclassified += 1,
-            Some(false) => {}
-            Some(true) => {
+            Some(&"no") => {}
+            Some(verdict) => {
                 let (a, b) = (&functions[*i], &functions[*j]);
                 let mut waste = BTreeMap::new();
-                if a.state == "final" && b.state == "final" {
+                let final_tree = a.state == "final" && b.state == "final";
+                if final_tree {
                     let later = if b.first >= a.first { b } else { a };
                     waste.insert(later.agent.clone(), (later.end - later.start + 1) as u64);
                 } else {
@@ -523,7 +1032,17 @@ fn duplicate_events(
                     }
                 }
                 let files = [a.file.clone(), b.file.clone()].into();
-                events.push(collision("duplicate_work", files, vec![], waste));
+                let mut event = collision("duplicate_work", files, vec![], waste);
+                // `report` counts final-tree pairs per class (#505).
+                event["pair_class"] = (*verdict).into();
+                event["final_tree"] = final_tree.into();
+                if let Some((mechanism, replaced)) =
+                    mechanisms.get(pair["id"].as_str().unwrap_or_default())
+                {
+                    event["mechanism"] = (*mechanism).into();
+                    event["replaced"] = (*replaced).into();
+                }
+                events.push(event);
             }
         }
     }
@@ -1314,6 +1833,119 @@ impl<'a> Repo<'a> {
         Ok(found.into_values().collect())
     }
 
+    /// The second agent's choice for a duplicate or divergent pair (#506, as #516 redefines it):
+    /// `blind` when its copy was written before the peer's defining share (its first share
+    /// holding the copy) presented it, else `seen-duplicated`. The second agent is the one whose
+    /// copy was shared later. The defining share's `peer_diff` goes out with it, and a notify
+    /// notice only with a share, so none presents the copy earlier. A copy is written at its
+    /// agent's first tool use holding the definition (`written`), else at its first share. With
+    /// the class, `replaced` (#516, report-only): the second agent's copy is discarded, the
+    /// final tree keeps the peer's, and a final line of the second agent's calls it.
+    // shortcut: a call is matched as `Name(` text, and presentation is the host's send, not the
+    // agent's read; read call sites by syntax or delivery from the transcript if that matters.
+    fn mechanism(
+        &mut self,
+        run: &Path,
+        result: &Value,
+        a: &Function,
+        b: &Function,
+    ) -> Result<(&'static str, bool)> {
+        let (peer, second) = if b.first >= a.first { (a, b) } else { (b, a) };
+        let last = result["final_snapshot"].as_str().map(String::from);
+        let replaced = match last.filter(|_| second.state == "discarded" && peer.state == "final") {
+            Some(last) => self.calls(&last, &second.agent, &peer.name)?,
+            None => false,
+        };
+        let chosen = written(run, result, &second.agent, &second.name)
+            .map_or(second.first, |t| t.min(second.first));
+        let class = if chosen < peer.first {
+            "blind"
+        } else {
+            "seen-duplicated"
+        };
+        Ok((class, replaced))
+    }
+
+    /// Whether a line of `agent`'s at `commit` calls `function`, matched as `Name(` text.
+    fn calls(&mut self, commit: &str, agent: &str, function: &str) -> Result<bool> {
+        let call = format!("{}(", function.rsplit('.').next().unwrap_or_default());
+        for path in self.paths(&[commit])? {
+            let (text, ids) = (self.text(commit, &path)?, self.line_ids(commit, &path)?);
+            let own = |id: &Line| id.agent().is_some_and(|(x, _)| x == agent);
+            if lines(&text)
+                .iter()
+                .zip(&ids)
+                .any(|(l, id)| own(id) && l.contains(&call))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// `reused` (#516): the shared helpers in the final tree, by `falinks-eval helpers`'s rule,
+    /// that agent X defined and a final line of the other agent Y calls, when Y never had its own
+    /// version: a function of Y's forming a duplicate or divergent pair with the helper, or with
+    /// the helper's name, at any share of Y's or tool use (`written`). Each helper once.
+    // shortcut: an own copy Y wrote under another name and deleted before any share forms no
+    // pair, so the helper still counts; read Y's transcript edits for such copies if that matters.
+    fn reused(
+        &mut self,
+        run: &Path,
+        result: &Value,
+        functions: &[Function],
+        pairs: &[(Value, usize, usize)],
+        verdicts: &BTreeMap<&str, &str>,
+    ) -> Result<Vec<String>> {
+        let last = (result["final_snapshot"].as_str()).ok_or("the run has no final snapshot")?;
+        let mut tree = BTreeMap::new();
+        for path in self
+            .paths(&[last])?
+            .into_iter()
+            .filter(|p| p.ends_with(".go"))
+        {
+            let text = self.text(last, &path)?;
+            tree.insert(path, text.into_bytes());
+        }
+        let fixture = fixture(result["fixture"].as_str().unwrap_or_default())?;
+        let helpers = crate::qualify::shared_helpers(&fixture, &tree)?;
+        let shown = |f: &Function| {
+            let dir = f.file.rsplit_once('/').map_or("", |(d, _)| d);
+            format!("{dir}.{}", f.name)
+        };
+        let agents: Vec<String> = self.shares.keys().cloned().collect();
+        let mut out = vec![];
+        for helper in helpers.as_array().into_iter().flatten() {
+            let name = helper["function"].as_str().unwrap_or_default();
+            // A helper the initial tree held is no agent's.
+            let Some(h) = (functions.iter()).position(|f| f.state == "final" && shown(f) == name)
+            else {
+                continue;
+            };
+            let defined = &functions[h];
+            for y in agents.iter().filter(|y| **y != defined.agent) {
+                let paired = pairs.iter().any(|(pair, i, j)| {
+                    let other = match (*i == h, *j == h) {
+                        (true, _) => *j,
+                        (_, true) => *i,
+                        _ => return false,
+                    };
+                    let id = pair["id"].as_str().unwrap_or_default();
+                    functions[other].agent == *y && verdicts.get(id).is_some_and(|v| *v != "no")
+                });
+                let named = functions
+                    .iter()
+                    .any(|f| f.agent == *y && f.name == defined.name);
+                let own = paired || named || written(run, result, y, &defined.name).is_some();
+                if !own && self.calls(last, y, &defined.name)? {
+                    out.push(name.to_string());
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// The lines of a discarded function at its last commit, by agent, once per run.
     fn discard(&mut self, f: &Function) -> Result<BTreeMap<String, u64>> {
         let ids = self.line_ids(&f.at, &f.file)?;
@@ -1501,6 +2133,16 @@ mod tests {
     const V2: &str = "package p\nfunc H() {\n    c := 3\n    return\n}\n";
     /// V1 with agent-0's `a := 1` dropped.
     const V0_B: &str = "package p\nfunc H() {\n    b := 2\n    return\n}\n";
+
+    #[test]
+    fn step_a_qualification_runs_are_classified_though_unscored() {
+        let ledger = |schedule: &str| json!({"invocations": [{"schedule": schedule}]});
+        let (scored, unscored) = (json!({"scored": true}), json!({"scored": false}));
+        assert!(pairs_classified(&ledger("step-a"), &scored));
+        assert!(!pairs_classified(&ledger("step-a"), &unscored));
+        assert!(!pairs_classified(&ledger("confirm"), &unscored));
+        assert!(pairs_classified(&ledger("step-a-qualify"), &unscored));
+    }
 
     #[test]
     fn a_stale_refusal_against_the_peers_region_is_a_line_conflict_whose_resolution_wastes_the_peers_lines()
@@ -1863,13 +2505,20 @@ mod tests {
     const NET_A: &str = "package p\nfunc NetA(q, p int) int {\n    n := q * p\n    return n\n}\n";
     const NET_B: &str = "package p\nfunc NetB(q, p int) int {\n    n := q * p\n    return n\n}\n";
 
-    /// Marks every candidate pair of `result`'s run as `verdict`.
-    fn classified(run: &Path, result: &Value, verdict: bool) -> Value {
+    /// Marks every candidate pair of `result`'s run as `verdict`: a class, or #339's
+    /// `duplicate` true or false.
+    fn classified(run: &Path, result: &Value, verdict: Value) -> Value {
+        let key = if verdict.is_boolean() {
+            "duplicate"
+        } else {
+            "class"
+        };
         let pairs = candidates(run, result).unwrap();
         let pairs: Vec<Value> = pairs
             .into_iter()
             .map(|mut p| {
-                p["duplicate"] = verdict.into();
+                p["class"] = Value::Null;
+                p[key] = verdict.clone();
                 p
             })
             .collect();
@@ -1910,54 +2559,64 @@ mod tests {
                 (&json!("B"), &json!("NetB"), &json!("final"), &json!(4))
             ]
         );
-        let yes = classified(run.dir.path(), &result, true);
-        let found = measured(run.dir.path(), &result, &yes);
-        assert_eq!(found["status"], "complete");
-        assert_eq!(
-            found["events"],
-            json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4, "waste": {"B": 4},
-                "detected": []}])
-        );
-        assert_eq!(waste(&found)["lines"], 4);
-        let no = classified(run.dir.path(), &result, false);
-        let found = measured(run.dir.path(), &result, &no);
-        assert_eq!(
-            (found["status"].clone(), found["lines"].clone()),
-            (json!("complete"), json!(0))
-        );
+        // #339's `duplicate: true` reads as duplicate; divergent is priced alike (#498).
+        for (verdict, class) in [
+            (json!(true), "duplicate"),
+            (json!("duplicate"), "duplicate"),
+            (json!("divergent"), "divergent"),
+        ] {
+            let found = measured(
+                run.dir.path(),
+                &result,
+                &classified(run.dir.path(), &result, verdict),
+            );
+            let event = json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4,
+                "waste": {"B": 4}, "detected": [], "pair_class": class, "final_tree": true,
+                "mechanism": "seen-duplicated", "replaced": false}]);
+            assert_eq!(found["status"], "complete");
+            assert_eq!(found["events"], event);
+            assert_eq!(waste(&found)["lines"], 4);
+        }
+        for verdict in [json!(false), json!("no")] {
+            let found = measured(
+                run.dir.path(),
+                &result,
+                &classified(run.dir.path(), &result, verdict),
+            );
+            assert_eq!(
+                (found["status"].clone(), found["lines"].clone()),
+                (json!("complete"), json!(0))
+            );
+        }
     }
 
     #[test]
     fn classify_shows_pairs_without_run_or_arm_and_keeps_each_answer_in_the_batch() {
-        let mut run = GitRun::new(&[("a.go", "package p\n"), ("b.go", "package p\n")]);
-        let initial = run.initial.clone();
-        let a = run.share("A", &initial, &[("a.go", NET_A)], 10.0);
-        let b = run.share("B", &initial, &[("b.go", NET_B)], 20.0);
-        let merged = run.merge(&a, &b, &[]);
-        run.measure(&[("A", &merged, true, 30.0)]);
-        crate::write(run.dir.path().join("controller/result.json"), &json!({"arm": "git", "team_size": 2,
-            "initial_snapshot": initial, "final_snapshot": merged, "timing": {"start_unix": 1000.0},
-            "validation_attempts": [{"number": 1, "candidate": merged, "passed": true, "conflict": null}]})).unwrap();
-        let batch = tempfile::tempdir().unwrap();
-        crate::write(
-            batch.path().join("batch.json"),
-            &json!({"runs": [{"run_dir": run.dir.path(),
-            "run_id": "go-page-1-git", "arm": "git", "fixture": "go-page", "scored": true}]}),
-        )
-        .unwrap();
+        let (_run, batch) = batch_of(NET_B);
         let mut shown = vec![];
-        classify(batch.path(), "y\n".as_bytes(), &mut shown).unwrap();
+        classify(batch.path(), "v\n".as_bytes(), &mut shown).unwrap();
         let shown = String::from_utf8(shown).unwrap();
         assert!(
             shown.contains("Pair 1 of 1") && shown.contains("func NetB"),
             "{shown}"
         );
         assert!(
+            shown.contains(&format!(
+                "{QUESTION} [d]uplicate, di[v]ergent, [n]o, [s]kip, [q]uit: "
+            )),
+            "{shown}"
+        );
+        assert!(
             !shown.contains("git") && !shown.contains("final"),
             "{shown}"
         );
-        let saved = read(batch.path().join("duplicates.json")).unwrap();
-        assert_eq!(saved["pairs"][0]["duplicate"], true);
+        assert!(
+            shown.contains("(an aid only; you decide): no difference on 64 inputs"),
+            "{shown}"
+        );
+        let path = batch.path().join("duplicates.json");
+        let mut saved = read(&path).unwrap();
+        assert_eq!(saved["pairs"][0]["class"], "divergent");
         assert_eq!(saved["pairs"][0]["run_id"], "go-page-1-git");
         // Proposing again keeps the answer and asks nothing.
         let mut again = vec![];
@@ -1969,6 +2628,14 @@ mod tests {
             result["collisions"]["by_class"]["duplicate_work"],
             json!({"count": 1, "lines": 4})
         );
+        // #339's file, `duplicate: false` and no `class`, still loads, as no.
+        saved["pairs"][0]["class"] = Value::Null;
+        saved["pairs"][0]["duplicate"] = false.into();
+        crate::write(&path, &saved).unwrap();
+        let mut again = vec![];
+        classify(batch.path(), "".as_bytes(), &mut again).unwrap();
+        assert!(!String::from_utf8(again).unwrap().contains("Pair 1"));
+        assert_eq!(read(&path).unwrap()["pairs"][0]["class"], "no");
     }
 
     #[test]
@@ -2115,11 +2782,200 @@ mod tests {
             .map(|s| &s["state"])
             .collect();
         assert_eq!(states, ["discarded", "final"]);
-        let found = measured(dir.path(), &result, &classified(dir.path(), &result, true));
+        let found = measured(
+            dir.path(),
+            &result,
+            &classified(dir.path(), &result, true.into()),
+        );
         assert_eq!(
             found["events"],
             json!([{"class": "duplicate_work", "files": ["a.go", "b.go"], "lines": 4, "waste": {"agent-0": 4},
-                "detected": []}])
+                "detected": [], "pair_class": "duplicate", "final_tree": false}])
         );
+    }
+
+    #[test]
+    fn the_filter_proposes_every_known_duplicate_case() {
+        // Recorded copies; the fixture's note says where each comes from.
+        let known: Value =
+            serde_json::from_str(include_str!("../tests/duplicates/known-cases.json")).unwrap();
+        let requirements = requirements(&json!({"fixture": "go-invoice"}));
+        let mut reasons = vec![];
+        for case in known["cases"].as_array().unwrap() {
+            let functions: Vec<Function> = case["sides"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| {
+                    let body = s["body"].as_str().unwrap().to_string();
+                    Function {
+                        agent: s["agent"].as_str().unwrap().into(),
+                        file: s["file"].as_str().unwrap().into(),
+                        name: s["name"].as_str().unwrap().into(),
+                        end: body.lines().count() - 1,
+                        body,
+                        state: "final",
+                        at: String::new(),
+                        start: 0,
+                        first: 0.0,
+                    }
+                })
+                .collect();
+            let found = pairs(&functions, &requirements, &json!({"run_id": "known"}));
+            assert_eq!(found.len(), 1, "{} is proposed", case["case"]);
+            reasons.push(found[0].0["reason"].clone());
+        }
+        // The inline per-line net scores 0.27 on similarity: only containment reaches it.
+        assert_eq!(reasons, ["containment", "name", "similarity", "similarity"]);
+    }
+
+    #[test]
+    fn the_divergence_aid_shows_differing_inputs_or_says_why_it_did_not_run() {
+        let known: Value =
+            serde_json::from_str(include_str!("../tests/duplicates/known-cases.json")).unwrap();
+        let sides = |case: &str| {
+            known["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["case"] == case)
+                .unwrap()["sides"]
+                .as_array()
+                .unwrap()
+                .clone()
+        };
+        let side = |name: &str, body: &str| json!({"name": name, "body": body});
+        let batch = tempfile::tempdir().unwrap();
+        let work = batch.path().join("divergence");
+        let aid =
+            |sides: &[Value]| divergence(sides, &work).unwrap_or_else(|e| format!("not run: {e}"));
+
+        let shown = aid(&sides("parseQty/parseCount"));
+        assert!(
+            shown.starts_with("results differ on 17 of 17 inputs:"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(
+                "\n  (\"0\"): first 0, \"count \\\"0\\\" is not a positive integer\"; second 0, true"
+            ),
+            "{shown}"
+        );
+        assert_eq!(aid(&sides("#339 isDigits")), "no difference on 17 inputs");
+        assert_eq!(
+            aid(&sides("bigDivRound/divRound")),
+            "not run: parameter type *big.Int is not generated"
+        );
+        let net = side("NetB", "func NetB(q, p int) int {\n    return q * p\n}");
+        let digits = &sides("#339 isDigits")[0];
+        assert_eq!(
+            aid(&[net, digits.clone()]),
+            "not run: different parameter types, (int, int) and (string)"
+        );
+        let first = side("first", "func first(s string) byte {\n\treturn s[0]\n}");
+        let second = side(
+            "second",
+            "func second(s string) byte {\n\tfor s == \"\" {\n\t}\n\treturn s[0]\n}",
+        );
+        let shown = aid(&[first, second]);
+        assert!(
+            shown.starts_with("results differ on 1 of 17 inputs:\n  (\"\"): first panic: runtime error: index out of range [0] with length 0; second timed out after 1s"),
+            "{shown}"
+        );
+        let broken = side("f", "func f(s string) core.Money {\n\treturn 0\n}");
+        assert!(
+            aid(&[broken.clone(), broken])
+                .starts_with("not run: does not build or run on its own: "),
+        );
+    }
+
+    /// A batch of one Git run in which A adds `NetA` and B adds `b`'s functions.
+    fn batch_of(b: &str) -> (GitRun, tempfile::TempDir) {
+        let mut run = GitRun::new(&[("a.go", "package p\n"), ("b.go", "package p\n")]);
+        let initial = run.initial.clone();
+        let a = run.share("A", &initial, &[("a.go", NET_A)], 10.0);
+        let b = run.share("B", &initial, &[("b.go", b)], 20.0);
+        let merged = run.merge(&a, &b, &[]);
+        run.measure(&[("A", &merged, true, 30.0)]);
+        crate::write(run.dir.path().join("controller/result.json"), &json!({"arm": "git", "team_size": 2,
+            "initial_snapshot": initial, "final_snapshot": merged, "timing": {"start_unix": 1000.0},
+            "validation_attempts": [{"number": 1, "candidate": merged, "passed": true, "conflict": null}]})).unwrap();
+        let batch = tempfile::tempdir().unwrap();
+        crate::write(
+            batch.path().join("batch.json"),
+            &json!({"runs": [{"run_dir": run.dir.path(),
+            "run_id": "go-page-1-git", "arm": "git", "fixture": "go-page", "scored": true}]}),
+        )
+        .unwrap();
+        (run, batch)
+    }
+
+    #[test]
+    fn the_seeded_audit_takes_every_answer_but_no_and_a_fifth_of_the_nos_rounded_up() {
+        let pairs: Vec<Value> = (0..13).map(|k| json!({"id": format!("p{k}")})).collect();
+        let mut answers = vec!["no"; 13];
+        answers[2] = "duplicate";
+        answers[5] = "divergent";
+        answers[7] = "unsure";
+        let picked = audited(&pairs, &answers, "seed-1");
+        assert_eq!(picked, audited(&pairs, &answers, "seed-1"), "reproducible");
+        assert_eq!(picked.len(), 3 + 2, "10 no answers: 2 audited");
+        assert!([2, 5, 7].iter().all(|k| picked.contains(k)));
+        let reseeded: Vec<Vec<usize>> = (2..6)
+            .map(|s| audited(&pairs, &answers, &format!("seed-{s}")))
+            .collect();
+        assert!(
+            reseeded.iter().any(|p| *p != picked),
+            "the seed picks the nos"
+        );
+    }
+
+    #[test]
+    fn more_than_one_disagreement_in_an_audit_needs_a_full_classification() {
+        const NET_C: &str = "func NetC(q, p int) int {\n    n := q * p\n    return n\n}\n";
+        let audit_with = |answers: Value, daniel: &str| {
+            let (_run, batch) = batch_of(&format!("{NET_B}{NET_C}"));
+            let file = batch.path().join("answers.json");
+            crate::write(&file, &answers).unwrap();
+            let mut shown = vec![];
+            audit(batch.path(), &file, "s", daniel.as_bytes(), &mut shown).unwrap();
+            let saved = read(batch.path().join("duplicates.json")).unwrap();
+            (String::from_utf8(shown).unwrap(), saved, batch)
+        };
+        let (shown, saved, _batch) = audit_with(json!(["duplicate", "duplicate"]), "n\nn\n");
+        assert!(shown.contains("Audit 2 of 2 pairs"), "{shown}");
+        assert!(
+            !shown.contains("git") && !shown.contains("go-page"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(
+                "Disagreements: 2, more than 1: a full classification by Daniel is needed"
+            ),
+            "{shown}"
+        );
+        assert_eq!(saved["audit"]["full_classification"], true);
+        // An unsure answer is never a disagreement.
+        let (shown, saved, _batch) = audit_with(json!(["duplicate", "unsure"]), "n\nd\n");
+        assert!(
+            shown.contains("Disagreements: 1, so the classifier's answers stand"),
+            "{shown}"
+        );
+        assert_eq!(saved["audit"]["disagreements"], 1);
+        // One of two no answers is audited; the other keeps the classifier's answer.
+        let (shown, saved, _batch) = audit_with(json!(["no", "no"]), "d\n");
+        assert!(shown.contains("Audit 1 of 2 pairs"), "{shown}");
+        let classes: Vec<&Value> = saved["pairs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| &p["class"])
+            .collect();
+        assert!(classes.contains(&&json!("duplicate")) && classes.contains(&&json!("no")));
+        // A wrong number of answers is refused.
+        let (_run, batch) = batch_of(NET_B);
+        let file = batch.path().join("answers.json");
+        crate::write(&file, &json!(["no", "no"])).unwrap();
+        assert!(audit(batch.path(), &file, "s", "".as_bytes(), vec![]).is_err());
     }
 }
