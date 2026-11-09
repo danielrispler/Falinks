@@ -44,7 +44,12 @@ workspace files. Visible tests cannot change the oracle's captured source.
 
 `fixtures/*.json` contain public initial source, allocation, dependency
 information, commands, requirements and host milestone definitions.
-`protected/*.json` contain host-only oracle and reference bytes. Do **not** give
+`protected/*.json` contain host-only oracle and reference bytes. An optional
+`"trap": {"milestone": ID, "cases": [TEST, ...], "side_cases": [TEST, ...]}` tags the oracle cases that depend on
+the milestone that changes a function's meaning (#490 C2). For each two-agent Git run,
+`report`'s `c2` says whether the first combined check after that development failed on a
+tagged case, and per arm whether C2 holds (at least 2 of 3 runs). `side_cases`, the trap
+developer's own dependents, are counted apart at that check and decide nothing. Do **not** give
 this checkout or a clone of it to task agents. `prepare` exports only the initial
 fixture repository. A future Falinks runner must use the same export, freeze,
 instructions, developments and `oracle` seam, with its engine/adapter controls and repeated `--deny-root` arguments for all prior runs or reference copies.

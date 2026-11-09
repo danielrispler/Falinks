@@ -655,6 +655,7 @@ pub fn results(runs: &Path) -> Result<Vec<Value>> {
             }
         }
         result["developments"] = developments(run_dir);
+        result["trap_reached"] = trap_reached(run_dir, &result);
         // Built once for collisions and timing; a team of one's too, for its changed bytes.
         let mut authorship = Authorship::read(run_dir, &result);
         result["collisions"] =
@@ -689,6 +690,68 @@ fn developments(run_dir: &Path) -> Value {
         .first()
         .map(|first| at("draft_shared").iter().filter(|s| *s > first).count());
     json!({"arrival_seconds": arrivals, "drafts_shared_after_first": after})
+}
+
+/// C2 (#490): whether the first combined check after the trap's development failed on an
+/// oracle case that depends on it, and, apart, how many cases its same-developer dependents
+/// failed there. The protected file tags them as `"trap": {"milestone": ID, "cases": [TEST,
+/// ...], "side_cases": [TEST, ...]}`, and the host records that in the run's evidence. Null
+/// unless the run has a trap and is a two-agent Git run.
+fn trap_reached(run_dir: &Path, result: &Value) -> Value {
+    let unreached = json!({"c2": false, "side_failures": 0});
+    let trap = &result["trap"];
+    if trap.is_null() || result["arm"] != "git" || result["team_size"] != 2 {
+        return Value::Null;
+    }
+    let Some(rows) = events(run_dir) else {
+        return Value::Null;
+    };
+    let Some(development) = rows
+        .iter()
+        .position(|r| r["kind"] == "development" && r["milestone"]["id"] == trap["milestone"])
+    else {
+        return unreached;
+    };
+    // The host records each check before its event, so the k-th check event is check-k.json;
+    // a check without a candidate (a conflict, or a draft missing) combined nothing.
+    let Some(number) = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r["kind"] == "validation" || r["kind"] == "final_validation")
+        .enumerate()
+        .find(|(_, (i, r))| *i > development && !r["candidate"].is_null())
+        .map(|(k, _)| k + 1)
+    else {
+        return unreached;
+    };
+    let Ok(check) = read(run_dir.join(format!("controller/check-{number}.json"))) else {
+        return Value::Null;
+    };
+    let lines: Vec<&str> = check["oracle"]["checks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c["output"].as_str())
+        .flat_map(str::lines)
+        .map(str::trim)
+        .collect();
+    // Go's `--- FAIL: Name (...)`, a subtest's `Name/sub`; Rust's `test name ... FAILED`.
+    let failed = |case: &str| {
+        lines.iter().any(|l| {
+            l.strip_prefix("--- FAIL: ")
+                .and_then(|rest| rest.split([' ', '/']).next())
+                == Some(case)
+                || *l == format!("test {case} ... FAILED")
+        })
+    };
+    let cases = |key: &str| {
+        let tagged = trap[key].as_array().into_iter().flatten();
+        tagged
+            .filter_map(Value::as_str)
+            .filter(|c| failed(c))
+            .count()
+    };
+    json!({"c2": cases("cases") > 0, "side_failures": cases("side_cases")})
 }
 
 /// The rows of a run's `controller/events.jsonl`, or None without it.

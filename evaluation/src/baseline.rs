@@ -157,6 +157,8 @@ pub fn baseline(
         "recommendations": 0, "transitions": 0,
         "timing": {"start_utc": utc_now(), "start_unix": start_unix, "endpoint": "clean preparation through exact candidate passing checks"},
         "tool_differences": read(root().join("config.json"))?["tool_differences"],
+        // C2's oracle cases (#490), for `report`; null for a fixture without a trap.
+        "trap": crate::protected(name)?["trap"],
     });
     if let Some(variant) = variant {
         evidence["variant"] = variant.into();
