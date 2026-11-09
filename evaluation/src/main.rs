@@ -296,7 +296,12 @@ impl Sandbox {
     /// Landlock allows only what it lists, so reads are everything outside the denied roots.
     /// Without network, the helper also refuses every socket.
     fn landlock(&self, argv: Vec<String>) -> Result<Vec<String>> {
-        let helper = env::current_exe()?.with_file_name(HELPER);
+        let mut helper = env::current_exe()?.with_file_name(HELPER);
+        // Unit tests run from target/<profile>/deps; the helper binary sits one level up.
+        let deps = helper.parent().filter(|d| d.ends_with("deps"));
+        if let Some(profile) = deps.and_then(Path::parent).filter(|_| !helper.is_file()) {
+            helper = profile.join(HELPER);
+        }
         if !helper.is_file() {
             bail!(
                 "Containment helper {} is missing; no unprotected fallback",
