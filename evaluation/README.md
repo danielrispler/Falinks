@@ -485,10 +485,20 @@ it; the runtime's own `<synthetic>` replies carry no effort and are skipped. A
     read; a team of one is `n/a`.
     - Duplicate work needs a classifier: after a batch, run `duplicates --runs DIR`. It
       proposes candidate pairs (one function per agent with one name, in files one
-      requirement names, or with token similarity at or above the frozen `SIMILARITY` in
-      `src/collisions.rs`), shows each unclassified pair without its run, arm or agent, in
-      hash order across runs, and saves each answer to `DIR/duplicates.json`
-      (`pairs[].duplicate`, null until classified). `collisions` and `report` read it.
+      requirement names, with token similarity at or above the frozen `SIMILARITY` in
+      `src/collisions.rs`, or, since #502, with the shorter body's tokens contained in the
+      longer at or above `CONTAINMENT`, so an inline duplicate is proposed), shows each
+      unclassified pair without its run, arm or agent, in hash order across runs, asks Step
+      A's three-way question (duplicate, divergent or no; #498's amendment) and saves each
+      answer to `DIR/duplicates.json` (`pairs[].class`, null until classified; #339's
+      `duplicate` true or false reads as duplicate or no). `collisions` and `report` read it,
+      pricing a divergent pair's waste as a duplicate's.
+    - Scored runs (#498's amendment, section 3): `duplicates --runs DIR --answers FILE --seed
+      SEED` takes a blind classifier's answers (a JSON array, one per pair in the order shown:
+      duplicate, divergent, no or unsure), asks Daniel the pairs to audit (every answer but no,
+      and a seeded random 20% of the no answers, rounded up) and records the `audit`. More than
+      1 disagreement (an unsure answer is never one) means Daniel classifies every pair;
+      otherwise the classifier's answers fill the pairs not audited.
     - `report` prints, per fixture and arm, `collisions`: waste lines, collisions per class
       and premature checks, the `handling` cost per class and `rereads` (round-trips and model
       seconds summed over agents), with `note`, `handling_note` and #205's three `sentences`.

@@ -1,0 +1,73 @@
+{
+  "note": "Recorded copies of the known duplicate-work cases the candidate filter must propose (#498 amendment, section 2; #502). Totals and Statement: #338 pilot 1 (falinks-arm go-invoice, v58), final tree, the per-line net computed inline in both (similarity 0.27). The rest: #339 large-spec duplicates.json, pairs 3b62b755657dfc02 (go-invoice-5-falinks-2), 4213d3b3255fef4d (go-invoice-2-git-2) and 545b1d688a4b584b (go-invoice-5-git-2, the lowest-similarity parseCount/parseQty pair).",
+  "cases": [
+    {
+      "case": "#205 inline per-line net",
+      "sides": [
+        {
+          "agent": "agent-0",
+          "file": "totals.go",
+          "name": "Totals",
+          "body": "func Totals(inv core.Invoice, rules []discount.Rule, taxes tax.Table) Summary {\n\ts := Summarize(inv)\n\tfor _, line := range inv.Lines {\n\t\toff := discount.Line(line, rules)\n\t\ts.Discount += off\n\t\ts.Tax += taxes.Line(line, line.Gross()-off)\n\t}\n\ts.Total = s.Subtotal - s.Discount + s.Tax\n\treturn s\n}"
+        },
+        {
+          "agent": "agent-1",
+          "file": "statement.go",
+          "name": "Statement",
+          "body": "func Statement(inv core.Invoice, rules []discount.Rule, taxes tax.Table, rates fx.Table, currency string) (Summary, string, error) {\n\tif err := inv.Validate(); err != nil {\n\t\treturn Summary{}, \"\", err\n\t}\n\ts := Totals(inv, rules, taxes)\n\tconverted, err := rates.Convert(s.Total, inv.Currency, currency)\n\tif err != nil {\n\t\treturn Summary{}, \"\", err\n\t}\n\ts.Currency = currency\n\ts.Converted = converted\n\n\tcols := []render.Column{\n\t\t{Title: \"SKU\"},\n\t\t{Title: \"Qty\", Right: true},\n\t\t{Title: \"Unit\", Right: true},\n\t\t{Title: \"Discount\", Right: true},\n\t\t{Title: \"Tax\", Right: true},\n\t\t{Title: \"Amount\", Right: true},\n\t}\n\trows := make([][]string, 0, len(inv.Lines))\n\tfor _, line := range inv.Lines {\n\t\toff := discount.Line(line, rules)\n\t\tnet := line.Gross() - off\n\t\tt := taxes.Line(line, net)\n\t\trows = append(rows, []string{\n\t\t\tline.SKU, strconv.FormatInt(line.Qty, 10), line.Unit.String(),\n\t\t\toff.String(), t.String(), (net + t).String(),\n\t\t})\n\t}\n\ttotal := func(label string, m core.Money) []string {\n\t\treturn []string{label, \"\", \"\", \"\", \"\", m.String()}\n\t}\n\tfooter := [][]string{\n\t\ttotal(\"Subtotal\", s.Subtotal),\n\t\ttotal(\"Discount\", s.Discount),\n\t\ttotal(\"Tax\", s.Tax),\n\t\ttotal(\"Total\", s.Total),\n\t}\n\tif currency != inv.Currency {\n\t\tfooter = append(footer, total(\"Total in \"+currency, s.Converted))\n\t}\n\ttext := \"Invoice \" + inv.ID + \" for \" + inv.Customer + \" (\" + inv.Currency + \")\\n\" +\n\t\trender.Table(cols, rows, footer)\n\treturn s, text, nil\n}"
+        }
+      ]
+    },
+    {
+      "case": "#339 isDigits",
+      "sides": [
+        {
+          "agent": "agent-0",
+          "file": "core/money.go",
+          "name": "isDigits",
+          "body": "func isDigits(s string) bool {\n\tif s == \"\" {\n\t\treturn false\n\t}\n\tfor i := 0; i < len(s); i++ {\n\t\tif s[i] < '0' || s[i] > '9' {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true\n}"
+        },
+        {
+          "agent": "agent-1",
+          "file": "parse/parse.go",
+          "name": "isDigits",
+          "body": "func isDigits(s string) bool {\n\tif s == \"\" {\n\t\treturn false\n\t}\n\tfor i := 0; i < len(s); i++ {\n\t\tif s[i] < '0' || s[i] > '9' {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true\n}"
+        }
+      ]
+    },
+    {
+      "case": "bigDivRound/divRound",
+      "sides": [
+        {
+          "agent": "A",
+          "file": "core/money.go",
+          "name": "bigDivRound",
+          "body": "func bigDivRound(a, b *big.Int) *big.Int {\n\tq, rem := new(big.Int).QuoRem(a, b, new(big.Int))\n\ttwice := new(big.Int).Abs(rem)\n\ttwice.Lsh(twice, 1)\n\tif twice.Cmp(new(big.Int).Abs(b)) >= 0 {\n\t\tif (a.Sign() < 0) != (b.Sign() < 0) {\n\t\t\tq.Sub(q, big.NewInt(1))\n\t\t} else {\n\t\t\tq.Add(q, big.NewInt(1))\n\t\t}\n\t}\n\treturn q\n}"
+        },
+        {
+          "agent": "B",
+          "file": "fx/fx.go",
+          "name": "divRound",
+          "body": "func divRound(a, b *big.Int) core.Money {\n\tq, r := new(big.Int).QuoRem(a, b, new(big.Int))\n\tr.Abs(r).Lsh(r, 1)\n\tif r.Cmp(b) >= 0 {\n\t\tif a.Sign() < 0 {\n\t\t\tq.Sub(q, big.NewInt(1))\n\t\t} else {\n\t\t\tq.Add(q, big.NewInt(1))\n\t\t}\n\t}\n\treturn core.Money(q.Int64())\n}"
+        }
+      ]
+    },
+    {
+      "case": "parseQty/parseCount",
+      "sides": [
+        {
+          "agent": "A",
+          "file": "discount/discount.go",
+          "name": "parseCount",
+          "body": "func parseCount(s string) (int64, string) {\n\tbad := \"count \" + strconv.Quote(s) + \" is not a positive integer\"\n\tif s == \"\" {\n\t\treturn 0, bad\n\t}\n\tfor i := 0; i < len(s); i++ {\n\t\tif s[i] < '0' || s[i] > '9' {\n\t\t\treturn 0, bad\n\t\t}\n\t}\n\tn, err := strconv.ParseInt(s, 10, 64)\n\tif err != nil || n < 1 {\n\t\treturn 0, bad\n\t}\n\treturn n, \"\"\n}"
+        },
+        {
+          "agent": "B",
+          "file": "parse/parse.go",
+          "name": "parseQty",
+          "body": "func parseQty(s string) (int64, bool) {\n\tif s == \"\" {\n\t\treturn 0, false\n\t}\n\tfor i := 0; i < len(s); i++ {\n\t\tif s[i] < '0' || s[i] > '9' {\n\t\t\treturn 0, false\n\t\t}\n\t}\n\tq, err := strconv.ParseInt(s, 10, 64)\n\treturn q, err == nil\n}"
+        }
+      ]
+    }
+  ]
+}
