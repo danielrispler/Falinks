@@ -677,6 +677,8 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         .filter(|r| r["arm"] == "falinks" && !replaceable(r))
         .filter_map(|r| r["transitions"].as_u64())
         .sum();
+    let (c2, mechanism) = (c2_cells(&current), mechanism_cells(&current));
+    let best = best_variants(&current, &mechanism, &c2);
     json!({
         "qualification": "Exploratory: three repetitions per fixture and no p-values. No winner is computed; the decision is written on the ticket. Cost is API-equivalent list price, not billed cost.",
         "runs": runs.iter().map(|r| json!({"run_id": r["run_id"], "pair": r["pair"], "arm": r["arm"],
@@ -696,8 +698,150 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         "regrouping_benefit": if transitions == 0 { "unestablished: no transitions" } else { "observed transitions; benefit needs review" },
         "replaced_runs": replaced,
         "c1": c1_cells(&current),
-        "c2": c2_cells(&current),
+        "c2": c2,
+        "mechanism": mechanism,
+        "best_variant": best,
     })
+}
+
+/// The mechanism classes (#506, #516), as `collisions` marks a Git pair's duplicate-work event.
+const MECHANISMS: [&str; 2] = ["blind", "seen-duplicated"];
+
+/// Printed with the mechanism cells.
+const MECHANISM_NOTE: &str = "Mechanism (#490, #506, #516): each duplicate or divergent pair of a two-agent Git run, by the second agent's choice (the agent whose copy was shared later). blind: its copy was written before the peer's defining share (the first share holding the peer's copy, whose peer_diff, and any notify notice, goes out with it) presented it; seen-duplicated: written after. A copy is written at its agent's first tool use holding its definition, else at its first share. replaced: pairs also flagged because the second agent's copy is discarded, the final tree keeps the peer's and a final line of the second agent's calls it (matched as `Name(` text); each keeps its class, its cost is already in C1, and it decides nothing. reused counts helpers, not pairs: each shared helper of the final tree (`falinks-eval helpers`) that one agent defined and a final line of the other agent's calls, when that other agent never had its own version (a function of its own forming a duplicate or divergent pair with the helper, or with the helper's name, at any of its tool uses or shares); an own copy under another name deleted before any share forms no pair, so the helper still counts. Counted per run and over the arm's runs; missing_runs lack complete collisions (classify with `falinks-eval duplicates`) or a reused count.";
+
+/// The mechanism classes per fixture and two-agent Git arm, with `replaced` and `reused`: each
+/// run's counts and their sums.
+fn mechanism_cells(runs: &[&Value]) -> Value {
+    let mut cells = json!({});
+    let git = |r: &&&Value| r["arm"] == "git" && r["team_size"] == 2 && !replaceable(r);
+    for run in runs.iter().filter(git) {
+        let fixture = run["fixture"].as_str().unwrap_or_default();
+        let cell = &mut cells[fixture][team(run).unwrap_or_default().as_str()];
+        let id = run["run_id"].as_str().unwrap_or_default();
+        let collisions = &run["collisions"];
+        let events = collisions["events"]
+            .as_array()
+            .filter(|_| collisions["status"] == "complete");
+        let count = |class: &str| {
+            let n = events.map(|e| e.iter().filter(|e| e["mechanism"] == class).count());
+            n.map(|n| n as u64)
+        };
+        let replaced = events.map(|e| e.iter().filter(|e| e["replaced"] == true).count() as u64);
+        let reused = events.and(collisions["reused"]["count"].as_u64());
+        let counts = MECHANISMS
+            .map(|class| (class, count(class)))
+            .into_iter()
+            .chain([("replaced", replaced), ("reused", reused)]);
+        for (class, n) in counts {
+            cell["runs"][id][class] = n.into();
+            cell[class] = (cell[class].as_u64().unwrap_or(0) + n.unwrap_or(0)).into();
+        }
+        let missing = cell["missing_runs"].as_u64().unwrap_or(0) + u64::from(reused.is_none());
+        cell["missing_runs"] = missing.into();
+        cell["note"] = MECHANISM_NOTE.into();
+    }
+    cells
+}
+
+/// #490's simplicity order of the Git arms Step A compares.
+const VARIANTS: [&str; 3] = ["git-2", "git-2+announce", "git-2+notify"];
+/// #490's noise band: medians of completion time within this fraction tie.
+const BAND: f64 = 0.15;
+
+/// Printed with the best variant.
+const BEST_VARIANT_NOTE: &str = "Best Git variant (#490): among the arms whose success rate is no lower than git-2's, in the simplicity order git-2, git-2+announce, git-2+notify. Medians of completion seconds (a failure ranks slower than every success) within 15% of the current choice's tie, and a tie goes to the simpler arm. A more complex arm wins only if its median is more than 15% below every simpler eligible arm's, or it ties and wins on mechanism (more reused and fewer blind, summed over its runs, than the current choice) or on C2 (C2 holds for the current choice and not for it). rule gives each step.";
+
+/// One arm's figures for the best-variant rule.
+struct Variant<'a> {
+    arm: &'a str,
+    successes: usize,
+    n: usize,
+    median: f64,
+    reused: u64,
+    blind: u64,
+    c2: Option<bool>,
+}
+
+/// The best Git variant per fixture with Step A's arms (#490), with each arm's figures.
+fn best_variants(runs: &[&Value], mechanism: &Value, c2: &Value) -> Value {
+    let mut out = json!({});
+    let fixtures: BTreeSet<&str> = runs.iter().filter_map(|r| r["fixture"].as_str()).collect();
+    for fixture in fixtures {
+        let variants: Vec<Variant> = VARIANTS
+            .iter()
+            .filter_map(|&arm| {
+                let mine = |r: &&&Value| {
+                    r["fixture"] == fixture && team(r).as_deref() == Some(arm) && !replaceable(r)
+                };
+                let ranked: Vec<&Value> = runs.iter().filter(mine).copied().collect();
+                let count = |class: &str| mechanism[fixture][arm][class].as_u64().unwrap_or(0);
+                Some(Variant {
+                    arm,
+                    successes: successes(&ranked) as usize,
+                    n: ranked.len(),
+                    median: median(ranked.iter().filter_map(|r| completion(r)).collect())?,
+                    reused: count("reused"),
+                    blind: count("blind"),
+                    c2: c2[fixture][arm]["holds"].as_bool(),
+                })
+            })
+            .collect();
+        if variants.len() < 2 {
+            continue;
+        }
+        let (arm, rule) = best_variant(&variants);
+        let arms: serde_json::Map<String, Value> = variants
+            .iter()
+            .map(|v| {
+                let figures = json!({"successes": v.successes, "n": v.n,
+                    "median_completion_seconds": v.median, "reused": v.reused, "blind": v.blind,
+                    "c2_holds": v.c2});
+                (v.arm.to_string(), figures)
+            })
+            .collect();
+        out[fixture] = json!({"arm": arm, "rule": rule, "arms": arms, "note": BEST_VARIANT_NOTE});
+    }
+    out
+}
+
+/// #490's rule over `variants`, in simplicity order: the chosen arm (None without `git-2`) and
+/// each step that decided it.
+fn best_variant(variants: &[Variant]) -> (Option<String>, String) {
+    let Some(base) = variants.iter().find(|v| v.arm == VARIANTS[0]) else {
+        return (None, "no git-2 runs, so no arm is eligible".into());
+    };
+    let rate = |v: &Variant| v.successes as f64 / v.n as f64;
+    let (mut best, mut simpler, mut steps) = (base, vec![base], vec![]);
+    for v in variants.iter().filter(|v| v.arm != base.arm) {
+        if rate(v) < rate(base) {
+            steps.push(format!(
+                "{} is not eligible: {} of {} successes, below git-2's {} of {}",
+                v.arm, v.successes, v.n, base.successes, base.n
+            ));
+            continue;
+        }
+        // Written so that two all-failure medians (infinite) tie.
+        let ties = v.median >= best.median * (1.0 - BAND) && v.median <= best.median * (1.0 + BAND);
+        let against = best.arm;
+        let step = if simpler.iter().all(|s| v.median < s.median * (1.0 - BAND)) {
+            best = v;
+            "is more than 15% faster than every simpler arm, so it wins"
+        } else if ties && v.reused > best.reused && v.blind < best.blind {
+            best = v;
+            "ties within 15% and wins on mechanism (more reused, fewer blind)"
+        } else if ties && best.c2 == Some(true) && v.c2 == Some(false) {
+            best = v;
+            "ties within 15% and wins on C2 (it holds for the simpler arm, not for this one)"
+        } else if ties {
+            "ties within 15% and wins on neither mechanism nor C2, so the simpler arm stands"
+        } else {
+            "is neither more than 15% faster than every simpler arm nor tied, so the simpler arm stands"
+        };
+        steps.push(format!("{} against {against}: {step}", v.arm));
+        simpler.push(v);
+    }
+    (Some(best.arm.to_string()), steps.join("; "))
 }
 
 /// Printed with the C2 cells.
@@ -3212,6 +3356,95 @@ mod tests {
             Some("git-2+announce")
         );
         assert_eq!(team(&run(json!("notify"))).as_deref(), Some("git-2+notify"));
+    }
+
+    /// Three Step A runs of a Git arm `variant`: their completion seconds (infinite: a failure),
+    /// the mechanism classes of their pairs (all in the first run; each `reused` a reused helper,
+    /// not a pair) and their C2 readings.
+    fn step_a(variant: &str, seconds: [f64; 3], mechanisms: &[&str], c2: [bool; 3]) -> Vec<Value> {
+        (0..3)
+            .map(|k| {
+                let first = mechanisms.iter().filter(|_| k == 0);
+                let events: Vec<Value> = (first.clone())
+                    .filter(|m| **m != "reused")
+                    .map(|m| json!({"class": "duplicate_work", "mechanism": m, "replaced": false}))
+                    .collect();
+                let reused = first.filter(|m| **m == "reused").count();
+                let outcome = if seconds[k].is_finite() { "success" } else { "task_failure" };
+                json!({"run_id": format!("{variant}-{k}"), "fixture": "go-emergent", "arm": "git",
+                    "team_size": 2, "variant": if variant.is_empty() { Value::Null } else { json!(variant) },
+                    "outcome": outcome, "timing": {"elapsed_seconds": seconds[k]},
+                    "collisions": {"status": "complete", "events": events,
+                        "reused": {"count": reused}},
+                    "trap_reached": {"c2": c2[k], "side_failures": 0}})
+            })
+            .collect()
+    }
+
+    /// `best_variant` of the arms' runs, as `report` builds it.
+    fn chosen(arms: &[Vec<Value>]) -> Value {
+        let runs: Vec<&Value> = arms.iter().flatten().collect();
+        let (mechanism, c2) = (mechanism_cells(&runs), c2_cells(&runs));
+        best_variants(&runs, &mechanism, &c2)["go-emergent"].clone()
+    }
+
+    #[test]
+    fn the_best_git_variant_follows_490s_noise_rule() {
+        let (no, two) = ([false; 3], [true, true, false]);
+        let git = step_a("", [100.0; 3], &["blind", "blind"], no);
+        // 10% faster is a tie, and a tie goes to the simpler arm.
+        let tie = chosen(&[git.clone(), step_a("announce", [90.0; 3], &["blind"], no)]);
+        assert_eq!(tie["arm"], "git-2", "{tie}");
+        assert!(
+            tie["rule"].as_str().unwrap().contains("wins on neither"),
+            "{tie}"
+        );
+        assert_eq!(
+            tie["arms"]["git-2+announce"]["median_completion_seconds"],
+            90.0
+        );
+        // More than 15% faster wins; notify ties announce, so announce stands.
+        let faster = chosen(&[
+            git.clone(),
+            step_a("announce", [80.0, 84.0, 70.0], &[], no),
+            step_a("notify", [75.0; 3], &[], no),
+        ]);
+        assert_eq!(faster["arm"], "git-2+announce", "{faster}");
+        assert!(
+            faster["rule"]
+                .as_str()
+                .unwrap()
+                .contains("more than 15% faster")
+        );
+        // A tie won on mechanism: more reused and fewer blind; more reused alone is not enough.
+        let mechanism = chosen(&[
+            git.clone(),
+            step_a("notify", [95.0; 3], &["reused", "blind"], no),
+        ]);
+        assert_eq!(mechanism["arm"], "git-2+notify", "{mechanism}");
+        assert!(
+            mechanism["rule"]
+                .as_str()
+                .unwrap()
+                .contains("wins on mechanism")
+        );
+        let reused = step_a("notify", [95.0; 3], &["reused", "blind", "blind"], no);
+        assert_eq!(chosen(&[git.clone(), reused])["arm"], "git-2");
+        // A tie won on C2: it holds for git-2 (2 of 3) and not for the tied arm.
+        let harmed = step_a("", [100.0; 3], &[], two);
+        let c2 = chosen(&[harmed.clone(), step_a("notify", [110.0; 3], &[], no)]);
+        assert_eq!(c2["arm"], "git-2+notify", "{c2}");
+        assert!(c2["rule"].as_str().unwrap().contains("wins on C2"));
+        assert_eq!(
+            chosen(&[harmed, step_a("notify", [110.0; 3], &[], two)])["arm"],
+            "git-2"
+        );
+        // A lower success rate excludes an arm, however fast.
+        let fails = step_a("notify", [50.0, 50.0, f64::INFINITY], &["reused"], no);
+        let excluded = chosen(&[git, fails]);
+        assert_eq!(excluded["arm"], "git-2", "{excluded}");
+        assert!(excluded["rule"].as_str().unwrap().contains("not eligible"));
+        assert_eq!(excluded["arms"]["git-2+notify"]["successes"], 2);
     }
 
     #[test]
