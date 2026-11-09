@@ -52,6 +52,7 @@
     "initial_snapshot": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "final_snapshot": {"type": ["string", "null"]},
     "oracle": {"type": ["object", "null"]},
+    "trap": {"type": ["object", "null"], "description": "Git arm: the protected file's trap (#490 C2), the milestone ID that changes a function's meaning and the oracle cases that depend on it; null without one"},
     "failure_reason": {"type": "string"},
     "nested_agent": {"type": "object", "description": "The first nested-agent detection (#178 C7): the Bash command or the foreign session; the run is invalid"},
     "replaces": {"type": "string", "description": "Run ID of the infrastructure failure this run replaces"},
