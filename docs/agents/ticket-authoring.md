@@ -48,6 +48,8 @@ Every new ticket must also include `## Touches`, so parallel planning can spot c
 
 Add or refresh `## Touches` alongside `## Reading` before starting an existing ticket.
 
+A criterion that asks for a screenshot asks for it saved under `local-evidence/<batch>/screenshots/` and listed by path in the PR. Agents cannot attach images to a PR.
+
 Before starting an existing ticket, add or refresh its reading section. When resolving, reopening or changing a decision, refresh reading links on affected open tickets and on tickets entering the frontier; replace superseded pointers without copying the decision detail. When a ticket depends on a repository rule, link the rule's doc section rather than restating it, so a rule change leaves the ticket current. Ticket creation and resolution are complete only after these context updates. Backfill the currently eligible tickets first; other existing tickets are updated as their prerequisites settle or before work begins.
 
 ## Wayfinder tracker operations
