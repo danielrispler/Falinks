@@ -250,6 +250,17 @@ fn order(pair: &Value) -> String {
     sha256(pair["id"].as_str().unwrap_or_default().as_bytes())
 }
 
+/// Whether a batch run's pairs are classified: every scored run, and every run of a Step A
+/// qualification batch, whose unscored runs are classified to decide qualification (#498).
+fn pairs_classified(ledger: &Value, entry: &Value) -> bool {
+    entry["scored"] == true
+        || ledger["invocations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|i| i["schedule"] == "step-a-qualify")
+}
+
 /// The candidate pairs of every scored run in the batch, in the order shown, each keeping the
 /// class `old` (the batch's `duplicates.json`) holds for it.
 fn proposed(runs: &Path, old: &Value, out: &mut impl Write) -> Result<Vec<Value>> {
@@ -265,7 +276,7 @@ fn proposed(runs: &Path, old: &Value, out: &mut impl Write) -> Result<Vec<Value>
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|e| e["scored"] == true)
+        .filter(|e| pairs_classified(&ledger, e))
     {
         let run = Path::new(entry["run_dir"].as_str().unwrap_or_default());
         let Ok(mut result) = read(run.join("controller/result.json")) else {
@@ -1690,6 +1701,16 @@ mod tests {
     const V2: &str = "package p\nfunc H() {\n    c := 3\n    return\n}\n";
     /// V1 with agent-0's `a := 1` dropped.
     const V0_B: &str = "package p\nfunc H() {\n    b := 2\n    return\n}\n";
+
+    #[test]
+    fn step_a_qualification_runs_are_classified_though_unscored() {
+        let ledger = |schedule: &str| json!({"invocations": [{"schedule": schedule}]});
+        let (scored, unscored) = (json!({"scored": true}), json!({"scored": false}));
+        assert!(pairs_classified(&ledger("step-a"), &scored));
+        assert!(!pairs_classified(&ledger("step-a"), &unscored));
+        assert!(!pairs_classified(&ledger("confirm"), &unscored));
+        assert!(pairs_classified(&ledger("step-a-qualify"), &unscored));
+    }
 
     #[test]
     fn a_stale_refusal_against_the_peers_region_is_a_line_conflict_whose_resolution_wastes_the_peers_lines()
