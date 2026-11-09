@@ -6,7 +6,7 @@
     "calibration/v4.json": "5330fca431e224ed4716c112528902dbbbb8aeb92b849d2389f05656ebc83642",
     "calibration/v6.json": "8d98f199a44d2bc737ef2680db671faef2f8470a0c2e474f927edea2713c027d",
     "code-quality.json": "6677ef288832b7a757d23f26fa5e5b253a52790ef1d3b7e0a9556075dbc574c0",
-    "config.json": "8618d025dc5734180db399dfe62f3fc3f7a20d77582cce51c3edf82eac034bfa",
+    "config.json": "e9ffbc49fb7e45b00d467e6b1a2463e59f88a2fe20a47ef41d96607a0722e4ad",
     "fixtures/go-indep-2.json": "90c26078f04ee98609a661a6fe7c0206e894f58432dad0d9e35023f325123805",
     "fixtures/go-indep-4.json": "8ebef51d045ec7ff60e8e5b98610ebde73ab3631ec2067693360a78343777a87",
     "fixtures/go-invoice.json": "1809c06a0161ff87f3250b89249df7738121395b1a6afc426ff095ab1dfd9376",
@@ -44,7 +44,7 @@
     "src/collisions.rs": "900376e7ba2644db7ce1b49c214cc4f39b06e15e437dcc1ee9096b5405d34bf5",
     "src/judge.rs": "a1e6b4b62fde4df561afc2b45285de40d59662a7d5c3d8f5d2bb0e56dfc93ad1",
     "src/known_answer.rs": "7db81cd188e3380beeb5fe96c6779db891e3ea45a04efc31f421ea986f004a73",
-    "src/main.rs": "6373aa24d6c092cde722d3ff71c36ae97e7554277e7bbdc951d16f15c8b5c9e6",
+    "src/main.rs": "8ccc49507639621fa659074408dc4346412cbadbde0b97e756e7369959886225",
     "src/qualify.rs": "dac5a3f1975f4bb40a0e7c5f89740e568fcc40555d49d465a57c073653aeacd5",
     "src/quality.rs": "f7a4e425033e6aa2b781cc394acef32d28d8eeec2e3f052fe6ef57c99659747d",
     "src/report.rs": "bba521ebed66a6237386fd758b1215cb212b8b7a5bbdc56244f5bd57f051358d",
@@ -62,5 +62,5 @@
     "library-loans": "5ef06a352c5c1d6bb710d6b76066573ff894e6a2",
     "rust-errors": "8c82c987dc848b1d5e49e799a92016579bb4e4e5"
   },
-  "version": 60
+  "version": 61
 }
