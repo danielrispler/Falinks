@@ -33,11 +33,13 @@
 //! written line counts once per run.
 use crate::authorship::{self, Authorship, Blame, Line, agent_name, applied, lines, matches, text};
 use crate::{
-    Result, bail, command, fixture, git, git_env, jsonl, read, sha256, strings,
+    Result, SCRATCH_DIRS, Sandbox, bail, check_env, command, fixture, git, git_env, jsonl,
+    protected_roots, read, sha256, strings,
     timing::{self, unix},
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -300,11 +302,12 @@ fn save(path: &Path, pairs: &[Value], audit: &Value) -> Result<()> {
     crate::write(path, &saved)
 }
 
-/// Shows pair `k` with each side's file and body only, and reads one answer: a class, `skip`,
-/// or `quit` (also at the end of the input).
+/// Shows pair `k` with each side's file and body only, then the divergence aid run in `work`,
+/// and reads one answer: a class, `skip`, or `quit` (also at the end of the input).
 fn ask(
     pairs: &[Value],
     k: usize,
+    work: &Path,
     input: &mut impl BufRead,
     out: &mut impl Write,
 ) -> Result<&'static str> {
@@ -331,6 +334,11 @@ fn ask(
             side["file"].as_str().unwrap_or_default()
         )?;
     }
+    let aid = divergence(&sides, work).unwrap_or_else(|e| format!("not run: {e}"));
+    writeln!(
+        out,
+        "--- divergence aid, on generated inputs (an aid only; you decide): {aid}"
+    )?;
     write!(
         out,
         "{QUESTION} [d]uplicate, di[v]ergent, [n]o, [s]kip, [q]uit: "
@@ -349,11 +357,266 @@ fn ask(
     })
 }
 
+/// The divergence aid's generated inputs (#504): a Go expression list per supported parameter
+/// type. Strings: empty, digits (with a leading zero, a sign, a fraction, an exponent, past
+/// int64), letters, a space, and non-ASCII. Integers: 0, ±1, 2, 10, 100 and the type's
+/// extremes (no negatives for unsigned). Bools: both. A function runs on every combination.
+fn generated(ty: &str) -> Option<Vec<String>> {
+    const STRINGS: [&str; 17] = [
+        "",
+        "0",
+        "1",
+        "7",
+        "42",
+        "007",
+        "-1",
+        "+3",
+        "1.5",
+        "1e3",
+        "abc",
+        "A",
+        "a1",
+        " 1",
+        "9223372036854775808",
+        "é",
+        "日本",
+    ];
+    const SIGNED: [(&str, &str); 6] = [
+        ("int", "Int"),
+        ("int8", "Int8"),
+        ("int16", "Int16"),
+        ("int32", "Int32"),
+        ("rune", "Int32"),
+        ("int64", "Int64"),
+    ];
+    const UNSIGNED: [(&str, &str); 6] = [
+        ("uint", "Uint"),
+        ("uint8", "Uint8"),
+        ("byte", "Uint8"),
+        ("uint16", "Uint16"),
+        ("uint32", "Uint32"),
+        ("uint64", "Uint64"),
+    ];
+    let mut values: Vec<String> = ["0", "1", "2", "10", "100"].map(String::from).to_vec();
+    if let Some((_, c)) = SIGNED.iter().find(|(t, _)| *t == ty) {
+        values.extend(["-1".into(), format!("math.Max{c}"), format!("math.Min{c}")]);
+    } else if let Some((_, c)) = UNSIGNED.iter().find(|(t, _)| *t == ty) {
+        values.push(format!("math.Max{c}"));
+    } else {
+        return match ty {
+            "string" => Some(STRINGS.iter().map(|s| format!("{s:?}")).collect()),
+            "bool" => Some(vec!["true".into(), "false".into()]),
+            _ => None,
+        };
+    }
+    Some(values.iter().map(|v| format!("{ty}({v})")).collect())
+}
+
+/// The parameter types a Go function's `body` declares, each one the aid generates.
+fn parameters(body: &str) -> Result<Vec<String>> {
+    let Some(header) = body.strip_prefix("func ") else {
+        bail!("not a function");
+    };
+    if header.starts_with('(') {
+        bail!("a method");
+    }
+    let open = header.find(['(', '[']).ok_or("no parameter list")?;
+    if header[open..].starts_with('[') {
+        bail!("a generic function");
+    }
+    let (mut parts, mut depth) = (vec![String::new()], 0);
+    for c in header[open + 1..].chars() {
+        match c {
+            ')' | ']' | '}' if depth == 0 => break,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(String::new());
+                continue;
+            }
+            _ => {}
+        }
+        parts.last_mut().unwrap().push(c);
+    }
+    let parts: Vec<&str> = parts
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+    // Named parameters (`a, b int`) take the type of the next one that states it.
+    let mut types = vec![];
+    if parts.iter().any(|p| p.contains(char::is_whitespace)) {
+        let mut ty = "";
+        for part in parts.iter().rev() {
+            if let Some((_, t)) = part.split_once(char::is_whitespace) {
+                ty = t.trim();
+            }
+            types.push(ty.to_string());
+        }
+        types.reverse();
+    } else {
+        types = parts.iter().map(|p| p.to_string()).collect();
+    }
+    if let Some(ty) = types.iter().find(|t| generated(t).is_none()) {
+        bail!("parameter type {ty} is not generated");
+    }
+    Ok(types)
+}
+
+/// The Go harness: both functions as `f0` and `f1` beside the standard packages a body may use,
+/// called on every input; a call that panics or runs past one second reports that as its result.
+const HARNESS: &str = r#"package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"math/big"
+	"os"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
+
+var _, _, _, _, _, _, _, _ = bytes.Equal, errors.New, math.Abs, big.NewInt, sort.Strings, strconv.Itoa, unicode.IsDigit, utf8.RuneLen
+
+FUNCTIONS
+
+func call(f any, args []reflect.Value) string {
+	args = append([]reflect.Value(nil), args...)
+	done := make(chan string, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- fmt.Sprintf("panic: %v", r)
+			}
+		}()
+		var out []string
+		for _, v := range reflect.ValueOf(f).Call(args) {
+			out = append(out, fmt.Sprintf("%#v", v.Interface()))
+		}
+		done <- strings.Join(out, ", ")
+	}()
+	select {
+	case r := <-done:
+		return r
+	case <-time.After(time.Second):
+		return "timed out after 1s"
+	}
+}
+
+func main() {
+	inputs := [][]any{INPUTS}
+	out := json.NewEncoder(os.Stdout)
+	args := make([]reflect.Value, len(inputs))
+	var each func(i int)
+	each = func(i int) {
+		if i == len(inputs) {
+			shown := make([]string, len(args))
+			for k, a := range args {
+				shown[k] = fmt.Sprintf("%#v", a.Interface())
+			}
+			out.Encode([]string{strings.Join(shown, ", "), call(f0, args), call(f1, args)})
+			return
+		}
+		for _, v := range inputs[i] {
+			args[i] = reflect.ValueOf(v)
+			each(i + 1)
+		}
+	}
+	each(0)
+}
+"#;
+
+/// The divergence aid (#498's amendment, section 2; #504) for two sides, in the order shown:
+/// when both take the same parameter types, runs both on the generated inputs as a contained
+/// command in `work` (no network, no reads of the batch beside `work`, writes only under it,
+/// bounded run time) and says where their results differ. An aid only: it sets no answer, and
+/// says nothing of run, arm or agent.
+fn divergence(sides: &[Value], work: &Path) -> Result<String> {
+    let body = |k: usize| sides[k]["body"].as_str().unwrap_or_default();
+    let (first, second) = (parameters(body(0))?, parameters(body(1))?);
+    if first != second {
+        bail!(
+            "different parameter types, ({}) and ({})",
+            first.join(", "),
+            second.join(", ")
+        );
+    }
+    let inputs: Vec<Vec<String>> = first.iter().map(|t| generated(t).unwrap()).collect();
+    if inputs.iter().map(Vec::len).product::<usize>() > 5000 {
+        bail!("more than 5000 input combinations");
+    }
+    let functions: Vec<String> = (0..2)
+        .map(|k| {
+            let name = sides[k]["name"].as_str().unwrap_or_default();
+            body(k).replace(&format!("{name}("), &format!("f{k}("))
+        })
+        .collect();
+    let inputs: Vec<String> = inputs
+        .iter()
+        .map(|values| format!("{{{}}}", values.join(", ")))
+        .collect();
+    let source = HARNESS
+        .replace("FUNCTIONS", &functions.join("\n\n"))
+        .replace("INPUTS", &inputs.join(", "));
+    for name in SCRATCH_DIRS {
+        fs::create_dir_all(work.join(name))?;
+    }
+    fs::write(work.join("main.go"), source)?;
+    let mut denied = protected_roots()?;
+    denied.push(work.parent().unwrap().into());
+    let sandbox = Sandbox {
+        writable: vec![work.into()],
+        denied,
+        reopened: vec![work.into()],
+        network: false,
+    };
+    let argv = sandbox.wrap(strings(&["go", "run", "main.go"]))?;
+    let bound = Duration::from_secs(120);
+    // `command`'s own error names the sandbox profile, whose paths could name the run.
+    let output = command(&argv, work, &check_env(work), bound)
+        .map_err(|_| format!("did not finish within {bound:?}"))?;
+    let text = String::from_utf8_lossy(&output.stderr);
+    if !output.success {
+        let line = text.lines().find(|l| !l.starts_with('#')).unwrap_or("");
+        bail!("does not build or run on its own: {line}");
+    }
+    let results: Vec<Vec<String>> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?;
+    let differ: Vec<&Vec<String>> = results.iter().filter(|r| r[1] != r[2]).collect();
+    if differ.is_empty() {
+        return Ok(format!("no difference on {} inputs", results.len()));
+    }
+    let mut shown = format!(
+        "results differ on {} of {} inputs:",
+        differ.len(),
+        results.len()
+    );
+    // 20 shows every input of one parameter: results of different types differ on all of them.
+    for r in differ.iter().take(20) {
+        shown += &format!("\n  ({}): first {}; second {}", r[0], r[1], r[2]);
+    }
+    if differ.len() > 20 {
+        shown += &format!("\n  and {} more", differ.len() - 20);
+    }
+    Ok(shown)
+}
+
 /// Asks for each of `asked` still unclassified, saving each answer at once, until a quit.
 fn answer(
     pairs: &mut [Value],
     asked: &[usize],
     save: impl Fn(&[Value]) -> Result<()>,
+    work: &Path,
     input: &mut impl BufRead,
     out: &mut impl Write,
 ) -> Result<()> {
@@ -361,7 +624,7 @@ fn answer(
         if class(&pairs[k]).is_some() {
             continue;
         }
-        match ask(pairs, k, input, out)? {
+        match ask(pairs, k, work, input, out)? {
             "quit" => break,
             "skip" => continue,
             class => pairs[k]["class"] = class.into(),
@@ -383,7 +646,8 @@ pub fn classify(runs: &Path, mut input: impl BufRead, mut out: impl Write) -> Re
     keep(&pairs)?;
     let total = pairs.len();
     let all: Vec<usize> = (0..total).collect();
-    answer(&mut pairs, &all, keep, &mut input, &mut out)?;
+    let work = runs.join("divergence");
+    answer(&mut pairs, &all, keep, &work, &mut input, &mut out)?;
     let left = pairs.iter().filter(|p| class(p).is_none()).count();
     writeln!(
         out,
@@ -456,7 +720,8 @@ pub fn audit(
             .join(", ")
     )?;
     let keep = |pairs: &[Value]| save(&path, pairs, &old["audit"]);
-    answer(&mut pairs, &picked, keep, &mut input, &mut out)?;
+    let work = runs.join("divergence");
+    answer(&mut pairs, &picked, keep, &work, &mut input, &mut out)?;
     let left = picked
         .iter()
         .filter(|&&k| class(&pairs[k]).is_none())
@@ -2147,6 +2412,10 @@ mod tests {
             !shown.contains("git") && !shown.contains("final"),
             "{shown}"
         );
+        assert!(
+            shown.contains("(an aid only; you decide): no difference on 64 inputs"),
+            "{shown}"
+        );
         let path = batch.path().join("duplicates.json");
         let mut saved = read(&path).unwrap();
         assert_eq!(saved["pairs"][0]["class"], "divergent");
@@ -2360,6 +2629,66 @@ mod tests {
         }
         // The inline per-line net scores 0.27 on similarity: only containment reaches it.
         assert_eq!(reasons, ["containment", "name", "similarity", "similarity"]);
+    }
+
+    #[test]
+    fn the_divergence_aid_shows_differing_inputs_or_says_why_it_did_not_run() {
+        let known: Value =
+            serde_json::from_str(include_str!("../tests/duplicates/known-cases.json")).unwrap();
+        let sides = |case: &str| {
+            known["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["case"] == case)
+                .unwrap()["sides"]
+                .as_array()
+                .unwrap()
+                .clone()
+        };
+        let side = |name: &str, body: &str| json!({"name": name, "body": body});
+        let batch = tempfile::tempdir().unwrap();
+        let work = batch.path().join("divergence");
+        let aid =
+            |sides: &[Value]| divergence(sides, &work).unwrap_or_else(|e| format!("not run: {e}"));
+
+        let shown = aid(&sides("parseQty/parseCount"));
+        assert!(
+            shown.starts_with("results differ on 17 of 17 inputs:"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(
+                "\n  (\"0\"): first 0, \"count \\\"0\\\" is not a positive integer\"; second 0, true"
+            ),
+            "{shown}"
+        );
+        assert_eq!(aid(&sides("#339 isDigits")), "no difference on 17 inputs");
+        assert_eq!(
+            aid(&sides("bigDivRound/divRound")),
+            "not run: parameter type *big.Int is not generated"
+        );
+        let net = side("NetB", "func NetB(q, p int) int {\n    return q * p\n}");
+        let digits = &sides("#339 isDigits")[0];
+        assert_eq!(
+            aid(&[net, digits.clone()]),
+            "not run: different parameter types, (int, int) and (string)"
+        );
+        let first = side("first", "func first(s string) byte {\n\treturn s[0]\n}");
+        let second = side(
+            "second",
+            "func second(s string) byte {\n\tfor s == \"\" {\n\t}\n\treturn s[0]\n}",
+        );
+        let shown = aid(&[first, second]);
+        assert!(
+            shown.starts_with("results differ on 1 of 17 inputs:\n  (\"\"): first panic: runtime error: index out of range [0] with length 0; second timed out after 1s"),
+            "{shown}"
+        );
+        let broken = side("f", "func f(s string) core.Money {\n\treturn 0\n}");
+        assert!(
+            aid(&[broken.clone(), broken])
+                .starts_with("not run: does not build or run on its own: "),
+        );
     }
 
     /// A batch of one Git run in which A adds `NetA` and B adds `b`'s functions.

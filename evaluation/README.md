@@ -492,7 +492,12 @@ it; the runtime's own `<synthetic>` replies carry no effort and are skipped. A
       A's three-way question (duplicate, divergent or no; #498's amendment) and saves each
       answer to `DIR/duplicates.json` (`pairs[].class`, null until classified; #339's
       `duplicate` true or false reads as duplicate or no). `collisions` and `report` read it,
-      pricing a divergent pair's waste as a duplicate's.
+      pricing a divergent pair's waste as a duplicate's. Since #504 each pair also shows a
+      divergence aid: when both functions take the same parameter types, both run on the
+      generated inputs (`generated` in `src/collisions.rs`) as a contained command under
+      `DIR/divergence/` (no network, writes only there, two minutes at most, one second per
+      call), and the view lists the inputs whose results differ, a panic or timeout as a
+      result. Otherwise it says "not run" and why. It is an aid only: it sets no answer.
     - Scored runs (#498's amendment, section 3): `duplicates --runs DIR --answers FILE --seed
       SEED` takes a blind classifier's answers (a JSON array, one per pair in the order shown:
       duplicate, divergent, no or unsure), asks Daniel the pairs to audit (every answer but no,
