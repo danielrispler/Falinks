@@ -116,5 +116,52 @@
       "old": "if currency != inv.Currency {",
       "new": "if currency == inv.Currency {"
     }
+  },
+  "library-loans": {
+    "L1": {
+      "file": "money/money.go",
+      "old": "\"%s%d.%02d\"",
+      "new": "\"%s%d.%d\""
+    },
+    "L2": {
+      "file": "calendar/calendar.go",
+      "old": "d.Month > 12",
+      "new": "d.Month > 11"
+    },
+    "L3": {
+      "file": "item/item.go",
+      "old": "strings.Trim(s, \" \\t\")",
+      "new": "strings.Trim(s, \" \")"
+    },
+    "L4": {
+      "file": "loan/due.go",
+      "old": "item.DVD: 7",
+      "new": "item.DVD: 8"
+    },
+    "L5": {
+      "file": "loan/fee.go",
+      "old": "item.Magazine: {10, 300}",
+      "new": "item.Magazine: {10, 30}"
+    },
+    "L6": {
+      "file": "loan/renew.go",
+      "old": "item.DVD: 1,",
+      "new": "item.DVD: 0,"
+    },
+    "L7": {
+      "file": "loan/limit.go",
+      "old": "total, dvds = 5, 1",
+      "new": "total, dvds = 5, 2"
+    },
+    "L8": {
+      "file": "report/parse.go",
+      "old": "len(id) > 20",
+      "new": "len(id) > 21"
+    },
+    "L9": {
+      "file": "report/overdue.go",
+      "old": "return rows[i].loan.ItemID < rows[j].loan.ItemID",
+      "new": "return rows[i].loan.ItemID > rows[j].loan.ItemID"
+    }
   }
 }

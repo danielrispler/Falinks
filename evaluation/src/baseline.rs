@@ -1,7 +1,7 @@
 //! One or two concurrent worker processes in Git worktrees, mediated by JSON lines on stdin/stdout.
 use crate::{
-    Result, Sandbox, bail, check, command, fixture, frozen, git, git_env, initial, kill_group,
-    protected_roots, read, resolve, root, sha256, strings, unix_now, utc_now, write,
+    Result, Sandbox, bail, check, check_env, command, fixture, frozen, git, git_env, initial,
+    kill_group, protected_roots, read, resolve, root, sha256, strings, unix_now, utc_now, write,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
 const AGENTS: [&str; 2] = ["A", "B"];
+/// The `announce` variant's extra workflow line, #490's wording.
+const ANNOUNCE: &str =
+    "There are other agents; announce the files you change; if you overlap, talk and plan.\n";
 
 /// The other agent in a team of two; a team of one has no peer.
 fn peer(team: &[&'static str], agent: &str) -> Option<&'static str> {
@@ -111,6 +114,7 @@ impl Run {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // The CLI's flags, one call site.
 pub fn baseline(
     name: &str,
     config_path: &Path,
@@ -119,9 +123,18 @@ pub fn baseline(
     order: i64,
     scored: bool,
     team_size: usize,
+    variant: Option<&str>,
 ) -> Result<i32> {
     if !(1..=2).contains(&team_size) {
         bail!("team size must be 1 or 2");
+    }
+    match variant {
+        None => {}
+        Some("announce" | "notify") if team_size == 2 => {}
+        Some(variant @ ("announce" | "notify")) => {
+            bail!("the {variant} variant needs a team of two")
+        }
+        Some(other) => bail!("unknown Git arm variant: {other}"),
     }
     let (started, start_unix) = (Instant::now(), unix_now());
     let config = read(config_path)?;
@@ -134,7 +147,7 @@ pub fn baseline(
     fs::DirBuilder::new().mode(0o700).create(&private)?;
     let public = destination.join("agents");
     fs::create_dir(&public)?;
-    let evidence = json!({
+    let mut evidence = json!({
         "schema_version": 1, "run_id": destination.file_name().unwrap().to_string_lossy(), "arm": "git",
         "fixture": name, "fixture_version": fixture["version"], "freeze": manifest, "configuration": config,
         "order": order, "pair": pair, "scored": scored, "team_size": team_size, "outcome": "infrastructure_failure",
@@ -146,7 +159,12 @@ pub fn baseline(
         "recommendations": 0, "transitions": 0,
         "timing": {"start_utc": utc_now(), "start_unix": start_unix, "endpoint": "clean preparation through exact candidate passing checks"},
         "tool_differences": read(root().join("config.json"))?["tool_differences"],
+        // C2's oracle cases (#490), for `report`; null for a fixture without a trap.
+        "trap": crate::protected(name)?["trap"],
     });
+    if let Some(variant) = variant {
+        evidence["variant"] = variant.into();
+    }
     let timeout = config["timeout_seconds"].as_f64().unwrap_or(0.0);
     let mut run = Run {
         team: &AGENTS[..team_size],
@@ -397,11 +415,20 @@ fn execute(
                 (parts.join("\n").into(), "instructions/git-solo.md")
             }
         };
+        // `notify` is announce plus the host's dependents notice on each share.
+        let announce = if matches!(
+            run.evidence["variant"].as_str(),
+            Some("announce" | "notify")
+        ) {
+            ANNOUNCE
+        } else {
+            ""
+        };
         let mut start = json!({
             "type": "start", "agent": agent, "workspace": public.join(agent),
             "peer_workspace": peer_workspace, "integration_workspace": public.join("integration"),
             "task": task, "development_count": milestones.len(), "allocation": allocation,
-            "workflow": fs::read_to_string(root().join(workflow))?,
+            "workflow": fs::read_to_string(root().join(workflow))? + announce,
             "runtime_binary": config["runtime_binary"], "runtime_version": config["runtime_version"],
             "runtime_home": config["runtime_home"],
             "model": {"model": config["model"], "model_version": config["model_version"], "reasoning": config["reasoning"]},
@@ -507,6 +534,18 @@ fn execute(
                 bail!("{agent} launched a nested agent; run invalid");
             }
             "ready" => {
+                // The trap's fallback: no call released it before the first ready, so this does,
+                // and the ready is refused like any before an unacknowledged development.
+                if awaiting_ack.is_empty()
+                    && milestones
+                        .get(milestone_index)
+                        .is_some_and(|m| m["release_on_call"].is_object())
+                {
+                    let release = json!({"rule": "ready_fallback", "agent": agent});
+                    develop(run, &milestones, &mut milestone_index, release)?;
+                    awaiting_ack = team.iter().copied().collect();
+                    ready.clear();
+                }
                 if milestone_index != milestones.len() || awaiting_ack.contains(agent) {
                     refuse(run, "not every development is delivered and acknowledged")?;
                     continue;
@@ -572,7 +611,7 @@ fn execute(
                     ],
                 )?;
                 let commit = public_git(&work, &["rev-parse", "HEAD"])?;
-                shares.insert(agent, Some(commit.clone()));
+                let previous = shares.insert(agent, Some(commit.clone())).flatten();
                 *sequence.get_mut(agent).unwrap() += 1;
                 let patch = public_git(&work, &["diff", "--binary", &sha, &commit])?;
                 run.event(
@@ -585,25 +624,46 @@ fn execute(
                         peer,
                         json!({"type": "peer_diff", "sender": agent, "commit": commit, "diff": patch}),
                     )?;
+                    if run.evidence["variant"] == "notify" {
+                        // Only this share's changes, so an unchanged name is not announced again.
+                        let base = previous.as_deref().unwrap_or(&sha);
+                        let changes =
+                            public_git(&work, &["diff", "-U0", base, &commit, "--", "*.go"])?;
+                        match notice(public, agent, peer, &changes, &denied) {
+                            Ok(Some(text)) => {
+                                run.event("notice", json!({"agent": peer, "text": text}))?;
+                                run.send(
+                                    peer,
+                                    json!({"type": "peer_message", "sender": "host", "text": text}),
+                                )?
+                            }
+                            Ok(None) => {}
+                            // The run goes on without this notice.
+                            Err(error) => run.event(
+                                "notice_failure",
+                                json!({"agent": peer, "commit": commit, "error": error.to_string()}),
+                            )?,
+                        }
+                    }
                 }
-                // Every agent in the team has shared since the last development; alone, its own share.
-                if awaiting_ack.is_empty()
-                    && milestone_index < milestones.len()
-                    && team.iter().all(|a| sequence[a] > milestone_floor[a])
-                {
-                    let milestone = milestones[milestone_index].clone();
-                    milestone_index += 1;
+                if !awaiting_ack.is_empty() || milestone_index == milestones.len() {
+                    continue;
+                }
+                let milestone = &milestones[milestone_index];
+                // The trap (#509) waits for a call to its function; every other development for
+                // every agent in the team to have shared since the last one (alone, its own share).
+                let release = if milestone["release_on_call"].is_object() {
+                    added_call(&work, &sha, &commit, fixture, &milestone["release_on_call"], &public_guard)?
+                        .map(|file| json!({"rule": "call", "agent": agent, "commit": commit, "file": file}))
+                } else if team.iter().all(|a| sequence[a] > milestone_floor[a]) {
+                    Some(Value::Null)
+                } else {
+                    None
+                };
+                if let Some(release) = release {
+                    develop(run, &milestones, &mut milestone_index, release)?;
                     awaiting_ack = team.iter().copied().collect();
                     ready.clear();
-                    run.event("development", json!({"milestone": milestone}))?;
-                    let mut development = json!({"type": "development"});
-                    development
-                        .as_object_mut()
-                        .unwrap()
-                        .extend(milestone.as_object().unwrap().clone());
-                    for member in team {
-                        run.send(member, development.clone())?;
-                    }
                 }
             }
             _ => refuse(run, "unknown action")?,
@@ -632,6 +692,139 @@ fn execute(
     run.evidence["timing"]["elapsed_seconds"] = run.started.elapsed().as_secs_f64().into();
     run.evidence["timing"]["stop_utc"] = utc_now().into();
     drain_usage(run, &incoming, drain)
+}
+
+/// Delivers the next development to every agent. A trap's `release` (rule, agent, and for a
+/// call the share and file) is recorded with its time; its host-only fields are not sent.
+fn develop(
+    run: &mut Run,
+    milestones: &[Value],
+    index: &mut usize,
+    mut release: Value,
+) -> Result<()> {
+    let milestone = milestones[*index].clone();
+    *index += 1;
+    let mut development = json!({"type": "development"});
+    development
+        .as_object_mut()
+        .unwrap()
+        .extend(milestone.as_object().unwrap().clone());
+    if release.is_null() {
+        run.event("development", json!({"milestone": milestone}))?;
+    } else {
+        release["elapsed"] = run.started.elapsed().as_secs_f64().into();
+        release["utc"] = utc_now().into();
+        run.evidence["trap_release"] = release.clone();
+        run.event(
+            "development",
+            json!({"milestone": milestone, "release": release}),
+        )?;
+        for key in ["trigger", "release_on_call"] {
+            development.as_object_mut().unwrap().remove(key);
+        }
+    }
+    for member in run.team {
+        run.send(member, development.clone())?;
+    }
+    Ok(())
+}
+
+/// The first non-test `.go` file outside the trap's package whose diff from `base` to `commit`
+/// adds a call `<qualifier>.<function>(` (#509).
+fn added_call(
+    work: &Path,
+    base: &str,
+    commit: &str,
+    fixture: &Value,
+    call: &Value,
+    guard: &Sandbox,
+) -> Result<Option<String>> {
+    let (package, function) = (
+        call["package"].as_str().unwrap(),
+        call["function"].as_str().unwrap(),
+    );
+    let module = fixture["files"]["go.mod"]
+        .as_str()
+        .and_then(|m| m.lines().find_map(|l| l.strip_prefix("module ")))
+        .ok_or("the trap's fixture has no go.mod module")?
+        .trim();
+    let changed = git(
+        work,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=AM",
+            base,
+            commit,
+        ],
+        Some(guard),
+    )?;
+    for file in changed.lines() {
+        let source = git(work, &["show", &format!("{commit}:{file}")], Some(guard))?;
+        let diff = git(
+            work,
+            &["diff", "-U0", base, commit, "--", file],
+            Some(guard),
+        )?;
+        let added: Vec<&str> = diff
+            .lines()
+            .filter(|l| !l.starts_with("+++"))
+            .filter_map(|l| l.strip_prefix('+'))
+            .collect();
+        if adds_call(file, &source, &added, module, package, function) {
+            return Ok(Some(file.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether `added`, lines new in `file`, call `<qualifier>.<function>(`, where the qualifier
+/// is the name `source` imports `module/package` by: the package's name or an alias. Dot and
+/// blank imports, test files and the package's own files never match.
+/// shortcut: the default name is the directory's last element, and a line's `//` comment is
+/// cut but block comments and strings still count; revisit for a fixture where that matters.
+fn adds_call(
+    file: &str,
+    source: &str,
+    added: &[&str],
+    module: &str,
+    package: &str,
+    function: &str,
+) -> bool {
+    let directory = file.rsplit_once('/').map_or("", |(d, _)| d);
+    if !file.ends_with(".go") || file.ends_with("_test.go") || directory == package {
+        return false;
+    }
+    let path = format!("\"{module}/{package}\"");
+    let default = package.rsplit('/').next().unwrap();
+    let (mut block, mut qualifiers) = (false, vec![]);
+    for line in source.lines() {
+        let line = line.split("//").next().unwrap().trim();
+        let spec = if block {
+            block = line != ")";
+            line
+        } else if let Some(rest) = line.strip_prefix("import") {
+            block = rest.trim() == "(";
+            rest.trim()
+        } else {
+            continue;
+        };
+        match spec.split_whitespace().collect::<Vec<_>>()[..] {
+            [p] if p == path => qualifiers.push(default),
+            [name, p] if p == path && name != "_" && name != "." => qualifiers.push(name),
+            _ => {}
+        }
+    }
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
+    qualifiers.iter().any(|q| {
+        let call = format!("{q}.{function}(");
+        added.iter().any(|line| {
+            let line = line.split("//").next().unwrap();
+            line.match_indices(&call)
+                .any(|(at, _)| !line[..at].ends_with(ident))
+        })
+    })
 }
 
 /// After the clock stops (#179): refuse every request while waiting up to `window` for each
@@ -706,6 +899,147 @@ fn drain_usage(
     usage["drain"] = json!({"window_seconds": window.as_secs_f64(),
         "seconds": started.elapsed().as_secs_f64()});
     Ok(())
+}
+
+/// The exported `func` and `type` names a `-U0` Go diff changes, by package directory: each
+/// changed declaration line, and the declaration Git names in each hunk's header, which
+/// for a changed body is its function (and between declarations, the one before: a harmless
+/// extra name). Test files are skipped: no package imports them.
+/// shortcut: declarations inside a `type (` group are missed; parse the source if a fixture uses them.
+fn changed_exports(diff: &str) -> BTreeMap<String, BTreeSet<String>> {
+    let mut changed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut directory = None;
+    for line in diff.lines() {
+        if let Some(header) = line.strip_prefix("diff --git ") {
+            let file = header.rsplit_once(" b/").map_or("", |(_, file)| file);
+            directory = (file.ends_with(".go") && !file.ends_with("_test.go")).then(|| {
+                Path::new(file)
+                    .parent()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            continue;
+        }
+        let Some(directory) = &directory else {
+            continue;
+        };
+        let declaration = match line.split_once(' ') {
+            Some(("@@", rest)) => rest.split_once(" @@ ").map_or("", |(_, context)| context),
+            _ if line.starts_with("+++") || line.starts_with("---") => "",
+            _ => line.strip_prefix(['+', '-']).unwrap_or(""),
+        };
+        let name = if let Some(rest) = declaration.strip_prefix("func ") {
+            // A method is named with its receiver's type: `(s *Store) Get` is `Store.Get`.
+            match rest.strip_prefix('(').and_then(|r| r.split_once(')')) {
+                Some((receiver, rest)) => {
+                    let kind = receiver.split_whitespace().last().unwrap_or("");
+                    let kind = kind.trim_start_matches('*').split('[').next().unwrap();
+                    Some(format!("{kind}.{}", identifier(rest.trim_start())))
+                }
+                None => Some(identifier(rest).to_string()),
+            }
+        } else {
+            declaration
+                .strip_prefix("type ")
+                .map(|rest| identifier(rest).to_string())
+        };
+        // Exported when the declared name, after any receiver, starts upper case.
+        if let Some(name) = name
+            && name
+                .rsplit('.')
+                .next()
+                .unwrap()
+                .starts_with(|c: char| c.is_uppercase())
+        {
+            changed.entry(directory.clone()).or_default().insert(name);
+        }
+    }
+    changed
+}
+
+fn identifier(text: &str) -> &str {
+    let end = text
+        .find(|c: char| !c.is_alphanumeric() && c != '_')
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+/// The `notify` variant's notice to `peer` about `agent`'s share (`diff`, for
+/// `changed_exports`): the changed names, and the peer's packages that import their
+/// packages, as `go list -e` finds them in the peer's worktree. It lists imports even when
+/// function bodies do not parse. Offline, read-only on modules, writing only a scratch
+/// cache, under the host's sandbox without network. `None` when no peer package imports one.
+fn notice(
+    public: &Path,
+    agent: &str,
+    peer: &str,
+    diff: &str,
+    denied: &[PathBuf],
+) -> Result<Option<String>> {
+    let changed = changed_exports(diff);
+    if changed.is_empty() {
+        return Ok(None);
+    }
+    let work = public.join(peer);
+    // shortcut: only the root module's packages; walk nested go.mod files if a fixture has them.
+    let module = fs::read_to_string(work.join("go.mod"))?
+        .lines()
+        .find_map(|line| line.strip_prefix("module "))
+        .map(|module| module.trim().trim_matches('"').to_string())
+        .ok_or("the peer's go.mod names no module")?;
+    let scratch = tempfile::tempdir()?;
+    for name in ["home", "tmp", "cache"] {
+        fs::create_dir(scratch.path().join(name))?;
+    }
+    let guard = Sandbox {
+        writable: vec![scratch.path().to_path_buf()],
+        denied: denied.to_vec(),
+        reopened: Vec::new(),
+        network: false,
+    };
+    let argv = guard.wrap(strings(&[
+        "go",
+        "list",
+        "-e",
+        "-f",
+        "{{.ImportPath}} {{join .Imports \",\"}}",
+        "./...",
+    ]))?;
+    let mut env = check_env(scratch.path());
+    env.push(("GOFLAGS".into(), "-mod=readonly".into()));
+    let listed = command(&argv, &work, &env, Duration::from_secs(120))?;
+    if !listed.success {
+        bail!("go list failed: {}", listed.text());
+    }
+    let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
+    let mut clauses = Vec::new();
+    for (directory, names) in &changed {
+        let package = match directory.as_str() {
+            "" => module.clone(),
+            directory => format!("{module}/{directory}"),
+        };
+        let importers: Vec<&str> = listed
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter(|(_, imports)| imports.split(',').any(|i| i == package))
+            .map(|(importer, _)| importer)
+            .collect();
+        if !importers.is_empty() {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            clauses.push(format!(
+                "{package} ({}) is imported by your {}",
+                names.join(", "),
+                importers.join(", ")
+            ));
+        }
+    }
+    Ok((!clauses.is_empty()).then(|| {
+        format!(
+            "Host notice: {agent}'s share changed exported names your packages import: {}.",
+            clauses.join("; ")
+        )
+    }))
 }
 
 /// The exact commit an agent's resolved ID names: a full or an unambiguous short commit ID,
@@ -819,6 +1153,94 @@ fn combine(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #509: the trap's call trigger names the defining package by its import name.
+    #[test]
+    fn the_trap_releases_on_a_qualified_call_outside_its_package_only() {
+        let fires = |file: &str, imports: &str, line: &str| {
+            let source = format!("package x\n\n{imports}\n\nfunc f() {{\n\t{line}\n}}\n");
+            adds_call(
+                file,
+                &source,
+                &[line],
+                "example.com/lending",
+                "calendar",
+                "DaysBetween",
+            )
+        };
+        let block = "import (\n\t\"errors\"\n\n\t\"example.com/lending/calendar\"\n)";
+        let call = "n := calendar.DaysBetween(a, b) - 1";
+        // The default qualifier, in a block or alone, and an alias.
+        assert!(fires("loan/fee.go", block, call));
+        assert!(fires(
+            "loan/fee.go",
+            "import \"example.com/lending/calendar\"",
+            call
+        ));
+        let alias = "import (\n\tcal \"example.com/lending/calendar\" // dates\n)";
+        assert!(fires(
+            "report/overdue.go",
+            alias,
+            "x := cal.DaysBetween(a, b)"
+        ));
+        assert!(!fires("report/overdue.go", alias, call));
+        // A same-named function of another package, or a method or variable of that name.
+        let other = "import calendar \"example.com/lending/dates\"";
+        assert!(!fires("loan/fee.go", other, call));
+        assert!(!fires(
+            "loan/fee.go",
+            block,
+            "n := c.calendar.DaysBetween(a, b)"
+        ));
+        assert!(!fires(
+            "loan/fee.go",
+            block,
+            "n := mycalendar.DaysBetween(a, b)"
+        ));
+        // Test files, the defining package itself, dot and blank imports, non-Go files.
+        assert!(!fires("loan/fee_test.go", block, call));
+        assert!(!fires("calendar/days.go", block, call));
+        let dot = "import . \"example.com/lending/calendar\"";
+        assert!(!fires("loan/fee.go", dot, "n := DaysBetween(a, b)"));
+        assert!(!fires("loan/fee.go", dot, call));
+        assert!(!fires(
+            "loan/fee.go",
+            "import _ \"example.com/lending/calendar\"",
+            call
+        ));
+        assert!(!fires("loan/notes.md", block, call));
+        // A comment, or a reference without a call (a function value), does not count.
+        assert!(!fires(
+            "loan/fee.go",
+            block,
+            "// calendar.DaysBetween(a, b) counts days"
+        ));
+        assert!(!fires("loan/fee.go", block, "f := calendar.DaysBetween"));
+    }
+
+    #[test]
+    fn changed_exports_names_exported_declarations_and_changed_bodies_by_package() {
+        let diff = "diff --git a/lib/lib.go b/lib/lib.go
+--- a/lib/lib.go
++++ b/lib/lib.go
+@@ -3 +3 @@ func Changed() int {
+-\treturn 1
++\treturn 2
+@@ -9,0 +10,3 @@ type Store struct{}
++func (s *Store[K]) Get() {}
++func hidden() {}
++type Kind int
+diff --git a/lib/lib_test.go b/lib/lib_test.go
++func TestChanged(t *testing.T) {}
+diff --git a/root.go b/root.go
+-func Gone() {}
+";
+        let changed = changed_exports(diff);
+        let names = |d: &str| changed[d].iter().cloned().collect::<Vec<_>>();
+        assert_eq!(names("lib"), ["Changed", "Kind", "Store", "Store.Get"]);
+        assert_eq!(names(""), ["Gone"]);
+        assert_eq!(changed.len(), 2);
+    }
 
     #[test]
     fn a_resolved_commit_may_be_named_by_a_short_id_but_never_by_a_ref() {

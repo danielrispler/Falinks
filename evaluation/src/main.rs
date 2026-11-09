@@ -5,6 +5,7 @@ mod batch;
 mod collisions;
 mod judge;
 mod known_answer;
+mod qualify;
 mod quality;
 mod report;
 mod significance;
@@ -29,7 +30,7 @@ macro_rules! bail {
 pub(crate) use bail;
 
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-pub const FIXTURES: [&str; 7] = [
+pub const FIXTURES: [&str; 8] = [
     "rust-errors",
     "go-page",
     "go-relationships",
@@ -37,7 +38,10 @@ pub const FIXTURES: [&str; 7] = [
     "go-indep-4",
     "go-tasks",
     "go-invoice",
+    "library-loans",
 ];
+/// Step A's fixture (#498, #509): its one milestone is the trap.
+pub const STEP_A_FIXTURE: &str = "library-loans";
 /// #205's sealed scored fixture (#332), the `large-spec` schedule's only one.
 pub const LARGE_SPEC_FIXTURE: &str = "go-invoice";
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
@@ -292,7 +296,12 @@ impl Sandbox {
     /// Landlock allows only what it lists, so reads are everything outside the denied roots.
     /// Without network, the helper also refuses every socket.
     fn landlock(&self, argv: Vec<String>) -> Result<Vec<String>> {
-        let helper = env::current_exe()?.with_file_name(HELPER);
+        let mut helper = env::current_exe()?.with_file_name(HELPER);
+        // Unit tests run from target/<profile>/deps; the helper binary sits one level up.
+        let deps = helper.parent().filter(|d| d.ends_with("deps"));
+        if let Some(profile) = deps.and_then(Path::parent).filter(|_| !helper.is_file()) {
+            helper = profile.join(HELPER);
+        }
         if !helper.is_file() {
             bail!(
                 "Containment helper {} is missing; no unprotected fallback",
@@ -844,14 +853,18 @@ const USAGE: &str = "usage: falinks-eval <command>
   schedule
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
-  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
-  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6|large-spec|wave-1..wave-4|sweep|confirm] [--fixtures NAME[,NAME]]
+  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2] [--variant announce|notify]
+  batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6|large-spec|step-a-qualify|step-a|wave-1..wave-4|sweep|confirm] [--fixtures NAME[,NAME]]
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
-  report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec|wave-1..wave-4|sweep|confirm] [--show-code]
+  report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec|step-a-qualify|step-a|wave-1..wave-4|sweep|confirm] [--show-code]
+  static-checks
+  helpers RUN_DIR
+  reverse-swap RUN_DIR
+  qualify --runs DIR
   timing RUN_DIR
   collisions RUN_DIR
-  duplicates --runs DIR";
+  duplicates --runs DIR [--answers FILE --seed SEED]";
 
 struct Args {
     positional: Vec<String>,
@@ -961,6 +974,7 @@ fn run() -> Result<i32> {
             args.get("order").unwrap_or("0").parse()?,
             args.get("scored") == Some("true"),
             args.get("team-size").unwrap_or("2").parse()?,
+            args.get("variant"),
         ),
         Some("batch") => batch::batch(
             Path::new(args.required("config")?),
@@ -969,15 +983,17 @@ fn run() -> Result<i32> {
             match args.get("schedule") {
                 None => None,
                 Some(name)
-                    if (matches!(name, "track-t" | "step-6" | "large-spec")
-                        || batch::wave_slots(name).is_some())
+                    if (matches!(
+                        name,
+                        "track-t" | "step-6" | "large-spec" | "step-a-qualify" | "step-a"
+                    ) || batch::wave_slots(name).is_some())
                         && args.get("after-pilot").is_none() =>
                 {
                     Some(name)
                 }
                 Some(_) => {
                     bail!(
-                        "--schedule takes track-t, step-6, large-spec, wave-1 to wave-4, sweep or confirm, without --after-pilot\n{USAGE}"
+                        "--schedule takes track-t, step-6, large-spec, step-a-qualify, step-a, wave-1 to wave-4, sweep or confirm, without --after-pilot\n{USAGE}"
                     )
                 }
             },
@@ -995,9 +1011,10 @@ fn run() -> Result<i32> {
                 Some("track-t") => report::track_t_report(&runs),
                 Some("step-6") => report::step_6_report(&runs),
                 Some("large-spec") => report::large_spec_report(&runs),
+                Some("step-a-qualify" | "step-a") => report::report(&runs, false),
                 Some(name) if batch::wave_slots(name).is_some() => report::wave_report(&runs),
                 Some(_) => bail!(
-                    "--schedule takes track-t, step-6, large-spec, wave-1 to wave-4, sweep or confirm\n{USAGE}"
+                    "--schedule takes track-t, step-6, large-spec, step-a-qualify, step-a, wave-1 to wave-4, sweep or confirm\n{USAGE}"
                 ),
             };
             println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -1011,11 +1028,16 @@ fn run() -> Result<i32> {
         Some("known-answer") => {
             known_answer::known_answer(args.get("judge").map(Path::new), args.get("fixtures"))
         }
-        Some("duplicates") => collisions::classify(
-            Path::new(args.required("runs")?),
-            std::io::stdin().lock(),
-            std::io::stdout(),
-        ),
+        Some("duplicates") => {
+            let runs = Path::new(args.required("runs")?);
+            let (input, out) = (std::io::stdin().lock(), std::io::stdout());
+            match args.get("answers") {
+                Some(answers) => {
+                    collisions::audit(runs, Path::new(answers), args.required("seed")?, input, out)
+                }
+                None => collisions::classify(runs, input, out),
+            }
+        }
         Some("collisions") => {
             let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
             let result = read(run.join("controller/result.json"))?;
@@ -1028,6 +1050,32 @@ fn run() -> Result<i32> {
             let found = collisions::collisions(run, &result, &classified, &mut authorship);
             println!("{}", serde_json::to_string_pretty(&found)?);
             Ok(0)
+        }
+        Some("static-checks") => {
+            let result = qualify::static_checks(STEP_A_FIXTURE)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(if result["passed"] == true { 0 } else { 1 })
+        }
+        Some("helpers") => {
+            let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
+            println!("{}", serde_json::to_string_pretty(&qualify::helpers(run)?)?);
+            Ok(0)
+        }
+        Some("reverse-swap") => {
+            let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
+            let report = qualify::reverse_swap(run)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(0)
+        }
+        Some("qualify") => {
+            let checks = qualify::static_checks(STEP_A_FIXTURE)?;
+            let result = qualify::qualify(Path::new(args.required("runs")?), checks)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(if result["decision"]["qualifies"] == true {
+                0
+            } else {
+                1
+            })
         }
         Some("timing") => {
             let run = Path::new(args.positional.get(1).ok_or(USAGE)?);

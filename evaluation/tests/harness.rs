@@ -189,6 +189,7 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
             "go-page",
             "go-relationships",
             "go-tasks",
+            "library-loans",
             "rust-errors"
         ]
     );
@@ -681,6 +682,74 @@ fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
     assert!(message.contains("gate scenario failed"), "{message}");
     assert_eq!(gate["started"], true);
     assert_eq!(gate["passed"], false);
+}
+
+#[test]
+fn batch_pins_its_setup_and_refuses_a_changed_item_before_any_run() {
+    let tmp = tmp("falinks-pin-test-");
+    // A copy of the runtime, so its bytes can change while the configuration stays the same.
+    let runtime = tmp.path().join("runtime");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let runtime = runtime.to_string_lossy().into_owned();
+    let mut config = read(config(tmp.path(), SCRIPTED, json!(["{worker}"]), &runtime));
+    // A failing gate ends each invocation before any run, so the test stays cheap.
+    config["gate_command"] = json!(["/usr/bin/false", runtime]);
+    let path = tmp.path().join("pinned.json");
+    let runs = tmp.path().join("runs");
+    let invoke = |config: &Value| {
+        fs::write(&path, config.to_string()).unwrap();
+        let output = batch(tmp.path(), &path, &runs).output().unwrap();
+        (output, read(runs.join("batch.json")))
+    };
+    let (first, ledger) = invoke(&config);
+    assert_eq!(first.status.code(), Some(3), "{}", text(&first));
+    let setup = &ledger["setup"];
+    assert_eq!(setup["claude_code_version"], "scripted-v1");
+    assert_eq!(setup["runtime_sha256"], hash(&runtime));
+    assert_eq!(setup["model"], "scripted");
+    assert_eq!(setup["reasoning_effort"], "none");
+    assert_eq!(setup["config_sha256"], hash(&path.to_string_lossy()));
+
+    for (item, key, value) in [
+        (
+            "claude_code_version",
+            "runtime_version",
+            json!("scripted-v2"),
+        ),
+        ("model", "model", json!("other")),
+        ("reasoning_effort", "reasoning", json!("high")),
+        ("config_sha256", "timeout_seconds", json!(299)),
+    ] {
+        let mut changed = config.clone();
+        changed[key] = value;
+        let (refused, ledger) = invoke(&changed);
+        assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+        assert!(text(&refused).contains(item), "{item}: {}", text(&refused));
+        // Refused before the gate, so no run could start.
+        assert_eq!(ledger["gates"].as_array().unwrap().len(), 1, "{item}");
+        assert_eq!(ledger["invocations"].as_array().unwrap().len(), 1, "{item}");
+    }
+    let original = fs::read(&runtime).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&runtime)
+        .unwrap()
+        .write_all(b"\0")
+        .unwrap();
+    let (refused, _) = invoke(&config);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("runtime_sha256"),
+        "{}",
+        text(&refused)
+    );
+    fs::write(&runtime, original).unwrap();
+
+    // The same setup resumes as before: it reaches the gate again.
+    let (resumed, ledger) = invoke(&config);
+    assert_eq!(resumed.status.code(), Some(3), "{}", text(&resumed));
+    assert_eq!(ledger["gates"].as_array().unwrap().len(), 2);
+    assert_eq!(ledger["setup"], *setup);
 }
 
 #[test]
@@ -1345,7 +1414,62 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
 
     // Git: A shares a1 at 2.25 and B shares b1 at 3.0, each from the initial commit; A's
     // merge of b1 in agents/integration conflicts at 5.5.
-    let run = copy("git-collision");
+    let run = git_collision(&tmp.path().join("git-collision"), [&[], &[]]);
+    let git = figures(&run);
+    let a = &git["agents"]["A"];
+    // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75), beside their
+    // categories, native and edit.
+    assert_eq!(
+        a["integration"],
+        json!({"round_trips": 2, "model_seconds": 1.75})
+    );
+    assert!(a["round_trips"].get("integration").is_none());
+    assert_eq!(
+        a["runtime_refusals"],
+        json!({"round_trips": 0, "model_seconds": 0.0})
+    );
+    // From m4, the first input at the CONFLICT's 5.5, to m6's passing check: 1.0, 0.75, 0.25.
+    assert_eq!(
+        a["collision_handling"],
+        json!({"line_conflict": cost(3, 2.0), "rework": idle, "no_fault": idle})
+    );
+    // m4's `cat consumer.go`.
+    assert_eq!(
+        a["rereads"],
+        json!({"round_trips": 1, "model_seconds": 1.0})
+    );
+    // Coordination m2 0.25, m6 0.25, m7 0.5; integration 1.75; the reread 1.0.
+    assert_eq!(
+        a["coordination_overhead"],
+        json!({"round_trips": 6, "model_seconds": 3.75})
+    );
+    assert!(a.get("review_estimate").is_none());
+    let b = &git["agents"]["B"];
+    assert_eq!(b["collision_handling"], unhandled);
+    // Share 0.5 and ready 0.5.
+    assert_eq!(
+        b["coordination_overhead"],
+        json!({"round_trips": 2, "model_seconds": 1.0})
+    );
+}
+
+/// `tests/timing/git-collision` copied to `to`, with its `agents/repo`: A's a1 and B's b1 each
+/// change `consumer.go`'s return line from the initial commit, adding `extra`'s files (A's,
+/// B's), and the final snapshot merges b1 into a1 keeping a1's side of the conflict.
+fn git_collision(to: &Path, extra: [&[(&str, &str)]; 2]) -> PathBuf {
+    let copied = Command::new("cp")
+        .arg("-R")
+        .arg(root().join("tests/timing/git-collision"))
+        .arg(to)
+        .status()
+        .unwrap();
+    assert!(copied.success());
+    let consume = |body: &str| {
+        format!("package fixture\n\nfunc Consume(records []string) []string {{\n{body}}}\n")
+    };
+    let theirs = consume("    return records\n");
+    let ours = consume("    return append(records[:0:0], records...)\n");
+    let run = to.to_path_buf();
     let repo = run.join("agents/repo");
     fs::create_dir_all(&repo).unwrap();
     let git = |args: &[&str]| {
@@ -1385,11 +1509,17 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
         .map(|(name, text)| (name.as_str(), text.as_str().unwrap()))
         .collect();
     let base = commit(&files, "Frozen initial task");
-    let a1 = commit(&[("consumer.go", &theirs)], "A draft 1");
+    let a1 = commit(
+        &[&[("consumer.go", &theirs[..])], extra[0]].concat(),
+        "A draft 1",
+    );
     git(&["checkout", "-q", "-b", "B", &base]);
-    let b1 = commit(&[("consumer.go", &ours)], "B draft 1");
+    let b1 = commit(
+        &[&[("consumer.go", &ours[..])], extra[1]].concat(),
+        "B draft 1",
+    );
     git(&["checkout", "-q", "-b", "integration", &a1]);
-    git(&["merge", "-q", "--no-edit", "-s", "ours", &b1]);
+    git(&["merge", "-q", "--no-edit", "-X", "ours", &b1]);
     let merged = git(&["rev-parse", "HEAD"]);
     let events = [("A", &a1, 2.25), ("B", &b1, 3.0)]
         .map(|(agent, commit, elapsed)| {
@@ -1402,42 +1532,101 @@ fn timing_reports_collision_handling_rereads_and_overhead() {
     result["initial_snapshot"] = json!(base);
     result["final_snapshot"] = json!(merged);
     fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
-    let git = figures(&run);
-    let a = &git["agents"]["A"];
-    // m3's merge (5.0-4.0) and m5's Edit under agents/integration (7.5-6.75), beside their
-    // categories, native and edit.
-    assert_eq!(
-        a["integration"],
-        json!({"round_trips": 2, "model_seconds": 1.75})
+    run
+}
+
+/// C1 (#490, #505) over the recorded Git collision run, with one duplicate and one divergent
+/// pair both standing in the final tree: each term and the sum match hand-computed values,
+/// and the final-tree pairs are counted per class.
+#[test]
+fn report_prices_c1_and_counts_final_tree_pairs_per_class() {
+    let tmp = tmp("falinks-report-c1-");
+    let net = |name: &str| {
+        format!("package p\nfunc {name}(q, p int) int {{\n    n := q * p\n    return n\n}}\n")
+    };
+    let join = |name: &str, sep: &str| {
+        format!(
+            "package p\nfunc {name}(xs []string) string {{\n    return strings.Join(xs, \"{sep}\")\n}}\n"
+        )
+    };
+    let (net_a, net_b, join_a, join_b) = (
+        net("NetA"),
+        net("NetB"),
+        join("JoinA", ","),
+        join("JoinB", ";"),
     );
-    assert!(a["round_trips"].get("integration").is_none());
-    assert_eq!(
-        a["runtime_refusals"],
-        json!({"round_trips": 0, "model_seconds": 0.0})
+    let run = git_collision(
+        &tmp.path().join("run"),
+        [
+            &[("a.go", &net_a[..]), ("c.go", &join_a[..])],
+            &[("b.go", &net_b[..]), ("d.go", &join_b[..])],
+        ],
     );
-    // From m4, the first input at the CONFLICT's 5.5, to m6's passing check: 1.0, 0.75, 0.25.
+    let id = "go-relationships-1-git-2";
+    let mut result = read(run.join("controller/result.json"));
+    result["outcome"] = json!("success");
+    fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+    fs::write(
+        tmp.path().join("batch.json"),
+        json!({"runs": [{"run_dir": run, "run_id": id, "pair": "go-relationships-1",
+            "fixture": "go-relationships", "arm": "git", "team_size": 2, "scored": true}]})
+        .to_string(),
+    )
+    .unwrap();
+    let metric = |value: f64| json!({"value": value});
+    fs::write(
+        tmp.path().join("quality.json"),
+        json!({"runs": {id: {"metrics": {"production_lines_changed": metric(40.0),
+            "test_lines_added": metric(15.0)}}}})
+        .to_string(),
+    )
+    .unwrap();
+    // Propose the pairs (no answers), then classify the Net pair duplicate, the Join pair
+    // divergent and any other no.
+    let proposed = cli(["duplicates", "--runs", tmp.path().to_str().unwrap()]);
+    assert!(proposed.status.success(), "{}", text(&proposed));
+    let path = tmp.path().join("duplicates.json");
+    let mut duplicates = read(&path);
+    for pair in duplicates["pairs"].as_array_mut().unwrap() {
+        let names: Vec<&str> = pair["sides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap())
+            .collect();
+        pair["class"] = match names[..] {
+            ["NetA", "NetB"] => "duplicate",
+            ["JoinA", "JoinB"] => "divergent",
+            _ => "no",
+        }
+        .into();
+    }
+    fs::write(&path, duplicates.to_string()).unwrap();
+    let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]);
+    assert!(output.status.success(), "{}", text(&output));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cell = &report["c1"]["go-relationships"]["git-2"];
+    let term = |name: &str| cell["terms"][name]["values"][0].as_f64().unwrap();
+    // A's integration, line-conflict handling and reread, as `timing` gives them.
     assert_eq!(
-        a["collision_handling"],
-        json!({"line_conflict": cost(3, 2.0), "rework": idle, "no_fault": idle})
+        ["integration", "line_conflict", "rework", "rereads"].map(term),
+        [1.75, 2.0, 0.0, 1.0]
     );
-    // m4's `cat consumer.go`.
+    // The later copies, B's NetB (4 lines) and JoinB (3), at edit model seconds A's m1 1.0
+    // and m5 0.75 plus B's n1 1.0, over 40 + 15 written lines: 7 × 2.75 / 55. B's dropped
+    // consumer.go line is line-conflict waste, not priced.
+    assert!((term("duplicate_work") - 0.35).abs() < 1e-9, "{cell}");
+    let c1 = cell["model_seconds"]["median"].as_f64().unwrap();
+    assert!((c1 - 5.1).abs() < 1e-9, "{cell}");
+    assert_eq!(cell["run_ids"], json!([id]));
     assert_eq!(
-        a["rereads"],
-        json!({"round_trips": 1, "model_seconds": 1.0})
+        (
+            &cell["final_tree_pairs"]["duplicate"]["values"],
+            &cell["final_tree_pairs"]["divergent"]["values"]
+        ),
+        (&json!([1.0]), &json!([1.0]))
     );
-    // Coordination m2 0.25, m6 0.25, m7 0.5; integration 1.75; the reread 1.0.
-    assert_eq!(
-        a["coordination_overhead"],
-        json!({"round_trips": 6, "model_seconds": 3.75})
-    );
-    assert!(a.get("review_estimate").is_none());
-    let b = &git["agents"]["B"];
-    assert_eq!(b["collision_handling"], unhandled);
-    // Share 0.5 and ready 0.5.
-    assert_eq!(
-        b["coordination_overhead"],
-        json!({"round_trips": 2, "model_seconds": 1.0})
-    );
+    assert!(cell["note"].as_str().unwrap().contains("decides nothing"));
 }
 
 /// A team of one (#178 C1) has no agent B: `timing` reads agent A alone.
@@ -1582,6 +1771,252 @@ fn a_team_of_one_completes_and_developments_fire_on_its_own_shares() {
     assert_eq!(events, ["development", "development"]);
     // Its one message has no peer to reach: refused, not delivered.
     assert_eq!(evidence["rejected_operations"], 1);
+}
+
+/// #509: Step A's static checks. The old reference with only `DaysBetween` corrected fails
+/// C2-tagged cases of B's T5 and T9, the full corrected reference fails none, and the
+/// reference calls `DaysBetween` from every user the dependency list names. Every tag names
+/// a test in the oracle.
+#[test]
+fn step_a_reference_swap_fails_tagged_cases_and_the_reference_passes() {
+    let protected = read(root().join("protected/library-loans.json"));
+    let oracle = protected["oracle"].as_str().unwrap();
+    let trap = &protected["trap"];
+    assert_eq!(
+        trap["milestone"],
+        read(root().join("fixtures/library-loans.json"))["milestones"][0]["id"]
+    );
+    for test in ["cases", "side_cases"]
+        .iter()
+        .flat_map(|k| trap[k].as_array().unwrap())
+    {
+        let test = test.as_str().unwrap();
+        assert!(
+            oracle.contains(&format!("\nfunc {test}(t *testing.T) {{")),
+            "{test}"
+        );
+    }
+    let output = cli(["static-checks"]);
+    assert!(output.status.success(), "{}", text(&output));
+    let checks = &serde_json::from_slice::<Value>(&output.stdout).unwrap()["checks"];
+    assert_eq!(checks["cross_developer_dependents"], json!(["T5", "T9"]));
+    assert_eq!(checks["corrected_reference_failures"], json!([]));
+    assert_eq!(
+        checks["swap_c2_failures"],
+        json!(["TestLateFeeDays", "TestOverdueReport"])
+    );
+    assert_eq!(checks["swap_side_failures"], json!(["TestRenewOverdue"]));
+    let calls: Vec<&Value> = checks["reference_calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .collect();
+    assert_eq!(calls.len(), 4);
+    assert!(calls.iter().all(|c| c["calls"] == true));
+}
+
+/// #509: the trap development is released by the first share adding a qualified call to
+/// `calendar.DaysBetween` outside `calendar`, or else at the first ready, which it refuses; in
+/// a team of one, its own shares count. The run records the rule, event and time, and the
+/// agent never sees the trigger.
+#[test]
+fn the_trap_releases_on_a_call_or_at_the_first_ready() {
+    for mode in ["call", "ready"] {
+        let tmp = tmp("falinks-trap-test-");
+        let config = config(
+            tmp.path(),
+            SCRIPTED,
+            json!([
+                "/bin/sh",
+                "-c",
+                format!("/usr/bin/tee scratch/host.jsonl | \"$0\" loans {mode}"),
+                "{worker}"
+            ]),
+            SCRIPTED,
+        );
+        let run = tmp.path().join("run");
+        let mut args = vec![OsStr::new("baseline"), OsStr::new("library-loans")];
+        args.extend([OsStr::new("--config"), config.as_os_str()]);
+        args.extend([OsStr::new("--output"), run.as_os_str()]);
+        args.extend([OsStr::new("--team-size"), OsStr::new("1")]);
+        let output = cli(args);
+        let evidence = read(run.join("controller/result.json"));
+        assert_eq!(
+            evidence["outcome"],
+            "task_failure",
+            "{mode}: {}",
+            text(&output)
+        );
+        let release = &evidence["trap_release"];
+        assert_eq!(release["agent"], "A", "{mode}");
+        assert!(release["elapsed"].as_f64().unwrap() > 0.0 && release["utc"].is_string());
+        let events: Vec<Value> = fs::read_to_string(run.join("controller/events.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let first_share = events.iter().find(|e| e["kind"] == "draft_shared").unwrap();
+        let development = events.iter().find(|e| e["kind"] == "development").unwrap();
+        assert_eq!(&development["release"], release);
+        if mode == "call" {
+            assert_eq!(release["rule"], "call");
+            assert_eq!(release["commit"], first_share["commit"]);
+            assert_eq!(release["file"], "loan/fee.go");
+            assert_eq!(evidence["rejected_operations"], 0);
+        } else {
+            // The comment-only share did not release it; the ready did, and was refused.
+            assert_eq!(release["rule"], "ready_fallback");
+            assert!(release.get("commit").is_none());
+            assert_eq!(evidence["rejected_operations"], 1);
+        }
+        let host = host_messages(&run.join("agents/A/scratch/host.jsonl"));
+        let delivered = &host["events"][0];
+        assert_eq!(delivered["type"], "development");
+        assert_eq!(delivered["id"], "days-between-correction");
+        assert!(delivered.get("trigger").is_none() && delivered.get("release_on_call").is_none());
+        assert!(
+            delivered["requirements"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("Correction to T2: `DaysBetween`")
+        );
+    }
+}
+
+/// #499: the `announce` variant adds #490's line to each agent's workflow text; plain `git.md`
+/// lacks it. An unknown variant is refused before the run directory exists.
+#[test]
+fn announce_variant_adds_its_line_and_unknown_variants_are_refused() {
+    let tmp = tmp("falinks-announce-test-");
+    let config = config(
+        tmp.path(),
+        SCRIPTED,
+        json!([
+            "/bin/sh",
+            "-c",
+            "/usr/bin/tee scratch/host.jsonl | \"$0\" relationships",
+            "{worker}"
+        ]),
+        SCRIPTED,
+    );
+    let line =
+        "There are other agents; announce the files you change; if you overlap, talk and plan.\n";
+    let plain = fs::read_to_string(root().join("instructions/git.md")).unwrap();
+    assert!(!plain.contains("announce the files"));
+    // Step A's test policy holds in every Git arm (#490).
+    let policy = "Test policy: mid-run, test your own packages; run one full check after the final combination.";
+    for workflow in ["git.md", "git-solo.md"] {
+        let text = fs::read_to_string(root().join("instructions").join(workflow)).unwrap();
+        assert!(text.contains(policy), "{workflow}");
+    }
+    let with_variant = |run: &Path, variant: &str| {
+        let mut args = vec![OsStr::new("baseline"), OsStr::new("go-relationships")];
+        args.extend([OsStr::new("--config"), config.as_os_str()]);
+        args.extend([OsStr::new("--output"), run.as_os_str()]);
+        args.extend([OsStr::new("--variant"), OsStr::new(variant)]);
+        cli(args)
+    };
+    let run = tmp.path().join("run");
+    let evidence = successful_evidence(&with_variant(&run, "announce"), &run);
+    assert_eq!(evidence["variant"], "announce");
+    for agent in ["A", "B"] {
+        let host = host_messages(&run.join(format!("agents/{agent}/scratch/host.jsonl")));
+        assert_eq!(
+            host["start"]["workflow"].as_str().unwrap(),
+            plain.clone() + line
+        );
+    }
+    let refused = tmp.path().join("refused");
+    let output = with_variant(&refused, "shout");
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("unknown Git arm variant: shout"),
+        "{}",
+        text(&output)
+    );
+    assert!(!refused.exists());
+}
+
+/// #503: with `notify`, A's share adding exported `lib.Changed`, which B's `app` imports, sends
+/// B one host `peer_message` naming both, also when B's draft does not parse. B's shares change
+/// nothing A imports, so A gets none. A failing `go list` is logged and the run goes on.
+#[test]
+fn notify_variant_tells_the_peer_which_of_its_packages_import_changed_names() {
+    let tmp = tmp("falinks-notify-test-");
+    let lib = "package lib\n\nfunc Changed() int { return 1 }\n";
+    let message = "Host notice: A's share changed exported names your packages import: \
+        fixture/lib (Changed) is imported by your fixture/app.";
+    for (case, app, broken_workspace) in [
+        ("parses", "lib.Changed()", false),
+        ("unparseable", "lib.Changed(", false),
+        ("go list fails", "lib.Changed()", true),
+    ] {
+        let app = format!("package app\n\nimport \"fixture/lib\"\n\nfunc Use() {{ {app} }}\n");
+        // B writes its importer first; A shares `lib` only once B's draft exists.
+        let mut setup = format!(
+            "if [ \"$FALINKS_AGENT\" = B ]; then mkdir app && printf '%s' '{app}' > app/app.go; \
+            else while [ ! -f ../B/app/app.go ]; do sleep 0.05; done; \
+            mkdir lib && printf '%s' '{lib}' > lib/lib.go; fi; "
+        );
+        // A broken workspace file, never shared, fails B's `go list` but not the checks.
+        if broken_workspace {
+            setup = "[ \"$FALINKS_AGENT\" = B ] && echo /go.work >> .gitignore && echo broken > go.work; "
+                .to_string()
+                + &setup;
+        }
+        let config = config(
+            tmp.path(),
+            SCRIPTED,
+            json!([
+                "/bin/sh",
+                "-c",
+                setup + "/usr/bin/tee scratch/host.jsonl | \"$0\" relationships",
+                "{worker}"
+            ]),
+            SCRIPTED,
+        );
+        let run = tmp.path().join(case.replace(' ', "-"));
+        let mut args = vec![OsStr::new("baseline"), OsStr::new("go-relationships")];
+        args.extend([OsStr::new("--config"), config.as_os_str()]);
+        args.extend([OsStr::new("--output"), run.as_os_str()]);
+        args.extend([OsStr::new("--variant"), OsStr::new("notify")]);
+        let output = cli(args);
+        let evidence = read(run.join("controller/result.json"));
+        // Only the unparseable draft fails the checks; every run reaches its final validation.
+        let outcome = if case == "unparseable" {
+            "task_failure"
+        } else {
+            "success"
+        };
+        assert_eq!(evidence["outcome"], outcome, "{case}: {}", text(&output));
+        let notices = |agent: &str| {
+            host_messages(&run.join(format!("agents/{agent}/scratch/host.jsonl")))["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["type"] == "peer_message" && e["sender"] == "host")
+                .map(|e| e["text"].clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(notices("A"), Vec::<Value>::new(), "{case}");
+        let failures: Vec<Value> = fs::read_to_string(run.join("controller/events.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|e| e["kind"] == "notice_failure")
+            .collect();
+        if broken_workspace {
+            assert_eq!(notices("B"), Vec::<Value>::new(), "{case}");
+            assert!(!failures.is_empty(), "{case}");
+            assert!(
+                failures.iter().all(|f| f["agent"] == "B"
+                    && f["error"].as_str().unwrap().contains("go list failed"))
+            );
+        } else {
+            assert_eq!(notices("B"), [json!(message)], "{case}");
+            assert_eq!(failures, Vec::<Value>::new(), "{case}");
+        }
+    }
 }
 
 /// C7 (#178), Git arm: a scripted `claude` or `node` launch through Bash invalidates the run.
@@ -1812,14 +2247,144 @@ fn report_prints_reverted_lines_only_with_show_code() {
     );
 }
 
+/// C2 (#490) over small recorded two-agent Git runs: a run reads true when the first combined
+/// check after the trap's development fails on a tagged case; a failure only on an untagged
+/// case, or only before the development, reads false. An arm holds C2 in 2 of 3 runs. Failures
+/// on side-tagged cases at that check are counted apart and do not make C2.
+#[test]
+fn report_reads_c2_from_cases_tagged_by_the_trap() {
+    let go_fail = |case: &str| format!("--- FAIL: {case} (0.00s)\nFAIL\tinvoice\t0.01s\n");
+    // Each run: its events, then each check's oracle output in order (None: no candidate).
+    let tagged = vec![
+        json!({"kind": "development", "milestone": {"id": "m1"}}),
+        json!({"kind": "development", "milestone": {"id": "m2"}}),
+        json!({"kind": "validation", "candidate": null}),
+        json!({"kind": "validation", "candidate": "c1"}),
+        json!({"kind": "final_validation", "candidate": "c2"}),
+    ];
+    let subtest = "    --- FAIL: TestTrap/rounding (0.00s)\n--- FAIL: TestTrap (0.00s)\n";
+    let runs = [
+        (
+            "tagged",
+            tagged.clone(),
+            vec![
+                None,
+                Some(go_fail("TestTrap") + &go_fail("TestTotals") + &go_fail("TestRender")),
+                Some(String::new()),
+            ],
+        ),
+        (
+            "subtest",
+            tagged.clone(),
+            vec![None, Some(subtest.into()), Some(String::new())],
+        ),
+        (
+            "untagged",
+            tagged,
+            vec![
+                None,
+                Some(go_fail("TestTrapped") + &go_fail("TestTotals")),
+                Some(String::new()),
+            ],
+        ),
+        (
+            "before",
+            vec![
+                json!({"kind": "validation", "candidate": "c1"}),
+                json!({"kind": "development", "milestone": {"id": "m2"}}),
+                json!({"kind": "final_validation", "candidate": "c2"}),
+            ],
+            vec![
+                Some(go_fail("TestTrap") + &go_fail("TestTotals")),
+                Some(String::new()),
+            ],
+        ),
+    ];
+    let tmp = tmp("falinks-report-c2-");
+    let trap = json!({"milestone": "m2", "cases": ["TestTrap", "TestRate"],
+        "side_cases": ["TestTotals", "TestRender"]});
+    let mut entries = vec![];
+    for (id, events, checks) in &runs {
+        let run = tmp.path().join(id);
+        fs::create_dir_all(run.join("controller")).unwrap();
+        let result = json!({"outcome": "success", "team_size": 2, "trap": trap});
+        fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+        let events: String = events.iter().map(|e| format!("{e}\n")).collect();
+        fs::write(run.join("controller/events.jsonl"), events).unwrap();
+        for (n, output) in checks.iter().enumerate() {
+            let check = match output {
+                None => json!({"candidate": null, "passed": false, "conflict": "CONFLICT"}),
+                Some(output) => json!({"oracle": {"passed": output.is_empty(),
+                    "checks": [{"command": ["go", "test"], "passed": output.is_empty(), "output": output}]}}),
+            };
+            let path = run.join(format!("controller/check-{}.json", n + 1));
+            fs::write(path, check.to_string()).unwrap();
+        }
+        entries.push(
+            json!({"run_dir": run, "run_id": id, "pair": id, "fixture": "go-invoice",
+            "arm": "git", "scored": true}),
+        );
+    }
+    // A run without a trap, as with every existing oracle: no reading.
+    let plain = tmp.path().join("plain");
+    fs::create_dir_all(plain.join("controller")).unwrap();
+    fs::write(
+        plain.join("controller/result.json"),
+        json!({"outcome": "success", "team_size": 2}).to_string(),
+    )
+    .unwrap();
+    entries.push(json!({"run_dir": plain, "run_id": "plain", "pair": "plain",
+        "fixture": "go-page", "arm": "git", "scored": true}));
+    let c2 = |ids: &[&str]| {
+        let chosen: Vec<&Value> = entries
+            .iter()
+            .filter(|e| ids.contains(&e["run_id"].as_str().unwrap()))
+            .collect();
+        let ledger = json!({"runs": chosen}).to_string();
+        fs::write(tmp.path().join("batch.json"), ledger).unwrap();
+        let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]);
+        assert!(output.status.success(), "{}", text(&output));
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["c2"].clone()
+    };
+    let mut all = c2(&["tagged", "subtest", "untagged", "plain"]);
+    let side = all["go-invoice"]["git-2"]
+        .as_object_mut()
+        .unwrap()
+        .remove("side")
+        .unwrap();
+    assert_eq!(
+        all,
+        json!({"go-invoice": {"git-2": {"runs": {"tagged": true, "subtest": true, "untagged": false},
+            "count": 2, "n": 3, "holds": true}}})
+    );
+    assert_eq!(
+        (&side["runs"], &side["failures"]),
+        (
+            &json!({"tagged": 2, "subtest": 0, "untagged": 1}),
+            &json!(3)
+        )
+    );
+    assert!(side["note"].as_str().unwrap().contains("decides nothing"));
+    let mut one = c2(&["tagged", "untagged", "before"])["go-invoice"]["git-2"].clone();
+    let side = one.as_object_mut().unwrap().remove("side").unwrap();
+    assert_eq!(
+        one,
+        json!({"runs": {"tagged": true, "untagged": false, "before": false}, "count": 1, "n": 3,
+            "holds": false})
+    );
+    assert_eq!(side["runs"]["before"], 0);
+    assert_eq!(c2(&["plain"]), json!({}));
+}
+
 /// #228 decision 27: every differential property quotes its requirement sentence verbatim
 /// from the frozen fixture definition, and the judge uses the run configuration's pins.
 #[test]
 fn code_quality_definitions_trace_to_fixture_requirements() {
     let definitions = read(root().join("code-quality.json"));
     let properties = definitions["properties"]["list"].as_array().unwrap();
-    // 13 on the scored batch's fixtures and one per go-invoice ticket (#336).
-    assert_eq!(properties.len(), 22);
+    // 13 on the scored batch's fixtures and one per go-invoice ticket (#336) and
+    // library-loans ticket (#509).
+    assert_eq!(properties.len(), 31);
     for property in properties {
         let fixture = read(
             root()

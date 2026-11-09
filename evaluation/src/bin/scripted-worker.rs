@@ -4,6 +4,9 @@
 //! `scripted-worker relationships [received|late|never]|conflict` speaks the host JSON-line
 //! protocol; with a usage mode, `relationships` reports a turn at start and its final result
 //! after `ready` at once, only when the host stops it, or never; alone, it writes both files;
+//! `scripted-worker loans [call|ready]` works alone on library-loans: its first share adds a
+//! `calendar.DaysBetween` call in `loan/fee.go` (`call`) or a comment only, then it asks for
+//! `ready` (`ready`) or waits for the trap (#509); it acks it, shares again and is ready;
 //! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
 //! `scripted-worker -p --output-format json ...` impersonates the judge's `claude -p` call: it
 //! appends the prompt (after `-p`) to `$FALINKS_FAKE_JUDGE/prompts.json` and replies with the next canned
@@ -69,6 +72,7 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("relationships") => relationships(args.get(1).map(String::as_str)),
         Some("conflict") => conflict(),
+        Some("loans") => loans(args.get(1).map(String::as_str) == Some("call")),
         Some("exec") => fake_codex(&args),
         Some("-p") if args.windows(2).any(|w| w == ["--output-format", "json"]) => {
             fake_judge(&args)
@@ -76,7 +80,7 @@ fn main() {
         Some("-p") => fake_claude(&args),
         Some(
             "rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4"
-            | "go-tasks" | "go-invoice",
+            | "go-tasks" | "go-invoice" | "library-loans",
         ) => fake_arm(&args),
         other => panic!("unknown mode {other:?}"),
     }
@@ -169,6 +173,34 @@ fn relationships(usage_mode: Option<&str>) {
                 }
                 _ => park(),
             },
+            _ => {}
+        }
+    }
+}
+
+fn loans(call: bool) {
+    let mut events = lines();
+    events.next().unwrap();
+    let first = if call {
+        "\nfunc late(a, b calendar.Date) int { return calendar.DaysBetween(a, b) }\n"
+    } else {
+        "\n// calendar.DaysBetween(a, b) is in a comment only\n"
+    };
+    append("loan/fee.go", first);
+    send(json!({"action": "share"}));
+    let mut acked = false;
+    for event in events {
+        match (event["type"].as_str().unwrap(), event["action"].as_str()) {
+            ("development", _) => send(json!({"action": "ack", "milestone": event["id"]})),
+            ("ok", Some("ack")) => {
+                acked = true;
+                append("loan/fee.go", "\n// after the correction\n");
+                send(json!({"action": "share"}));
+            }
+            ("shared", _) if acked || !call => {
+                send(json!({"action": "ready", "commit": event["commit"]}))
+            }
+            ("ok", Some("ready")) => park(),
             _ => {}
         }
     }
