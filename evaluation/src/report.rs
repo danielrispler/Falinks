@@ -695,6 +695,7 @@ pub fn report(runs: &[Value], show_code: bool) -> Value {
         "falinks_transitions": transitions,
         "regrouping_benefit": if transitions == 0 { "unestablished: no transitions" } else { "observed transitions; benefit needs review" },
         "replaced_runs": replaced,
+        "c1": c1_cells(&current),
         "c2": c2_cells(&current),
     })
 }
@@ -723,6 +724,83 @@ fn c2_cells(runs: &[&Value]) -> Value {
         cell["side"]["runs"][id] = side.into();
         cell["side"]["failures"] = (cell["side"]["failures"].as_u64().unwrap_or(0) + side).into();
         cell["side"]["note"] = C2_SIDE_NOTE.into();
+    }
+    cells
+}
+
+/// C1's terms (#490), each in model seconds.
+const C1_TERMS: [&str; 5] = [
+    "integration",
+    "line_conflict",
+    "rework",
+    "rereads",
+    "duplicate_work",
+];
+
+/// Printed with the C1 cells.
+const C1_NOTE: &str = "C1 (#490; #498's amendment, section 2): per run, summed over agents, the model seconds of integration, line-conflict and rework handling and rereads, plus duplicate work: the waste lines of pairs classified duplicate or divergent, at the run's edit model seconds per written line (production lines changed plus test lines added). Missing when a term is. final_tree_pairs counts each run's pairs of either class whose copies both stand in the final tree; a side report that decides nothing.";
+
+/// One run's C1 terms, in `C1_TERMS` order, from the figures the report prints elsewhere.
+fn c1_terms(run: &Value) -> Option<[f64; 5]> {
+    let seconds = |part: &str| sum(run, &format!("/{part}/model_seconds"));
+    let work = &run["discarded_or_rewritten_work"];
+    let lines = collision_waste(run).and(work["by_class"]["duplicate_work"]["lines"].as_f64())?;
+    // No duplicate lines cost nothing, whatever the run wrote.
+    let duplicate = if lines == 0.0 {
+        0.0
+    } else {
+        let quality = |metric: &str| run["quality"]["metrics"][metric]["value"].as_f64();
+        let written = quality("production_lines_changed")? + quality("test_lines_added")?;
+        lines * seconds("round_trips/edit")? / written
+    };
+    Some([
+        seconds("integration")?,
+        seconds("collision_handling/line_conflict")?,
+        seconds("collision_handling/rework")?,
+        seconds("rereads")?,
+        duplicate,
+    ])
+}
+
+/// One run's duplicate-work pairs of `class` whose copies both stand in the final tree.
+fn final_tree_pairs(run: &Value, class: &str) -> Option<f64> {
+    let collisions = &run["collisions"];
+    let events = collisions["events"]
+        .as_array()
+        .filter(|_| collisions["status"] == "complete")?;
+    let standing = events
+        .iter()
+        .filter(|e| e["pair_class"] == class && e["final_tree"] == true);
+    Some(standing.count() as f64)
+}
+
+/// C1 (#490) per fixture and two-agent arm: each run's cost and terms, with their medians, and
+/// the final-tree duplicate and divergent pairs apart.
+fn c1_cells(runs: &[&Value]) -> Value {
+    let mut groups: BTreeMap<(&str, String), Vec<&Value>> = BTreeMap::new();
+    let paired = |r: &&&Value| r["collisions"]["status"] != "n/a" && !replaceable(r);
+    for &run in runs.iter().filter(paired) {
+        let fixture = run["fixture"].as_str().unwrap_or_default();
+        let key = (fixture, team(run).unwrap_or_default());
+        groups.entry(key).or_default().push(run);
+    }
+    let mut cells = json!({});
+    for ((fixture, arm), runs) in groups {
+        let terms: serde_json::Map<String, Value> = C1_TERMS
+            .iter()
+            .enumerate()
+            .map(|(k, t)| (t.to_string(), figure(&runs, |r| Some(c1_terms(r)?[k]))))
+            .collect();
+        cells[fixture][arm] = json!({
+            "run_ids": runs.iter().map(|r| &r["run_id"]).collect::<Vec<_>>(),
+            "model_seconds": figure(&runs, |r| Some(c1_terms(r)?.iter().sum::<f64>())),
+            "terms": terms,
+            "final_tree_pairs": {
+                "duplicate": figure(&runs, |r| final_tree_pairs(r, "duplicate")),
+                "divergent": figure(&runs, |r| final_tree_pairs(r, "divergent")),
+            },
+            "note": C1_NOTE,
+        });
     }
     cells
 }
@@ -1648,6 +1726,7 @@ pub fn large_spec_report(runs: &[Value]) -> Value {
         "per_arm": per_arm, "per_arm_note": PER_ARM_NOTE, "coordination_note": COORDINATION_NOTE,
         "cost": costs,
         "code_quality": quality,
+        "c1": c1_cells(&current),
         "gaps": gaps,
         "nested_agent_hits": nested_hits(runs, &STEP_6_ARMS, team),
         "replaced_runs": replaced,
