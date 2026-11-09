@@ -163,5 +163,52 @@
       "old": "return rows[i].loan.ItemID < rows[j].loan.ItemID",
       "new": "return rows[i].loan.ItemID > rows[j].loan.ItemID"
     }
+  },
+  "timesheet-payroll": {
+    "P1": {
+      "file": "clock/clock.go",
+      "old": "minutes > \"59\"",
+      "new": "minutes > \"60\""
+    },
+    "P2": {
+      "file": "clock/clock.go",
+      "old": "back = 7",
+      "new": "back = 6"
+    },
+    "P3": {
+      "file": "money/money.go",
+      "old": "(len(whole)-i)%3 == 0",
+      "new": "(len(whole)-i)%4 == 0"
+    },
+    "P4": {
+      "file": "entry/entry.go",
+      "old": "len(id) > 32",
+      "new": "len(id) > 33"
+    },
+    "P5": {
+      "file": "entry/entry.go",
+      "old": "rest[0] == '#'",
+      "new": "rest[0] == ';'"
+    },
+    "P6": {
+      "file": "payroll/payroll.go",
+      "old": "min(total, 40*60)",
+      "new": "min(total, 40*60+1)"
+    },
+    "P7": {
+      "file": "payroll/payroll.go",
+      "old": "3*int64(s.Overtime)",
+      "new": "2*int64(s.Overtime)"
+    },
+    "P8": {
+      "file": "payroll/payroll.go",
+      "old": "rate <= 0",
+      "new": "rate < 0"
+    },
+    "P9": {
+      "file": "report/report.go",
+      "old": "%8s  %12s",
+      "new": "%8s  %13s"
+    }
   }
 }

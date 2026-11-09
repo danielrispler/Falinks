@@ -1063,16 +1063,16 @@ mod tests {
         assert!(
             qualify
                 .iter()
-                .all(|s| s["scored"] == false && s["fixture"] == "library-loans")
+                .all(|s| s["scored"] == false && s["fixture"] == "timesheet-payroll")
         );
         assert_eq!(
             names(qualify),
             [
-                "library-loans-1-git-1",
-                "library-loans-2-git-1",
-                "library-loans-3-git-2",
-                "library-loans-4-git-2",
-                "library-loans-5-git-2"
+                "timesheet-payroll-1-git-1",
+                "timesheet-payroll-2-git-1",
+                "timesheet-payroll-3-git-2",
+                "timesheet-payroll-4-git-2",
+                "timesheet-payroll-5-git-2"
             ]
         );
         let scored = step_a_slots();
@@ -1084,17 +1084,17 @@ mod tests {
         assert_eq!(
             names(scored.clone()),
             [
-                "library-loans-1-git-1",
-                "library-loans-1-git-2",
-                "library-loans-1-git-2-announce",
-                "library-loans-1-git-2-notify",
-                "library-loans-2-git-2",
-                "library-loans-2-git-2-announce",
-                "library-loans-2-git-2-notify",
-                "library-loans-2-git-1",
-                "library-loans-3-git-2-announce",
-                "library-loans-3-git-2-notify",
-                "library-loans-3-git-2",
+                "timesheet-payroll-1-git-1",
+                "timesheet-payroll-1-git-2",
+                "timesheet-payroll-1-git-2-announce",
+                "timesheet-payroll-1-git-2-notify",
+                "timesheet-payroll-2-git-2",
+                "timesheet-payroll-2-git-2-announce",
+                "timesheet-payroll-2-git-2-notify",
+                "timesheet-payroll-2-git-1",
+                "timesheet-payroll-3-git-2-announce",
+                "timesheet-payroll-3-git-2-notify",
+                "timesheet-payroll-3-git-2",
             ]
         );
         let count = |size: u64, variant: Value| {

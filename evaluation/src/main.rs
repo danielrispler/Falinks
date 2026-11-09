@@ -30,7 +30,7 @@ macro_rules! bail {
 pub(crate) use bail;
 
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-pub const FIXTURES: [&str; 8] = [
+pub const FIXTURES: [&str; 9] = [
     "rust-errors",
     "go-page",
     "go-relationships",
@@ -39,9 +39,11 @@ pub const FIXTURES: [&str; 8] = [
     "go-tasks",
     "go-invoice",
     "library-loans",
+    "timesheet-payroll",
 ];
-/// Step A's fixture (#498, #509): its one milestone is the trap.
-pub const STEP_A_FIXTURE: &str = "library-loans";
+/// Step A's fixture (#498): its one milestone is the trap. Try 2's `timesheet-payroll` (#552);
+/// try 1's `library-loans` (#509) stays as its record.
+pub const STEP_A_FIXTURE: &str = "timesheet-payroll";
 /// #205's sealed scored fixture (#332), the `large-spec` schedule's only one.
 pub const LARGE_SPEC_FIXTURE: &str = "go-invoice";
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).
@@ -858,7 +860,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
   report --runs DIR [--runs DIR]... [--schedule track-t|step-6|large-spec|step-a-qualify|step-a|wave-1..wave-4|sweep|confirm] [--show-code]
-  static-checks
+  static-checks [FIXTURE]
   helpers RUN_DIR
   reverse-swap RUN_DIR
   qualify --runs DIR
@@ -1052,7 +1054,11 @@ fn run() -> Result<i32> {
             Ok(0)
         }
         Some("static-checks") => {
-            let result = qualify::static_checks(STEP_A_FIXTURE)?;
+            let name = args
+                .positional
+                .get(1)
+                .map_or(STEP_A_FIXTURE, String::as_str);
+            let result = qualify::static_checks(name)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(if result["passed"] == true { 0 } else { 1 })
         }

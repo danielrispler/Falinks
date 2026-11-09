@@ -4,9 +4,10 @@
 //! `scripted-worker relationships [received|late|never]|conflict` speaks the host JSON-line
 //! protocol; with a usage mode, `relationships` reports a turn at start and its final result
 //! after `ready` at once, only when the host stops it, or never; alone, it writes both files;
-//! `scripted-worker loans [call|ready]` works alone on library-loans: its first share adds a
-//! `calendar.DaysBetween` call in `loan/fee.go` (`call`) or a comment only, then it asks for
-//! `ready` (`ready`) or waits for the trap (#509); it acks it, shares again and is ready;
+//! `scripted-worker trap FIXTURE [call|ready]` works alone on a Step A fixture (#509, #552): its
+//! first share adds a call to the trap's function outside its package (`call`) or a comment
+//! only, then it asks for `ready` (`ready`) or waits for the trap; it acks it, shares again and
+//! is ready;
 //! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
 //! `scripted-worker -p --output-format json ...` impersonates the judge's `claude -p` call: it
 //! appends the prompt (after `-p`) to `$FALINKS_FAKE_JUDGE/prompts.json` and replies with the next canned
@@ -72,7 +73,7 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("relationships") => relationships(args.get(1).map(String::as_str)),
         Some("conflict") => conflict(),
-        Some("loans") => loans(args.get(1).map(String::as_str) == Some("call")),
+        Some("trap") => trap(&args[1], args.get(2).map(String::as_str) == Some("call")),
         Some("exec") => fake_codex(&args),
         Some("-p") if args.windows(2).any(|w| w == ["--output-format", "json"]) => {
             fake_judge(&args)
@@ -80,7 +81,7 @@ fn main() {
         Some("-p") => fake_claude(&args),
         Some(
             "rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4"
-            | "go-tasks" | "go-invoice" | "library-loans",
+            | "go-tasks" | "go-invoice" | "library-loans" | "timesheet-payroll",
         ) => fake_arm(&args),
         other => panic!("unknown mode {other:?}"),
     }
@@ -178,15 +179,29 @@ fn relationships(usage_mode: Option<&str>) {
     }
 }
 
-fn loans(call: bool) {
+fn trap(fixture: &str, call: bool) {
+    // A file outside the trap's package that imports it, and a call to the trap's function.
+    let (file, function, line) = match fixture {
+        "library-loans" => (
+            "loan/fee.go",
+            "func late(a, b calendar.Date) int",
+            "calendar.DaysBetween(a, b)",
+        ),
+        "timesheet-payroll" => (
+            "payroll/payroll.go",
+            "func week(t time.Time) time.Time",
+            "clock.WeekStart(t)",
+        ),
+        other => panic!("no trap for {other}"),
+    };
     let mut events = lines();
     events.next().unwrap();
     let first = if call {
-        "\nfunc late(a, b calendar.Date) int { return calendar.DaysBetween(a, b) }\n"
+        format!("\n{function} {{ return {line} }}\n")
     } else {
-        "\n// calendar.DaysBetween(a, b) is in a comment only\n"
+        format!("\n// {line} is in a comment only\n")
     };
-    append("loan/fee.go", first);
+    append(file, &first);
     send(json!({"action": "share"}));
     let mut acked = false;
     for event in events {
@@ -194,7 +209,7 @@ fn loans(call: bool) {
             ("development", _) => send(json!({"action": "ack", "milestone": event["id"]})),
             ("ok", Some("ack")) => {
                 acked = true;
-                append("loan/fee.go", "\n// after the correction\n");
+                append(file, "\n// after the correction\n");
                 send(json!({"action": "share"}));
             }
             ("shared", _) if acked || !call => {
