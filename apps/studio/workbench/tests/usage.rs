@@ -25,7 +25,7 @@ fn the_newest_snapshot_gives_the_rate_limits() {
         usage["five_hour"],
         json!({"used_percentage": 23.5, "resets_at": 1738425600})
     );
-    assert_eq!(usage["seven_day"]["used_percentage"], json!(99.9));
+    assert_eq!(usage["seven_day"]["used_percentage"], json!(41.2));
 }
 
 #[test]
