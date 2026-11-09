@@ -685,6 +685,74 @@ fn batch_tells_a_gate_that_could_not_start_from_a_failed_gate() {
 }
 
 #[test]
+fn batch_pins_its_setup_and_refuses_a_changed_item_before_any_run() {
+    let tmp = tmp("falinks-pin-test-");
+    // A copy of the runtime, so its bytes can change while the configuration stays the same.
+    let runtime = tmp.path().join("runtime");
+    fs::copy(SCRIPTED, &runtime).unwrap();
+    let runtime = runtime.to_string_lossy().into_owned();
+    let mut config = read(config(tmp.path(), SCRIPTED, json!(["{worker}"]), &runtime));
+    // A failing gate ends each invocation before any run, so the test stays cheap.
+    config["gate_command"] = json!(["/usr/bin/false", runtime]);
+    let path = tmp.path().join("pinned.json");
+    let runs = tmp.path().join("runs");
+    let invoke = |config: &Value| {
+        fs::write(&path, config.to_string()).unwrap();
+        let output = batch(tmp.path(), &path, &runs).output().unwrap();
+        (output, read(runs.join("batch.json")))
+    };
+    let (first, ledger) = invoke(&config);
+    assert_eq!(first.status.code(), Some(3), "{}", text(&first));
+    let setup = &ledger["setup"];
+    assert_eq!(setup["claude_code_version"], "scripted-v1");
+    assert_eq!(setup["runtime_sha256"], hash(&runtime));
+    assert_eq!(setup["model"], "scripted");
+    assert_eq!(setup["reasoning_effort"], "none");
+    assert_eq!(setup["config_sha256"], hash(&path.to_string_lossy()));
+
+    for (item, key, value) in [
+        (
+            "claude_code_version",
+            "runtime_version",
+            json!("scripted-v2"),
+        ),
+        ("model", "model", json!("other")),
+        ("reasoning_effort", "reasoning", json!("high")),
+        ("config_sha256", "timeout_seconds", json!(299)),
+    ] {
+        let mut changed = config.clone();
+        changed[key] = value;
+        let (refused, ledger) = invoke(&changed);
+        assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+        assert!(text(&refused).contains(item), "{item}: {}", text(&refused));
+        // Refused before the gate, so no run could start.
+        assert_eq!(ledger["gates"].as_array().unwrap().len(), 1, "{item}");
+        assert_eq!(ledger["invocations"].as_array().unwrap().len(), 1, "{item}");
+    }
+    let original = fs::read(&runtime).unwrap();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&runtime)
+        .unwrap()
+        .write_all(b"\0")
+        .unwrap();
+    let (refused, _) = invoke(&config);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("runtime_sha256"),
+        "{}",
+        text(&refused)
+    );
+    fs::write(&runtime, original).unwrap();
+
+    // The same setup resumes as before: it reaches the gate again.
+    let (resumed, ledger) = invoke(&config);
+    assert_eq!(resumed.status.code(), Some(3), "{}", text(&resumed));
+    assert_eq!(ledger["gates"].as_array().unwrap().len(), 2);
+    assert_eq!(ledger["setup"], *setup);
+}
+
+#[test]
 fn fixture_shard_runs_only_its_slots_denies_siblings_and_records_concurrency() {
     let tmp = tmp("falinks-shard-test-");
     let base = fs::canonicalize(tmp.path()).unwrap();
@@ -1695,6 +1763,60 @@ fn the_trap_releases_on_a_call_or_at_the_first_ready() {
     }
 }
 
+/// #499: the `announce` variant adds #490's line to each agent's workflow text; plain `git.md`
+/// lacks it. An unknown variant is refused before the run directory exists.
+#[test]
+fn announce_variant_adds_its_line_and_unknown_variants_are_refused() {
+    let tmp = tmp("falinks-announce-test-");
+    let config = config(
+        tmp.path(),
+        SCRIPTED,
+        json!([
+            "/bin/sh",
+            "-c",
+            "/usr/bin/tee scratch/host.jsonl | \"$0\" relationships",
+            "{worker}"
+        ]),
+        SCRIPTED,
+    );
+    let line =
+        "There are other agents; announce the files you change; if you overlap, talk and plan.\n";
+    let plain = fs::read_to_string(root().join("instructions/git.md")).unwrap();
+    assert!(!plain.contains("announce the files"));
+    // Step A's test policy holds in every Git arm (#490).
+    let policy = "Test policy: mid-run, test your own packages; run one full check after the final combination.";
+    for workflow in ["git.md", "git-solo.md"] {
+        let text = fs::read_to_string(root().join("instructions").join(workflow)).unwrap();
+        assert!(text.contains(policy), "{workflow}");
+    }
+    let with_variant = |run: &Path, variant: &str| {
+        let mut args = vec![OsStr::new("baseline"), OsStr::new("go-relationships")];
+        args.extend([OsStr::new("--config"), config.as_os_str()]);
+        args.extend([OsStr::new("--output"), run.as_os_str()]);
+        args.extend([OsStr::new("--variant"), OsStr::new(variant)]);
+        cli(args)
+    };
+    let run = tmp.path().join("run");
+    let evidence = successful_evidence(&with_variant(&run, "announce"), &run);
+    assert_eq!(evidence["variant"], "announce");
+    for agent in ["A", "B"] {
+        let host = host_messages(&run.join(format!("agents/{agent}/scratch/host.jsonl")));
+        assert_eq!(
+            host["start"]["workflow"].as_str().unwrap(),
+            plain.clone() + line
+        );
+    }
+    let refused = tmp.path().join("refused");
+    let output = with_variant(&refused, "shout");
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("unknown Git arm variant: shout"),
+        "{}",
+        text(&output)
+    );
+    assert!(!refused.exists());
+}
+
 /// C7 (#178), Git arm: a scripted `claude` or `node` launch through Bash invalidates the run.
 /// Both arms: hits are counted per arm and the batch stops at the first.
 #[test]
@@ -1921,6 +2043,135 @@ fn report_prints_reverted_lines_only_with_show_code() {
         shown["fixtures"]["go-page"]["reverted_peer_text"][0]["lines"],
         json!([secret, "}"])
     );
+}
+
+/// C2 (#490) over small recorded two-agent Git runs: a run reads true when the first combined
+/// check after the trap's development fails on a tagged case; a failure only on an untagged
+/// case, or only before the development, reads false. An arm holds C2 in 2 of 3 runs. Failures
+/// on side-tagged cases at that check are counted apart and do not make C2.
+#[test]
+fn report_reads_c2_from_cases_tagged_by_the_trap() {
+    let go_fail = |case: &str| format!("--- FAIL: {case} (0.00s)\nFAIL\tinvoice\t0.01s\n");
+    // Each run: its events, then each check's oracle output in order (None: no candidate).
+    let tagged = vec![
+        json!({"kind": "development", "milestone": {"id": "m1"}}),
+        json!({"kind": "development", "milestone": {"id": "m2"}}),
+        json!({"kind": "validation", "candidate": null}),
+        json!({"kind": "validation", "candidate": "c1"}),
+        json!({"kind": "final_validation", "candidate": "c2"}),
+    ];
+    let subtest = "    --- FAIL: TestTrap/rounding (0.00s)\n--- FAIL: TestTrap (0.00s)\n";
+    let runs = [
+        (
+            "tagged",
+            tagged.clone(),
+            vec![
+                None,
+                Some(go_fail("TestTrap") + &go_fail("TestTotals") + &go_fail("TestRender")),
+                Some(String::new()),
+            ],
+        ),
+        (
+            "subtest",
+            tagged.clone(),
+            vec![None, Some(subtest.into()), Some(String::new())],
+        ),
+        (
+            "untagged",
+            tagged,
+            vec![
+                None,
+                Some(go_fail("TestTrapped") + &go_fail("TestTotals")),
+                Some(String::new()),
+            ],
+        ),
+        (
+            "before",
+            vec![
+                json!({"kind": "validation", "candidate": "c1"}),
+                json!({"kind": "development", "milestone": {"id": "m2"}}),
+                json!({"kind": "final_validation", "candidate": "c2"}),
+            ],
+            vec![
+                Some(go_fail("TestTrap") + &go_fail("TestTotals")),
+                Some(String::new()),
+            ],
+        ),
+    ];
+    let tmp = tmp("falinks-report-c2-");
+    let trap = json!({"milestone": "m2", "cases": ["TestTrap", "TestRate"],
+        "side_cases": ["TestTotals", "TestRender"]});
+    let mut entries = vec![];
+    for (id, events, checks) in &runs {
+        let run = tmp.path().join(id);
+        fs::create_dir_all(run.join("controller")).unwrap();
+        let result = json!({"outcome": "success", "team_size": 2, "trap": trap});
+        fs::write(run.join("controller/result.json"), result.to_string()).unwrap();
+        let events: String = events.iter().map(|e| format!("{e}\n")).collect();
+        fs::write(run.join("controller/events.jsonl"), events).unwrap();
+        for (n, output) in checks.iter().enumerate() {
+            let check = match output {
+                None => json!({"candidate": null, "passed": false, "conflict": "CONFLICT"}),
+                Some(output) => json!({"oracle": {"passed": output.is_empty(),
+                    "checks": [{"command": ["go", "test"], "passed": output.is_empty(), "output": output}]}}),
+            };
+            let path = run.join(format!("controller/check-{}.json", n + 1));
+            fs::write(path, check.to_string()).unwrap();
+        }
+        entries.push(
+            json!({"run_dir": run, "run_id": id, "pair": id, "fixture": "go-invoice",
+            "arm": "git", "scored": true}),
+        );
+    }
+    // A run without a trap, as with every existing oracle: no reading.
+    let plain = tmp.path().join("plain");
+    fs::create_dir_all(plain.join("controller")).unwrap();
+    fs::write(
+        plain.join("controller/result.json"),
+        json!({"outcome": "success", "team_size": 2}).to_string(),
+    )
+    .unwrap();
+    entries.push(json!({"run_dir": plain, "run_id": "plain", "pair": "plain",
+        "fixture": "go-page", "arm": "git", "scored": true}));
+    let c2 = |ids: &[&str]| {
+        let chosen: Vec<&Value> = entries
+            .iter()
+            .filter(|e| ids.contains(&e["run_id"].as_str().unwrap()))
+            .collect();
+        let ledger = json!({"runs": chosen}).to_string();
+        fs::write(tmp.path().join("batch.json"), ledger).unwrap();
+        let output = cli(["report", "--runs", tmp.path().to_str().unwrap()]);
+        assert!(output.status.success(), "{}", text(&output));
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["c2"].clone()
+    };
+    let mut all = c2(&["tagged", "subtest", "untagged", "plain"]);
+    let side = all["go-invoice"]["git-2"]
+        .as_object_mut()
+        .unwrap()
+        .remove("side")
+        .unwrap();
+    assert_eq!(
+        all,
+        json!({"go-invoice": {"git-2": {"runs": {"tagged": true, "subtest": true, "untagged": false},
+            "count": 2, "n": 3, "holds": true}}})
+    );
+    assert_eq!(
+        (&side["runs"], &side["failures"]),
+        (
+            &json!({"tagged": 2, "subtest": 0, "untagged": 1}),
+            &json!(3)
+        )
+    );
+    assert!(side["note"].as_str().unwrap().contains("decides nothing"));
+    let mut one = c2(&["tagged", "untagged", "before"])["go-invoice"]["git-2"].clone();
+    let side = one.as_object_mut().unwrap().remove("side").unwrap();
+    assert_eq!(
+        one,
+        json!({"runs": {"tagged": true, "untagged": false, "before": false}, "count": 1, "n": 3,
+            "holds": false})
+    );
+    assert_eq!(side["runs"]["before"], 0);
+    assert_eq!(c2(&["plain"]), json!({}));
 }
 
 /// #228 decision 27: every differential property quotes its requirement sentence verbatim

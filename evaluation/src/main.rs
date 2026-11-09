@@ -848,7 +848,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   schedule
   prepare <fixture> --output DIR
   oracle <fixture> --repo DIR --evidence DIR [--deny-root DIR]...
-  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2]
+  baseline <fixture> --config FILE --output DIR [--pair NAME] [--order N] [--scored true] [--team-size 1|2] [--variant announce]
   batch --config FILE --runs DIR [--after-pilot PILOT_RUNS_DIR | --schedule track-t|step-6|large-spec|step-a-qualify|step-a|wave-1..wave-4|sweep|confirm] [--fixtures NAME[,NAME]]
   quality --runs DIR [--runs DIR]... [--judge CONFIG]
   known-answer [--judge CONFIG | --fixtures NAME[,NAME]]
@@ -858,7 +858,7 @@ const USAGE: &str = "usage: falinks-eval <command>
   qualify --runs DIR
   timing RUN_DIR
   collisions RUN_DIR
-  duplicates --runs DIR";
+  duplicates --runs DIR [--answers FILE --seed SEED]";
 
 struct Args {
     positional: Vec<String>,
@@ -968,6 +968,7 @@ fn run() -> Result<i32> {
             args.get("order").unwrap_or("0").parse()?,
             args.get("scored") == Some("true"),
             args.get("team-size").unwrap_or("2").parse()?,
+            args.get("variant"),
         ),
         Some("batch") => batch::batch(
             Path::new(args.required("config")?),
@@ -1021,11 +1022,16 @@ fn run() -> Result<i32> {
         Some("known-answer") => {
             known_answer::known_answer(args.get("judge").map(Path::new), args.get("fixtures"))
         }
-        Some("duplicates") => collisions::classify(
-            Path::new(args.required("runs")?),
-            std::io::stdin().lock(),
-            std::io::stdout(),
-        ),
+        Some("duplicates") => {
+            let runs = Path::new(args.required("runs")?);
+            let (input, out) = (std::io::stdin().lock(), std::io::stdout());
+            match args.get("answers") {
+                Some(answers) => {
+                    collisions::audit(runs, Path::new(answers), args.required("seed")?, input, out)
+                }
+                None => collisions::classify(runs, input, out),
+            }
+        }
         Some("collisions") => {
             let run = Path::new(args.positional.get(1).ok_or(USAGE)?);
             let result = read(run.join("controller/result.json"))?;

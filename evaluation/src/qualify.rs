@@ -1,6 +1,7 @@
 //! Step A's mechanical qualification steps (#498 amendment 1 and 4, #509), under the frozen
 //! qualification rule: the static checks with the reference swap, the `git-1` shared-helper
 //! check over Go's call graph, and the qualify decision.
+use crate::collisions::class;
 use crate::{
     Result, bail, blobs, check, fixture, frozen, git, initial, protected, put_files, read,
 };
@@ -476,7 +477,7 @@ fn median(mut counts: Vec<u64>) -> Option<f64> {
 }
 
 /// `qualify --runs DIR`: the frozen qualification rule's decision for a `step-a-qualify` batch.
-/// Step 4 reads Daniel's classes from the batch's `duplicates.json`: each pair's `run_id` and
+/// Step 4 reads Daniel's classes from the batch's `duplicates.json` (#502): each pair's `run_id` and
 /// `class` (`duplicate`, `divergent` or `no`). Until every pair has one, the decision is
 /// incomplete.
 pub fn qualify(runs: &Path, static_result: Value) -> Result<Value> {
@@ -515,14 +516,14 @@ pub fn qualify(runs: &Path, static_result: Value) -> Result<Value> {
         .collect();
     let unclassified = pairs
         .iter()
-        .filter(|p| !matches!(p["class"].as_str(), Some("duplicate" | "divergent" | "no")))
+        .filter(|p| !matches!(class(p), Some("duplicate" | "divergent" | "no")))
         .count();
     let counts: Vec<u64> = of_size(2)
         .map(|e| {
             pairs
                 .iter()
                 .filter(|p| p["run_id"] == e["run_id"])
-                .filter(|p| matches!(p["class"].as_str(), Some("duplicate" | "divergent")))
+                .filter(|p| matches!(class(p), Some("duplicate" | "divergent")))
                 .count() as u64
         })
         .collect();
