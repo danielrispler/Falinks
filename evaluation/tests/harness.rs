@@ -190,7 +190,8 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
             "go-relationships",
             "go-tasks",
             "library-loans",
-            "rust-errors"
+            "rust-errors",
+            "timesheet-payroll"
         ]
     );
     for fixture in fixtures.values() {
@@ -215,8 +216,12 @@ fn setup_ledger_totals_match_its_sessions() {
 
     // Track T's own budget (#178), and #205's (B1) charged the same way: each session's charge
     // is its run (with the usage drain) and preparation time; implementation is recorded but not
-    // charged (Daniel, 2026-10-22, #180). Usage comes from complete runs only.
-    for section in ["team_size_research", "large_spec_research"] {
+    // charged (Daniel, 2026-10-22, #180). Usage comes from complete runs only. Step A's (#498) too.
+    for section in [
+        "team_size_research",
+        "large_spec_research",
+        "step_a_research",
+    ] {
         let track = &ledger[section];
         let sessions = track["sessions"].as_array().unwrap();
         let parts = [
@@ -1921,55 +1926,77 @@ fn a_team_of_one_completes_and_developments_fire_on_its_own_shares() {
     assert_eq!(evidence["rejected_operations"], 1);
 }
 
-/// #509: Step A's static checks. The old reference with only `DaysBetween` corrected fails
-/// C2-tagged cases of B's T5 and T9, the full corrected reference fails none, and the
-/// reference calls `DaysBetween` from every user the dependency list names. Every tag names
+/// #509, #552: Step A's static checks, on try 2's fixture (the default) and try 1's. The old
+/// reference with only the trap's function corrected fails C2-tagged cases of the other
+/// developer's dependents (T6; try 1's T5 and T9), the full corrected reference fails none, and
+/// the reference calls the function from every user the dependency list names. Every tag names
 /// a test in the oracle.
 #[test]
 fn step_a_reference_swap_fails_tagged_cases_and_the_reference_passes() {
-    let protected = read(root().join("protected/library-loans.json"));
-    let oracle = protected["oracle"].as_str().unwrap();
-    let trap = &protected["trap"];
-    assert_eq!(
-        trap["milestone"],
-        read(root().join("fixtures/library-loans.json"))["milestones"][0]["id"]
-    );
-    for test in ["cases", "side_cases"]
-        .iter()
-        .flat_map(|k| trap[k].as_array().unwrap())
-    {
-        let test = test.as_str().unwrap();
-        assert!(
-            oracle.contains(&format!("\nfunc {test}(t *testing.T) {{")),
-            "{test}"
+    let cases = [
+        (
+            "timesheet-payroll",
+            json!(["T6"]),
+            json!(["TestSummarizeWeeks"]),
+            json!([]),
+            1,
+        ),
+        (
+            "library-loans",
+            json!(["T5", "T9"]),
+            json!(["TestLateFeeDays", "TestOverdueReport"]),
+            json!(["TestRenewOverdue"]),
+            4,
+        ),
+    ];
+    for (name, cross, c2, side, users) in cases {
+        let protected = read(root().join(format!("protected/{name}.json")));
+        let oracle = protected["oracle"].as_str().unwrap();
+        let trap = &protected["trap"];
+        assert_eq!(
+            trap["milestone"],
+            read(root().join(format!("fixtures/{name}.json")))["milestones"][0]["id"]
         );
+        for test in ["cases", "side_cases"]
+            .iter()
+            .flat_map(|k| trap[k].as_array().unwrap())
+        {
+            let test = test.as_str().unwrap();
+            assert!(
+                oracle.contains(&format!("\nfunc {test}(t *testing.T) {{")),
+                "{test}"
+            );
+        }
+        let output = match name {
+            "timesheet-payroll" => cli(["static-checks"]),
+            _ => cli(["static-checks", name]),
+        };
+        assert!(output.status.success(), "{name}: {}", text(&output));
+        let checks = &serde_json::from_slice::<Value>(&output.stdout).unwrap()["checks"];
+        assert_eq!(checks["cross_developer_dependents"], cross, "{name}");
+        assert_eq!(checks["corrected_reference_failures"], json!([]), "{name}");
+        assert_eq!(checks["swap_c2_failures"], c2, "{name}");
+        assert_eq!(checks["swap_side_failures"], side, "{name}");
+        let calls = checks["reference_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), users, "{name}");
+        assert!(calls.iter().all(|c| c["calls"] == true), "{name}");
     }
-    let output = cli(["static-checks"]);
-    assert!(output.status.success(), "{}", text(&output));
-    let checks = &serde_json::from_slice::<Value>(&output.stdout).unwrap()["checks"];
-    assert_eq!(checks["cross_developer_dependents"], json!(["T5", "T9"]));
-    assert_eq!(checks["corrected_reference_failures"], json!([]));
-    assert_eq!(
-        checks["swap_c2_failures"],
-        json!(["TestLateFeeDays", "TestOverdueReport"])
-    );
-    assert_eq!(checks["swap_side_failures"], json!(["TestRenewOverdue"]));
-    let calls: Vec<&Value> = checks["reference_calls"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .collect();
-    assert_eq!(calls.len(), 4);
-    assert!(calls.iter().all(|c| c["calls"] == true));
 }
 
-/// #509: the trap development is released by the first share adding a qualified call to
-/// `calendar.DaysBetween` outside `calendar`, or else at the first ready, which it refuses; in
+/// #509, #552: the trap development is released by the first share adding a qualified call to
+/// the trap's function outside its package, or else at the first ready, which it refuses; in
 /// a team of one, its own shares count. The run records the rule, event and time, and the
-/// agent never sees the trigger.
+/// agent never sees the trigger. On try 2's fixture and try 1's.
 #[test]
 fn the_trap_releases_on_a_call_or_at_the_first_ready() {
-    for mode in ["call", "ready"] {
+    let runs = [
+        ("timesheet-payroll", "payroll/payroll.go", "call"),
+        ("timesheet-payroll", "payroll/payroll.go", "ready"),
+        ("library-loans", "loan/fee.go", "call"),
+        ("library-loans", "loan/fee.go", "ready"),
+    ];
+    for (name, file, mode) in runs {
+        let milestone = &read(root().join(format!("fixtures/{name}.json")))["milestones"][0];
         let tmp = tmp("falinks-trap-test-");
         let config = config(
             tmp.path(),
@@ -1977,13 +2004,13 @@ fn the_trap_releases_on_a_call_or_at_the_first_ready() {
             json!([
                 "/bin/sh",
                 "-c",
-                format!("/usr/bin/tee scratch/host.jsonl | \"$0\" loans {mode}"),
+                format!("/usr/bin/tee scratch/host.jsonl | \"$0\" trap {name} {mode}"),
                 "{worker}"
             ]),
             SCRIPTED,
         );
         let run = tmp.path().join("run");
-        let mut args = vec![OsStr::new("baseline"), OsStr::new("library-loans")];
+        let mut args = vec![OsStr::new("baseline"), OsStr::new(name)];
         args.extend([OsStr::new("--config"), config.as_os_str()]);
         args.extend([OsStr::new("--output"), run.as_os_str()]);
         args.extend([OsStr::new("--team-size"), OsStr::new("1")]);
@@ -1992,11 +2019,11 @@ fn the_trap_releases_on_a_call_or_at_the_first_ready() {
         assert_eq!(
             evidence["outcome"],
             "task_failure",
-            "{mode}: {}",
+            "{name} {mode}: {}",
             text(&output)
         );
         let release = &evidence["trap_release"];
-        assert_eq!(release["agent"], "A", "{mode}");
+        assert_eq!(release["agent"], "A", "{name} {mode}");
         assert!(release["elapsed"].as_f64().unwrap() > 0.0 && release["utc"].is_string());
         let events: Vec<Value> = fs::read_to_string(run.join("controller/events.jsonl"))
             .unwrap()
@@ -2009,7 +2036,7 @@ fn the_trap_releases_on_a_call_or_at_the_first_ready() {
         if mode == "call" {
             assert_eq!(release["rule"], "call");
             assert_eq!(release["commit"], first_share["commit"]);
-            assert_eq!(release["file"], "loan/fee.go");
+            assert_eq!(release["file"], file);
             assert_eq!(evidence["rejected_operations"], 0);
         } else {
             // The comment-only share did not release it; the ready did, and was refused.
@@ -2020,13 +2047,15 @@ fn the_trap_releases_on_a_call_or_at_the_first_ready() {
         let host = host_messages(&run.join("agents/A/scratch/host.jsonl"));
         let delivered = &host["events"][0];
         assert_eq!(delivered["type"], "development");
-        assert_eq!(delivered["id"], "days-between-correction");
+        assert_eq!(delivered["id"], milestone["id"]);
         assert!(delivered.get("trigger").is_none() && delivered.get("release_on_call").is_none());
+        assert_eq!(delivered["requirements"], milestone["requirements"]);
+        let function = milestone["release_on_call"]["function"].as_str().unwrap();
         assert!(
             delivered["requirements"][0]
                 .as_str()
                 .unwrap()
-                .starts_with("Correction to T2: `DaysBetween`")
+                .starts_with(&format!("Correction to T2: `{function}`"))
         );
     }
 }
@@ -2531,8 +2560,8 @@ fn code_quality_definitions_trace_to_fixture_requirements() {
     let definitions = read(root().join("code-quality.json"));
     let properties = definitions["properties"]["list"].as_array().unwrap();
     // 13 on the scored batch's fixtures and one per go-invoice ticket (#336) and
-    // library-loans ticket (#509).
-    assert_eq!(properties.len(), 31);
+    // library-loans ticket (#509) and timesheet-payroll ticket (#552).
+    assert_eq!(properties.len(), 40);
     for property in properties {
         let fixture = read(
             root()

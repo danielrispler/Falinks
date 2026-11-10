@@ -509,33 +509,54 @@ fn final_tree(run: &Path) -> Result<(Value, BTreeMap<String, Vec<u8>>)> {
     Ok((result, tree))
 }
 
-/// The trap function's declaration in a file: the header line (through its `{`), the body's
-/// lines and the parameter names, when it has the spec's signature `(a, b Date) int`.
-/// shortcut: the body ends at the first line that is `}` alone, as gofmt writes a top-level
-/// function; an unformatted tree is reported not applicable.
-fn declaration<'a>(source: &'a str, function: &str) -> Option<(usize, usize, Vec<&'a str>)> {
+/// A top-level function's declaration in a file: its header line (through its `{`), its
+/// closing line, its parameters' names and types, and its result.
+struct Declaration {
+    header: usize,
+    end: usize,
+    names: Vec<String>,
+    types: Vec<String>,
+    result: String,
+}
+
+/// The declaration of `function` in `source`, read from its one-line header.
+/// shortcut: the parameter list ends at the header's first `)`, so a parameter of function
+/// type is not read, and the body ends at the first line that is `}` alone, as gofmt writes a
+/// top-level function; either is reported not applicable.
+fn declaration(source: &str, function: &str) -> Option<Declaration> {
     let lines: Vec<&str> = source.split_inclusive('\n').collect();
-    let header = lines
-        .iter()
-        .position(|l| l.starts_with(&format!("func {function}(")))?;
-    let line = lines[header].trim_end();
-    let inside = line.strip_prefix(&format!("func {function}("))?;
-    let (params, result) = inside.split_once(')')?;
-    if result.trim() != "int {" {
-        return None;
+    let prefix = format!("func {function}(");
+    let header = lines.iter().position(|l| l.starts_with(&prefix))?;
+    let (params, result) = lines[header]
+        .trim_end()
+        .strip_prefix(&prefix)?
+        .split_once(')')?;
+    let (mut names, mut types) = (vec![], vec![]);
+    for part in params.split(',') {
+        match part.split_whitespace().collect::<Vec<_>>()[..] {
+            [] => {}
+            [name] => names.push(name.to_string()),
+            // `a, b T`: the type is every pending name's.
+            [name, ty] => {
+                names.push(name.to_string());
+                types.resize(names.len(), ty.to_string());
+            }
+            _ => return None,
+        }
     }
-    let parts: Vec<Vec<&str>> = params
-        .split(',')
-        .map(|p| p.split_whitespace().collect())
-        .collect();
-    let typed = |p: &Vec<&str>| p.len() == 2 && p[1] == "Date";
-    let names: Vec<&str> = parts.iter().filter_map(|p| p.first().copied()).collect();
-    let fits = match &parts[..] {
-        [a, b] => (a.len() == 1 && typed(b)) || (typed(a) && typed(b)),
-        _ => false,
-    };
     let end = header + lines[header..].iter().position(|l| l.trim_end() == "}")?;
-    (fits && names.len() == 2).then_some((header, end, names))
+    (types.len() == names.len()).then(|| Declaration {
+        header,
+        end,
+        names,
+        types,
+        result: result
+            .trim()
+            .strip_suffix('{')
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+    })
 }
 
 /// Qualification step 5's side report (#512's amendments): the protected oracle on `tree`
@@ -553,13 +574,14 @@ fn reverse_swapped(
         call["package"].as_str().unwrap(),
         call["function"].as_str().unwrap(),
     );
-    let old = (protected["old_reference"].as_object().into_iter().flatten())
+    let (old, body) = (protected["old_reference"].as_object().into_iter().flatten())
         .filter(|(f, _)| f.starts_with(&format!("{package}/")))
         .find_map(|(_, text)| {
             let text = text.as_str()?;
-            let (header, end, _) = declaration(text, function)?;
+            let old = declaration(text, function)?;
             let lines: Vec<&str> = text.split_inclusive('\n').collect();
-            Some(lines[header + 1..end].concat())
+            let body = lines[old.header + 1..old.end].concat();
+            Some((old, body))
         })
         .ok_or("the old reference has no trap function")?;
     let not_applicable = |reason: String| Ok(json!({"not_applicable": reason}));
@@ -569,19 +591,21 @@ fn reverse_swapped(
             return None;
         }
         let text = String::from_utf8_lossy(bytes).into_owned();
-        let (header, end, names) = declaration(&text, function)?;
+        // The spec's signature is the old reference's: the same parameter types and result.
+        let new = declaration(&text, function)
+            .filter(|d| d.types == old.types && d.result == old.result)?;
         let lines: Vec<&str> = text.split_inclusive('\n').collect();
-        // The old body names its parameters `from` and `to`.
-        let rename = match names[..] {
-            ["from", "to"] => String::new(),
-            [a, b] => format!("\tfrom, to := {a}, {b}\n"),
-            _ => return None,
+        // The old body uses the old reference's parameter names.
+        let rename = if new.names == old.names {
+            String::new()
+        } else {
+            format!("\t{} := {}\n", old.names.join(", "), new.names.join(", "))
         };
         let swapped = [
-            lines[..=header].concat(),
+            lines[..=new.header].concat(),
             rename,
-            old.clone(),
-            lines[end..].concat(),
+            body.clone(),
+            lines[new.end..].concat(),
         ]
         .concat();
         Some((file.clone(), swapped))
@@ -749,13 +773,82 @@ pub fn qualify(runs: &Path, static_result: Value) -> Result<Value> {
 mod tests {
     use super::*;
 
-    fn loans() -> (Value, BTreeMap<String, Vec<u8>>) {
-        let fixture = fixture(crate::STEP_A_FIXTURE).unwrap();
+    /// A Step A fixture and its reference tree.
+    fn reference(name: &str) -> (Value, BTreeMap<String, Vec<u8>>) {
+        let fixture = fixture(name).unwrap();
         let mut tree = text_tree(&fixture["files"]);
-        tree.extend(text_tree(
-            &protected(crate::STEP_A_FIXTURE).unwrap()["reference"],
-        ));
+        tree.extend(text_tree(&protected(name).unwrap()["reference"]));
         (fixture, tree)
+    }
+
+    /// Try 1's fixture, kept as its record (#509).
+    fn loans() -> (Value, BTreeMap<String, Vec<u8>>) {
+        reference("library-loans")
+    }
+
+    /// #552: try 2's allocation names its requirements inside a sentence, and the reference
+    /// calls `WeekStart` from T6, the one user the dependency list names.
+    #[test]
+    fn try_2_owners_and_the_week_start_caller() {
+        let (fixture, tree) = reference("timesheet-payroll");
+        let requirements = requirements(&fixture).unwrap();
+        let owned = |agent: &str| -> Vec<&str> {
+            (requirements.iter().filter(|r| r.owner == agent))
+                .map(|r| r.id.as_str())
+                .collect()
+        };
+        assert_eq!(owned("A"), ["T1", "T2", "T4", "T5", "T9"]);
+        assert_eq!(owned("B"), ["T3", "T6", "T7", "T8"]);
+        let shown: Vec<String> = requirements[1].entries.iter().map(show).collect();
+        assert_eq!(shown, ["clock.ParseDate", "clock.WeekStart"]);
+        let callers = trap_callers(&fixture, &tree).unwrap();
+        assert_eq!(callers, [("T6".to_string(), true)]);
+        let initial = text_tree(&fixture["files"]);
+        assert_eq!(
+            trap_callers(&fixture, &initial).unwrap(),
+            [("T6".to_string(), false)]
+        );
+    }
+
+    /// #552: the reverse swap takes the trap function's signature from the old reference. A
+    /// `WeekStart` whose parameter is named otherwise gets the old body, so the reference's
+    /// Summarize, which relies on the correction, fails T6's tagged case; another result type is
+    /// not the spec's signature.
+    #[test]
+    fn the_reverse_swap_reads_the_signature_from_the_old_reference() {
+        let (fixture, mut tree) = reference("timesheet-payroll");
+        let protected = protected("timesheet-payroll").unwrap();
+        let clock = String::from_utf8(tree["clock/clock.go"].clone()).unwrap();
+        let renamed = clock.replacen(
+            "func WeekStart(t time.Time) time.Time {\n\tyear, month, day := t.UTC().Date()",
+            "func WeekStart(at time.Time) time.Time {\n\tyear, month, day := at.UTC().Date()",
+            1,
+        );
+        assert_ne!(renamed, clock);
+        tree.insert("clock/clock.go".into(), renamed.clone().into_bytes());
+        let report = reverse_swapped(&fixture, &protected, tree.clone()).unwrap();
+        assert_eq!(
+            report["c2_failures"],
+            json!(["TestSummarizeWeeks"]),
+            "{report}"
+        );
+        assert_eq!(report["side_failures"], json!([]));
+        let failures = report["failures"].as_array().unwrap();
+        assert!(failures.contains(&json!("TestClockWeekStart")), "{report}");
+        let other = renamed.replacen(
+            "func WeekStart(at time.Time) time.Time {",
+            "func WeekStart(at time.Time) *time.Time {",
+            1,
+        );
+        tree.insert("clock/clock.go".into(), other.into_bytes());
+        let report = reverse_swapped(&fixture, &protected, tree).unwrap();
+        assert!(
+            report["not_applicable"]
+                .as_str()
+                .unwrap()
+                .starts_with("no clock.WeekStart"),
+            "{report}"
+        );
     }
 
     #[test]
@@ -922,7 +1015,7 @@ mod tests {
         let record = |slot: &Value, id: &str, tree: Option<&BTreeMap<String, Vec<u8>>>| {
             let run = dir.path().join(id);
             std::fs::create_dir_all(run.join("controller")).unwrap();
-            let mut result = json!({"fixture": crate::STEP_A_FIXTURE});
+            let mut result = json!({"fixture": "library-loans"});
             if let Some(tree) = tree {
                 let files: serde_json::Map<String, Value> = (tree.iter())
                     .map(|(k, v)| (k.clone(), String::from_utf8_lossy(v).into_owned().into()))
@@ -1036,7 +1129,7 @@ mod tests {
     #[test]
     fn the_reverse_swap_reports_tagged_failures_under_the_old_body() {
         let (fixture, mut tree) = loans();
-        let protected = protected(crate::STEP_A_FIXTURE).unwrap();
+        let protected = protected("library-loans").unwrap();
         tree.insert(
             "calendar/span.go".into(),
             b"package calendar\n\n// Span is the days from a to b, both counted.\nfunc Span(a, b Date) int { return DaysBetween(a, b) }\n".to_vec(),
