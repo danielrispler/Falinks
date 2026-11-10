@@ -216,8 +216,12 @@ fn setup_ledger_totals_match_its_sessions() {
 
     // Track T's own budget (#178), and #205's (B1) charged the same way: each session's charge
     // is its run (with the usage drain) and preparation time; implementation is recorded but not
-    // charged (Daniel, 2026-10-22, #180). Usage comes from complete runs only.
-    for section in ["team_size_research", "large_spec_research"] {
+    // charged (Daniel, 2026-10-22, #180). Usage comes from complete runs only. Step A's (#498) too.
+    for section in [
+        "team_size_research",
+        "large_spec_research",
+        "step_a_research",
+    ] {
         let track = &ledger[section];
         let sessions = track["sessions"].as_array().unwrap();
         let parts = [

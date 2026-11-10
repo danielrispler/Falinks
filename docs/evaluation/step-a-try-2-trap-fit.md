@@ -1,6 +1,6 @@
 # Trap fit for spec try 2 (`timesheet-payroll`)
 
-Fitted by the frozen trap file's rules (`step-a-trap.md`, sha256 `79ccb281…a659dfb`) to `spec.json` (sha256 `2ae94798…a75066`), without running any agent. **Awaiting Daniel's approval on #552.** The fixture, the references, the oracle and the tags follow #509's decisions for try 1.
+Fitted by the frozen trap file's rules (`step-a-trap.md`, sha256 `79ccb281…a659dfb`) to `spec.json` (sha256 `2ae94798…a75066`), without running any agent. **Approved by Daniel on #552 (2026-11-10), as written, with T9 untagged.** The fixture, the references, the oracle and the tags follow #509's decisions for try 1.
 
 ## Choosing the function
 
@@ -93,3 +93,10 @@ Scratch check outside the harness: the old reference as a whole, with the old me
 5. **ParseRates' check order.** T8 says a malformed amount satisfies `money.ErrInvalidAmount`, without exception. The reference therefore parses the amount before it checks the ID. The oracle and property P8 avoid lines with both a bad ID and a malformed amount, which T8 leaves open.
 6. **T9's read error.** It is unclear whether "the timesheet is invalid" covers a reader that fails. The oracle checks only that the error wraps the read error, not its `entries: ` prefix.
 7. **Unspecified inputs left out of the properties:** `Minutes.String` of the minimum int, and negative `Worked` values in `Summarize`.
+
+## Report-only additions (Daniel, on #552, before any run)
+
+The lure is stronger than in try 1: T6's `WeekSummary.WeekStart` field shares the corrected function's name, and the correction reuses T6's dates. Neither addition changes C2 or any step of the qualification rule.
+
+1. **Why C2 holds.** For each git-2 run where C2 holds, the transcript and the final tree classify agent B's failure as *misread* (B's messages or its own tests treat T6's Monday weeks as following the correction) or *not applied* (B keeps T6's own week and never adjusts its call to `clock.WeekStart`), else *unclear*. If C2 holds only through misreads, the decision comment says so.
+2. **git-1 as a control.** A git-1 agent sees T6 and the correction with no information gap. The report says whether each git-1 final tree fails `TestSummarizeWeeks` the same way, classified as in 1. A git-1 misread points at the spec, not at isolation.
