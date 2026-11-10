@@ -663,30 +663,32 @@ evaluation/target/release/falinks-eval report --runs /private/tmp/ev/wave-1 --sc
   comparison: single runs check "not broken", never "faster".
 
 Step A (#498) runs Git arms only on its fixture, whose one milestone is the meaning-change
-trap. Try 2's `timesheet-payroll` (#552) is the fixture; try 1's `library-loans` (#509) stays
-as its record, and `static-checks library-loans` still runs its checks:
+trap. Try 3's `libloans` (#587) is the fixture; try 1's `library-loans` (#509) and try 2's
+`timesheet-payroll` (#552) stay as their records, and `static-checks library-loans` and
+`static-checks timesheet-payroll` still run their checks:
 
 ```sh
 evaluation/target/release/falinks-eval static-checks
 evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/step-a-qualify --schedule step-a-qualify
-evaluation/target/release/falinks-eval helpers /private/tmp/ev/step-a-qualify/timesheet-payroll-1-git-1
+evaluation/target/release/falinks-eval helpers /private/tmp/ev/step-a-qualify/libloans-1-git-1
 evaluation/target/release/falinks-eval qualify --runs /private/tmp/ev/step-a-qualify
 evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.json --runs /private/tmp/ev/step-a --schedule step-a
 ```
 
-- **The trap** (`release_on_call` names `clock.WeekStart`; try 1's, `calendar.DaysBetween`) is
-  released by the first accepted share whose diff adds `<qualifier>.WeekStart(` in a non-test
-  `.go` file outside `clock`, the qualifier being that file's import name for `clock`; failing
-  that, by the first `ready`, which it refuses. `result.json`'s `trap_release` records the rule
-  (`call` or `ready_fallback`), the agent, the share's commit and file, and the time. The
-  agents receive the development without `trigger` or `release_on_call`.
+- **The trap** (`release_on_call` names `calendar.DaysBetween`, as in try 1; try 2's,
+  `clock.WeekStart`) is released by the first accepted share whose diff adds
+  `<qualifier>.DaysBetween(` in a non-test `.go` file outside `calendar`, the qualifier being
+  that file's import name for `calendar`; failing that, by the first `ready`, which it
+  refuses. `result.json`'s `trap_release` records the rule (`call` or `ready_fallback`), the
+  agent, the share's commit and file, and the time. The agents receive the development without
+  `trigger` or `release_on_call`.
 - **`static-checks [FIXTURE]`**: the frozen qualification rule's step 1. A cross-developer
   dependency on the trap's function, the reference calling it from every user the dependency
   list names, and the reference swap: the corrected reference passes every oracle case, and
-  the old reference (`old_reference` in the protected file) with only `clock/` corrected fails
-  at least one case in the protected file's `trap.cases` (C2's tags: T6, developer B's).
-  Failures in `trap.side_cases` (the defining developer's own callers; none in try 2, T6 and
-  T8 in try 1) are reported apart.
+  the old reference (`old_reference` in the protected file) with only `calendar/` corrected
+  fails at least one case in the protected file's `trap.cases` (C2's tags: T6, T7 and T9,
+  developer B's). Failures in `trap.side_cases` (the defining developer's own callers: T5 and
+  T8; none in try 2, T6 and T8 in try 1) are reported apart.
 - **Schedules**: `step-a-qualify` runs `git-1` twice, then `git-2` three times, unscored.
   `step-a` runs `git-1` twice and `git-2`, `git-2+announce` and `git-2+notify` three times
   each, scored, in three rotations whose order shifts by one; the third has no `git-1`. A
@@ -698,9 +700,9 @@ evaluation/target/release/falinks-eval batch --config /private/tmp/eval-config.j
   so each helper comes with one path per requirement, hop by hop with each call's `file:line`,
   for Daniel to confirm (#512's amendment).
 - **`reverse-swap RUN_DIR`**: qualification step 5's side report, which decides nothing and
-  `qualify` never reads. In a `git-1` final tree, only the trap function's body (`WeekStart`'s)
-  goes back to the old reference's; the oracle's failures in `trap.cases` and
-  `trap.side_cases` are listed, or `not_applicable` with the reason when the tree has no such
+  `qualify` never reads. In a `git-1` final tree, only the trap function's body
+  (`DaysBetween`'s) goes back to the old reference's; the oracle's failures in `trap.cases`
+  and `trap.side_cases` are listed, or `not_applicable` with the reason when the tree has no such
   function with the old reference's parameter types and result, or does not compile after the
   swap.
 - **`qualify --runs DIR`**: the decision, step by step. Step 4 reads each pair's `run_id` and

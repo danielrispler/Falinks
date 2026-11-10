@@ -30,7 +30,7 @@ macro_rules! bail {
 pub(crate) use bail;
 
 pub const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-pub const FIXTURES: [&str; 9] = [
+pub const FIXTURES: [&str; 10] = [
     "rust-errors",
     "go-page",
     "go-relationships",
@@ -40,10 +40,11 @@ pub const FIXTURES: [&str; 9] = [
     "go-invoice",
     "library-loans",
     "timesheet-payroll",
+    "libloans",
 ];
-/// Step A's fixture (#498): its one milestone is the trap. Try 2's `timesheet-payroll` (#552);
-/// try 1's `library-loans` (#509) stays as its record.
-pub const STEP_A_FIXTURE: &str = "timesheet-payroll";
+/// Step A's fixture (#498): its one milestone is the trap. Try 3's `libloans` (#587); try 1's
+/// `library-loans` (#509) and try 2's `timesheet-payroll` (#552) stay as their records.
+pub const STEP_A_FIXTURE: &str = "libloans";
 /// #205's sealed scored fixture (#332), the `large-spec` schedule's only one.
 pub const LARGE_SPEC_FIXTURE: &str = "go-invoice";
 /// The scored batch's fixtures, fixed to v11's three whatever `FIXTURES` gains (#178 C4).

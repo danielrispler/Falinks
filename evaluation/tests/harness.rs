@@ -189,6 +189,7 @@ fn frozen_oracles_reject_initial_and_accept_reference() {
             "go-page",
             "go-relationships",
             "go-tasks",
+            "libloans",
             "library-loans",
             "rust-errors",
             "timesheet-payroll"
@@ -1926,14 +1927,21 @@ fn a_team_of_one_completes_and_developments_fire_on_its_own_shares() {
     assert_eq!(evidence["rejected_operations"], 1);
 }
 
-/// #509, #552: Step A's static checks, on try 2's fixture (the default) and try 1's. The old
-/// reference with only the trap's function corrected fails C2-tagged cases of the other
-/// developer's dependents (T6; try 1's T5 and T9), the full corrected reference fails none, and
-/// the reference calls the function from every user the dependency list names. Every tag names
-/// a test in the oracle.
+/// #509, #552, #587: Step A's static checks, on try 3's fixture (the default), try 2's and try
+/// 1's. The old reference with only the trap's function corrected fails C2-tagged cases of the
+/// other developer's dependents (T6 and T9; try 2's T6; try 1's T5 and T9), the full corrected
+/// reference fails none, and the reference calls the function from every user the dependency
+/// list names. Every tag names a test in the oracle.
 #[test]
 fn step_a_reference_swap_fails_tagged_cases_and_the_reference_passes() {
     let cases = [
+        (
+            "libloans",
+            json!(["T6", "T7", "T9"]),
+            json!(["TestRenewOverdue", "TestStatement"]),
+            json!(["TestFineDays", "TestOverdueReport"]),
+            5,
+        ),
         (
             "timesheet-payroll",
             json!(["T6"]),
@@ -1968,7 +1976,7 @@ fn step_a_reference_swap_fails_tagged_cases_and_the_reference_passes() {
             );
         }
         let output = match name {
-            "timesheet-payroll" => cli(["static-checks"]),
+            "libloans" => cli(["static-checks"]),
             _ => cli(["static-checks", name]),
         };
         assert!(output.status.success(), "{name}: {}", text(&output));
@@ -1983,19 +1991,21 @@ fn step_a_reference_swap_fails_tagged_cases_and_the_reference_passes() {
     }
 }
 
-/// #509, #552: the trap development is released by the first share adding a qualified call to
-/// the trap's function outside its package, or else at the first ready, which it refuses; in
-/// a team of one, its own shares count. The run records the rule, event and time, and the
-/// agent never sees the trigger. On try 2's fixture and try 1's.
+/// #509, #552, #587: the trap development is released by the first share adding a qualified
+/// call to the trap's function outside its package, or else at the first ready, which it
+/// refuses; in a team of one, its own shares count. The run records the rule, event and time,
+/// and the agent never sees the trigger. On try 3's fixture, try 2's and try 1's.
 #[test]
 fn the_trap_releases_on_a_call_or_at_the_first_ready() {
     let runs = [
-        ("timesheet-payroll", "payroll/payroll.go", "call"),
-        ("timesheet-payroll", "payroll/payroll.go", "ready"),
-        ("library-loans", "loan/fee.go", "call"),
-        ("library-loans", "loan/fee.go", "ready"),
+        ("libloans", "lending/fine.go", "T3", "call"),
+        ("libloans", "lending/fine.go", "T3", "ready"),
+        ("timesheet-payroll", "payroll/payroll.go", "T2", "call"),
+        ("timesheet-payroll", "payroll/payroll.go", "T2", "ready"),
+        ("library-loans", "loan/fee.go", "T2", "call"),
+        ("library-loans", "loan/fee.go", "T2", "ready"),
     ];
-    for (name, file, mode) in runs {
+    for (name, file, defining, mode) in runs {
         let milestone = &read(root().join(format!("fixtures/{name}.json")))["milestones"][0];
         let tmp = tmp("falinks-trap-test-");
         let config = config(
@@ -2055,7 +2065,7 @@ fn the_trap_releases_on_a_call_or_at_the_first_ready() {
             delivered["requirements"][0]
                 .as_str()
                 .unwrap()
-                .starts_with(&format!("Correction to T2: `{function}`"))
+                .starts_with(&format!("Correction to {defining}: `{function}`"))
         );
     }
 }
@@ -2560,8 +2570,8 @@ fn code_quality_definitions_trace_to_fixture_requirements() {
     let definitions = read(root().join("code-quality.json"));
     let properties = definitions["properties"]["list"].as_array().unwrap();
     // 13 on the scored batch's fixtures and one per go-invoice ticket (#336) and
-    // library-loans ticket (#509) and timesheet-payroll ticket (#552).
-    assert_eq!(properties.len(), 40);
+    // library-loans ticket (#509), timesheet-payroll ticket (#552) and libloans ticket (#587).
+    assert_eq!(properties.len(), 49);
     for property in properties {
         let fixture = read(
             root()
