@@ -63,3 +63,7 @@ The evaluation sources are hash-frozen in `evaluation/manifest.json`. Before you
 ### Scored-batch inspection
 
 #228's stage 2 is frozen (#233), so the scored-batch inspection and diagnosis rules are lifted. A scored run's final code may be inspected. The lifted rules stay on record in `evaluation/code-quality.json`, `rules`.
+
+### Long jobs
+
+When you start a background job longer than a few minutes, watch its log for every state it can end in: progress, pauses, errors and exit. Check the first events against what you expect, and say so as soon as they differ. Silence is not success.
