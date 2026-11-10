@@ -4,7 +4,8 @@ name: Evaluation tests
 # Pull requests that change its inputs run the light tests, in two partitions per OS
 # (13-20 min serially in one job, run 42625395294). Ten heavy
 # end-to-end tests take 6-8 min even in four shards (run 39778827225), so they run on
-# main four times a day and by hand (AGENTS.md, "Checks"). main does not repeat a PR's run.
+# main four times a day and by hand (AGENTS.md, "Checks"); a run by hand skips the light tests.
+# main does not repeat a PR's run.
 on:
   pull_request:
     paths: ["evaluation/**", "rust-toolchain.toml", ".cargo/**", ".github/workflows/evaluation.yml"]
@@ -57,7 +58,8 @@ jobs:
 
   light:
     needs: changes
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changes.outputs.run == 'true') }}
+    # A run by hand is for the heavy tests: the pull request already ran these.
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.changes.outputs.run == 'true') }}
     # Sandboxed Go/Cargo checks are slow and time out under contention, so every
     # job runs its tests serially. Linux runners have their own quota, so the same
     # tests run there on the Landlock backend (#56).
