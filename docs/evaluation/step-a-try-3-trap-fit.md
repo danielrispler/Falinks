@@ -1,6 +1,6 @@
 # Trap fit for spec try 3 (`libloans`)
 
-Fitted by the frozen trap file's rules (`step-a-trap.md`, sha256 `79ccb281…a659dfb`) to `spec.json` (sha256 `a54911bf…46e2e3d1`), without running any agent. **Awaiting Daniel's approval on #587.** The fixture, the references, the oracle and the tags follow #509's decisions for try 1 and #552's for try 2. The fixture keeps the spec's name, `libloans`; try 1's fixture is `library-loans`, and the two names do not collide.
+Fitted by the frozen trap file's rules (`step-a-trap.md`, sha256 `79ccb281…a659dfb`) to `spec.json` (sha256 `a54911bf…46e2e3d1`), without running any agent. **Approved by Daniel on #587 (2026-11-10), as written, with all three C2 tags (T6, T7, T9) kept.** The fixture, the references, the oracle and the tags follow #509's decisions for try 1 and #552's for try 2. The fixture keeps the spec's name, `libloans`; try 1's fixture is `library-loans`, and the two names do not collide.
 
 ## Choosing the function
 
