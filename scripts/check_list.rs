@@ -31,8 +31,7 @@ pub const ACTIONLINT: &str = "go run github.com/rhysd/actionlint/cmd/actionlint@
 /// The evaluation test step: slow, so CI runs its light tests on PRs that change one
 /// of `EVALUATION_INPUTS` and the heavy ones on a schedule; `ci-checks` runs it only
 /// with `--all`.
-pub const EVALUATION_TESTS: &str =
-    "cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1";
+pub const EVALUATION_TESTS: &str = "cargo nextest run --locked --offline --manifest-path evaluation/Cargo.toml --test-threads=1 --no-fail-fast";
 
 /// Path prefixes that trigger the evaluation tests in CI; `tests/check_drift.rs`
 /// keeps them equal to the `paths:` filter in `evaluation.yml`.

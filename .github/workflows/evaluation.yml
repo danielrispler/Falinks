@@ -1,7 +1,8 @@
 name: Evaluation tests
 
 # The evaluation crate is standalone (see evaluation/Cargo.toml). Lint and deny stay in checks.yml.
-# Pull requests that change its inputs run the light tests, about 2 min. Ten heavy
+# Pull requests that change its inputs run the light tests, in two partitions per OS
+# (13-20 min serially in one job, run 42625395294). Ten heavy
 # end-to-end tests take 6-8 min even in four shards (run 39778827225), so they run on
 # main four times a day and by hand (AGENTS.md, "Checks"). main does not repeat a PR's run.
 on:
@@ -23,6 +24,7 @@ permissions:
 env:
   # Keep in step with checks.yml.
   GO_VERSION: "1.27.2"
+  NEXTEST_VERSION: "0.9.148"
 
 jobs:
   changes:
@@ -65,9 +67,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
+        partition: ["--partition hash:1/2", "--partition hash:2/2"]
         # Every test the heavy shards name is skipped, so keep the two lists in step.
         tests:
-          - --skip frozen_oracles --skip baseline_retains --skip fixture_shard_runs --skip nested_agents_invalidate --skip two_agent_runs --skip oracle_blocks --skip track_t_batch --skip usage_is_complete --skip batch_gates_pauses --skip oracles_reject_compiling
+          - -- --skip frozen_oracles --skip baseline_retains --skip fixture_shard_runs --skip nested_agents_invalidate --skip two_agent_runs --skip oracle_blocks --skip track_t_batch --skip usage_is_complete --skip batch_gates_pauses --skip oracles_reject_compiling
     steps: &steps
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
@@ -86,8 +89,11 @@ jobs:
       # The Linux sandbox needs Landlock in the LSM list (docs/platforms.md).
       - if: runner.os == 'Linux'
         run: grep -qw landlock /sys/kernel/security/lsm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
       - run: cargo fetch --locked --manifest-path evaluation/Cargo.toml
-      - run: cargo test --locked --offline --manifest-path evaluation/Cargo.toml -- --test-threads=1 ${{ matrix.tests }}
+      - run: cargo nextest run --locked --offline --manifest-path evaluation/Cargo.toml --test-threads=1 --no-fail-fast ${{ matrix.partition }} ${{ matrix.tests }}
 
   heavy:
     # Each `batch` call re-verifies every fixture (about 115 s), and every check
@@ -102,6 +108,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
+        # The steps are light's; heavy shards by test name instead.
+        partition: [""]
         tests:
           - frozen_oracles baseline_retains fixture_shard_runs
           - nested_agents_invalidate two_agent_runs
