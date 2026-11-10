@@ -2,8 +2,8 @@ name: Evaluation tests
 
 # The evaluation crate is standalone (see evaluation/Cargo.toml). Lint and deny stay in checks.yml.
 # Pull requests that change its inputs run the light tests, in two partitions per OS
-# (13-20 min serially in one job, run 42625395294). Ten heavy
-# end-to-end tests take 6-8 min even in four shards (run 39778827225), so they run on
+# (13-20 min serially in one job, run 42625395294). Fourteen heavy
+# end-to-end tests take 8-15 min even in four shards (runs 39778827225, 42910269508), so they run on
 # main four times a day and by hand (AGENTS.md, "Checks"); a run by hand skips the light tests.
 # main does not repeat a PR's run.
 on:
@@ -72,7 +72,7 @@ jobs:
         partition: ["--partition hash:1/2", "--partition hash:2/2"]
         # Every test the heavy shards name is skipped, so keep the two lists in step.
         tests:
-          - -- --skip frozen_oracles --skip baseline_retains --skip fixture_shard_runs --skip nested_agents_invalidate --skip two_agent_runs --skip oracle_blocks --skip track_t_batch --skip usage_is_complete --skip batch_gates_pauses --skip oracles_reject_compiling
+          - -- --skip frozen_oracles --skip baseline_retains --skip fixture_shard_runs --skip nested_agents_invalidate --skip two_agent_runs --skip oracle_blocks --skip track_t_batch --skip usage_is_complete --skip batch_gates_pauses --skip oracles_reject_compiling --skip known_answer_names --skip wave_batch_runs --skip quality_measures_both_arms --skip quality_judges_a_team
     steps: &steps
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
@@ -100,7 +100,9 @@ jobs:
   heavy:
     # Each `batch` call re-verifies every fixture (about 115 s), and every check
     # starts from an empty Go build cache. Shards are balanced by each test's time
-    # in runs 39766522074, 39764928341 and 39778827225. Four shards plus the light
+    # in runs 39766522074, 39764928341 and 39778827225. The judge, wave and quality tests
+    # moved here from light (921 s of its 1,365 s on macOS, run 42817414504) and joined
+    # the shortest shards (run 42910269508). Four shards plus the light
     # job fill the free plan's five concurrent macOS runners.
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'pull_request' && (github.event_name != 'schedule' || needs.changes.outputs.run == 'true') }}
@@ -113,8 +115,8 @@ jobs:
         # The steps are light's; heavy shards by test name instead.
         partition: [""]
         tests:
-          - frozen_oracles baseline_retains fixture_shard_runs
+          - frozen_oracles baseline_retains fixture_shard_runs wave_batch_runs
           - nested_agents_invalidate two_agent_runs
-          - oracle_blocks track_t_batch usage_is_complete
-          - batch_gates_pauses oracles_reject_compiling
+          - oracle_blocks track_t_batch usage_is_complete known_answer_names
+          - batch_gates_pauses oracles_reject_compiling quality_measures_both_arms quality_judges_a_team
     steps: *steps
