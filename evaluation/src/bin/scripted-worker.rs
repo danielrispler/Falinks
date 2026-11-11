@@ -4,10 +4,10 @@
 //! `scripted-worker relationships [received|late|never]|conflict` speaks the host JSON-line
 //! protocol; with a usage mode, `relationships` reports a turn at start and its final result
 //! after `ready` at once, only when the host stops it, or never; alone, it writes both files;
-//! `scripted-worker trap FIXTURE [call|ready]` works alone on a Step A fixture (#509, #552): its
-//! first share adds a call to the trap's function outside its package (`call`) or a comment
-//! only, then it asks for `ready` (`ready`) or waits for the trap; it acks it, shares again and
-//! is ready;
+//! `scripted-worker trap FIXTURE [call|ready]` works alone on a Step A fixture (#509, #552,
+//! #587): its first share adds a call to the trap's function outside its package (`call`) or a
+//! comment only, then it asks for `ready` (`ready`) or waits for the trap; it acks it, shares
+//! again and is ready;
 //! `scripted-worker exec ...` impersonates `codex exec` for the Codex bridge;
 //! `scripted-worker -p --output-format json ...` impersonates the judge's `claude -p` call: it
 //! appends the prompt (after `-p`) to `$FALINKS_FAKE_JUDGE/prompts.json` and replies with the next canned
@@ -81,7 +81,7 @@ fn main() {
         Some("-p") => fake_claude(&args),
         Some(
             "rust-errors" | "go-page" | "go-relationships" | "go-indep-2" | "go-indep-4"
-            | "go-tasks" | "go-invoice" | "library-loans" | "timesheet-payroll",
+            | "go-tasks" | "go-invoice" | "library-loans" | "timesheet-payroll" | "libloans",
         ) => fake_arm(&args),
         other => panic!("unknown mode {other:?}"),
     }
@@ -191,6 +191,11 @@ fn trap(fixture: &str, call: bool) {
             "payroll/payroll.go",
             "func week(t time.Time) time.Time",
             "clock.WeekStart(t)",
+        ),
+        "libloans" => (
+            "lending/fine.go",
+            "func late(a, b calendar.Date) int",
+            "calendar.DaysBetween(a, b)",
         ),
         other => panic!("no trap for {other}"),
     };

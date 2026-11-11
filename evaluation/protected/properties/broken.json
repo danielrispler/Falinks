@@ -210,5 +210,52 @@
       "old": "%8s  %12s",
       "new": "%8s  %13s"
     }
+  },
+  "libloans": {
+    "N1": {
+      "file": "money/money.go",
+      "old": "len(whole) > 9",
+      "new": "len(whole) > 10"
+    },
+    "N2": {
+      "file": "isbn/isbn.go",
+      "old": "sum%11 == 0",
+      "new": "sum%10 == 0"
+    },
+    "N3": {
+      "file": "calendar/calendar.go",
+      "old": "return n - 1",
+      "new": "return n + 1"
+    },
+    "N4": {
+      "file": "lending/kind.go",
+      "old": "Magazine: 14",
+      "new": "Magazine: 15"
+    },
+    "N5": {
+      "file": "lending/fine.go",
+      "old": "Magazine: {10, 300}",
+      "new": "Magazine: {10, 350}"
+    },
+    "N6": {
+      "file": "lending/renew.go",
+      "old": "renewalsSoFar >= 2",
+      "new": "renewalsSoFar >= 3"
+    },
+    "N7": {
+      "file": "lending/loan.go",
+      "old": "len(f) != 6",
+      "new": "len(f) < 6"
+    },
+    "N8": {
+      "file": "report/overdue.go",
+      "old": "return a.late > b.late",
+      "new": "return a.late < b.late"
+    },
+    "N9": {
+      "file": "report/statement.go",
+      "old": "out.WriteString(\"  none\\n\")",
+      "new": "out.WriteString(\"none\\n\")"
+    }
   }
 }

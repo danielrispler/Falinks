@@ -810,6 +810,57 @@ mod tests {
         );
     }
 
+    /// #587: try 3's allocation lists its requirements out of order, and the reference calls
+    /// `DaysBetween` from T5 to T9, every user the dependency list names.
+    #[test]
+    fn try_3_owners_and_the_days_between_callers() {
+        let (fixture, tree) = reference("libloans");
+        let requirements = requirements(&fixture).unwrap();
+        let owned = |agent: &str| -> Vec<&str> {
+            (requirements.iter().filter(|r| r.owner == agent))
+                .map(|r| r.id.as_str())
+                .collect()
+        };
+        assert_eq!(owned("A"), ["T1", "T3", "T5", "T8"]);
+        assert_eq!(owned("B"), ["T2", "T4", "T6", "T7", "T9"]);
+        let shown: Vec<String> = requirements[2].entries.iter().map(show).collect();
+        assert_eq!(
+            shown,
+            [
+                "calendar.DaysBetween",
+                "calendar.New",
+                "calendar.Parse",
+                "calendar.Date.AddDays",
+                "calendar.Date.String",
+                "calendar.Date.Weekday"
+            ]
+        );
+        let users = ["T5", "T6", "T7", "T8", "T9"];
+        let callers = |tree| -> Vec<(String, bool)> { trap_callers(&fixture, tree).unwrap() };
+        assert_eq!(callers(&tree), users.map(|u| (u.to_string(), true)));
+        let initial = text_tree(&fixture["files"]);
+        assert_eq!(callers(&initial), users.map(|u| (u.to_string(), false)));
+    }
+
+    /// #587: the old `DaysBetween` body reads a Date only through `String`, so the reverse swap
+    /// fits a tree whose Date has other fields: the reference, whose callers rely on the
+    /// correction, then fails B's tagged T6 and T9 cases and A's T5 and T8 side cases.
+    #[test]
+    fn the_try_3_reverse_swap_fits_any_date_fields() {
+        let (fixture, tree) = reference("libloans");
+        let protected = protected("libloans").unwrap();
+        let report = reverse_swapped(&fixture, &protected, tree).unwrap();
+        assert_eq!(
+            report["c2_failures"],
+            json!(["TestRenewOverdue", "TestStatement"]),
+            "{report}"
+        );
+        assert_eq!(
+            report["side_failures"],
+            json!(["TestFineDays", "TestOverdueReport"])
+        );
+    }
+
     /// #552: the reverse swap takes the trap function's signature from the old reference. A
     /// `WeekStart` whose parameter is named otherwise gets the old body, so the reference's
     /// Summarize, which relies on the correction, fails T6's tagged case; another result type is

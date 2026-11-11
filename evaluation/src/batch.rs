@@ -1063,16 +1063,16 @@ mod tests {
         assert!(
             qualify
                 .iter()
-                .all(|s| s["scored"] == false && s["fixture"] == "timesheet-payroll")
+                .all(|s| s["scored"] == false && s["fixture"] == "libloans")
         );
         assert_eq!(
             names(qualify),
             [
-                "timesheet-payroll-1-git-1",
-                "timesheet-payroll-2-git-1",
-                "timesheet-payroll-3-git-2",
-                "timesheet-payroll-4-git-2",
-                "timesheet-payroll-5-git-2"
+                "libloans-1-git-1",
+                "libloans-2-git-1",
+                "libloans-3-git-2",
+                "libloans-4-git-2",
+                "libloans-5-git-2"
             ]
         );
         let scored = step_a_slots();
@@ -1084,17 +1084,17 @@ mod tests {
         assert_eq!(
             names(scored.clone()),
             [
-                "timesheet-payroll-1-git-1",
-                "timesheet-payroll-1-git-2",
-                "timesheet-payroll-1-git-2-announce",
-                "timesheet-payroll-1-git-2-notify",
-                "timesheet-payroll-2-git-2",
-                "timesheet-payroll-2-git-2-announce",
-                "timesheet-payroll-2-git-2-notify",
-                "timesheet-payroll-2-git-1",
-                "timesheet-payroll-3-git-2-announce",
-                "timesheet-payroll-3-git-2-notify",
-                "timesheet-payroll-3-git-2",
+                "libloans-1-git-1",
+                "libloans-1-git-2",
+                "libloans-1-git-2-announce",
+                "libloans-1-git-2-notify",
+                "libloans-2-git-2",
+                "libloans-2-git-2-announce",
+                "libloans-2-git-2-notify",
+                "libloans-2-git-1",
+                "libloans-3-git-2-announce",
+                "libloans-3-git-2-notify",
+                "libloans-3-git-2",
             ]
         );
         let count = |size: u64, variant: Value| {
