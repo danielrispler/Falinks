@@ -709,16 +709,16 @@
     "scope": "Step A (#498, under #490's frozen rules): qualification tries and the scored Git-arm batch. It never draws on the setup budget above, on track T's or on #205's. Each session charges run wall time (including the usage drain) and harness preparation, with complete-only usage; implementation is recorded but not charged, as in track T. Hard stop: stop and ask before exceeding cap_seconds.",
     "cap_seconds": 9000,
     "totals": {
-      "implementation_seconds": 4087,
-      "run_seconds": 2413,
-      "preparation_seconds": 128,
-      "charged_seconds": 2541,
+      "implementation_seconds": 5590,
+      "run_seconds": 5781,
+      "preparation_seconds": 159,
+      "charged_seconds": 5940,
       "complete_usage": {
-        "runs": 10,
-        "input_tokens": 756,
-        "output_tokens": 255935,
-        "cache_read_input_tokens": 11956510,
-        "cache_creation_input_tokens": 798683
+        "runs": 26,
+        "input_tokens": 1996,
+        "output_tokens": 709946,
+        "cache_read_input_tokens": 31838480,
+        "cache_creation_input_tokens": 2257775
       }
     },
     "sessions": [
@@ -761,6 +761,46 @@
         },
         "measurement": "Session wall time from the clone to the end of the invocation. run_seconds is measured: the one invocation, 1,264 s (14:08:19-14:29:23Z: gate and 5 runs, each with its drain). preparation_seconds is measured: 28 s from the clone of f471f9f into /private/tmp/f552 to the finished release builds (13:09:13-13:09:41Z); writing the run configuration was not timed. implementation_seconds is the rest, so it includes the stage dry runs (scripted worker, no model usage) and the stage.sh trap fix; it is not charged. Usage is from the 5 complete runs, summed from each run's result.json (API-equivalent list price $7.87). Evidence: local-evidence/2026-11-09-step-a-498/qualification-try-2.",
         "work": "#553 (Step A qualification, try 2): `batch --schedule step-a-qualify` on timesheet-payroll at manifest v63 (commit f471f9f), git-1 x2 and git-2 x3, all 5 successful, the trap released by a call in every run. Try 2 failed at step 3 (#554): no shared helper in either git-1 tree, and 0 duplicate or divergent pairs."
+      },
+      {
+        "issue": 588,
+        "source": "https://github.com/danielrispler/Falinks/issues/588#issuecomment-6796661898",
+        "start_utc": "2026-11-11T11:46:10Z",
+        "stop_utc": "2026-11-11T12:30:56Z",
+        "measured_seconds": 2686,
+        "implementation_seconds": 1503,
+        "run_seconds": 1152,
+        "preparation_seconds": 31,
+        "charged_seconds": 1183,
+        "complete_usage": {
+          "runs": 5,
+          "input_tokens": 350,
+          "output_tokens": 126116,
+          "cache_read_input_tokens": 5027491,
+          "cache_creation_input_tokens": 373016
+        },
+        "measurement": "Session wall time from the clone to the end of the invocation. run_seconds is measured: the one invocation, 1,152 s (12:11:44-12:30:56Z: gate and 5 runs, each with its drain). preparation_seconds is measured: 31 s from the clone of 511b3a9 into /private/tmp/f587 to the finished release builds (11:46:10-11:46:41Z). implementation_seconds is the rest, so it includes the stage dry run (scripted worker, no model usage); it is not charged. Usage is from the 5 complete runs, from the batch's per-run usage (API-equivalent list price $6.51). Evidence: local-evidence/2026-11-09-step-a-498/qualification-try-3.",
+        "work": "#588 (Step A qualification, try 3): `batch --schedule step-a-qualify` on libloans at manifest v64 (commit 511b3a9), git-1 x2 and git-2 x3, all 5 successful, the trap released by a call in every run. Try 3 qualified (#589): lending.elapsed confirmed in both git-1 trees, and a median of 2 duplicate pairs per git-2 run."
+      },
+      {
+        "issue": 513,
+        "source": "https://github.com/danielrispler/Falinks/issues/513#issuecomment-6823091830",
+        "start_utc": "2026-11-11T16:33:19Z",
+        "stop_utc": "2026-11-11T17:10:15Z",
+        "measured_seconds": 2216,
+        "implementation_seconds": 0,
+        "run_seconds": 2216,
+        "preparation_seconds": 0,
+        "charged_seconds": 2216,
+        "complete_usage": {
+          "runs": 11,
+          "input_tokens": 890,
+          "output_tokens": 327895,
+          "cache_read_input_tokens": 14854479,
+          "cache_creation_input_tokens": 1086076
+        },
+        "measurement": "run_seconds is measured: the one invocation, 2,216 s (16:33:19-17:10:15Z: gate and 11 runs, each with its drain). It reused try 3's clone, builds and configuration, so preparation_seconds is 0. The blind classifier's single call and the quality measurement are evidence processing and are not charged. Usage is from the 11 complete runs, from the batch's per-run usage (API-equivalent list price $18.22). Evidence: /private/tmp/ev/step-a-scored, to move to local-evidence/2026-11-09-step-a-498.",
+        "work": "#513 (Step A scored runs): `batch --schedule step-a` on libloans at manifest v64 (commit 511b3a9), git-1 x2 and git-2, git-2+announce and git-2+notify x3 each, all 11 successful. Step A decided to stop the engine track (#498): best variant plain git-2, C1 median 21.6 model s, C2 in 0 of 3 runs."
       }
     ]
   }
