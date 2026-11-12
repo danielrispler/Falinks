@@ -1,3 +1,23 @@
+## Status: parked
+
+Falinks is parked. Nobody is developing the engine. The numbers further down this page are projections, and the measured results below did not bear them out.
+
+**What it tried.** Falinks tested one claim: when two Claude Code agents share one live tree, with stale edits rejected and dependent work rechecked, they finish a task cheaper and faster than agents in separate Git worktrees that merge at the end.
+
+**Key results.** All runs used Claude Code 2.1.309, `claude-opus-5-5` at medium effort, on small Go fixtures.
+
+- **No payback ([#339](https://github.com/danielrispler/Falinks/issues/339), [decision](https://github.com/danielrispler/Falinks/issues/205#issuecomment-6660371354)).** The batch had 24 runs on `go-invoice`, all successful. Falinks won on neither cost nor time. Two Git worktrees finished faster: median 251 s against 290 s (p = 0.0035). The batch had enough power to show a 20% advantage, and it showed none.
+- **Step A ([decision](https://github.com/danielrispler/Falinks/issues/498#issuecomment-6825068388)).** Without Falinks, Git's coordination cost was small: a median of 21.6 model seconds, under the 55 s bar. Duplicate work did occur, but 25 of the 26 duplicate pairs were same-package test helpers. The planted change in meaning never caused a combined-check failure in any of the 9 two-agent runs. So the engine track stopped.
+
+**What was never tested.**
+
+- Larger scale: bigger repositories and longer, multi-ticket work.
+- Three or more agents. Every scored run used one or two.
+- Rust: whether test and build time dominate parallel-worktree tasks ([#497](https://github.com/danielrispler/Falinks/issues/497)).
+- The real-repo pilot idea: running agents on a real project instead of a built fixture.
+
+Open questions stay open with the `parked` label: [parked issues](https://github.com/danielrispler/Falinks/issues?q=is%3Aopen+label%3Aparked).
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
