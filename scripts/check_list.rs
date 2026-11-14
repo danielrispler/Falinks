@@ -29,7 +29,7 @@ pub const CHECKS: &[&str] = &[
 pub const ACTIONLINT: &str = "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12";
 
 /// The evaluation test step: slow, so CI runs its light tests on PRs that change one
-/// of `EVALUATION_INPUTS` and the heavy ones on a schedule; `ci-checks` runs it only
+/// of `EVALUATION_INPUTS` and the heavy ones by hand; `ci-checks` runs it only
 /// with `--all`.
 pub const EVALUATION_TESTS: &str = "cargo nextest run --locked --offline --manifest-path evaluation/Cargo.toml --test-threads=1 --no-fail-fast";
 
