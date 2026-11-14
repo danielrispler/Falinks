@@ -4,7 +4,7 @@ These docs are shared by Codex and Claude Code. `$skill` means `/skill` in Claud
 
 ## Areas
 
-The repo holds two areas. The engine sits at the root (`src/`, `adapters/`, `evaluation/`, `scripts/`, `tests/`). The studio lives in `apps/studio`. Rules in this file apply to both, except under **Engine rules** below. Before working under `apps/studio`, read `apps/studio/AGENTS.md`; it holds the studio's rules. It may not load on its own.
+The engine sits at the root (`src/`, `adapters/`, `evaluation/`, `scripts/`, `tests/`). The studio, which lived in `apps/studio` and `docs/studio`, moved to [`danielrispler/plotkeeper`](https://github.com/danielrispler/plotkeeper) with its history and open issues (#605). Work on it there.
 
 ## Supported platforms
 
@@ -24,11 +24,11 @@ Before planning, grilling or explanations, read `docs/agents/learning.md`. Follo
 
 Track issues and specs in GitHub Issues for `danielrispler/Falinks`. To read, list or claim issues, read `docs/agents/issue-tracker.md`. To create, edit or resolve issues, read `docs/agents/ticket-authoring.md`.
 
-Label every issue by area: `studio` for the studio, `engine` for the rest (the engine, its adapters, evaluation and repository automation). An issue that spans both gets both.
+Label every issue `engine`: it covers the engine, its adapters, evaluation and repository automation. Studio issues go to `danielrispler/plotkeeper`.
 
 ### Wayfinder
 
-For Wayfinder sessions, run `cargo run --bin wayfinder-startup -- [map-number]`. The default is the newest open `wayfinder:map` issue, so pass a number: `19` for the engine, whose live tickets are under #19, or `266` for the studio, the control-room effort whose issues are titled `Studio:` and labelled `studio`. Claim a ticket with `--claim <n>`. Follow the startup steps in `docs/agents/issue-tracker.md` and the ticket-context rules in `docs/agents/ticket-authoring.md`.
+For Wayfinder sessions, run `cargo run --bin wayfinder-startup -- [map-number]`. The default is the newest open `wayfinder:map` issue, so pass a number: `19` for the engine, whose live tickets are under #19. Claim a ticket with `--claim <n>`. Follow the startup steps in `docs/agents/issue-tracker.md` and the ticket-context rules in `docs/agents/ticket-authoring.md`.
 
 ### Triage labels
 
@@ -36,11 +36,11 @@ Use the five default triage labels. Before triaging issues, read `docs/agents/tr
 
 ### Domain docs
 
-The engine's context is root `CONTEXT.md` and `docs/adr/`; the studio's is `docs/studio/CONTEXT.md`. Before exploring the codebase, read `docs/agents/domain.md`. Settled decisions are indexed in a `wayfinder:map`'s Decisions-so-far or a spec's Implementation Decisions; read the linked resolution comment before proposing a design change.
+The engine's context is root `CONTEXT.md` and `docs/adr/`. Before exploring the codebase, read `docs/agents/domain.md`. Settled decisions are indexed in a `wayfinder:map`'s Decisions-so-far or a spec's Implementation Decisions; read the linked resolution comment before proposing a design change.
 
 ## Engine rules
 
-These rules apply to the engine and repository automation, not to work under `apps/studio`.
+These rules apply to the engine and repository automation.
 
 ### Implementation language
 

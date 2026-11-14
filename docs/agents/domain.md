@@ -2,7 +2,7 @@
 
 ## Layout
 
-This repo has two contexts. The engine uses `CONTEXT.md` at the repo root and architecture decision records in `docs/adr/`. The studio, a control room for understanding agent work, uses `docs/studio/CONTEXT.md`. Use the context of the area you work in; a term defined in both means what its own context says.
+The engine uses `CONTEXT.md` at the repo root and architecture decision records in `docs/adr/`. The studio's context moved with it to `danielrispler/plotkeeper` (#605).
 
 ## Before exploring
 

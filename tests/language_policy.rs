@@ -1,7 +1,5 @@
 //! Enforces the implementation-language rule (map #1): Rust implements Falinks;
 //! Go appears only as supported-language fixture/test code under `evaluation/`.
-//! The studio (`apps/studio/`, and its docs under `docs/studio/`) is outside the rule
-//! (`apps/studio/AGENTS.md`).
 
 use std::{fs, path::Path, process::Command};
 
@@ -9,9 +7,6 @@ const DATA_EXTENSIONS: &[&str] = &["md", "json", "jsonl", "toml", "lock", "yml",
 const DATA_NAMES: &[&str] = &[".gitignore", "CODEOWNERS", "LICENSE-MIT", "LICENSE-APACHE"];
 
 fn violation(path: &str) -> Option<&'static str> {
-    if path.starts_with("apps/studio/") || path.starts_with("docs/studio/") {
-        return None;
-    }
     let name = path.rsplit('/').next().unwrap_or(path);
     let extension = name.rsplit_once('.').map(|(_, e)| e);
     let allowed = DATA_NAMES.contains(&name)

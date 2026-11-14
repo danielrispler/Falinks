@@ -1,5 +1,7 @@
 ## Status: parked
 
+> **The studio moved.** The agent control room that lived in `apps/studio` is now [danielrispler/plotkeeper](https://github.com/danielrispler/plotkeeper), with its history and open issues (#605).
+
 Falinks is parked. Nobody is developing the engine. The numbers further down this page are projections, and the measured results below did not bear them out.
 
 **What it tried.** Falinks tested one claim: when two Claude Code agents share one live tree, with stale edits rejected and dependent work rechecked, they finish a task cheaper and faster than agents in separate Git worktrees that merge at the end.
