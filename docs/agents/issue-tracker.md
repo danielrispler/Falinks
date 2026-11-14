@@ -28,7 +28,7 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
    - With no open map it exits non-zero and lists recent maps. It never falls back to a closed map.
    - An explicit closed or missing map is an error.
    - The live collaborative-editing tickets are children of #19. #19 is a `Spec:` issue without the map label, so pass `19` to see them.
-   - The studio tickets (the control-room effort, titled `Studio:` and labelled `studio`) are children of the map #266; pass `266`.
+   - The studio tickets moved to `danielrispler/plotkeeper` (#605), with their map.
    - It reads the map once, then the open children in map order. Each row shows the assignees, the open blocker numbers (`blocked_by`) and `frontier`. This repo uses native GitHub sub-issues and dependencies; missing blocker metadata is an error.
    - It prints the map title and URL, then the rows. Add `--body` to append the map body, which holds Decisions-so-far and the implementation progress log.
 2. Use the named ticket, or the first row with `frontier: true`. Claim it before any work (see **Claim** below). Then work in the worktree path it prints.
@@ -49,7 +49,7 @@ Used by `/wayfinder`. The **map** is one issue. Its **child** issues are the tic
 - It prints the worktree path.
 - After the PR merges, `--done <n>` run from the main checkout removes that worktree and branch; `--help` lists what it refuses.
 
-Daniel picks how parallel tickets run: separate sessions he starts (one `--claim <n>` command and one prompt per terminal), or `/implement-spec` over tickets whose Touches say `Session: auto mode`. A ticket outside auto mode, or one that stops for Daniel's sign-off, runs in its own session. On an integration branch, implementers do not run `freeze`; it runs once after the last merge. Merge `origin/main` into the integration branch at the start of each pass, so it carries `main`'s fixes. Name it `issue-<spec>-<slug>`: pushes to `issue-*` branches run the studio's CI. Never spawn background implementers unasked.
+Daniel picks how parallel tickets run: separate sessions he starts (one `--claim <n>` command and one prompt per terminal), or `/implement-spec` over tickets whose Touches say `Session: auto mode`. A ticket outside auto mode, or one that stops for Daniel's sign-off, runs in its own session. On an integration branch, implementers do not run `freeze`; it runs once after the last merge. Merge `origin/main` into the integration branch at the start of each pass, so it carries `main`'s fixes. Name it `issue-<spec>-<slug>`. Never spawn background implementers unasked.
 
 GitHub stays authoritative.
 
