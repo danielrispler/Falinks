@@ -3,15 +3,12 @@ name: Evaluation tests
 # The evaluation crate is standalone (see evaluation/Cargo.toml). Lint and deny stay in checks.yml.
 # Pull requests that change its inputs run the light tests, in two partitions per OS
 # (13-20 min serially in one job, run 42625395294). Fourteen heavy
-# end-to-end tests take 8-15 min even in four shards (runs 39778827225, 42910269508), so they run on
-# main four times a day and by hand (AGENTS.md, "Checks"); a run by hand skips the light tests.
+# end-to-end tests take 8-15 min even in four shards (runs 39778827225, 42910269508), so they run
+# only by hand (AGENTS.md, "Checks"); a run by hand skips the light tests.
 # main does not repeat a PR's run.
 on:
   pull_request:
     paths: ["evaluation/**", "rust-toolchain.toml", ".cargo/**", ".github/workflows/evaluation.yml"]
-  # 09:00, 13:00, 17:00 and 21:00 at UTC+2.
-  schedule:
-    - cron: "0 7,11,15,19 * * *"
   workflow_dispatch:
 
 # A new push cancels its pull request's older run.
@@ -28,38 +25,9 @@ env:
   NEXTEST_VERSION: "0.9.148"
 
 jobs:
-  changes:
-    # A scheduled run goes ahead only when evaluation inputs changed since the last
-    # scheduled run that passed, so it holds the macOS runners only when it can find
-    # something new.
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      run: ${{ steps.inputs.outputs.run }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - id: inputs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        # The paths match the pull_request filter above.
-        run: |
-          last=$(gh run list --workflow evaluation.yml --event schedule --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
-          if [[ -z $last ]] || ! git diff --quiet "$last" HEAD -- evaluation rust-toolchain.toml .cargo .github/workflows/evaluation.yml; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::Evaluation inputs unchanged since the scheduled run at $last; skipping."
-          fi
-
   light:
-    needs: changes
     # A run by hand is for the heavy tests: the pull request already ran these.
-    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.changes.outputs.run == 'true') }}
+    if: github.event_name == 'pull_request'
     # Sandboxed Go/Cargo checks are slow and time out under contention, so every
     # job runs its tests serially. Linux runners have their own quota, so the same
     # tests run there on the Landlock backend (#56).
@@ -104,8 +72,7 @@ jobs:
     # moved here from light (921 s of its 1,365 s on macOS, run 42817414504) and joined
     # the shortest shards (run 42910269508). Four shards plus the light
     # job fill the free plan's five concurrent macOS runners.
-    needs: changes
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && (github.event_name != 'schedule' || needs.changes.outputs.run == 'true') }}
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
